@@ -40,13 +40,14 @@ export default function PostMedia({
   // 上次稳定停靠的图片索引：快速甩动时限制一次手势最多翻一页（防惯性一下跳过 2 张）
   const mainSettledRef = useRef(0);
   const zoomSettledRef = useRef(0);
-  // 最近一次滚动事件的速度（px/ms）：区分快速甩动（限制翻页）与缓慢拖动（按实际落点吸附）
-  const scrollVelocityRef = useRef(0);
-  const zoomVelocityRef = useRef(0);
+  // 手势级速度检测：记录本次手势的起点（位置/时间/停靠索引），
+  // 用「总位移/总时长」判断是否快速甩动（惯性末尾的瞬时速度≈0，不可靠）
+  const mainGestureRef = useRef({ startLeft: 0, startTime: 0, startIndex: 0, active: false });
+  const zoomGestureRef = useRef({ startLeft: 0, startTime: 0, startIndex: 0, active: false });
   const lastScrollEventRef = useRef({ time: 0, left: 0 });
   const lastZoomScrollEventRef = useRef({ time: 0, left: 0 });
 
-  // 主轮播滚动：实时回写索引；记录速度；滚动停止后吸附到整页
+  // 主轮播滚动：实时回写索引；记录手势起点；滚动停止后吸附到整页
   // （快速甩动时最多前进/后退一页，WebView 惯性滚动不会一次跨过多张）
   const handleScroll = () => {
     if (!scrollRef.current) return;
@@ -55,19 +56,28 @@ export default function PostMedia({
     const index = Math.round(el.scrollLeft / width);
     setCurrentImageIndex(index);
     const now = performance.now();
-    const dt = now - lastScrollEventRef.current.time;
-    const dx = el.scrollLeft - lastScrollEventRef.current.left;
-    scrollVelocityRef.current = dt > 0 ? Math.abs(dx) / dt : 0;
+    // 距离上次滚动 >250ms 视为新手势（重新记录起点与起点停靠索引）
+    if (now - lastScrollEventRef.current.time > 250) {
+      mainGestureRef.current = {
+        startLeft: el.scrollLeft,
+        startTime: now,
+        startIndex: mainSettledRef.current,
+        active: true,
+      };
+    }
     lastScrollEventRef.current = { time: now, left: el.scrollLeft };
     if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
     snapTimerRef.current = setTimeout(() => {
       const raw = Math.round(el.scrollLeft / width);
-      const last = mainSettledRef.current;
+      const g = mainGestureRef.current;
       let target = raw;
-      // 快速甩动（惯性大）只允许前进/后退一页；缓慢拖动按实际落点吸附
-      if (scrollVelocityRef.current > 0.4) {
-        target = Math.max(0, Math.min(images.length - 1, raw > last ? last + 1 : raw < last ? last - 1 : raw));
+      // 用整个手势的平均速度判断快速甩动（惯性末尾瞬时速度≈0，用平均速度才可靠）
+      const gestureTime = now - g.startTime;
+      const avgVelocity = gestureTime > 0 ? Math.abs(el.scrollLeft - g.startLeft) / gestureTime : 0;
+      if (g.active && avgVelocity > 0.4) {
+        target = Math.max(0, Math.min(images.length - 1, raw > g.startIndex ? g.startIndex + 1 : raw < g.startIndex ? g.startIndex - 1 : raw));
       }
+      g.active = false;
       const targetLeft = width * target;
       if (Math.abs(el.scrollLeft - targetLeft) > 4) {
         el.scrollTo({ left: targetLeft, behavior: 'smooth' });
@@ -97,21 +107,30 @@ export default function PostMedia({
     lastZoomIndexRef.current = index;
     syncMainCarousel(index);
     const now = performance.now();
-    const dt = now - lastZoomScrollEventRef.current.time;
-    const dx = el.scrollLeft - lastZoomScrollEventRef.current.left;
-    zoomVelocityRef.current = dt > 0 ? Math.abs(dx) / dt : 0;
+    // 距离上次滚动 >250ms 视为新手势（重新记录起点与起点停靠索引）
+    if (now - lastZoomScrollEventRef.current.time > 250) {
+      zoomGestureRef.current = {
+        startLeft: el.scrollLeft,
+        startTime: now,
+        startIndex: zoomSettledRef.current,
+        active: true,
+      };
+    }
     lastZoomScrollEventRef.current = { time: now, left: el.scrollLeft };
     if (zoomSnapTimerRef.current) clearTimeout(zoomSnapTimerRef.current);
     zoomSnapTimerRef.current = setTimeout(() => {
       // 已退出全屏（节点脱离文档）则不再吸附/同步，防止把主轮播拽回第一张
       if (!el.isConnected) return;
       const raw = Math.round(el.scrollLeft / width);
-      const last = zoomSettledRef.current;
+      const g = zoomGestureRef.current;
       let target = raw;
-      // 快速甩动（惯性大）只允许前进/后退一页；缓慢拖动按实际落点吸附
-      if (zoomVelocityRef.current > 0.4) {
-        target = Math.max(0, Math.min(images.length - 1, raw > last ? last + 1 : raw < last ? last - 1 : raw));
+      // 用整个手势的平均速度判断快速甩动（惯性末尾瞬时速度≈0，用平均速度才可靠）
+      const gestureTime = now - g.startTime;
+      const avgVelocity = gestureTime > 0 ? Math.abs(el.scrollLeft - g.startLeft) / gestureTime : 0;
+      if (g.active && avgVelocity > 0.4) {
+        target = Math.max(0, Math.min(images.length - 1, raw > g.startIndex ? g.startIndex + 1 : raw < g.startIndex ? g.startIndex - 1 : raw));
       }
+      g.active = false;
       const targetLeft = width * target;
       if (Math.abs(el.scrollLeft - targetLeft) > 4) {
         el.scrollTo({ left: targetLeft, behavior: 'smooth' });
