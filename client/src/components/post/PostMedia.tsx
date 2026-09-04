@@ -35,6 +35,8 @@ export default function PostMedia({
   // 主轮播/全屏内滑动结束后的分页吸附定时器（JS 兜底：iOS/WebView 的 scroll-snap 不可靠）
   const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const zoomSnapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 全屏内最后停靠的图片索引（同步写入 ref，退出时以此为准，避免依赖可能过期的 state）
+  const lastZoomIndexRef = useRef(0);
 
   // 主轮播滚动：实时回写索引；滚动停止后吸附到最近整页（滑动=翻到下一张完整图）
   const handleScroll = () => {
@@ -69,15 +71,19 @@ export default function PostMedia({
     const width = el.clientWidth;
     const index = Math.round(el.scrollLeft / width);
     setCurrentImageIndex(index);
+    lastZoomIndexRef.current = index;
     syncMainCarousel(index);
     if (zoomSnapTimerRef.current) clearTimeout(zoomSnapTimerRef.current);
     zoomSnapTimerRef.current = setTimeout(() => {
+      // 已退出全屏（节点脱离文档）则不再吸附/同步，防止把主轮播拽回第一张
+      if (!el.isConnected) return;
       const target = width * Math.round(el.scrollLeft / width);
       if (Math.abs(el.scrollLeft - target) > 4) {
         el.scrollTo({ left: target, behavior: 'smooth' });
       }
       // 吸附落位后再同步一次主轮播，确保退出时两者完全一致
-      syncMainCarousel(Math.round(el.scrollLeft / width));
+      lastZoomIndexRef.current = Math.round(el.scrollLeft / width);
+      syncMainCarousel(lastZoomIndexRef.current);
     }, 120);
   };
 
@@ -108,18 +114,26 @@ export default function PostMedia({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoomed]);
 
-  // 退出全屏：主轮播对齐到全屏中选中的图片。
+  // 退出全屏：主轮播对齐到全屏最后停靠的图片。
   // 全屏滑动时主轮播已实时同步（syncMainCarousel），此处仅兜底瞬时对齐，
-  // 不用 smooth——避免退出后看到"自己翻页追过去"的动画
+  // 不用 smooth——避免退出后看到"自己翻页追过去"的动画；
+  // 以 lastZoomIndexRef 为准，避免读取可能尚未更新的 state
   useEffect(() => {
     if (zoomed || !scrollRef.current) return;
     const el = scrollRef.current;
-    const target = el.clientWidth * currentImageIndex;
+    const target = el.clientWidth * lastZoomIndexRef.current;
     if (Math.abs(el.scrollLeft - target) > 4) {
       el.scrollLeft = target;
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoomed]);
+
+  // 卸载时清理吸附定时器，防止组件销毁后回调操作已脱离 DOM 的节点
+  useEffect(() => {
+    return () => {
+      if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
+      if (zoomSnapTimerRef.current) clearTimeout(zoomSnapTimerRef.current);
+    };
+  }, []);
 
   const scrollToIndex = (index: number) => {
     setCurrentImageIndex(index);
