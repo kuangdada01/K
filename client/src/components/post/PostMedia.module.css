@@ -248,8 +248,10 @@
 
   .imageCarousel {
     height: auto;
-    /* 单图时残留的横向滚动偏移会让图片看起来"缺一块"，关掉强制吸附 */
-    scroll-snap-type: none;
+    /* 统一翻页：滑动吸附到下一张完整图（与全屏一致），不做无极滑动；
+       单图时无横向滚动，吸附无副作用 */
+    scroll-snap-type: x mandatory;
+    scroll-snap-stop: always;
   }
 
   .image {

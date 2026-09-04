@@ -4,7 +4,7 @@
  * ============================================================
  * PostDetail 的媒体区（图片轮播/视频/缩放查看）抽取：
  * - 图片轮播 + 指示点 + 左右切换（受控组件，索引/缩放状态由调用方管理）
- * - 详情页主轮播：无自动轮播，手势自由滑动（无极）
+ * - 详情页主轮播：无自动轮播，滑动吸附翻到下一张完整图
  * - 缩放查看 overlay（全屏）：点击进入/退出，滑动吸附翻页
  */
 
@@ -32,14 +32,24 @@ export default function PostMedia({
 }: PostMediaProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const zoomScrollRef = useRef<HTMLDivElement>(null);
-  // 全屏内滑动结束后的分页吸附定时器（JS 兜底：iOS/WebView 的 scroll-snap 不可靠）
+  // 主轮播/全屏内滑动结束后的分页吸附定时器（JS 兜底：iOS/WebView 的 scroll-snap 不可靠）
+  const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const zoomSnapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 详情页主轮播：跟随用户手势自由滑动（无极），仅回写索引；不做整页吸附
+  // 主轮播滚动：实时回写索引；滚动停止后吸附到最近整页（滑动=翻到下一张完整图）
   const handleScroll = () => {
     if (!scrollRef.current) return;
     const el = scrollRef.current;
-    setCurrentImageIndex(Math.round(el.scrollLeft / el.clientWidth));
+    const width = el.clientWidth;
+    const index = Math.round(el.scrollLeft / width);
+    setCurrentImageIndex(index);
+    if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
+    snapTimerRef.current = setTimeout(() => {
+      const target = width * Math.round(el.scrollLeft / width);
+      if (Math.abs(el.scrollLeft - target) > 4) {
+        el.scrollTo({ left: target, behavior: 'smooth' });
+      }
+    }, 120);
   };
 
   // 全屏内滚动：实时回写索引；滚动停止后吸附到最近整页（分页，不是无极滑动）
