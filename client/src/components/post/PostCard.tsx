@@ -286,8 +286,8 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
       const dx = el.scrollLeft - startLeft; // 正向 = 手指左滑（scrollLeft 增大）= 下一张
       const width = el.clientWidth || 1;
       let target = startIndex;
-      if (Math.abs(dx) > width * 0.2) {
-        // 拖动超过 1/5 屏 → 翻一页（最多一页，绝不过 2 张）
+      if (Math.abs(dx) > width * 0.12) {
+        // 拖动超过 ~1/8 屏 → 翻一页（最多一页，绝不过 2 张）
         if (dx > 0) target = Math.min(images.length - 1, startIndex + 1);
         else if (dx < 0) target = Math.max(0, startIndex - 1);
       } else {
