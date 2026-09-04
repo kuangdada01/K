@@ -39,7 +39,8 @@ const VIDEO_AUTOPLAY_DELAY_MS = 500;
 interface PostCardProps {
   post: Post;
   onLikeToggle?: () => void;
-  onPostClick?: (postId: number) => void;
+  /** 打开详情页；imageIndex 为当前图片索引（详情页/全屏首屏定位用） */
+  onPostClick?: (postId: number, imageIndex?: number) => void;
   onProfileClick?: (userId: number) => void;
   onLikeChange?: (postId: number, liked: boolean, likeCount: number) => void;
 }
@@ -294,7 +295,7 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
 
       <div
         className={styles.imageWrapper}
-        onClick={() => onPostClick ? onPostClick(post.id) : navigate(`/post/${post.id}`, { state: { from: 'home' } })}
+        onClick={() => onPostClick ? onPostClick(post.id, currentImageIndex) : navigate(`/post/${post.id}`, { state: { from: 'home' } })}
         onMouseEnter={() => setIsPaused(true)}
         onMouseLeave={() => setIsPaused(false)}
       >
@@ -367,7 +368,7 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
         <button className={styles.actionBtn} onClick={() => {
           if (!user) { openLoginPrompt(); return; }
           if (onPostClick) {
-            onPostClick(post.id);
+            onPostClick(post.id, currentImageIndex);
           } else {
             navigate(`/post/${post.id}`);
           }

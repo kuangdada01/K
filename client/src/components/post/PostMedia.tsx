@@ -68,6 +68,21 @@ export default function PostMedia({
     }, 120);
   };
 
+  // 首页卡片点开详情页时带图片索引进入：images 首次就绪后主轮播定位到同一张
+  // （post 异步加载，进入时 scrollRef 尚未有图片；ref 对比确保只在首次就绪时执行一次）
+  const prevImagesRef = useRef<string[] | null>(null);
+  useEffect(() => {
+    if (prevImagesRef.current === images) return;
+    prevImagesRef.current = images;
+    if (currentImageIndex <= 0 || !scrollRef.current) return;
+    const el = scrollRef.current;
+    const target = el.clientWidth * Math.min(currentImageIndex, Math.max(images.length - 1, 0));
+    if (Math.abs(el.scrollLeft - target) > 4) {
+      el.scrollTo({ left: target, behavior: 'auto' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [images]);
+
   // 进入全屏：zoomOverlay 条件渲染后 scrollLeft 为 0，需定位到当前图片
   // （rAF 等一轮布局：图片异步加载不影响 clientWidth，但确保容器已排布）
   useEffect(() => {

@@ -75,6 +75,8 @@ export default function HomePage() {
     return null;
   });
   const [skipOverlayAnim, setSkipOverlayAnim] = useState(() => !!sessionStorage.getItem('reopenPostId'));
+  // 打开详情页时记住卡片上正在看的图片索引，详情页/全屏首屏定位到同一张
+  const [overlayImageIndex, setOverlayImageIndex] = useState(0);
   const [profileUserId, setProfileUserId] = useState<number | null>(null);
 
   // Save scroll position continuously while on homepage
@@ -218,7 +220,8 @@ export default function HomePage() {
       ));
   }, [queryClient]);
 
-  const handlePostClick = useCallback((postId: number) => {
+  const handlePostClick = useCallback((postId: number, imageIndex?: number) => {
+    setOverlayImageIndex(imageIndex ?? 0);
     setOverlayPostId(postId);
   }, []);
 
@@ -343,6 +346,7 @@ export default function HomePage() {
         {overlayPostId && createPortal(
           <PostDetail
             postId={overlayPostId}
+            initialImageIndex={overlayImageIndex}
             onClose={() => { setSkipOverlayAnim(false); handlePostClose(); }}
             onLikeChange={handleLikeChange}
             onCommentChange={handleCommentChange}

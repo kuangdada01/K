@@ -51,6 +51,8 @@ import styles from './PostDetail.module.css';
 
 interface PostDetailProps {
   postId: number;
+  /** 进入详情页时定位到的图片索引（首页卡片点开时传入当前轮播位置） */
+  initialImageIndex?: number;
   onClose?: () => void;
   onLikeChange?: (postId: number, liked: boolean, likeCount: number) => void;
   onCommentChange?: (postId: number, commentCount: number) => void;
@@ -60,6 +62,7 @@ interface PostDetailProps {
 
 export default function PostDetail({
   postId,
+  initialImageIndex = 0,
   onClose,
   onLikeChange,
   onCommentChange,
@@ -95,7 +98,8 @@ export default function PostDetail({
   const { reposted, setReposted, repostCount, setRepostCount, toggle: toggleRepost } = useRepostPost(postId);
   const { bookmarked, setBookmarked, toggle: toggleBookmark } = useBookmarkPost(postId);
   const [submitting, setSubmitting] = useState(false);
-  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  // 首页卡片点开时带图片索引进来，详情页/全屏首屏定位到同一张
+  const [currentImageIndex, setCurrentImageIndex] = useState(initialImageIndex);
   const [zoomed, setZoomed] = useState(false);
   const [closing, setClosing] = useState(false);
   const [collapsedReplies, setCollapsedReplies] = useState<Set<number>>(new Set());
@@ -120,6 +124,7 @@ export default function PostDetail({
     setPrevDetailKey(detailKey);
     setLoadError(false);
     setActiveHighlightId(null);
+    setCurrentImageIndex(initialImageIndex);
   }
 
   // 检测是否为嵌套 PostDetail（在另一个 PostDetail 的 ProfileOverlay 内部）
