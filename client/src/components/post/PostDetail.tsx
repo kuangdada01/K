@@ -96,7 +96,6 @@ export default function PostDetail({
   const { bookmarked, setBookmarked, toggle: toggleBookmark } = useBookmarkPost(postId);
   const [submitting, setSubmitting] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
-  const [isPaused, setIsPaused] = useState(false);
   const [zoomed, setZoomed] = useState(false);
   const [closing, setClosing] = useState(false);
   const [collapsedReplies, setCollapsedReplies] = useState<Set<number>>(new Set());
@@ -650,8 +649,6 @@ export default function PostDetail({
           detailVideoRef={detailVideoRef}
           currentImageIndex={currentImageIndex}
           setCurrentImageIndex={setCurrentImageIndex}
-          isPaused={isPaused}
-          setIsPaused={setIsPaused}
           zoomed={zoomed}
           setZoomed={setZoomed}
         />
