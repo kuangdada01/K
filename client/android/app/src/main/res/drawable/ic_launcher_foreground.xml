@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  K · Adaptive Icon 前景层
+  主体：几何化字母「K」，两笔构成
+      笔 1 竖笔  M46,39 L46,69   —— 创作者 / 自我
+      笔 2 斜臂  M62,39 L46,54 L62,69 —— 内容的发散与回流（社交传播）
+  尺寸：描边宽 10，圆头端点，实际墨迹范围 x[41,67] y[34,74]
+      即 26 x 40dp，占画布 24% x 37%（上一版 31 x 49，再缩约 18%）
+  安全区：四端点圆心距画布中心 17 + 5 = 22 < 33（66dp 绝对安全圆半径），
+      Squircle 等更圆的 OEM 遮罩也不会裁到笔画
+  配色：#F7FBF7 青瓷白 → #C9A962 鎏金（品牌强调色），由左上向右下过渡
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 竖笔 -->
+    <path
+        android:pathData="M46,39L46,69"
+        android:fillColor="#00000000"
+        android:strokeWidth="10"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="linear"
+                android:startX="41"
+                android:startY="34"
+                android:endX="67"
+                android:endY="74">
+                <item android:offset="0" android:color="#FFF7FBF7" />
+                <item android:offset="0.5" android:color="#FFF2F7F2" />
+                <item android:offset="1" android:color="#FFC9A962" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- 斜臂：一笔连写，折点落在竖笔中线，round join 保证转折圆润 -->
+    <path
+        android:pathData="M62,39L46,54L62,69"
+        android:fillColor="#00000000"
+        android:strokeWidth="10"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:type="linear"
+                android:startX="41"
+                android:startY="34"
+                android:endX="67"
+                android:endY="74">
+                <item android:offset="0" android:color="#FFF7FBF7" />
+                <item android:offset="0.5" android:color="#FFF2F7F2" />
+                <item android:offset="1" android:color="#FFC9A962" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+</vector>

@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>霜晨月 · 青瓷黛绿配色预览</title>
+  <style>
+    :root {
+      --bg: #eef2ee;
+      --surface: #ffffff;
+      --surface-soft: #dfe8df;
+      --text: #1f2b26;
+      --text-soft: #55645d;
+      --muted: #82948b;
+      --line: #d2ddd2;
+      --pine: #2f5d50;
+      --pine-soft: #d8e6de;
+      --danger: #b5544a;
+      --shadow: 0 18px 50px rgba(31, 60, 48, .09);
+      --radius: 16px;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: MiSans, "Noto Serif SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        radial-gradient(circle at 12% -8%, rgba(47, 93, 80, .10), transparent 36%),
+        var(--bg);
+      color: var(--text);
+    }
+
+    button { font: inherit; }
+
+    .layout {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 220px minmax(0, 620px) 280px;
+      gap: 28px;
+      min-height: 100vh;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 28px 14px;
+      border-right: 1px solid rgba(210, 221, 210, .9);
+      display: flex;
+      flex-direction: column;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 10px 28px;
+      font-weight: 800;
+      letter-spacing: .12em;
+    }
+
+    .brand-mark {
+      width: 38px;
+      height: 38px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #2f5d50, #7fa390);
+      color: #f5faf6;
+      display: grid;
+      place-items: center;
+      box-shadow: var(--shadow);
+    }
+
+    .nav {
+      display: grid;
+      gap: 4px;
+    }
+
+    .nav a {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 11px 12px;
+      border-radius: 12px;
+      color: var(--text-soft);
+      text-decoration: none;
+      transition: background .16s ease, color .16s ease;
+    }
+
+    .nav a:hover { background: rgba(255, 255, 255, .78); color: var(--text); }
+    .nav a.active { background: var(--surface); color: var(--pine); box-shadow: var(--shadow); }
+
+    .nav i {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      opacity: .72;
+    }
+
+    .sidebar-bottom {
+      margin-top: auto;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+    }
+
+    .user-chip {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, .74);
+      border: 1px solid rgba(210, 221, 210, .86);
+    }
+
+    .avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--g, linear-gradient(135deg, #b7cebe, #2f5d50));
+      flex-shrink: 0;
+      box-shadow: inset 0 0 0 2px rgba(255, 255, 255, .78);
+    }
+
+    .user-chip strong { display: block; font-size: 14px; }
+    .user-chip small { color: var(--muted); }
+
+    main { padding: 34px 0 90px; }
+
+    .feed-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .feed-head h1 {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: -.04em;
+    }
+
+    .feed-head span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .post {
+      background: rgba(255, 255, 255, .86);
+      border: 1px solid rgba(210, 221, 210, .9);
+      border-radius: 22px;
+      padding: 18px;
+      margin-bottom: 22px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(12px);
+    }
+
+    .post-head,
+    .post-actions,
+    .recommend-row {
+      display: flex;
+      align-items: center;
+    }
+
+    .post-head { gap: 12px; margin-bottom: 14px; }
+    .post-head strong { display: block; font-size: 15px; }
+    .post-head small { color: var(--muted); }
+
+    .follow-btn {
+      margin-left: auto;
+      border: 1px solid rgba(47, 93, 80, .22);
+      background: var(--pine);
+      color: #f5faf6;
+      padding: 8px 13px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .follow-btn.soft {
+      background: transparent;
+      color: var(--pine);
+    }
+
+    .photo {
+      height: 520px;
+      border-radius: 18px;
+      background:
+        linear-gradient(to top, rgba(31, 43, 38, .22), transparent 42%),
+        var(--g, linear-gradient(135deg, #b7cebe, #7fa390 48%, #2f5d50));
+      position: relative;
+      overflow: hidden;
+    }
+
+    .photo::after {
+      content: attr(data-label);
+      position: absolute;
+      left: 16px;
+      bottom: 14px;
+      padding: 7px 11px;
+      border-radius: 999px;
+      background: rgba(245, 250, 246, .8);
+      color: var(--pine);
+      font-size: 12px;
+      letter-spacing: .08em;
+      backdrop-filter: blur(14px);
+    }
+
+    .post-actions {
+      gap: 18px;
+      padding: 14px 2px 0;
+      color: var(--text-soft);
+      font-size: 14px;
+    }
+
+    .post-actions button {
+      border: 0;
+      background: none;
+      padding: 0;
+      cursor: pointer;
+      color: inherit;
+    }
+
+    .post-actions button:first-child { color: var(--danger); }
+
+    .caption {
+      padding: 10px 2px 0;
+      color: var(--text-soft);
+      line-height: 1.8;
+      font-size: 14px;
+    }
+
+    .caption strong { color: var(--text); }
+
+    .rightbar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 42px 0;
+    }
+
+    .panel {
+      background: rgba(255, 255, 255, .82);
+      border: 1px solid rgba(210, 221, 210, .92);
+      border-radius: 22px;
+      padding: 18px;
+      box-shadow: var(--shadow);
+    }
+
+    .panel h2 {
+      margin: 0 0 14px;
+      font-size: 14px;
+      color: var(--muted);
+      letter-spacing: .12em;
+      font-weight: 700;
+    }
+
+    .recommend-row {
+      gap: 10px;
+      padding: 10px 0;
+      border-top: 1px solid rgba(210, 221, 210, .76);
+    }
+
+    .recommend-row:first-of-type { border-top: 0; }
+    .recommend-row .avatar { width: 36px; height: 36px; }
+    .recommend-row div { flex: 1; min-width: 0; }
+    .recommend-row strong { display: block; font-size: 13px; }
+    .recommend-row small { color: var(--muted); font-size: 12px; }
+
+    .mini-btn {
+      border: 0;
+      background: var(--pine-soft);
+      color: #295247;
+      padding: 7px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    @media (max-width: 1020px) {
+      .layout { grid-template-columns: 200px minmax(0, 1fr); }
+      .rightbar { display: none; }
+    }
+
+    @media (max-width: 720px) {
+      .layout { display: block; width: min(100% - 24px, 620px); }
+      .sidebar {
+        position: fixed;
+        z-index: 20;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        top: auto;
+        height: auto;
+        padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+        border-right: 0;
+        border-top: 1px solid rgba(210, 221, 210, 1);
+        background: rgba(238, 242, 238, .92);
+        backdrop-filter: blur(20px);
+      }
+      .brand, .sidebar-bottom { display: none; }
+      .nav {
+        display: flex;
+        justify-content: space-around;
+      }
+      .nav a {
+        flex-direction: column;
+        gap: 5px;
+        font-size: 11px;
+        padding: 6px 8px;
+      }
+      main { padding: 22px 0 96px; }
+      .photo { height: 420px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">霜</span>霜晨月</div>
+      <nav class="nav" aria-label="主导航">
+        <a class="active" href="#"><i></i>首页</a>
+        <a href="#"><i></i>搜索</a>
+        <a href="#"><i></i>消息</a>
+        <a href="#"><i></i>分享</a>
+        <a href="#"><i></i>公告</a>
+        <a href="#"><i></i>图书</a>
+        <a href="#"><i></i>主页</a>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="user-chip">
+          <span class="avatar" style="--g:linear-gradient(135deg,#2f5d50,#b7cebe)"></span>
+          <div><strong>k</strong><small>青瓷黛绿预览</small></div>
+        </div>
+      </div>
+    </aside>
+
+    <main>
+      <div class="feed-head">
+        <h1>首页</h1>
+        <span>CELADON PINE / SAME LAYOUT</span>
+      </div>
+
+      <article class="post">
+        <header class="post-head">
+          <span class="avatar" style="--g:linear-gradient(135deg,#b7cebe,#2f5d50)"></span>
+          <div><strong>晨野</strong><small>22 分钟前 · 城市摄影</small></div>
+          <button class="follow-btn">关注</button>
+        </header>
+        <div class="photo" data-label="雨后山色" style="--g:linear-gradient(135deg,#cfe0d4,#8aaf9a 45%,#2f5d50)"></div>
+        <div class="post-actions"><button>♡ 1,284</button><button>评论 96</button><button>转发 38</button><button>分享</button></div>
+        <div class="caption"><strong>晨野</strong> 侧栏、卡片与推荐位一概未动，只把底色换成青瓷般的水绿，强调色收敛为松柏深绿。</div>
+      </article>
+
+      <article class="post">
+        <header class="post-head">
+          <span class="avatar" style="--g:linear-gradient(135deg,#7fa390,#d8e6de)"></span>
+          <div><strong>青柠</strong><small>1 小时前 · 阅读日常</small></div>
+          <button class="follow-btn soft">已关注</button>
+        </header>
+        <div class="photo" data-label="茶席一隅" style="--g:linear-gradient(135deg,#e6efe7,#a9c4b1 52%,#41655a)"></div>
+        <div class="post-actions"><button>♡ 2,040</button><button>评论 121</button><button>转发 57</button><button>分享</button></div>
+        <div class="caption"><strong>青柠</strong> 白瓷卡片浮在淡青底上，边框取自瓷缘的灰绿，整体像一盏温过的茶。</div>
+      </article>
+    </main>
+
+    <aside class="rightbar">
+      <section class="panel">
+        <h2>推荐关注</h2>
+        <div class="recommend-row">
+          <span class="avatar" style="--g:linear-gradient(135deg,#2f5d50,#7fa390)"></span>
+          <div><strong>洛书</strong><small>电子书与手记</small></div>
+          <button class="mini-btn">关注</button>
+        </div>
+        <div class="recommend-row">
+          <span class="avatar" style="--g:linear-gradient(135deg,#b5544a,#d8e6de)"></span>
+          <div><strong>白噪音</strong><small>音乐与影像</small></div>
+          <button class="mini-btn">关注</button>
+        </div>
+        <div class="recommend-row">
+          <span class="avatar" style="--g:linear-gradient(135deg,#6b7f5a,#b7cebe)"></span>
+          <div><strong>禾木</strong><small>胶片日记</small></div>
+          <button class="mini-btn">关注</button>
+        </div>
+      </section>
+    </aside>
+  </div>
+</body>
+</html>

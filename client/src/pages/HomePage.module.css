@@ -1,0 +1,153 @@
+/* 首页布局与下拉刷新（参考稿 premium-celadon/obsidian 布局） */
+
+.layout {
+  display: grid;
+  /* 三列网格：左留白 | 信息流(恒定居中) | 右栏(贴右缘)；列间距统一 44px */
+  grid-template-columns: minmax(0, 1fr) auto minmax(280px, 1fr);
+  gap: 44px;
+  align-items: start;
+  padding: 34px 44px 90px 16px;
+  width: 100%;
+}
+
+.feed {
+  grid-column: 2;
+  width: 100%;
+  max-width: 620px;
+  min-width: 0;
+}
+
+/* 桌面端精确居中补偿：左导航占位(220px+28px 间距) + 右栏最小 280px + 非对称
+   内边距(左16/右44)共同使帖子栏中心落在浏览器可见中线左侧约 18px（1600/1920
+   宽下实测恒定），相对定位右移抵消。改导航宽度/列间距/内边距/帖子最大宽时需同步调整。 */
+@media (min-width: 1021px) {
+  .feed {
+    position: relative;
+    left: 18px;
+  }
+}
+
+/* 页头：标题 + 副标题 */
+.feedHead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.feedHead h1 {
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: -0.04em;
+  color: var(--text-primary);
+}
+
+/* 移动端首页右上角搜索入口（桌面端侧边栏已有搜索，隐藏） */
+.searchBtn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  color: var(--accent);
+  background: transparent;
+  border: none;
+  transition: transform 0.12s ease, opacity 0.12s ease, color 0.12s ease;
+}
+
+.searchBtn:active {
+  transform: scale(0.92);
+  opacity: 0.8;
+}
+
+@media (max-width: 768px) {
+  .searchBtn {
+    display: flex;
+  }
+}
+
+.sidebar {
+  grid-column: 3;
+  justify-self: end;
+  /* 负右边距抵消布局 44px 右内边距，使卡片右缘与容器右缘对齐，
+     与左侧导航齐贴容器左缘对称：窗口两侧留白相等 */
+  margin-right: -44px;
+  width: 280px;
+  position: sticky;
+  top: 34px;
+  align-self: start;
+}
+
+@media (max-width: 1020px) {
+  .sidebar {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .layout {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 22px 16px 96px;
+    gap: 0;
+  }
+
+  .feed {
+    grid-column: 1;
+    max-width: 100%;
+    margin: 0 auto;
+  }
+
+  .feedHead {
+    margin-bottom: 16px;
+  }
+
+  .feedHead h1 {
+    font-size: 24px;
+  }
+
+  .sidebar {
+    display: none;
+  }
+}
+
+/* Pull-to-refresh: finger-following indicator */
+.pullIndicator {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Progress circle (shown during pull, hidden during refresh) */
+.pullProgress {
+  display: block;
+}
+
+.pullIndicator.refreshing .pullProgress {
+  display: none;
+}
+
+/* Spinner (hidden during pull, shown during refresh) */
+.pullSpinner {
+  display: none;
+  width: 26px;
+  height: 26px;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: homePullSpin 0.7s linear infinite;
+}
+
+.pullIndicator.refreshing .pullSpinner {
+  display: block;
+}
+
+@keyframes homePullSpin {
+  to { transform: rotate(360deg); }
+}

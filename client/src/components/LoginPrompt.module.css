@@ -1,0 +1,260 @@
+/* 登录弹窗（原 auth.css 的 auth-* + post.css 尾部的 login-prompt-* 规则） */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 500;
+  animation: loginFadeIn 0.2s ease;
+}
+
+.overlay.closing {
+  animation: loginFadeOut 0.2s ease forwards;
+}
+
+.modal {
+  position: relative;
+  background: var(--bg-primary);
+  border-radius: var(--radius);
+  padding: 28px 24px;
+  width: 400px;
+  max-width: 85vw;
+  text-align: center;
+  animation: loginScaleIn 0.2s ease;
+}
+
+.modal.closing {
+  animation: loginScaleOut 0.2s ease forwards;
+}
+
+.close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 50%;
+  transition: background 0.15s, color 0.15s;
+}
+
+.close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.logo {
+  font-size: 28px;
+}
+
+.subtitle {
+  margin-bottom: 16px;
+}
+
+.authLogo {
+  font-size: 36px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.authSubtitle {
+  color: var(--text-secondary);
+  font-size: 16px;
+  margin-bottom: 24px;
+  line-height: 1.4;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.emailRow {
+  position: relative;
+}
+
+.emailRow .input {
+  width: 100%;
+  padding-right: 40px;
+}
+
+.sendBtn {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: var(--on-accent);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.sendBtn:hover {
+  background: var(--accent-hover);
+}
+
+.sendBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.countdown {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* 旋转动画（发送中） */
+@keyframes loginSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: loginSpin 1s linear infinite;
+}
+
+.input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  font-size: 14px;
+  background: var(--bg-secondary);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.input:focus {
+  border-color: var(--text-secondary);
+}
+
+.button {
+  width: 100%;
+  padding: 10px;
+  background: var(--accent);
+  color: var(--on-accent);
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+  margin-top: 8px;
+}
+
+.button:hover {
+  background: var(--accent-hover);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.actionsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
+}
+
+.registerLink {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+  margin-left: 16px;
+  padding: 0;
+}
+
+.registerLink:hover {
+  color: var(--accent-hover);
+}
+
+.actionsRow .forgotRow {
+  margin-top: 0;
+  margin-right: 16px;
+}
+
+.linkBtn {
+  padding: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.linkBtn:hover {
+  color: var(--accent-hover);
+}
+
+.error {
+  color: var(--danger);
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.success {
+  color: var(--success);
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.forgotRow {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.forgotLink {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 0;
+}
+
+.forgotLink:hover {
+  color: var(--accent);
+}
+
+.link {
+  margin-top: 16px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+@keyframes loginFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes loginFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes loginScaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes loginScaleOut {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.95); }
+}

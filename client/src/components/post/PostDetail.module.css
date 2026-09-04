@@ -1,0 +1,511 @@
+/* 帖子详情弹窗（原 post.css 的 post-detail 系列规则） */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 20px;
+  animation: pdFadeIn 0.2s ease;
+}
+
+@keyframes pdFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes pdFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes pdScaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes pdScaleOut {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.95); }
+}
+
+.overlay.closing {
+  animation: pdFadeOut 0.2s ease forwards;
+  pointer-events: none;
+}
+
+.container.closing {
+  animation: pdScaleOut 0.2s ease forwards;
+}
+
+.overlay.noAnimation {
+  animation: none;
+}
+
+.container.noAnimation {
+  animation: none;
+}
+
+.close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  color: white;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 50%;
+  transition: background 0.15s;
+}
+
+.close:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.mobileHeader {
+  display: none;
+}
+
+.container {
+  background: var(--bg-primary);
+  border-radius: var(--radius);
+  display: flex;
+  width: 80vw;
+  height: 80vh;
+  overflow: hidden;
+  animation: pdScaleIn 0.25s ease;
+}
+
+.info {
+  width: 45%;
+  min-width: 360px;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.avatar {
+  width: 39px;
+  height: 39px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--bg-hover);
+  vertical-align: middle;
+}
+
+.avatarPlaceholder {
+  width: 39px;
+  height: 39px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.username {
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.userLink {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.dot {
+  color: var(--text-secondary);
+  font-size: 14px;
+  margin: 0;
+}
+
+.followBtn {
+  margin-left: auto;
+  padding: 7px 13px;
+  border: 1px solid rgba(47, 93, 80, 0.22);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  background: var(--accent);
+  color: var(--on-accent);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+
+.followBtn:hover {
+  background: var(--accent-hover);
+}
+
+.followBtn.following {
+  background: transparent;
+  color: var(--accent);
+}
+
+.followBtn.following:hover {
+  background: var(--accent-soft);
+}
+
+[data-theme="dark"] .followBtn {
+  border-color: rgba(201, 169, 98, 0.38);
+}
+
+.comments {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 16px;
+}
+
+.comment {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.commentAvatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.commentAvatarPlaceholder {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.commentContent {
+  font-size: 14px;
+}
+
+.commentUsername {
+  font-weight: 600;
+  margin-right: 6px;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.actionBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 4px;
+  color: var(--text-primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: hover) {
+  .actionBtn:hover {
+    opacity: 0.6;
+  }
+}
+
+.actionBtn.liked {
+  color: var(--danger);
+}
+
+/* 转发态修饰类（原实现无专属规则，仅作状态标识） */
+.reposted {}
+
+.actionCount {
+  font-size: 14px;
+  font-weight: 400;
+  margin-left: 2px;
+}
+
+.actionBtn.liked svg {
+  fill: var(--danger) !important;
+  stroke: var(--danger) !important;
+}
+
+.bookmarkBtn {
+  margin-left: auto;
+}
+
+.bookmarkBtn.bookmarked {
+  color: var(--accent);
+}
+
+.bookmarkBtn.bookmarked svg {
+  fill: var(--accent) !important;
+  stroke: var(--accent) !important;
+}
+
+.shareTooltip {
+  position: relative;
+}
+
+.shareTooltipText {
+  position: absolute;
+  bottom: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  animation: pdFadeInOut 1.5s ease-in-out;
+}
+
+@keyframes pdFadeInOut {
+  0% { opacity: 0; }
+  20% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.inputWrapper {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.commentsDisabled {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 14px;
+  background: var(--bg-hover);
+}
+
+.input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 14px;
+  padding: 4px;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.input::placeholder {
+  color: var(--text-secondary);
+}
+
+.inputLocked {
+  opacity: 0.5;
+  cursor: pointer;
+  user-select: none;
+}
+
+.replyingToBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: var(--bg-hover);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.replyingToBar button {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 13px;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.submit {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: opacity 0.15s;
+}
+
+.submit:hover {
+  opacity: 0.7;
+}
+
+.submit:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.editBtn {
+  padding: 2px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  display: none;
+  transition: color 0.15s;
+}
+
+.editBtn:hover {
+  color: var(--accent);
+}
+
+@media (max-width: 768px) {
+  .overlay {
+    padding: 0;
+  }
+
+  /* 整体内容流：媒体 → 描述 → 评论连续滚动，返回栏吸顶、操作/输入区吸底。
+     flex 子项全部不收缩：内容超屏时自然溢出滚动；不足一屏时 flex-grow 撑满，
+     保证底部 dock 始终贴住视口底边 */
+  .container {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  .mobileHeader {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: calc(10px + var(--safe-area-top)) 12px 10px 0;
+    background: var(--bg-primary);
+    border-bottom: 1px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    flex-shrink: 0;
+  }
+
+  .mobileUser {
+    flex: 1;
+  }
+
+  .backBtn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-primary);
+    padding: 8px 4px 8px 8px;
+    border-radius: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s;
+    margin-left: 0;
+  }
+
+  .backBtn:hover {
+    background: var(--bg-hover);
+  }
+
+  .mobileUser {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+  }
+
+  .mobileAvatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    object-fit: cover;
+  }
+
+  .mobileAvatarPlaceholder {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--on-accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .mobileUsername {
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .close {
+    display: none;
+  }
+
+  .info {
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    flex: 1 0 auto; /* 不足一屏时撑满剩余空间，把底部 dock 推到视口底 */
+    border-left: none;
+    border-top: none;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .header {
+    display: none;
+  }
+
+  .comments {
+    flex: 1 0 auto; /* 吸收 info 的富余高度，让评论之后的内容落在视口底部 */
+    overflow-y: visible; /* 评论并入容器内容流，随整页连续滚动 */
+  }
+
+  .editBtn {
+    display: flex;
+  }
+
+  /* 操作栏 + 评论框整体吸底，滚动时始终可见、不被内容顶走 */
+  .bottomDock {
+    position: sticky;
+    bottom: 0;
+    z-index: 4;
+    background: var(--bg-primary);
+    padding-bottom: var(--safe-area-bottom);
+  }
+}

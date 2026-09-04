@@ -1,0 +1,138 @@
+/* 推荐关注卡片（参考稿 premium-celadon/obsidian 的 panel 样式） */
+
+.card {
+  background: var(--bg-frosted);
+  border: 1px solid rgba(210, 221, 210, 0.92);
+  border-radius: 22px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px) saturate(180%);
+  -webkit-backdrop-filter: blur(18px) saturate(180%);
+}
+
+[data-theme="dark"] .card {
+  background: var(--bg-frosted);
+  border-color: rgba(38, 43, 53, 0.95);
+}
+
+.title {
+  margin: 0 0 14px;
+  font-size: 14px;
+  color: var(--text-muted);
+  letter-spacing: 0.12em;
+  font-weight: 700;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(210, 221, 210, 0.76);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+[data-theme="dark"] .item {
+  border-top-color: rgba(38, 43, 53, 0.72);
+}
+
+.item:first-child {
+  border-top: 0;
+}
+
+.item.removing {
+  opacity: 0;
+  transform: translateX(20px);
+}
+
+.itemLink {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  transition: opacity 0.15s;
+}
+
+.itemLink:hover {
+  opacity: 0.7;
+}
+
+/* 迷你胶囊按钮（参考稿 mini-btn） */
+.followBtn {
+  flex-shrink: 0;
+  border: none;
+  background: var(--bg-tag-admin);
+  color: var(--text-tag-admin);
+  padding: 7px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.followBtn:hover {
+  opacity: 0.85;
+}
+
+[data-theme="dark"] .followBtn {
+  border: 1px solid rgba(201, 169, 98, 0.22);
+}
+
+.itemAvatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.itemAvatarPlaceholder {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.itemInfo {
+  min-width: 0;
+  flex: 1;
+}
+
+.itemName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemBio {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.empty {
+  font-size: 13px;
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 16px 0;
+}

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!-- Allow cleartext traffic to production server for API requests -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">120.25.100.193</domain>
+        <domain includeSubdomains="false">www.kuangdada.top</domain>
+        <domain includeSubdomains="false">kuangdada.top</domain>
+    </domain-config>
+</network-security-config>

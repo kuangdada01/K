@@ -1,0 +1,150 @@
+/* App 更新检测弹窗（风格与 LoginPrompt 保持一致） */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 600;
+  animation: updateFadeIn 0.2s ease;
+}
+
+.overlay.closing {
+  animation: updateFadeOut 0.2s ease forwards;
+}
+
+.modal {
+  position: relative;
+  background: var(--bg-primary);
+  border-radius: var(--radius);
+  padding: 28px 24px;
+  width: 360px;
+  max-width: 85vw;
+  text-align: center;
+  animation: updateScaleIn 0.2s ease;
+}
+
+.modal.closing {
+  animation: updateScaleOut 0.2s ease forwards;
+}
+
+.close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 50%;
+  transition: background 0.15s, color 0.15s;
+}
+
+.close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.logo {
+  font-size: 36px;
+  margin-bottom: 8px;
+}
+
+.title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.version {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--accent, #2f81f7);
+  margin-bottom: 12px;
+}
+
+.notes {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+  margin-bottom: 20px;
+  max-height: 96px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px 0;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--accent, #2f81f7);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+.primary:hover {
+  opacity: 0.9;
+}
+
+.primary:active {
+  transform: scale(0.98);
+}
+
+.secondary {
+  width: 100%;
+  padding: 9px 0;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.3));
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.secondary:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+@keyframes updateFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes updateFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes updateScaleIn {
+  from { transform: scale(0.92); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@keyframes updateScaleOut {
+  from { transform: scale(1); opacity: 1; }
+  to { transform: scale(0.92); opacity: 0; }
+}

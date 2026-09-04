@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            shared/package-lock.json
+            server/package-lock.json
+            client/package-lock.json
+
+      - name: 安装依赖（npm ci 一步完成，E3 修复：此前 npm install + install:all 根目录装两遍且可能改写 lockfile）
+        run: npm ci && npm ci --prefix shared && npm ci --prefix server && npm ci --prefix client
+
+      - name: 构建（shared → server → client）
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: 测试（server vitest）
+        run: npm run test
+
+      - name: E2E 冒烟（Playwright）
+        env:
+          # E3 修复：build 步骤已产出 dist，webServer 跳过重复构建
+          SKIP_BUILD: '1'
+        run: |
+          npx playwright install --with-deps chromium
+          npm run e2e

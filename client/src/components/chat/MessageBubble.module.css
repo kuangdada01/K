@@ -1,0 +1,174 @@
+/* 消息气泡（原 messages.css 的 chat-message-row/bubble/quote/时间分隔符规则） */
+
+.row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.row.sent {
+  flex-direction: row-reverse;
+}
+
+.msgAvatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+.bubbleWrapper {
+  display: flex;
+  flex-direction: column;
+  max-width: 60%;
+}
+
+.bubbleWrapper.sent {
+  align-items: flex-end;
+}
+
+.bubbleWrapper.received {
+  align-items: flex-start;
+}
+
+.message {
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.4;
+  word-wrap: break-word;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.bubbleWrapper.sent .message {
+  margin-left: auto;
+}
+
+.message.sent {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.message.received {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.messageTime {
+  font-size: 11px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  padding: 0 4px;
+}
+
+/* ============================================================
+ * 时间分隔符（微信风格 — 消息间隔超过 5 分钟时居中显示）
+ * ============================================================ */
+
+.timeSeparator {
+  text-align: center;
+  padding: 8px 0;
+}
+
+.timeSeparator span {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 2px 12px;
+  border-radius: 4px;
+}
+
+.messageImage {
+  max-width: 240px;
+  max-height: 240px;
+  border-radius: 12px;
+  object-fit: cover;
+  cursor: pointer;
+}
+
+/* ============================================================
+ * 气泡内引用预览
+ * ============================================================ */
+
+.messageQuote {
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border-radius: 8px;
+  padding: 4px 8px;
+  margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: fit-content;
+  max-width: 100%;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.messageQuote:active {
+  opacity: 0.7;
+}
+
+.quoteImg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.quoteUserName {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.quoteThumb {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  object-fit: cover;
+  vertical-align: middle;
+}
+
+.highlight {
+  animation: chatHighlightFlash 1.5s ease;
+}
+
+@keyframes chatHighlightFlash {
+  0% { background: var(--accent-soft); }
+  100% { background: transparent; }
+}
+
+@media (max-width: 768px) {
+  .msgAvatar {
+    width: 28px !important;
+    height: 28px !important;
+  }
+
+  .message {
+    font-size: 14px;
+    padding: 8px 12px;
+    max-width: 75vw;
+  }
+
+  .messageImage {
+    max-width: 65vw;
+    max-height: 50vw;
+  }
+
+  .messageQuote {
+    font-size: 11px;
+    padding: 5px 8px;
+    margin-top: 3px;
+  }
+
+  .timeSeparator {
+    padding: 6px 0;
+  }
+
+  .timeSeparator span {
+    font-size: 11px;
+    padding: 2px 10px;
+  }
+}

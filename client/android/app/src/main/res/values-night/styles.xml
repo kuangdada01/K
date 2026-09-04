@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 夜间模式：状态栏深灰（与深色主题页面协调），背景深 + 浅色图标。
+         浅色主题 values/styles.xml 的 #EEF2EE 在夜间不会被自动覆盖 —— 不补这版夜间
+         主题，DayNight 夜间默认 statusBarColor 是黑色，与深色页面协调但偏刺眼 -->
+    <style name="AppTheme.NoActionBar" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:statusBarColor">#1A1A1A</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+    </style>
+</resources>

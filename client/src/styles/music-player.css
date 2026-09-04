@@ -1,0 +1,165 @@
+.music-player {
+  position: fixed;
+  bottom: calc(80px + var(--safe-area-bottom));
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 48px;
+  max-width: 320px;
+  padding: 0 8px 0 16px;
+  background: var(--bg-frosted);
+  border: 1px solid var(--border-color);
+  border-radius: 24px;
+  -webkit-backdrop-filter: blur(18px) saturate(180%);
+  backdrop-filter: blur(18px) saturate(180%);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+  z-index: 150;
+}
+
+/* 桌面端（>1020px 右栏可见时）：浮窗隐藏，改用右侧栏 inline 版 */
+@media (min-width: 1021px) {
+  .music-player:not(.music-player-inline) {
+    display: none;
+  }
+}
+
+/* inline 版：右侧栏推荐关注下方，对齐 280px 右栏宽度 */
+.music-player-inline {
+  position: static;
+  width: 100%;
+  max-width: none;
+  height: 52px;
+  padding: 0 10px 0 16px;
+  margin-top: 16px;
+  background: var(--bg-frosted);
+  border: 1px solid rgba(210, 221, 210, 0.92);
+  border-radius: 22px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px) saturate(180%);
+  -webkit-backdrop-filter: blur(18px) saturate(180%);
+  box-sizing: border-box;
+}
+
+[data-theme="dark"] .music-player-inline {
+  background: var(--bg-frosted);
+  border-color: rgba(38, 43, 53, 0.95);
+}
+
+.music-player-inline .music-player-info {
+  max-width: 150px;
+}
+
+@keyframes music-player-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 标题/歌手区 */
+.music-player-info {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  flex: 1;
+  max-width: 160px;
+}
+
+.music-player-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+.music-player-artist {
+  font-size: 11px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.2;
+  margin-top: 1px;
+}
+
+/* 控制组 */
+.music-player-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.music-player-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: hover) {
+  .music-player-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+  }
+}
+
+.music-player-play-btn {
+  background: var(--accent);
+  color: var(--on-accent);
+  width: 36px;
+  height: 36px;
+  position: relative;
+  margin: 0 2px;
+}
+
+@media (hover: hover) {
+  .music-player-play-btn:hover {
+    background: var(--accent-hover);
+  }
+}
+
+/* 播放按钮外圈进度环：收敛为按钮内描边，避免视觉重叠 */
+.music-player-progress-ring {
+  position: absolute;
+  inset: 0;
+  width: 36px;
+  height: 36px;
+  pointer-events: none;
+}
+
+.music-player-progress-ring circle {
+  stroke: var(--accent-hover);
+  opacity: 0.55;
+}
+
+@media (max-width: 768px) {
+  /* 移动端隐藏音乐播放器浮窗（inline 版所在右栏 ≤1020px 已随 .sidebar 隐藏） */
+  .music-player:not(.music-player-inline) {
+    display: none;
+  }
+}
+
+@media (min-width: 769px) and (max-width: 1020px) {
+  .music-player {
+    bottom: 84px;
+    right: 24px;
+  }
+}

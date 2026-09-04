@@ -1,0 +1,237 @@
+/* 头像二级菜单 */
+
+.trigger {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border: none;
+  background: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.15s;
+  width: 100%;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.trigger:hover {
+  background: rgba(47, 93, 80, 0.08);
+}
+
+[data-theme="dark"] .trigger:hover {
+  background: rgba(201, 169, 98, 0.1);
+}
+
+.triggerWide {
+  padding: 10px 12px;
+}
+
+.avatar {
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--bg-hover);
+}
+
+.avatarPlaceholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.triggerText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.username {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 图标模式触发器（设置齿轮） */
+.iconTrigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--text-secondary);
+  transition: color 0.15s, background 0.15s;
+}
+
+.trigger:hover .iconTrigger {
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+
+.subtitle {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---------- 菜单（桌面浮动） ---------- */
+
+.menuFloat {
+  position: fixed;
+  width: 280px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 18px;
+  box-shadow: var(--shadow-dropdown);
+  padding: 8px;
+  z-index: 900;
+  animation: amPopIn 0.16s ease;
+}
+
+/* ---------- 菜单（移动端底部面板） ---------- */
+
+.menuSheet {
+  position: fixed;
+  z-index: 900;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 18px;
+  box-shadow: var(--shadow-dropdown);
+  padding: 8px;
+  animation: amSlideUp 0.22s ease;
+}
+
+.menuHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 12px;
+}
+
+.menuAvatar {
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--bg-hover);
+}
+
+.menuUserInfo {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.menuUserInfo strong {
+  font-size: 14px;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menuUserInfo small {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sectionLabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--text-muted);
+  padding: 8px 12px 4px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: none;
+  border-radius: 12px;
+  font-size: 14px;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.item:hover {
+  background: var(--bg-hover);
+}
+
+.itemIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.itemCheck {
+  margin-left: auto;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.itemActive {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.itemActive .itemIcon {
+  color: var(--accent);
+}
+
+.itemDanger {
+  color: var(--danger);
+}
+
+.itemDanger .itemIcon {
+  color: var(--danger);
+}
+
+.itemDanger:hover {
+  background: var(--bg-danger-light);
+}
+
+.itemLogin {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.itemLogin .itemIcon {
+  color: var(--accent);
+}
+
+.divider {
+  height: 1px;
+  margin: 6px 8px;
+  background: var(--border-color);
+}
+
+@keyframes amPopIn {
+  from { opacity: 0; transform: scale(0.96) translateY(-4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes amSlideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}

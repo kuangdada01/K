@@ -1,0 +1,84 @@
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db
+
+# Server 数据库（k.db 现行库及 WAL 一律不提交）
+server/k.db*
+server/uploads/*
+!server/uploads/.gitkeep
+server/uploads_private/*
+!server/uploads_private/.gitkeep
+
+# Client
+client/dist/
+client/tsconfig.tsbuildinfo
+client/android/.gradle/
+client/android/build/
+client/android/local.properties
+client/android/app/build/
+client/android/capacitor-cordova-android-plugins
+client/android/app/src/main/assets/public
+client/android/app/src/main/assets/capacitor.config.json
+client/android/app/src/main/assets/capacitor.plugins.json
+client/android/app/src/main/res/xml/config.xml
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude local settings
+.claude/settings.local.json
+.claude/deploy_fix.py
+
+# Music files (large & potential copyright)
+client/public/music/
+
+# Android keystore
+client/android/keystore.properties
+*.keystore
+*.jks
+*.p12
+*.pfx
+
+# Playwright
+test-results/
+playwright-report/
+# Dev server runtime files
+*.pid
+dev-server*.log
+dev-vite*.log
+
+# npm pack 产物（防提交进仓库、防整树打包时被重复包含）
+*.tgz
+*.tar.gz
+
+# J-Space 工作台账（本地工作状态，不入库）
+.jspace/
+
+# ZCode 本地会话目录
+.zcode/
+
+# 部署脚本（包含服务器凭据的禁止入库；deploy-sftp.py / deploy-client-lite.py 无凭据且工具链依赖，需入库）
+deploy*.py
+!deploy-probe*.py.keep
+!deploy-sftp.py
+!deploy-client-lite.py
+
+# 发布产物（release APK 等，构建生成不入库）
+release/
+
+# APK 发布产物（构建生成不入库）
+client/public/apk/
+
+# WorkBuddy workspace data
+.workbuddy/

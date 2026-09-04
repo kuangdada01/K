@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="colorPrimary">#1a1a2e</color>
+    <color name="colorPrimaryDark">#0f0f23</color>
+    <color name="colorAccent">#e94560</color>
+    <!-- 窗口背景 = 状态栏条颜色（Android 16 强制 edge-to-edge，statusBarColor 被忽略，
+         WebView 被 Capacitor 下移避让状态栏，露出的就是窗口背景）。
+         必须与页面底色 bg-page (#eef2ee) 一致，否则状态栏出现白条 -->
+    <color name="background">#EEF2EE</color>
+</resources>

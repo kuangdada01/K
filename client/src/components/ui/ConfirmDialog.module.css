@@ -1,0 +1,93 @@
+/* 确认对话框（原 post.css 的 confirm-* 规则） */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 400;
+  animation: cdFadeIn 0.2s ease;
+}
+
+.overlay.closing {
+  animation: cdFadeOut 0.2s ease forwards;
+}
+
+.modal {
+  background: var(--bg-primary);
+  border-radius: var(--radius);
+  padding: 24px;
+  width: 360px;
+  max-width: 85vw;
+  animation: cdScaleIn 0.2s ease;
+}
+
+.modal.closing {
+  animation: cdScaleOut 0.2s ease forwards;
+}
+
+.message {
+  font-size: 15px;
+  color: var(--text-primary);
+  margin: 0 0 20px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.btnCancel,
+.btnConfirm {
+  flex: 1;
+  padding: 8px 0;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.btnCancel {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.btnCancel:hover {
+  opacity: 0.85;
+}
+
+.btnConfirm {
+  background: var(--danger);
+  color: #fff;
+}
+
+.btnConfirm:hover {
+  opacity: 0.85;
+}
+
+@keyframes cdFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes cdFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes cdScaleIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes cdScaleOut {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.95); }
+}

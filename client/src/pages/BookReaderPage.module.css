@@ -1,0 +1,109 @@
+/* 图书阅读页（原 books.css 阅读页规则） */
+
+.reader {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 0 20px 80px;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  background: var(--bg-color, var(--bg-page));
+  border-bottom: 1px solid var(--border-color);
+}
+
+.back,
+.tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: none;
+  background: none;
+  font-size: 14px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 8px;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+}
+
+.back:hover,
+.tool:hover {
+  background: var(--hover-bg, var(--bg-hover));
+  color: var(--text-primary);
+}
+
+.title {
+  flex: 1;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.tools {
+  display: flex;
+  gap: 2px;
+}
+
+.content {
+  padding: 28px 4px 20px;
+  line-height: 1.9;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.para {
+  margin: 0 0 0.5em;
+  text-align: justify;
+  text-indent: 2em;
+}
+
+.nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 40px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.navBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  background: none;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.navBtn:hover:not(:disabled) {
+  background: var(--hover-bg, var(--bg-hover));
+}
+
+.navBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ---- 暗色主题适配 ---- */
+[data-theme='dark'] .topbar {
+  background: var(--card-bg, var(--bg-page));
+}

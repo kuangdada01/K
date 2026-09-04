@@ -1,0 +1,255 @@
+/* ============================================================
+ * 搜索页样式 (Search Page)
+ * ============================================================ */
+
+.page {
+  width: 100%;
+  min-height: 100%;
+  padding: 0 0 40px;
+}
+
+/* 搜索框区域 */
+.boxWrapper {
+  display: flex;
+  justify-content: center;
+  padding: 40px 0 32px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--bg-page);
+}
+
+.inputContainer {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+}
+
+.inputIcon {
+  position: absolute;
+  left: 16px;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+.input {
+  width: 100%;
+  height: 40px;
+  padding: 0 18px 0 44px;
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  font-size: 15px;
+  outline: none;
+  background: var(--bg-input);
+  transition: box-shadow 0.2s, border-color 0.2s;
+  line-height: 40px;
+}
+
+.input:focus {
+  box-shadow: 0 0 0 2px var(--accent-soft);
+  background: var(--bg-input);
+}
+
+.input::placeholder {
+  color: var(--text-secondary);
+}
+
+.clearBtn {
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 4px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s;
+}
+
+.clearBtn:hover {
+  background: var(--bg-hover);
+}
+
+/* 搜索结果信息 */
+.resultInfo {
+  text-align: center;
+  font-size: 14px;
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+}
+
+/* 帖子网格 */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.gridItem {
+  position: relative;
+  aspect-ratio: 1;
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--bg-secondary);
+}
+
+.gridItem img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.2s;
+}
+
+@media (hover: hover) {
+  .gridItem:hover img {
+    transform: scale(1.03);
+  }
+}
+
+.gridOverlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+@media (hover: hover) {
+  .gridItem:hover .gridOverlay {
+    opacity: 1;
+  }
+}
+
+.gridStat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: white;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+/* 视频标识 */
+.videoBadge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 多图标识 */
+.multiBadge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  color: white;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
+}
+
+/* 加载更多 */
+.loadMore {
+  display: flex;
+  justify-content: center;
+  padding: 32px 0;
+}
+
+.loadMore-btn {
+  padding: 10px 32px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: background 0.15s;
+}
+
+.loadMore-btn:hover {
+  background: var(--bg-hover);
+}
+
+/* 空状态 */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  color: var(--text-secondary);
+}
+
+.emptyIcon {
+  opacity: 0.3;
+  margin-bottom: 16px;
+}
+
+.emptyText {
+  font-size: 18px;
+  font-weight: 300;
+}
+
+.emptyHint {
+  font-size: 14px;
+  margin-top: 8px;
+}
+
+/* 加载状态 */
+.loading {
+  display: flex;
+  justify-content: center;
+  padding: 60px 0;
+  color: var(--text-secondary);
+}
+
+/* 响应式 */
+@media (max-width: 768px) {
+  .page {
+    padding: 0 16px 40px;
+  }
+
+  .boxWrapper {
+    padding: 20px 0 16px;
+  }
+
+  .grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+    max-width: 100%;
+  }
+
+  .input {
+    font-size: 14px;
+    padding: 0 16px 0 44px;
+  }
+}
+
+@media (max-width: 480px) {
+  .grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 2px;
+  }
+}

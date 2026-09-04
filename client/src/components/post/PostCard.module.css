@@ -1,0 +1,285 @@
+/* 帖子卡片（参考稿 premium-celadon/obsidian 的白瓷卡片样式） */
+
+.card {
+  background: var(--bg-frosted);
+  border: 1px solid rgba(210, 221, 210, 0.9);
+  border-radius: 22px;
+  padding: 18px;
+  margin: 0 auto 22px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px) saturate(180%);
+  -webkit-backdrop-filter: blur(18px) saturate(180%);
+  max-width: 620px;
+}
+
+[data-theme="dark"] .card {
+  background: var(--bg-frosted);
+  border-color: rgba(38, 43, 53, 0.95);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--bg-hover);
+  vertical-align: middle;
+}
+
+.headerInfo {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.username {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.time {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* 胶囊关注按钮（参考稿 follow-btn / follow-btn.soft） */
+.followBtn {
+  margin-left: auto;
+  flex-shrink: 0;
+  border: 1px solid rgba(47, 93, 80, 0.22);
+  background: var(--accent);
+  color: var(--on-accent);
+  padding: 8px 13px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.followBtn:hover {
+  background: var(--accent-hover);
+}
+
+.followBtn.following {
+  background: transparent;
+  color: var(--accent);
+  border-color: rgba(47, 93, 80, 0.22);
+}
+
+[data-theme="dark"] .followBtn {
+  border-color: rgba(201, 169, 98, 0.38);
+}
+
+.followBtn.following:hover {
+  background: var(--accent-soft);
+}
+
+.caption {
+  padding: 10px 2px 0;
+  color: var(--text-secondary);
+  line-height: 1.8;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+
+.captionUsername {
+  font-weight: 700;
+  color: var(--text-primary);
+  margin-right: 6px;
+}
+
+.imageWrapper {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  cursor: pointer;
+  border-radius: 18px;
+}
+
+.imageCarousel {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.imageCarousel::-webkit-scrollbar {
+  display: none;
+}
+
+.image {
+  width: 100%;
+  height: auto;
+  max-height: 520px;
+  flex-shrink: 0;
+  display: block;
+  object-fit: contain;
+  background: #000;
+  scroll-snap-align: start;
+}
+
+.videoWrapper {
+  position: relative;
+  width: 100%;
+  background: #000;
+  border-radius: 18px;
+  overflow: hidden;
+}
+
+.video,
+.videoPoster {
+  width: 100%;
+  max-height: 600px;
+  object-fit: contain;
+  display: block;
+}
+
+/* 视频覆盖层：绝对定位盖在封面上，opacity 淡入（封面始终垫底，无布局跳变） */
+.videoOverlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.videoOn {
+  opacity: 1;
+}
+
+.videoCover {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.imageDots {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 5px;
+  z-index: 2;
+}
+
+.imageDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.5);
+  transition: background 0.2s;
+  cursor: pointer;
+}
+
+.imageDot.active {
+  background: white;
+}
+
+/* 操作栏（参考稿 post-actions：点赞恒为危险色，其余 text-soft） */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 14px 2px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.actionBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 4px;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.15s;
+}
+
+.actionBtn:first-child {
+  color: var(--danger);
+}
+
+@media (hover: hover) {
+  .actionBtn:hover {
+    opacity: 0.6;
+  }
+}
+
+.actionBtn.liked {
+  color: var(--danger);
+}
+
+/* 转发态修饰类（原实现无专属规则，仅作状态标识） */
+.reposted {}
+
+.actionCount {
+  font-size: 14px;
+  font-weight: 400;
+  margin-left: 2px;
+}
+
+.actionBtn.liked svg {
+  fill: var(--danger) !important;
+  stroke: var(--danger) !important;
+}
+
+/* Share tooltip */
+.shareTooltip {
+  position: relative;
+}
+
+.shareTooltipText {
+  position: absolute;
+  bottom: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+  animation: postCardFadeInOut 1.5s ease-in-out;
+}
+
+@keyframes postCardFadeInOut {
+  0% { opacity: 0; }
+  20% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "k",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -n shared,server,client -c yellow,blue,green \"npm run dev --prefix shared\" \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
+    "build": "npm run build --prefix shared && npm run build --prefix server && npm run build --prefix client",
+    "lint": "npm run lint --prefix shared && npm run lint --prefix server && npm run lint --prefix client",
+    "test": "npm test --prefix server",
+    "e2e": "playwright test",
+    "install:all": "npm install && npm install --prefix shared && npm install --prefix server && npm install --prefix client"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "concurrently": "^10.0.0",
+    "prettier": "^3.6.2"
+  }
+}

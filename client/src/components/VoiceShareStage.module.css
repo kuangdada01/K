@@ -1,0 +1,332 @@
+/**
+ * 屏幕共享舞台样式：16:9 画框（默认），深色底、圆角与页面一致；
+ * :fullscreen 时铺满整屏，画面 object-fit: contain 不裁切。
+ */
+
+.stage {
+  position: relative;
+  width: 100%;
+  max-width: 1080px;
+  aspect-ratio: 16 / 9;
+  margin: 0 auto 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #101418;
+  border-radius: var(--radius, 16px);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  /* 画框本身接双击全屏；内部控件区已阻止冒泡 */
+  cursor: zoom-in;
+}
+
+.stage:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  /* Android Chrome 全屏时状态栏隐藏但 100vh 不含状态栏高度，导致顶部空出
+     状态栏位置（黑色）；100dvh 动态 viewport 包含状态栏区域，让舞台顶到屏幕最顶，
+     消除"保留状态栏位置"的黑条。100vh 留作旧浏览器 fallback。 */
+  height: 100dvh;
+  max-width: none;
+  aspect-ratio: auto;
+  border-radius: 0;
+  margin: 0;
+  cursor: default;
+  background: #000;
+}
+
+/* 全屏下禁用叠加层的 backdrop-filter：毛玻璃叠在全屏视频上会显著加重
+   GPU 合成负担，部分机器上直接触发发绿/掉帧伪影；改用不透明底 */
+.stage:fullscreen .badge,
+.stage:fullscreen .ctlBtn,
+.stage:fullscreen .qualitySelect,
+.stage:fullscreen .statsBar,
+.stage:fullscreen .hintBar {
+  backdrop-filter: none;
+  background: rgba(0, 0, 0, 0.6);
+}
+
+/* ---- canvas 渲染管线（绕开 <video> 的硬件 overlay 合成） ----
+   .sourceVideo 只做解码源：缩到 1px 藏在角落保持解码活跃，不再直接显示；
+   .canvas 是实际画面（YUV→RGB 在浏览器内完成，颜色确定正确，且永不进 overlay） */
+
+.sourceVideo {
+  position: absolute;
+  left: 2px;
+  bottom: 2px;
+  width: 1px;
+  height: 1px;
+  opacity: 0.01;
+  pointer-events: none;
+}
+
+.canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #101418;
+  /* opacity<1 使 canvas 不符合硬件 overlay 提升条件（全屏视频/画布走 overlay 时
+     部分 NVIDIA 驱动的 YUV→RGB 转换有色偏 bug，表现为整屏发绿）；0.999 视觉不可感知 */
+  opacity: 0.999;
+}
+
+/* 舞台画布槽位：小窗模式时画布被搬进 PiP 窗口，槽位显示占位提示 */
+.canvasSlot {
+  position: absolute;
+  inset: 0;
+  background: #101418;
+}
+
+/* 全屏：槽位背景用纯黑（与 canvas letterbox、.stage:fullscreen 一致） */
+.stage:fullscreen .canvasSlot {
+  background: #000;
+}
+
+.pipPlayingNote {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #9fb0a6;
+  font-size: 14px;
+  background: #101418;
+}
+
+/* 小窗控制条按钮（跨文档原生创建，内联样式为主，这里只调间距） */
+.pipBar button + button {
+  margin-left: 8px;
+}
+
+.badge,
+.controls {
+  z-index: 2;
+}
+
+/* ---- 共享者自看防递归遮罩 ---- */
+
+.presenterVeil {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 0 24px;
+  text-align: center;
+  background: rgba(16, 20, 24, 0.55);
+  color: #dfe8e1;
+  pointer-events: none;
+}
+
+.veilTitle {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.veilSub {
+  font-size: 13px;
+  color: #9fb0a6;
+  max-width: 420px;
+}
+
+/* ---- 共享者隐藏预览时的占位卡（不渲染直播画面 = 无递归） ---- */
+
+.previewHidden {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: #dfe8e1;
+  text-align: center;
+  background: #101418;
+}
+
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  color: #9fb0a6;
+  font-size: 14px;
+}
+
+/* ---- 左上角共享者徽标 ---- */
+
+.badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  color: #e8efe9;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+/* ---- 右上角悬浮控件 ---- */
+
+.controls {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ctlBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  color: #e8efe9;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.ctlBtn:hover {
+  background: rgba(0, 0, 0, 0.75);
+}
+
+.ctlOn {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.ctlOn:hover {
+  background: var(--accent-hover);
+}
+
+.stopBtn {
+  background: rgba(196, 58, 58, 0.85);
+}
+
+.stopBtn:hover {
+  background: rgba(196, 58, 58, 1);
+}
+
+.qualitySelect {
+  height: 34px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  color: #e8efe9;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+}
+
+.qualitySelect option {
+  color: var(--text-primary);
+  background: var(--bg-primary);
+}
+
+/* ---- 发送端实时统计（左下角）与降级提示条（底部居中） ---- */
+
+.statsBar {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+  color: #aebdb4;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.statsWarn {
+  color: #ffd08a;
+  font-weight: 700;
+}
+
+.hintBar {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  max-width: 92%;
+  padding: 6px 14px;
+  border-radius: 8px;
+  background: rgba(196, 58, 58, 0.88);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* ---- 移动端：全宽 + 控件收紧 ---- */
+
+@media (max-width: 768px) {
+  .stage {
+    max-width: none;
+    border-radius: 12px;
+    margin-bottom: 16px;
+  }
+
+  .ctlBtn span {
+    display: none;
+  }
+
+  .ctlBtn {
+    padding: 0 10px;
+  }
+
+  .badge {
+    font-size: 12px;
+    padding: 5px 10px;
+    max-width: 60%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* 移动端空间小：统计栏只保留帧率+码率，隐藏分辨率段 */
+  .statsBar span:nth-child(4),
+  .statsBar span:nth-child(5) {
+    display: none;
+  }
+
+  .hintBar {
+    white-space: normal;
+    line-height: 1.4;
+  }
+}

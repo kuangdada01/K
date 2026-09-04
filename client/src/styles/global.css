@@ -1,0 +1,287 @@
+@font-face {
+  font-family: 'MiSans';
+  src: url('../assets/fonts/MiSans-Regular.subset.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'MiSans';
+  src: url('../assets/fonts/MiSans-Semibold.subset.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* ============================================================
+   主题色板
+   ------------------------------------------------------------
+   浅色: 青瓷黛绿 (Celadon Pine)
+     --bg-page  页面底色 #eef2ee / 卡片表面 #ffffff / 松绿强调 #2f5d50
+   暗色: 玄夜鎏金 (Obsidian & Gold)
+     --bg-page  页面底色 #0d0f14 / 卡片表面 #161a22 / 鎏金强调 #c9a962
+   ============================================================ */
+:root {
+  --bg-page: #eef2ee;            /* 页面底色（青瓷） */
+  --bg-primary: #ffffff;         /* 卡片/表面（白瓷） */
+  --bg-secondary: #ffffff;       /* 次级表面 */
+  --bg-hover: #dfe8df;           /* 悬停/浅表面 */
+  --border-color: #d2ddd2;       /* 瓷缘灰绿 */
+  --text-primary: #1f2b26;
+  --text-secondary: #55645d;
+  --text-muted: #82948b;
+  --accent: #2f5d50;             /* 松柏深绿 */
+  --accent-hover: #24493e;
+  --accent-soft: rgba(47, 93, 80, 0.15);
+  --on-accent: #f5faf6;          /* 强调色上的文字 */
+  --danger: #b5544a;
+  --danger-hover: #a3473e;
+  --success: #3a7d5c;
+  --sidebar-width-collapsed: 220px;
+  --sidebar-width-expanded: 220px;
+  --radius: 16px;
+  --shadow: 0 6px 20px rgba(31, 60, 48, 0.06);
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
+
+  /* 扩展变量：输入框、按钮、标签等 */
+  --bg-input: #e9efe9;
+  --bg-input-hover: #dfe8df;
+  --bg-btn-secondary: #dfe8df;
+  --bg-btn-secondary-hover: #d2ddd2;
+  --bg-tag-admin: #d8e6de;
+  --text-tag-admin: #2f5d50;
+  --bg-danger-light: rgba(181, 84, 74, 0.12);
+  --bg-frosted: rgba(255, 255, 255, 0.62);
+  --shadow-dropdown: 0 8px 24px rgba(31, 60, 48, 0.14);
+}
+
+/* 暗色模式变量覆盖（玄夜鎏金） */
+[data-theme="dark"] {
+  --bg-page: #0d0f14;
+  --bg-primary: #161a22;
+  --bg-secondary: #1e232d;
+  --bg-hover: #1e232d;
+  --border-color: #262b35;
+  --text-primary: #e8e6e1;
+  --text-secondary: #a8abaf;
+  --text-muted: #6d7178;
+  --accent: #c9a962;             /* 鎏金 */
+  --accent-hover: #d9bd7c;
+  --accent-soft: rgba(201, 169, 98, 0.18);
+  --on-accent: #0d0f14;          /* 金底用深字 */
+  --danger: #e0586b;
+  --danger-hover: #ea7080;
+  --success: #7fbf8f;
+  --shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  --bg-input: #1e232d;
+  --bg-input-hover: #262b35;
+  --bg-btn-secondary: #1e232d;
+  --bg-btn-secondary-hover: #262b35;
+  --bg-tag-admin: rgba(201, 169, 98, 0.15);
+  --text-tag-admin: #c9a962;
+  --bg-danger-light: rgba(224, 88, 107, 0.15);
+  --bg-frosted: rgba(28, 32, 42, 0.58);
+  --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 桌面端预留滚动条槽位（不强制创建滚动条）：
+   避免页面切换时滚动条出现/消失导致居中容器水平位置抖动 */
+@media (min-width: 769px) {
+  html {
+    scrollbar-gutter: stable;
+  }
+}
+
+body {
+  font-family: 'MiSans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  background-color: var(--bg-page);
+  color: var(--text-primary);
+  line-height: 1.5;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+input, textarea, select {
+  font-family: inherit;
+  font-size: 16px;
+  color: inherit;
+}
+
+button, a {
+  touch-action: manipulation;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: none;
+  font-family: inherit;
+  color: inherit;
+}
+
+input, textarea {
+  font-family: inherit;
+}
+
+img {
+  max-width: 100%;
+}
+
+.app-layout {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  width: min(1320px, calc(100% - 32px));
+  margin: 0 auto;
+  gap: 28px;
+  min-height: 100vh;
+  /* 透明：让 body 的渐变氛围底透出 */
+  background: transparent;
+}
+
+.main-content {
+  flex: 1;
+  min-width: 0;
+  min-height: 100vh;
+  padding: 0;
+}
+
+/* 消息页聊天布局：会话列表紧贴侧边栏分隔线 */
+.app-layout-messages {
+  gap: 0;
+}
+
+/* 移动端通用页面滚动容器：body 不再滚动，各页面自身用此类滚动 */
+.page-scroll {
+  height: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ============================================================
+   移动端滚动架构（根治底部导航栏跟随移动 + 私信滑不动）
+   ------------------------------------------------------------
+   关键：桌面端 body 作为滚动容器，Android WebView 上
+   position:fixed 元素在 body 惯性滚动期间会跟随移动。
+   移动端把滚动从 body 下放到各页面内部容器：html/body/#root
+   锁定高度且 overflow:hidden，body 不再滚动，
+   .main-content 也固定高度，页面内容由内部容器滚动。
+   ============================================================ */
+@media (max-width: 768px) {
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  .app-layout {
+    flex-direction: column;
+    width: 100%;
+    margin: 0;
+    gap: 0;
+    height: 100%;
+    min-height: 0;
+  }
+
+  .main-content {
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    box-sizing: border-box;
+    /* 状态栏避让：原生 edge-to-edge 下 WebView 铺满全屏，
+       env() 原生端 = 状态栏高度（全屏沉浸时自动归 0），网页端 = 0 无影响 */
+    padding-top: var(--safe-area-top);
+    /* 底部留出悬浮胶囊导航 + 安全区空间（胶囊 68px + 16px 浮起 + 12px 呼吸） */
+    padding-bottom: calc(96px + var(--safe-area-bottom));
+  }
+
+  /* 沉浸页（图书详情/阅读器/语音房间内）隐藏了底部胶囊导航，
+     同步回收为胶囊预留的 96px 底部内边距，只保留安全区 */
+  .app-layout.mobile-nav-hidden .main-content {
+    padding-bottom: var(--safe-area-bottom);
+  }
+
+  /* 移动端页面容器：不限高，由 .main-content 滚动 */
+  /* 注: .home-layout 已迁移至 HomePage.module.css（含等价宽度重置规则） */
+  .admin-page,
+  .profile-container,
+  .announcement-page,
+  .search-page {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    box-sizing: border-box !important;
+  }
+}
+
+/* 隐藏所有滚动条（仅 Android App 端；网页端保留正常滚动条） */
+html.native-app body {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+html.native-app,
+html.native-app #root {
+  -ms-overflow-style: none;
+  scrollbar-width: none !important;
+  background-color: var(--bg-page);
+}
+
+html.native-app::-webkit-scrollbar,
+html.native-app::-webkit-scrollbar-track,
+html.native-app::-webkit-scrollbar-thumb,
+html.native-app::-webkit-scrollbar-corner,
+html.native-app body::-webkit-scrollbar,
+html.native-app body::-webkit-scrollbar-track,
+html.native-app body::-webkit-scrollbar-thumb,
+html.native-app body::-webkit-scrollbar-corner,
+html.native-app #root::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}
+
+html.native-app *,
+html.native-app *::before,
+html.native-app *::after {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+html.native-app *::-webkit-scrollbar,
+html.native-app *::-webkit-scrollbar-track,
+html.native-app *::-webkit-scrollbar-thumb,
+html.native-app *::-webkit-scrollbar-corner {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  background: transparent !important;
+}

@@ -1,0 +1,453 @@
+/* Create post overlay */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: pcFadeIn 0.2s ease;
+}
+
+.overlay.closing {
+  animation: pcFadeOut 0.2s ease forwards;
+}
+
+.dialog {
+  width: 64vw;
+  height: 80vh;
+  background: var(--bg-primary);
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  animation: pcScaleIn 0.2s ease;
+}
+
+.dialog.closing {
+  animation: pcScaleOut 0.2s ease forwards;
+}
+
+.overlayHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.overlayTitle {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.overlayBtn {
+  background: none;
+  border: none;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 8px 16px;
+  border-radius: 8px;
+  color: var(--text-primary);
+  transition: background 0.15s;
+}
+
+.overlayBtn:hover {
+  background: var(--bg-hover);
+}
+
+.overlayBtn.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.overlayBtn.primary:hover {
+  background: var(--accent-hover);
+}
+
+.overlayBtn.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.overlayBtn.danger {
+  background: var(--danger);
+  color: white;
+}
+
+.overlayBtn.danger:hover {
+  background: var(--danger-hover);
+}
+
+.overlayBody {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 30px;
+}
+
+.overlayBody .create-upload-area {
+  width: 100%;
+  max-width: 600px;
+}
+
+.overlayBody .create-preview-grid {
+  max-width: 700px;
+  max-height: 100%;
+  margin: 0 auto;
+  aspect-ratio: 1;
+  overflow: hidden;
+}
+
+/* Step 1: 9-Grid layout */
+.gridWrapper {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 24px;
+  box-sizing: border-box;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  width: 100%;
+  max-width: 450px;
+  overflow: hidden;
+}
+
+.gridItem {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: grab;
+  transition: transform 0.2s ease, opacity 0.2s ease, box-shadow 0.2s ease;
+  background: var(--bg-secondary);
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.gridItem:active {
+  cursor: grabbing;
+}
+
+.gridItem.pressing {
+  transform: scale(1.05);
+}
+
+.gridItem.dragging-source {
+  opacity: 0.3;
+}
+
+/* 拖拽中的图片浮起效果（useImageGridDrag：按下即拖，实时重排）
+   注意：不做放大（grid 容器 overflow:hidden 会裁掉放大后的边缘，
+   导致边缘图片被遮住），仅用阴影 + 层级作为拖拽反馈 */
+.dragging {
+  box-shadow: 0 0 16px rgba(0, 0, 0, 0.3);
+  z-index: 3;
+}
+
+.gridItem img {
+  /* 绝对定位填充：img 不参与布局，格子高度完全由 aspect-ratio: 1 决定，
+     16:9 等宽图在拖拽/重排动画中也不会把格子撑成长方形 */
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  display: block;
+}
+
+.gridDeleteBtn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  z-index: 5;
+  /* 桌面端 hover 显示；移动端（无 hover）由 @media 内常显 */
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.gridItem:hover .gridDeleteBtn {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.8);
+}
+
+.gridDeleteBtn:hover {
+  background: var(--danger);
+}
+
+.gridIndex {
+  position: absolute;
+  bottom: 4px;
+  left: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.gridAdd {
+  aspect-ratio: 1;
+  border: 2px dashed var(--border-color);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+  transition: border-color 0.15s, color 0.15s;
+  background: transparent;
+}
+
+.gridAdd:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.gridNewBadge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Dragged item (portal) styles */
+.gridDragging {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  border-radius: 10px;
+  overflow: hidden;
+  opacity: 0.85;
+  transform: scale(0.85);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  will-change: transform;
+}
+
+.gridDragging img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Step 2: Edit layout */
+.editLayout {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.editLeft {
+  flex: 1;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  min-width: 0;
+}
+
+.editImageWrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.editImage {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.editNav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(0, 0, 0, 0.4);
+  border: none;
+  color: white;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.editNav:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.editPrev {
+  left: 12px;
+}
+
+.editNext {
+  right: 12px;
+}
+
+.editDots {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+}
+
+.editDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.editDot.active {
+  background: white;
+}
+
+.editRight {
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+.editVideo {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+@media (max-width: 768px) {
+  .overlay {
+    align-items: flex-end;
+  }
+
+  .dialog {
+    width: 100%;
+    height: 100vh; /* fallback for older browsers without dvh support */
+    height: 100dvh; /* 动态视口高度：100vh 在移动浏览器（URL栏可见时）和
+                       Android WebView 上偏大，底部对齐后标题栏会被浏览器
+                       URL 栏/状态栏遮挡，改用 100dvh 与可视区严格等高 */
+    max-height: 100vh;
+    max-height: 100dvh;
+    border-radius: 0;
+  }
+
+  .overlayHeader {
+    padding: 12px 16px;
+    /* 原生 App edge-to-edge 下 WebView 铺满全屏，状态栏避让由
+       env(safe-area-inset-top) 承担；网页端 env() 为 0，无影响 */
+    padding-top: calc(12px + var(--safe-area-top));
+  }
+
+  .overlayBtn {
+    background: var(--bg-input);
+    border-radius: 8px;
+    padding: 8px 16px;
+  }
+
+  .overlayBtn:hover {
+    background: var(--bg-input-hover);
+  }
+
+  .overlayBtn.primary {
+    background: var(--accent);
+    color: var(--on-accent);
+  }
+
+  .overlayBtn.primary:hover {
+    background: var(--accent-hover);
+  }
+
+  .overlayBody {
+    padding: 16px;
+  }
+
+  .gridDeleteBtn {
+    opacity: 1;
+  }
+
+  .editLayout {
+    flex-direction: column;
+  }
+
+  .editLeft {
+    width: 100%;
+    height: auto;
+    max-height: 40vh;
+  }
+
+  .editRight {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border-color);
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  .editImageWrapper {
+    max-height: 35vh;
+  }
+}
+
+  
+
+
+@keyframes pcFadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pcFadeOut { from { opacity: 1; } to { opacity: 0; } }
+@keyframes pcScaleIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+@keyframes pcScaleOut { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(0.95); } }

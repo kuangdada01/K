@@ -1,0 +1,185 @@
+/* 评论条目（原 post.css 的 post-detail-comment 与 comment 系列规则） */
+
+.comment {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.avatarLink {
+  flex-shrink: 0;
+  text-decoration: none;
+  align-self: flex-start;
+}
+
+.avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.avatarPlaceholder {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.content {
+  font-size: 14px;
+}
+
+.usernameLink {
+  font-weight: 600;
+  margin-right: 6px;
+  text-decoration: none;
+  color: var(--text-primary);
+}
+
+.usernameLink:hover {
+  text-decoration: underline;
+}
+
+.time {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.likeBtn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 2px;
+  transition: color 0.15s;
+}
+
+@media (hover: hover) {
+  .likeBtn:hover {
+    color: var(--danger);
+  }
+}
+
+.likeBtn.liked {
+  color: var(--danger);
+}
+
+.likeBtn.liked svg {
+  fill: var(--danger);
+  stroke: var(--danger);
+}
+
+.deleteBtn {
+  padding: 2px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+
+.comment:hover .deleteBtn {
+  opacity: 1;
+}
+
+.deleteBtn:hover {
+  color: var(--danger);
+}
+
+.replyTag {
+  font-size: 14px;
+  color: var(--accent);
+  margin-right: 4px;
+}
+
+.actionsRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.highlight {
+  animation: ciCommentHighlight 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  border-radius: 8px;
+}
+
+@keyframes ciCommentHighlight {
+  0% { background: transparent; }
+  15% { background: var(--accent-soft); }
+  40% { background: var(--accent-soft); }
+  100% { background: transparent; }
+}
+
+.replyBtn {
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0;
+}
+
+.replyBtn:hover {
+  color: var(--text-primary);
+}
+
+.collapseBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  padding: 0;
+  transition: color 0.15s;
+}
+
+.collapseBtn:hover {
+  color: var(--accent-hover);
+}
+
+.replyItem {
+  padding-left: 36px;
+  margin-top: 4px;
+}
+
+.replyItem .avatarLink {
+  display: flex;
+  align-items: flex-start;
+}
+
+.replyItem .avatar,
+.replyItem .avatarPlaceholder {
+  width: 22px;
+  height: 22px;
+  font-size: 10px;
+}
+
+@media (max-width: 768px) {
+  .deleteBtn {
+    opacity: 1;
+  }
+}

@@ -1,0 +1,10 @@
+node_modules
+dist
+build
+uploads
+books
+android
+*.lock
+package-lock.json
+k.db*
+OPTIMIZATION_PLAN.md

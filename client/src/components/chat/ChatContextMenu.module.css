@@ -1,0 +1,69 @@
+/* 聊天上下文菜单（原 messages.css 的 chat-context-menu 规则） */
+
+.menu {
+  position: fixed;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: var(--shadow-dropdown);
+  z-index: 600;
+  display: flex;
+  padding: 4px;
+  animation: chatMenuFadeIn 0.15s ease;
+}
+
+.menu::after {
+  content: '';
+  position: absolute;
+  left: var(--arrow-x, 50%);
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+}
+
+.menu.arrowBottom::after {
+  bottom: -12px;
+  border-top-color: var(--bg-primary);
+  filter: drop-shadow(0 1px 0 var(--border-color));
+}
+
+.menu.arrowTop::after {
+  top: -12px;
+  border-bottom-color: var(--bg-primary);
+  filter: drop-shadow(0 -1px 0 var(--border-color));
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text-primary);
+  border-radius: 8px;
+  transition: background 0.15s;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.item.danger {
+  color: var(--danger);
+}
+
+@media (hover: hover) {
+  .item:hover {
+    background: var(--bg-hover);
+  }
+
+  .item.danger:hover {
+    background: var(--bg-danger-light);
+  }
+}
+
+@keyframes chatMenuFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}

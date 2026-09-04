@@ -1,0 +1,298 @@
+/* 侧边栏（参考稿 premium-celadon / premium-obsidian 样式） */
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  width: var(--sidebar-width-collapsed);
+  flex-shrink: 0;
+  background: transparent;
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  padding: 28px 14px;
+  z-index: 100;
+}
+
+/* 品牌区 */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px 28px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.brandMark {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, var(--accent), #7fa390);
+  color: var(--on-accent);
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  box-shadow: var(--shadow);
+  flex-shrink: 0;
+}
+
+[data-theme="dark"] .brandMark {
+  background: linear-gradient(135deg, var(--accent), #7a6335);
+}
+
+.brandName {
+  font-size: 20px;
+  color: var(--text-primary);
+  /* 英文品牌名不继承 .brand 的字距（避免 Kuangdada 被撑开显得有空格） */
+  letter-spacing: 0;
+}
+
+.nav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  transition: background 0.16s ease, color 0.16s ease;
+  color: var(--text-secondary);
+  text-decoration: none;
+  cursor: pointer;
+  background: none;
+  width: 100%;
+  font-size: 15px;
+  text-align: left;
+}
+
+.item:hover {
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .item:hover {
+  background: rgba(30, 35, 45, 0.85);
+  color: var(--text-primary);
+}
+
+.item.active {
+  background: var(--bg-primary);
+  color: var(--accent);
+  box-shadow: var(--shadow);
+  font-weight: 600;
+}
+
+/* 深色侧边栏选中项：--bg-primary(#161a22) 在页面底色 #0d0f14 上是突兀的深灰块，
+   改为淡金色底 + 去阴影，与浅色"白色卡片高亮"的选中语义保持一致。
+   此规则写在 hover 规则之后，(0,3,0) 高于 .item.active (0,2,0)，hover 选中时也保持淡金。 */
+[data-theme="dark"] .item.active {
+  background: var(--accent-soft);
+  box-shadow: none;
+}
+
+/* 导航图标 */
+.itemIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  flex-shrink: 0;
+  color: inherit;
+}
+
+.itemLabel {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 语音进行中："语音"文字右侧的呼吸绿点（垂直居中）
+   vertical-align:middle 按拉丁 x 高度对齐，中文视觉中心更高，
+   需再上移 0.12em（em 单位随 15px/11px 字号自动缩放） */
+.voiceDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--success, #3ba55d);
+  vertical-align: middle;
+  position: relative;
+  top: -0.12em;
+  animation: voiceDotPulse 2s ease-in-out infinite;
+}
+
+@keyframes voiceDotPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.badge {
+  position: absolute;
+  top: -6px;
+  right: -8px;
+  background: var(--danger);
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+/* 键盘导航（Tab）聚焦环：用 inset 阴影，避免被 .sidebar 的
+   overflow:hidden 裁剪成"半个边框"（默认 outline 画在元素外） */
+.sidebar :focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.bottom {
+  margin-top: auto;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-color);
+}
+
+/* 用户 Chip（参考稿 user-chip：白色微透卡片 + 圆角） */
+.userChipTrigger {
+  border: 1px solid rgba(210, 221, 210, 0.86) !important;
+  background: rgba(255, 255, 255, 0.74) !important;
+  border-radius: 14px !important;
+}
+
+[data-theme="dark"] .userChipTrigger {
+  border-color: rgba(38, 43, 53, 0.9) !important;
+  background: rgba(22, 26, 34, 0.8) !important;
+}
+
+/* 移动端头像入口（已迁移至主页右上角设置图标，移除） */
+
+/* Mobile floating capsule nav */
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed !important;
+    top: auto !important;
+    bottom: calc(16px + var(--safe-area-bottom)) !important;
+    left: 50% !important;
+    right: auto !important;
+    transform: translateX(-50%) !important;
+    width: calc(100% - 24px) !important;
+    max-width: 420px !important;
+    height: 68px !important;
+    flex-direction: row !important;
+    border: 1px solid rgba(255, 255, 255, 0.14) !important;
+    border-radius: 999px !important;
+    padding: 8px 10px !important;
+    z-index: 200;
+    transition: none !important;
+    overflow: visible !important;
+    /* 悬浮胶囊毛玻璃 + 阴影（统一 var(--bg-frosted) + 18px） */
+    background: var(--bg-frosted) !important;
+    -webkit-backdrop-filter: blur(18px) saturate(180%);
+    backdrop-filter: blur(18px) saturate(180%);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.10), 0 4px 12px rgba(0, 0, 0, 0.06) !important;
+  }
+
+  [data-theme="dark"] .sidebar {
+    background: var(--bg-frosted) !important;
+    border-color: rgba(255, 255, 255, 0.06) !important;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.22) !important;
+  }
+
+  .brand,
+  .bottom {
+    display: none !important;
+  }
+
+  .nav {
+    flex: 1 !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    justify-content: space-evenly !important;
+    padding: 0 !important;
+    gap: 2px !important;
+    margin-top: 0 !important;
+    width: 100% !important;
+  }
+
+  .item {
+    flex: 1 !important;
+    padding: 10px 0 !important;
+    margin: 0 !important;
+    flex-direction: column !important;
+    gap: 2px !important;
+    justify-content: center !important;
+    align-items: center !important;
+    font-size: 10px !important;
+    -webkit-tap-highlight-color: transparent;
+    background: transparent !important;
+    box-shadow: none !important;
+    border-radius: 999px !important;
+    min-width: 0 !important;
+    transition: background 0.18s ease, color 0.18s ease, transform 0.12s ease !important;
+  }
+
+  .item:active {
+    transform: scale(0.96);
+  }
+
+  /* 触屏（hover:none）点击后 :hover 会残留为"sticky hover"，
+     导致非选中项也残留浅色背景 —— 只在真正支持 hover 的设备上启用 hover 效果 */
+  @media (hover: hover) {
+    .item:hover {
+      background: rgba(0, 0, 0, 0.04) !important;
+    }
+
+    [data-theme="dark"] .item:hover {
+      background: rgba(255, 255, 255, 0.06) !important;
+    }
+  }
+
+  /* 选中态强制透明：触屏点击后 :hover 会残留（sticky hover），
+     深色下 [data-theme="dark"] .item:hover 特异性 (0,3,0) 高于 .item.active (0,2,0)，
+     会把选中项染成灰底 —— 因此 active 连同 active:hover 一起覆盖，且写在 hover 规则之后 */
+  .item.active,
+  .item.active:hover,
+  [data-theme="dark"] .item.active:hover {
+    background: transparent !important;
+    color: var(--accent) !important;
+    box-shadow: none !important;
+  }
+
+  .itemLabel {
+    display: none !important;
+  }
+
+  .itemIcon svg {
+    width: 26px;
+    height: 26px;
+  }
+
+  .item.active .itemIcon svg {
+    width: 28px;
+    height: 28px;
+  }
+
+  .itemSearch {
+    display: none !important;
+  }
+
+  /* 二级/三级沉浸页（图书详情、阅读器、语音房间内）：隐藏底部胶囊导航。
+     标记类由 App 的 MainLayout 打在 .app-layout 上（祖先节点），
+     仅窄屏生效，桌面端侧边栏不受影响。 */
+  :global(.mobile-nav-hidden) .sidebar {
+    display: none !important;
+  }
+}

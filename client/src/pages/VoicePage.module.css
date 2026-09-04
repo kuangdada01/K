@@ -1,0 +1,963 @@
+/* 语音房间页（Kook 式语音频道） */
+
+.page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 20px 80px;
+}
+
+/* ---- 房间列表视图 ---- */
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.header h1 {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.createBtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.createBtn:hover {
+  background: var(--accent-hover);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 80px 20px;
+  color: var(--text-secondary);
+}
+
+.empty p {
+  margin: 0;
+  font-size: 15px;
+}
+
+.roomList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.roomCard {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius, 16px);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.roomActive {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+
+.roomIcon {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.roomBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.roomName {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.roomMeta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.roomDesc {
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.countBadge {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+}
+
+.countLive {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+
+.deleteBtn {
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.deleteBtn:hover {
+  color: var(--danger);
+  background: var(--bg-danger-light);
+}
+
+/* ---- 进房视图 ---- */
+
+.roomHeader {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.backBtn {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 12px;
+  /* 强调色填充，随主题变量自动适配亮/暗模式（亮=松柏绿，暗=鎏金） */
+  background: var(--accent);
+  color: var(--on-accent);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.backBtn:hover {
+  background: var(--accent-hover);
+}
+
+.roomTitleWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.roomTitle {
+  font-size: 22px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.roomCount {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.memberGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 16px;
+  margin-bottom: 28px;
+}
+
+.memberCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 14px 14px;
+  background: var(--bg-primary);
+  border: 2px solid transparent;
+  border-radius: var(--radius, 16px);
+  transition: border-color 0.1s;
+}
+
+/* ---- 网络质量圆点（卡片右上角） ---- */
+
+.qDot {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--bg-primary);
+}
+
+.q_good {
+  background: var(--success, #3ba55d);
+}
+
+.q_fair {
+  background: #d6a02e;
+}
+
+.q_poor {
+  background: var(--danger);
+}
+
+/* 说话光环 */
+.speaking {
+  border-color: var(--success, #3ba55d);
+}
+
+.avatarWrap {
+  position: relative;
+}
+
+.mutedBadge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  border: 2px solid var(--bg-primary);
+  color: var(--danger);
+}
+
+/* 屏幕共享中徽标（头像左下角，与右下角静音徽标对称） */
+.sharingBadge {
+  position: absolute;
+  left: -2px;
+  bottom: -2px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-primary);
+  color: var(--on-accent);
+}
+
+.memberName {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.peerVolume {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  width: 100%;
+  padding: 0 4px;
+}
+
+.peerVolume .slider {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ---- 底部控制栏 ---- */
+
+.controlBar {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(24px + var(--safe-area-bottom, 0px));
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 18px;
+  background: var(--bg-frosted);
+  backdrop-filter: blur(18px) saturate(180%);
+  -webkit-backdrop-filter: blur(18px) saturate(180%);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  box-shadow: var(--shadow-dropdown, 0 8px 24px rgba(0, 0, 0, 0.12));
+  /* fixed 元素默认 shrink-to-fit 会被视口压缩 → 按钮文字换行成竖排；
+     显式上限留 24px 边距，配合按钮 flex-shrink:0 + 滑条 flex-shrink:1 兜底 */
+  max-width: calc(100vw - 24px);
+  z-index: 10;
+}
+
+/* 控制栏内所有按钮：不收缩、文字不换行（窄视口时由滑条先收缩让位，
+   避免按钮被挤到文字竖排） */
+.micBtn,
+.noiseBtn,
+.shareBtn,
+.recBtn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.micBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.micBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.micOn {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.micOn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.micOff {
+  background: var(--bg-danger-light);
+  color: var(--danger);
+}
+
+/* ---- 麦克风降噪开关 ---- */
+
+.noiseBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.noiseBtn:hover {
+  filter: brightness(0.95);
+}
+
+/* 音乐模式下降噪与保真互斥：置灰禁用 */
+.noiseBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
+}
+
+.noiseOn {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.noiseOn:hover {
+  background: var(--accent-hover);
+}
+
+.noiseOff {
+  background: var(--bg-btn-secondary, var(--bg-secondary));
+  color: var(--text-primary);
+}
+
+/* ---- 屏幕共享按钮 ---- */
+
+.shareBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.shareBtn:hover {
+  filter: brightness(0.95);
+}
+
+.shareOff {
+  background: var(--bg-btn-secondary, var(--bg-secondary));
+  color: var(--text-primary);
+}
+
+.shareOn {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.shareOn:hover {
+  background: var(--accent-hover);
+}
+
+/* ---- 全房间录制按钮 ---- */
+
+.recBtn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--bg-btn-secondary, var(--bg-secondary));
+  color: var(--text-primary);
+  transition: background 0.15s, color 0.15s;
+}
+
+.recBtn:hover {
+  filter: brightness(0.95);
+}
+
+.recActive {
+  background: var(--bg-danger-light);
+  color: var(--danger);
+}
+
+.recDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: recPulse 1.2s ease-in-out infinite;
+}
+
+.recTime {
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+}
+
+@keyframes recPulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.8);
+  }
+}
+
+.volumeGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+
+.volumeLabel {
+  font-size: 13px;
+  white-space: nowrap;
+  line-height: 16px;
+}
+
+.volumeValue {
+  font-size: 12px;
+  min-width: 38px;
+  text-align: right;
+  line-height: 16px;
+}
+
+.volumeGroup .slider {
+  width: 80px;
+  /* 窄视口时先收缩滑条（保按钮文字横排），收缩下限 28px 仍可拖动 */
+  flex-shrink: 1;
+  min-width: 28px;
+}
+
+/* ---- 文字聊天面板（信令通道，与语音媒体分离：语音差时仍可打字交流） ---- */
+
+.chatPanel {
+  display: flex;
+  flex-direction: column;
+  height: 420px;
+  margin-bottom: 28px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius, 16px);
+  overflow: hidden;
+}
+
+.chatHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.chatClearBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.chatClearBtn:hover {
+  color: var(--danger);
+  background: var(--bg-danger-light);
+}
+
+/* 朗读开关（清空按钮左侧；margin-left:auto 与清空按钮一起贴右，清空不再自己推右） */
+.ttsBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  margin-left: auto;
+  border: none;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
+}
+
+.ttsBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ttsOn {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.ttsOn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.ttsOff {
+  background: var(--bg-btn-secondary, var(--bg-secondary));
+  color: var(--text-primary);
+}
+
+.ttsOff:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+.chatList {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* 微信式浅色气泡背景在亮/暗主题下均可读 */
+  background: var(--bg-secondary-soft, var(--bg-primary));
+}
+
+.chatEmpty {
+  margin: auto;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.chatLoadMore {
+  align-self: center;
+  padding: 4px 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-btn-secondary, var(--bg-secondary));
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chatLoadMore:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.chatLoadMore:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.chatMsg {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.chatMsgBody {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chatMsgMeta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.chatMsgName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chatMsgTime {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.chatMsgText {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.chatInputRow {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-color);
+}
+
+.chatInput {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.chatInput:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.chatSendBtn {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.chatSendBtn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.chatSendBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---- 音量滑条（本体即 4px 细轨道 + 20px 圆形滑块，填充随值变化） ---- */
+
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  margin: 0;
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-primary);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+
+.slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-primary);
+}
+
+.slider::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+/* 底部控制栏四个按钮统一高度（麦克风开关 / 降噪 / 共享屏幕 / 录制）：
+   所有按钮保持完全一致的高度，左右内边距也统一（16px）。
+   （退出走左上角返回按钮，底栏不设退出键） */
+.micBtn,
+.noiseBtn,
+.shareBtn,
+.recBtn {
+  height: 40px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+/* ---- 创建房间弹层 ---- */
+
+.modalMask {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 100;
+}
+
+.modal {
+  width: min(400px, calc(100vw - 48px));
+  padding: 24px;
+  background: var(--bg-primary);
+  border-radius: var(--radius, 16px);
+  box-shadow: var(--shadow, 0 12px 32px rgba(0, 0, 0, 0.18));
+}
+
+.modal h2 {
+  margin: 0 0 16px;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.input {
+  width: 100%;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.cancelBtn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--bg-btn-secondary);
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.cancelBtn:hover {
+  background: var(--bg-btn-secondary-hover);
+}
+
+.confirmBtn {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.confirmBtn:hover {
+  background: var(--accent-hover);
+}
+
+/* ---- 移动端适配（断点与侧边栏底部导航 768px 对齐） ---- */
+
+/* 控制栏抬高到底部导航（64px + 安全区）之上，聊天面板（页面最后一块）预留滚动空间 */
+@media (max-width: 768px) {
+  .controlBar {
+    bottom: calc(64px + var(--safe-area-bottom) + 12px);
+  }
+
+  .chatPanel {
+    margin-bottom: calc(150px + var(--safe-area-bottom));
+  }
+
+  /* 房间内隐藏了底部胶囊导航（App 打在 .app-layout 上的标记类）：
+     控制栏下移到贴近安全区，聊天面板底部留白同步收窄
+     （控制栏 ~58px + 下边距 14px + 呼吸位） */
+  :global(.mobile-nav-hidden) .controlBar {
+    bottom: calc(14px + var(--safe-area-bottom));
+  }
+
+  :global(.mobile-nav-hidden) .chatPanel {
+    margin-bottom: calc(100px + var(--safe-area-bottom));
+  }
+}
+
+@media (max-width: 640px) {
+  .controlBar {
+    width: calc(100vw - 24px);
+    /* 两端锚定：麦克风按钮贴左、音量组靠右（margin-right 抵消，数值不贴边），
+       中段空隙集中在降噪/录制两侧使其整体偏左 */
+    justify-content: space-between;
+    gap: 5px;
+    padding: 8px 10px;
+  }
+
+  /* 移动端：胶囊宽度放不下带文字的按钮（文字会竖排换行撑破胶囊），
+     全部只留图标，状态仍由图标/颜色区分；录制中的计时时长保留。
+     六个元素（麦克风/降噪/音乐/共享/录制/音量组）由 space-between 等距分布，
+     空间不足时音量滑条自动收窄（最小 28px） */
+  .micBtn span,
+  .noiseBtn span,
+  .shareBtn span,
+  .recBtn .recLabel {
+    display: none;
+  }
+
+  .volumeLabel {
+    display: none;
+  }
+
+  /* 左右内边距 10px，纯图标时按钮为 36x36 正圆（六个控件在小屏才放得下） */
+  .micBtn,
+  .noiseBtn,
+  .shareBtn,
+  .recBtn {
+    flex-shrink: 0;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  /* 空闲态录制图标只有 14px，补足为与其他按钮一致的正圆 */
+  .recBtn {
+    justify-content: center;
+    min-width: 36px;
+  }
+
+  .volumeGroup {
+    min-width: 0;
+    justify-content: center;
+    gap: 4px;
+    /* 右侧留白：数值不贴胶囊边缘 */
+    margin-right: 8px;
+  }
+
+  .volumeGroup .slider {
+    /* 移动端：六个控件并存，滑条收窄给图标按钮让位（空间不足再自动收缩） */
+    width: 70px;
+    flex-shrink: 1;
+    min-width: 28px;
+  }
+
+  .volumeValue {
+    flex-shrink: 0;
+  }
+
+  .memberGrid {
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 10px;
+  }
+
+  /* 移动端聊天面板适当压缩高度，让成员网格更靠前 */
+  .chatPanel {
+    height: 320px;
+  }
+}
+
+/* 小屏（<480px）：六个控件 + 数值放不下，退回纯滑条（位置本身即可读） */
+@media (max-width: 479px) {
+  .volumeValue {
+    display: none;
+  }
+}

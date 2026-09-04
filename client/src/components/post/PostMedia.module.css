@@ -1,0 +1,265 @@
+/* 帖子媒体区（原 post.css 的 post-detail-image-section/zoom 与共享 dots 规则） */
+
+.video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.imageSection {
+  flex: 1;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.imageCarousel {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.imageCarousel::-webkit-scrollbar {
+  display: none;
+}
+
+.image {
+  width: 100%;
+  height: 100%;
+  flex-shrink: 0;
+  object-fit: contain;
+  scroll-snap-align: start;
+}
+
+.imageDots {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 5px;
+  z-index: 2;
+}
+
+.imageDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.5);
+  transition: background 0.2s;
+  cursor: pointer;
+}
+
+.imageDot.active {
+  background: white;
+}
+
+.carouselBtn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(0, 0, 0, 0.45);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s, background 0.2s;
+  z-index: 3;
+  padding: 0;
+}
+
+.imageSection:hover .carouselBtn {
+  opacity: 1;
+}
+
+.carouselBtn:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.carouselPrev {
+  left: 12px;
+}
+
+.carouselNext {
+  right: 12px;
+}
+
+.zoomBtn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: rgba(0, 0, 0, 0.45);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s, background 0.2s;
+  z-index: 3;
+  padding: 0;
+}
+
+.imageSection:hover .zoomBtn {
+  opacity: 1;
+}
+
+.zoomBtn:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  color: white;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 50%;
+  transition: background 0.15s;
+}
+
+.close:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.zoomOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 400;
+}
+
+.zoomContent {
+  position: relative;
+  width: 95vw;
+  height: 95vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoomCarousel {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.zoomCarousel::-webkit-scrollbar {
+  display: none;
+}
+
+.zoomImage {
+  width: 100%;
+  height: 100%;
+  flex-shrink: 0;
+  object-fit: contain;
+  scroll-snap-align: start;
+  cursor: zoom-out;
+}
+
+.zoomDots {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  z-index: 5;
+}
+
+.zoomNav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s;
+  z-index: 5;
+  padding: 0;
+}
+
+.zoomNav:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.zoomPrev {
+  left: 16px;
+}
+
+.zoomNext {
+  right: 16px;
+}
+
+@media (max-width: 768px) {
+  .imageSection {
+    flex: none;
+    height: auto;
+    min-height: 0;
+    /* 不再用 max-height + overflow:hidden 硬性限高：
+       超宽图按宽度铺满时高度很小不会被裁；超长竖图交给下面的 max-height 封顶，
+       配合 object-fit:contain 等比缩放（保留完整画面），两侧留黑边而非裁切。 */
+    max-height: none;
+    overflow: visible;
+  }
+
+  .imageCarousel {
+    height: auto;
+    /* 单图时残留的横向滚动偏移会让图片看起来"缺一块"，关掉强制吸附 */
+    scroll-snap-type: none;
+  }
+
+  .image {
+    /* 与首页 PostCard 保持一致：宽度铺满 + 限高封顶 + contain 保完整 */
+    width: 100%;
+    height: auto;
+    max-height: 70vh;
+    object-fit: contain;
+    display: block;
+  }
+
+  .video {
+    height: auto;
+    max-height: 70vh;
+  }
+
+  .close {
+    display: none;
+  }
+}
