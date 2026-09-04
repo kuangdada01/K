@@ -35,6 +35,8 @@ export default function PostMedia({
 }: PostMediaProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const zoomScrollRef = useRef<HTMLDivElement>(null);
+  // 全屏内滑动结束后的分页吸附定时器（JS 兜底：iOS/WebView 的 scroll-snap 不可靠）
+  const zoomSnapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 用户手动切过图（点按钮/指示点/触摸滑动）后停止自动轮播，避免与手动操作抢权限
   const [userInteracted, setUserInteracted] = useState(false);
 
@@ -45,12 +47,44 @@ export default function PostMedia({
     setCurrentImageIndex(Math.round(scrollLeft / width));
   };
 
+  // 全屏内滚动：实时回写索引；滚动停止后吸附到最近整页（分页，不是无极滑动）
   const handleZoomScroll = () => {
     if (!zoomScrollRef.current) return;
-    const scrollLeft = zoomScrollRef.current.scrollLeft;
-    const width = zoomScrollRef.current.clientWidth;
-    setCurrentImageIndex(Math.round(scrollLeft / width));
+    const el = zoomScrollRef.current;
+    const width = el.clientWidth;
+    const index = Math.round(el.scrollLeft / width);
+    setCurrentImageIndex(index);
+    if (zoomSnapTimerRef.current) clearTimeout(zoomSnapTimerRef.current);
+    zoomSnapTimerRef.current = setTimeout(() => {
+      const target = width * Math.round(el.scrollLeft / width);
+      if (Math.abs(el.scrollLeft - target) > 4) {
+        el.scrollTo({ left: target, behavior: 'smooth' });
+      }
+    }, 120);
   };
+
+  // 进入全屏：zoomOverlay 条件渲染后 scrollLeft 为 0，需定位到当前图片
+  // （rAF 等一轮布局：图片异步加载不影响 clientWidth，但确保容器已排布）
+  useEffect(() => {
+    if (!zoomed || !zoomScrollRef.current) return;
+    const el = zoomScrollRef.current;
+    const raf = requestAnimationFrame(() => {
+      el.scrollLeft = el.clientWidth * currentImageIndex;
+    });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoomed]);
+
+  // 退出全屏：主轮播对齐到全屏中选中的图片（避免 dots 高亮与实际显示不一致）
+  useEffect(() => {
+    if (zoomed || !scrollRef.current) return;
+    const el = scrollRef.current;
+    const target = el.clientWidth * currentImageIndex;
+    if (Math.abs(el.scrollLeft - target) > 4) {
+      el.scrollTo({ left: target, behavior: 'smooth' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoomed]);
 
   const scrollToIndex = (index: number) => {
     // 任何手动切图（按钮/指示点）都停止自动轮播
@@ -111,7 +145,18 @@ export default function PostMedia({
           <>
             <div className={styles.imageCarousel} ref={scrollRef} onScroll={handleScroll} onPointerDown={() => setUserInteracted(true)}>
               {images.map((url, i) => (
-                <img key={i} src={resolveMediaUrl(url) || url} alt={post.title} className={styles.image} />
+                <img
+                  key={i}
+                  src={resolveMediaUrl(url) || url}
+                  alt={post.title}
+                  className={styles.image}
+                  // 点击图片进入全屏查看（触摸滑动由浏览器识别为滚动，不会触发 click）
+                  onClick={(e) => {
+                    e.stopPropagation(); // 防止冒泡关闭详情 overlay
+                    setUserInteracted(true);
+                    setZoomed(true);
+                  }}
+                />
               ))}
             </div>
             <button className={styles.zoomBtn} onClick={(e) => { e.stopPropagation(); setZoomed(true); }} aria-label="放大查看">
@@ -151,7 +196,12 @@ export default function PostMedia({
                 <ChevronLeft size={32} />
               </button>
             )}
-            <div className={styles.zoomCarousel} ref={zoomScrollRef} onScroll={handleZoomScroll} onPointerDown={() => setUserInteracted(true)}>
+            <div
+              className={styles.zoomCarousel}
+              ref={zoomScrollRef}
+              onScroll={handleZoomScroll}
+              onPointerDown={() => setUserInteracted(true)}
+            >
               {images.map((url, i) => (
                 <img
                   key={i}
