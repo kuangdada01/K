@@ -8,7 +8,7 @@
  * - 3 秒自动轮播（仅当未暂停、未缩放、多图时）
  */
 
-import { useEffect, useRef, RefObject } from 'react';
+import { useEffect, useRef, useState, RefObject } from 'react';
 import { X, ZoomIn, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { Post } from '../../types';
 import { resolveMediaUrl } from '../../utils';
@@ -35,6 +35,8 @@ export default function PostMedia({
 }: PostMediaProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const zoomScrollRef = useRef<HTMLDivElement>(null);
+  // 用户手动切过图（点按钮/指示点/触摸滑动）后停止自动轮播，避免与手动操作抢权限
+  const [userInteracted, setUserInteracted] = useState(false);
 
   const handleScroll = () => {
     if (!scrollRef.current) return;
@@ -51,6 +53,8 @@ export default function PostMedia({
   };
 
   const scrollToIndex = (index: number) => {
+    // 任何手动切图（按钮/指示点）都停止自动轮播
+    setUserInteracted(true);
     setCurrentImageIndex(index);
     if (zoomed && zoomScrollRef.current) {
       const width = zoomScrollRef.current.clientWidth;
@@ -75,9 +79,9 @@ export default function PostMedia({
     scrollToIndex(newIndex);
   };
 
-  // 自动轮播
+  // 自动轮播（用户手动切图/触摸滑动后停止）
   useEffect(() => {
-    if (isPaused || zoomed) return;
+    if (isPaused || zoomed || userInteracted) return;
     if (images.length <= 1) return;
     const timer = setInterval(() => {
       setCurrentImageIndex(prev => {
@@ -92,7 +96,7 @@ export default function PostMedia({
     return () => clearInterval(timer);
     // 历史实现依赖 post/images/isPaused（zoomed 变化时由条件短路，不重建定时器）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [post, isPaused]);
+  }, [post, isPaused, userInteracted]);
 
   return (
     <>
@@ -105,7 +109,7 @@ export default function PostMedia({
           <video ref={detailVideoRef} src={resolveMediaUrl(post.video_url) || undefined} controls className={styles.video} poster={resolveMediaUrl(post.video_cover) || undefined} onLoadedMetadata={(e) => { e.currentTarget.volume = 0.8; }} />
         ) : (
           <>
-            <div className={styles.imageCarousel} ref={scrollRef} onScroll={handleScroll}>
+            <div className={styles.imageCarousel} ref={scrollRef} onScroll={handleScroll} onPointerDown={() => setUserInteracted(true)}>
               {images.map((url, i) => (
                 <img key={i} src={resolveMediaUrl(url) || url} alt={post.title} className={styles.image} />
               ))}
@@ -147,7 +151,7 @@ export default function PostMedia({
                 <ChevronLeft size={32} />
               </button>
             )}
-            <div className={styles.zoomCarousel} ref={zoomScrollRef} onScroll={handleZoomScroll}>
+            <div className={styles.zoomCarousel} ref={zoomScrollRef} onScroll={handleZoomScroll} onPointerDown={() => setUserInteracted(true)}>
               {images.map((url, i) => (
                 <img
                   key={i}

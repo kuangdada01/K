@@ -61,6 +61,9 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   const [isFollowing, setIsFollowing] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
+  // 用户手动触摸/滑动过轮播图后停止自动轮播（移动端无 hover，isPaused 恒 false，
+  // 此前手动切图 3 秒后会被自动轮播切走——"抢权限"；触摸过一次即不再自动播）
+  const [userInteracted, setUserInteracted] = useState(false);
   const [isFullyVisible, setIsFullyVisible] = useState(false);
   const [isPartiallyVisible, setIsPartiallyVisible] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
@@ -100,14 +103,15 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
     return () => observer.disconnect();
   }, []);
 
-  // Auto-play carousel: 部分可见且未悬停暂停时每 3 秒推进一张
+  // Auto-play carousel: 部分可见且未悬停暂停时每 3 秒推进一张；
+  // 用户手动触摸/滑动过后（userInteracted）不再自动播
   useEffect(() => {
-    if (images.length <= 1 || isPaused || !isPartiallyVisible) return;
+    if (images.length <= 1 || isPaused || userInteracted || !isPartiallyVisible) return;
     const timer = setInterval(() => {
       setCurrentImageIndex(prev => (prev + 1) % images.length);
     }, 3000);
     return () => clearInterval(timer);
-  }, [images.length, isPaused, isPartiallyVisible]);
+  }, [images.length, isPaused, userInteracted, isPartiallyVisible]);
 
   // index 变化 → 平滑滚动到对应图片（滚动副作用从 state updater 移出；
   // 防抖回写与平滑动画的竞争是轮播不动的历史根因）
@@ -326,7 +330,12 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
           )
         ) : (
           <>
-            <div className={styles.imageCarousel} ref={scrollRef} onScroll={handleScroll}>
+            <div
+              className={styles.imageCarousel}
+              ref={scrollRef}
+              onScroll={handleScroll}
+              onPointerDown={() => setUserInteracted(true)}
+            >
               {images.map((url, i) => (
                 <img
                   key={i}
