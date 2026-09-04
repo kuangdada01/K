@@ -52,19 +52,32 @@ export default function PostMedia({
     }, 120);
   };
 
-  // 全屏内滚动：实时回写索引；滚动停止后吸附到最近整页（分页，不是无极滑动）
+  // 全屏内滚动：实时回写索引，并同步主轮播滚动位置（详情页跟随全屏翻页，
+  // 退出全屏时详情页已停在同一张图，无"翻页追回"动画）
+  const syncMainCarousel = (index: number) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const target = el.clientWidth * index;
+    if (Math.abs(el.scrollLeft - target) > 4) {
+      el.scrollLeft = target; // 瞬时定位（详情页被全屏遮住，无动画需求）
+    }
+  };
+
   const handleZoomScroll = () => {
     if (!zoomScrollRef.current) return;
     const el = zoomScrollRef.current;
     const width = el.clientWidth;
     const index = Math.round(el.scrollLeft / width);
     setCurrentImageIndex(index);
+    syncMainCarousel(index);
     if (zoomSnapTimerRef.current) clearTimeout(zoomSnapTimerRef.current);
     zoomSnapTimerRef.current = setTimeout(() => {
       const target = width * Math.round(el.scrollLeft / width);
       if (Math.abs(el.scrollLeft - target) > 4) {
         el.scrollTo({ left: target, behavior: 'smooth' });
       }
+      // 吸附落位后再同步一次主轮播，确保退出时两者完全一致
+      syncMainCarousel(Math.round(el.scrollLeft / width));
     }, 120);
   };
 
@@ -95,13 +108,15 @@ export default function PostMedia({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoomed]);
 
-  // 退出全屏：主轮播对齐到全屏中选中的图片（避免 dots 高亮与实际显示不一致）
+  // 退出全屏：主轮播对齐到全屏中选中的图片。
+  // 全屏滑动时主轮播已实时同步（syncMainCarousel），此处仅兜底瞬时对齐，
+  // 不用 smooth——避免退出后看到"自己翻页追过去"的动画
   useEffect(() => {
     if (zoomed || !scrollRef.current) return;
     const el = scrollRef.current;
     const target = el.clientWidth * currentImageIndex;
     if (Math.abs(el.scrollLeft - target) > 4) {
-      el.scrollTo({ left: target, behavior: 'smooth' });
+      el.scrollLeft = target;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoomed]);
@@ -111,6 +126,8 @@ export default function PostMedia({
     if (zoomed && zoomScrollRef.current) {
       const width = zoomScrollRef.current.clientWidth;
       zoomScrollRef.current.scrollTo({ left: width * index, behavior: 'smooth' });
+      // 全屏内点箭头/指示点切换时，主轮播同步跟随（退出全屏无追回动画）
+      syncMainCarousel(index);
     } else if (scrollRef.current) {
       const width = scrollRef.current.clientWidth;
       scrollRef.current.scrollTo({ left: width * index, behavior: 'smooth' });
