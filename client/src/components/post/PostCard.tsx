@@ -73,12 +73,8 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   const videoRef = useRef<HTMLVideoElement>(null);
   const heartRef = useRef<SVGSVGElement>(null);
   const scrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // 分页吸附定时器 + 手势级速度检测（JS 兜底：Android WebView 对 scroll-snap 支持不可靠，
-  // 快速甩动会惯性跨页；用整个手势的平均速度判断并限制一次最多翻一页）
-  const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 上次稳定停靠的图片索引：手势完全接管分页（一次最多翻一页）
   const settledIndexRef = useRef(0);
-  const gestureRef = useRef({ startLeft: 0, startTime: 0, startIndex: 0, active: false });
-  const lastScrollEventRef = useRef({ time: 0, left: 0 });
   const navigate = useNavigate();
 
   const images = (() => {
@@ -148,10 +144,9 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
       settledIndexRef.current = 0;
     }
   }, [isPartiallyVisible]);
-  // 卸载时清理吸附定时器
+  // 卸载时清理防抖定时器
   useEffect(() => {
     return () => {
-      if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
       if (scrollDebounceRef.current) clearTimeout(scrollDebounceRef.current);
     };
   }, []);
@@ -242,7 +237,7 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
     void svg.getBoundingClientRect();
   }, [liked]);
 
-  // 用户滚动 → 400ms 防抖回写 index（覆盖手动滑动；时长大于平滑动画，
+  // 用户滚动 → 400ms 防抖回写 index（覆盖自动滚动；时长大于平滑动画，
   // 自动播放产生的 onScroll 不会把索引拉回，避免与自动滚动打架）
   const handleScroll = () => {
     if (scrollDebounceRef.current) clearTimeout(scrollDebounceRef.current);
@@ -251,44 +246,69 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
       if (!el) return;
       setCurrentImageIndex(Math.round(el.scrollLeft / el.clientWidth));
     }, 400);
+  };
 
-    // —— 分页吸附（JS 兜底，Android WebView 快速甩动会惯性跨页）——
+  // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）——
+  // pointerdown 记录起点 → touchmove preventDefault + 手动驱动 scrollLeft（跟手）→
+  // pointerup 按位移决定翻一页并平滑落位。touch-action:pan-y 禁掉原生水平滚动。
+  useEffect(() => {
     const el = scrollRef.current;
     if (!el || images.length <= 1) return;
-    const now = performance.now();
-    // 距离上次滚动 >250ms 视为新手势（重新记录起点与起点停靠索引）
-    if (now - lastScrollEventRef.current.time > 250) {
-      gestureRef.current = {
-        startLeft: el.scrollLeft,
-        startTime: now,
-        startIndex: settledIndexRef.current,
-        active: true,
+    let startX = 0;
+    let startLeft = 0;
+    let startIndex = 0;
+    let active = false;
+    let moveHandler: ((e: TouchEvent) => void) | null = null;
+
+    const down = (e: PointerEvent) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      setUserInteracted(true); // 手动触摸后停止自动轮播
+      active = true;
+      startX = e.clientX;
+      startLeft = el.scrollLeft;
+      startIndex = settledIndexRef.current;
+      moveHandler = (te: TouchEvent) => {
+        if (!active || te.touches.length !== 1) return;
+        te.preventDefault();
+        const dx = te.touches[0].clientX - startX;
+        el.scrollLeft = startLeft - dx;
       };
-    }
-    lastScrollEventRef.current = { time: now, left: el.scrollLeft };
-    if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
-    snapTimerRef.current = setTimeout(() => {
-      if (!scrollRef.current) return;
-      const targetEl = scrollRef.current;
-      const targetWidth = targetEl.clientWidth;
-      const raw = Math.round(targetEl.scrollLeft / targetWidth);
-      const g = gestureRef.current;
-      let target = raw;
-      // 用整个手势的平均速度判断快速甩动（惯性末尾瞬时速度≈0，用平均速度才可靠）
-      const gestureTime = now - g.startTime;
-      const avgVelocity = gestureTime > 0 ? Math.abs(targetEl.scrollLeft - g.startLeft) / gestureTime : 0;
-      if (g.active && avgVelocity > 0.4) {
-        target = Math.max(0, Math.min(images.length - 1, raw > g.startIndex ? g.startIndex + 1 : raw < g.startIndex ? g.startIndex - 1 : raw));
+      el.addEventListener('touchmove', moveHandler, { passive: false });
+    };
+
+    const up = () => {
+      if (!active) return;
+      active = false;
+      if (moveHandler) {
+        el.removeEventListener('touchmove', moveHandler);
+        moveHandler = null;
       }
-      g.active = false;
-      const targetLeft = targetWidth * target;
-      if (Math.abs(targetEl.scrollLeft - targetLeft) > 4) {
-        targetEl.scrollTo({ left: targetLeft, behavior: 'smooth' });
+      const dx = startLeft - el.scrollLeft; // 正向 = 手指左滑 = 下一张
+      const width = el.clientWidth || 1;
+      let target = startIndex;
+      if (Math.abs(dx) > width * 0.2) {
+        // 拖动超过 1/5 屏 → 翻一页（最多一页，绝不过 2 张）
+        if (dx > 0) target = Math.min(images.length - 1, startIndex + 1);
+        else if (dx < 0) target = Math.max(0, startIndex - 1);
+      } else {
+        // 微动 → 回到起点
+        target = startIndex;
       }
       settledIndexRef.current = target;
       setCurrentImageIndex(target);
-    }, 120);
-  };
+      el.scrollTo({ left: width * target, behavior: 'smooth' });
+    };
+
+    el.addEventListener('pointerdown', down);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+    return () => {
+      el.removeEventListener('pointerdown', down);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      if (moveHandler) el.removeEventListener('touchmove', moveHandler);
+    };
+  }, [images]);
 
   const handleFollow = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -391,7 +411,6 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
               className={styles.imageCarousel}
               ref={scrollRef}
               onScroll={handleScroll}
-              onPointerDown={() => setUserInteracted(true)}
             >
               {images.map((url, i) => (
                 <img

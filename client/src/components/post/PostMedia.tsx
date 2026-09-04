@@ -32,60 +32,15 @@ export default function PostMedia({
 }: PostMediaProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const zoomScrollRef = useRef<HTMLDivElement>(null);
-  // 主轮播/全屏内滑动结束后的分页吸附定时器（JS 兜底：iOS/WebView 的 scroll-snap 不可靠）
-  const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const zoomSnapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 全屏内最后停靠的图片索引（同步写入 ref，退出时以此为准，避免依赖可能过期的 state）
   const lastZoomIndexRef = useRef(0);
-  // 上次稳定停靠的图片索引：快速甩动时限制一次手势最多翻一页（防惯性一下跳过 2 张）
+  // 上次稳定停靠的图片索引：一次手势最多翻一页（防惯性一下跳过 2 张）
   const mainSettledRef = useRef(0);
   const zoomSettledRef = useRef(0);
-  // 手势级速度检测：记录本次手势的起点（位置/时间/停靠索引），
-  // 用「总位移/总时长」判断是否快速甩动（惯性末尾的瞬时速度≈0，不可靠）
-  const mainGestureRef = useRef({ startLeft: 0, startTime: 0, startIndex: 0, active: false });
-  const zoomGestureRef = useRef({ startLeft: 0, startTime: 0, startIndex: 0, active: false });
-  const lastScrollEventRef = useRef({ time: 0, left: 0 });
-  const lastZoomScrollEventRef = useRef({ time: 0, left: 0 });
 
-  // 主轮播滚动：实时回写索引；记录手势起点；滚动停止后吸附到整页
-  // （快速甩动时最多前进/后退一页，WebView 惯性滚动不会一次跨过多张）
-  const handleScroll = () => {
-    if (!scrollRef.current) return;
-    const el = scrollRef.current;
-    const width = el.clientWidth;
-    const index = Math.round(el.scrollLeft / width);
-    setCurrentImageIndex(index);
-    const now = performance.now();
-    // 距离上次滚动 >250ms 视为新手势（重新记录起点与起点停靠索引）
-    if (now - lastScrollEventRef.current.time > 250) {
-      mainGestureRef.current = {
-        startLeft: el.scrollLeft,
-        startTime: now,
-        startIndex: mainSettledRef.current,
-        active: true,
-      };
-    }
-    lastScrollEventRef.current = { time: now, left: el.scrollLeft };
-    if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
-    snapTimerRef.current = setTimeout(() => {
-      const raw = Math.round(el.scrollLeft / width);
-      const g = mainGestureRef.current;
-      let target = raw;
-      // 用整个手势的平均速度判断快速甩动（惯性末尾瞬时速度≈0，用平均速度才可靠）
-      const gestureTime = now - g.startTime;
-      const avgVelocity = gestureTime > 0 ? Math.abs(el.scrollLeft - g.startLeft) / gestureTime : 0;
-      if (g.active && avgVelocity > 0.4) {
-        target = Math.max(0, Math.min(images.length - 1, raw > g.startIndex ? g.startIndex + 1 : raw < g.startIndex ? g.startIndex - 1 : raw));
-      }
-      g.active = false;
-      const targetLeft = width * target;
-      if (Math.abs(el.scrollLeft - targetLeft) > 4) {
-        el.scrollTo({ left: targetLeft, behavior: 'smooth' });
-      }
-      mainSettledRef.current = target;
-      setCurrentImageIndex(target);
-    }, 120);
-  };
+  // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）——
+  // 每个轮播容器：pointerdown 记录起点 → pointermove 手动驱动 scrollLeft（跟手）→
+  // pointerup 按位移/速度决定翻一页并平滑落位。touch-action:none 禁掉原生滚动。
 
   // 全屏内滚动：实时回写索引，并同步主轮播滚动位置（详情页跟随全屏翻页，
   // 退出全屏时详情页已停在同一张图，无"翻页追回"动画）；快速甩动最多翻一页
@@ -98,50 +53,94 @@ export default function PostMedia({
     }
   };
 
-  const handleZoomScroll = () => {
-    if (!zoomScrollRef.current) return;
-    const el = zoomScrollRef.current;
-    const width = el.clientWidth;
-    const index = Math.round(el.scrollLeft / width);
-    setCurrentImageIndex(index);
-    lastZoomIndexRef.current = index;
-    syncMainCarousel(index);
-    const now = performance.now();
-    // 距离上次滚动 >250ms 视为新手势（重新记录起点与起点停靠索引）
-    if (now - lastZoomScrollEventRef.current.time > 250) {
-      zoomGestureRef.current = {
-        startLeft: el.scrollLeft,
-        startTime: now,
-        startIndex: zoomSettledRef.current,
-        active: true,
+  const attachGesture = (
+    el: HTMLDivElement | null,
+    getSettled: () => number,
+    setSettled: (v: number) => void,
+    onMove: (index: number) => void,
+  ) => {
+    if (!el) return () => {};
+    let startX = 0;
+    let startLeft = 0;
+    let startIndex = 0;
+    let active = false;
+    let moveHandler: ((e: TouchEvent) => void) | null = null;
+
+    const down = (e: PointerEvent) => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      active = true;
+      startX = e.clientX;
+      startLeft = el.scrollLeft;
+      startIndex = getSettled();
+      moveHandler = (te: TouchEvent) => {
+        if (!active || te.touches.length !== 1) return;
+        te.preventDefault();
+        const dx = te.touches[0].clientX - startX;
+        el.scrollLeft = startLeft - dx;
       };
-    }
-    lastZoomScrollEventRef.current = { time: now, left: el.scrollLeft };
-    if (zoomSnapTimerRef.current) clearTimeout(zoomSnapTimerRef.current);
-    zoomSnapTimerRef.current = setTimeout(() => {
-      // 已退出全屏（节点脱离文档）则不再吸附/同步，防止把主轮播拽回第一张
-      if (!el.isConnected) return;
-      const raw = Math.round(el.scrollLeft / width);
-      const g = zoomGestureRef.current;
-      let target = raw;
-      // 用整个手势的平均速度判断快速甩动（惯性末尾瞬时速度≈0，用平均速度才可靠）
-      const gestureTime = now - g.startTime;
-      const avgVelocity = gestureTime > 0 ? Math.abs(el.scrollLeft - g.startLeft) / gestureTime : 0;
-      if (g.active && avgVelocity > 0.4) {
-        target = Math.max(0, Math.min(images.length - 1, raw > g.startIndex ? g.startIndex + 1 : raw < g.startIndex ? g.startIndex - 1 : raw));
+      // passive:false 才能 preventDefault 禁掉原生惯性滚动
+      el.addEventListener('touchmove', moveHandler, { passive: false });
+    };
+
+    const up = (e: PointerEvent) => {
+      if (!active) return;
+      active = false;
+      if (moveHandler) {
+        el.removeEventListener('touchmove', moveHandler);
+        moveHandler = null;
       }
-      g.active = false;
-      const targetLeft = width * target;
-      if (Math.abs(el.scrollLeft - targetLeft) > 4) {
-        el.scrollTo({ left: targetLeft, behavior: 'smooth' });
+      const dx = startLeft - el.scrollLeft; // 正向 = 手指左滑 = 下一张
+      const width = el.clientWidth || 1;
+      const total = images.length;
+      let target = startIndex;
+      if (Math.abs(dx) > width * 0.2 || e.pointerType === 'mouse') {
+        // 拖动超过 1/5 屏 → 翻一页（最多一页，绝不过 2 张）
+        if (dx > 0) target = Math.min(total - 1, startIndex + 1);
+        else if (dx < 0) target = Math.max(0, startIndex - 1);
+      } else {
+        // 微动 → 回到起点
+        target = startIndex;
       }
-      // 吸附落位后再同步一次主轮播，确保退出时两者完全一致
-      zoomSettledRef.current = target;
-      lastZoomIndexRef.current = target;
-      setCurrentImageIndex(target);
-      syncMainCarousel(target);
-    }, 120);
+      setSettled(target);
+      onMove(target);
+      el.scrollTo({ left: width * target, behavior: 'smooth' });
+    };
+
+    el.addEventListener('pointerdown', down);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+    return () => {
+      el.removeEventListener('pointerdown', down);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      if (moveHandler) el.removeEventListener('touchmove', moveHandler);
+    };
   };
+
+  // 主轮播手势（详情页）
+  useEffect(() => {
+    const detach = attachGesture(
+      scrollRef.current,
+      () => mainSettledRef.current,
+      (v) => { mainSettledRef.current = v; },
+      (index) => setCurrentImageIndex(index),
+    );
+    return detach;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [images]);
+
+  // 全屏轮播手势（zoom overlay 条件渲染，zoomed 后挂载）
+  useEffect(() => {
+    if (!zoomed || !zoomScrollRef.current) return;
+    const detach = attachGesture(
+      zoomScrollRef.current,
+      () => zoomSettledRef.current,
+      (v) => { zoomSettledRef.current = v; lastZoomIndexRef.current = v; },
+      (index) => { setCurrentImageIndex(index); lastZoomIndexRef.current = index; syncMainCarousel(index); },
+    );
+    return detach;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoomed, images]);
 
   // 首页卡片点开详情页时带图片索引进入：images 首次就绪后主轮播定位到同一张
   // （post 异步加载，进入时 scrollRef 尚未有图片；ref 对比确保只在首次就绪时执行一次）
@@ -187,14 +186,6 @@ export default function PostMedia({
     }
   }, [zoomed]);
 
-  // 卸载时清理吸附定时器，防止组件销毁后回调操作已脱离 DOM 的节点
-  useEffect(() => {
-    return () => {
-      if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
-      if (zoomSnapTimerRef.current) clearTimeout(zoomSnapTimerRef.current);
-    };
-  }, []);
-
   const scrollToIndex = (index: number) => {
     setCurrentImageIndex(index);
     if (zoomed && zoomScrollRef.current) {
@@ -231,7 +222,7 @@ export default function PostMedia({
           <video ref={detailVideoRef} src={resolveMediaUrl(post.video_url) || undefined} controls className={styles.video} poster={resolveMediaUrl(post.video_cover) || undefined} onLoadedMetadata={(e) => { e.currentTarget.volume = 0.8; }} />
         ) : (
           <>
-            <div className={styles.imageCarousel} ref={scrollRef} onScroll={handleScroll}>
+            <div className={styles.imageCarousel} ref={scrollRef}>
               {images.map((url, i) => (
                 <img
                   key={i}
@@ -286,7 +277,6 @@ export default function PostMedia({
             <div
               className={styles.zoomCarousel}
               ref={zoomScrollRef}
-              onScroll={handleZoomScroll}
             >
               {images.map((url, i) => (
                 <img

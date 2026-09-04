@@ -121,8 +121,8 @@
   width: 100%;
   height: 100%;
   overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  scroll-snap-stop: always; /* 一次滑动只翻一页（浏览器端；WebView 由 JS 兜底） */
+  /* 手势完全接管：禁原生水平滚动/惯性（WebView 下跨页不可控），垂直留给页面 */
+  touch-action: pan-y;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -139,7 +139,6 @@
   display: block;
   object-fit: contain;
   background: #000;
-  scroll-snap-align: start;
 }
 
 .videoWrapper {

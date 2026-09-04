@@ -23,7 +23,8 @@
   width: 100%;
   height: 100%;
   overflow-x: auto;
-  scroll-snap-type: x mandatory;
+  /* 手势完全接管：禁原生水平滚动/惯性（WebView 下跨页不可控），垂直留给页面 */
+  touch-action: pan-y;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
@@ -37,7 +38,6 @@
   height: 100%;
   flex-shrink: 0;
   object-fit: contain;
-  scroll-snap-align: start;
 }
 
 .imageDots {
@@ -168,8 +168,8 @@
   width: 100%;
   height: 100%;
   overflow-x: auto;
-  scroll-snap-type: x mandatory;
-  scroll-snap-stop: always; /* 一次滑动只翻一页，避免跨页 */
+  /* 手势完全接管：禁原生水平滚动/惯性 */
+  touch-action: pan-y;
   scrollbar-width: none;
   -ms-overflow-style: none;
   /* 防止图片被拖拽/长按选中干扰滑动 */
@@ -189,7 +189,6 @@
   height: 100%;
   flex-shrink: 0;
   object-fit: contain;
-  scroll-snap-align: start;
   cursor: zoom-out;
 }
 
@@ -248,10 +247,6 @@
 
   .imageCarousel {
     height: auto;
-    /* 统一翻页：滑动吸附到下一张完整图（与全屏一致），不做无极滑动；
-       单图时无横向滚动，吸附无副作用 */
-    scroll-snap-type: x mandatory;
-    scroll-snap-stop: always;
   }
 
   .image {
