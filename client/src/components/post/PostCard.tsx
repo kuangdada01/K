@@ -283,7 +283,7 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
         el.removeEventListener('touchmove', moveHandler);
         moveHandler = null;
       }
-      const dx = startLeft - el.scrollLeft; // 正向 = 手指左滑 = 下一张
+      const dx = el.scrollLeft - startLeft; // 正向 = 手指左滑（scrollLeft 增大）= 下一张
       const width = el.clientWidth || 1;
       let target = startIndex;
       if (Math.abs(dx) > width * 0.2) {
