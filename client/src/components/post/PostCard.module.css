@@ -122,6 +122,7 @@
   height: 100%;
   overflow-x: auto;
   scroll-snap-type: x mandatory;
+  scroll-snap-stop: always; /* 一次滑动只翻一页（浏览器端；WebView 由 JS 兜底） */
   scrollbar-width: none;
   -ms-overflow-style: none;
 }

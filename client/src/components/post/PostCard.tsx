@@ -73,6 +73,12 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   const videoRef = useRef<HTMLVideoElement>(null);
   const heartRef = useRef<SVGSVGElement>(null);
   const scrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 分页吸附定时器 + 手势级速度检测（JS 兜底：Android WebView 对 scroll-snap 支持不可靠，
+  // 快速甩动会惯性跨页；用整个手势的平均速度判断并限制一次最多翻一页）
+  const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const settledIndexRef = useRef(0);
+  const gestureRef = useRef({ startLeft: 0, startTime: 0, startIndex: 0, active: false });
+  const lastScrollEventRef = useRef({ time: 0, left: 0 });
   const navigate = useNavigate();
 
   const images = (() => {
@@ -136,6 +142,19 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   if (!isPartiallyVisible && images.length > 1 && currentImageIndex !== 0) {
     setCurrentImageIndex(0);
   }
+  // 离开视口后同步重置吸附基准（渲染期不写 ref，放 effect 里避免 lint 告警）
+  useEffect(() => {
+    if (!isPartiallyVisible) {
+      settledIndexRef.current = 0;
+    }
+  }, [isPartiallyVisible]);
+  // 卸载时清理吸附定时器
+  useEffect(() => {
+    return () => {
+      if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
+      if (scrollDebounceRef.current) clearTimeout(scrollDebounceRef.current);
+    };
+  }, []);
   if (!videoShouldBeReady && videoReady) setVideoReady(false);
   useEffect(() => {
     if (!videoShouldBeReady) return;
@@ -232,6 +251,43 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
       if (!el) return;
       setCurrentImageIndex(Math.round(el.scrollLeft / el.clientWidth));
     }, 400);
+
+    // —— 分页吸附（JS 兜底，Android WebView 快速甩动会惯性跨页）——
+    const el = scrollRef.current;
+    if (!el || images.length <= 1) return;
+    const now = performance.now();
+    // 距离上次滚动 >250ms 视为新手势（重新记录起点与起点停靠索引）
+    if (now - lastScrollEventRef.current.time > 250) {
+      gestureRef.current = {
+        startLeft: el.scrollLeft,
+        startTime: now,
+        startIndex: settledIndexRef.current,
+        active: true,
+      };
+    }
+    lastScrollEventRef.current = { time: now, left: el.scrollLeft };
+    if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
+    snapTimerRef.current = setTimeout(() => {
+      if (!scrollRef.current) return;
+      const targetEl = scrollRef.current;
+      const targetWidth = targetEl.clientWidth;
+      const raw = Math.round(targetEl.scrollLeft / targetWidth);
+      const g = gestureRef.current;
+      let target = raw;
+      // 用整个手势的平均速度判断快速甩动（惯性末尾瞬时速度≈0，用平均速度才可靠）
+      const gestureTime = now - g.startTime;
+      const avgVelocity = gestureTime > 0 ? Math.abs(targetEl.scrollLeft - g.startLeft) / gestureTime : 0;
+      if (g.active && avgVelocity > 0.4) {
+        target = Math.max(0, Math.min(images.length - 1, raw > g.startIndex ? g.startIndex + 1 : raw < g.startIndex ? g.startIndex - 1 : raw));
+      }
+      g.active = false;
+      const targetLeft = targetWidth * target;
+      if (Math.abs(targetEl.scrollLeft - targetLeft) > 4) {
+        targetEl.scrollTo({ left: targetLeft, behavior: 'smooth' });
+      }
+      settledIndexRef.current = target;
+      setCurrentImageIndex(target);
+    }, 120);
   };
 
   const handleFollow = async (e: React.MouseEvent) => {
