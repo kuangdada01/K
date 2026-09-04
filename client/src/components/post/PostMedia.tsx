@@ -37,25 +37,48 @@ export default function PostMedia({
   const zoomSnapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 全屏内最后停靠的图片索引（同步写入 ref，退出时以此为准，避免依赖可能过期的 state）
   const lastZoomIndexRef = useRef(0);
+  // 上次稳定停靠的图片索引：快速甩动时限制一次手势最多翻一页（防惯性一下跳过 2 张）
+  const mainSettledRef = useRef(0);
+  const zoomSettledRef = useRef(0);
+  // 最近一次滚动事件的速度（px/ms）：区分快速甩动（限制翻页）与缓慢拖动（按实际落点吸附）
+  const scrollVelocityRef = useRef(0);
+  const zoomVelocityRef = useRef(0);
+  const lastScrollEventRef = useRef({ time: 0, left: 0 });
+  const lastZoomScrollEventRef = useRef({ time: 0, left: 0 });
 
-  // 主轮播滚动：实时回写索引；滚动停止后吸附到最近整页（滑动=翻到下一张完整图）
+  // 主轮播滚动：实时回写索引；记录速度；滚动停止后吸附到整页
+  // （快速甩动时最多前进/后退一页，WebView 惯性滚动不会一次跨过多张）
   const handleScroll = () => {
     if (!scrollRef.current) return;
     const el = scrollRef.current;
     const width = el.clientWidth;
     const index = Math.round(el.scrollLeft / width);
     setCurrentImageIndex(index);
+    const now = performance.now();
+    const dt = now - lastScrollEventRef.current.time;
+    const dx = el.scrollLeft - lastScrollEventRef.current.left;
+    scrollVelocityRef.current = dt > 0 ? Math.abs(dx) / dt : 0;
+    lastScrollEventRef.current = { time: now, left: el.scrollLeft };
     if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
     snapTimerRef.current = setTimeout(() => {
-      const target = width * Math.round(el.scrollLeft / width);
-      if (Math.abs(el.scrollLeft - target) > 4) {
-        el.scrollTo({ left: target, behavior: 'smooth' });
+      const raw = Math.round(el.scrollLeft / width);
+      const last = mainSettledRef.current;
+      let target = raw;
+      // 快速甩动（惯性大）只允许前进/后退一页；缓慢拖动按实际落点吸附
+      if (scrollVelocityRef.current > 0.4) {
+        target = Math.max(0, Math.min(images.length - 1, raw > last ? last + 1 : raw < last ? last - 1 : raw));
       }
+      const targetLeft = width * target;
+      if (Math.abs(el.scrollLeft - targetLeft) > 4) {
+        el.scrollTo({ left: targetLeft, behavior: 'smooth' });
+      }
+      mainSettledRef.current = target;
+      setCurrentImageIndex(target);
     }, 120);
   };
 
   // 全屏内滚动：实时回写索引，并同步主轮播滚动位置（详情页跟随全屏翻页，
-  // 退出全屏时详情页已停在同一张图，无"翻页追回"动画）
+  // 退出全屏时详情页已停在同一张图，无"翻页追回"动画）；快速甩动最多翻一页
   const syncMainCarousel = (index: number) => {
     const el = scrollRef.current;
     if (!el) return;
@@ -73,17 +96,31 @@ export default function PostMedia({
     setCurrentImageIndex(index);
     lastZoomIndexRef.current = index;
     syncMainCarousel(index);
+    const now = performance.now();
+    const dt = now - lastZoomScrollEventRef.current.time;
+    const dx = el.scrollLeft - lastZoomScrollEventRef.current.left;
+    zoomVelocityRef.current = dt > 0 ? Math.abs(dx) / dt : 0;
+    lastZoomScrollEventRef.current = { time: now, left: el.scrollLeft };
     if (zoomSnapTimerRef.current) clearTimeout(zoomSnapTimerRef.current);
     zoomSnapTimerRef.current = setTimeout(() => {
       // 已退出全屏（节点脱离文档）则不再吸附/同步，防止把主轮播拽回第一张
       if (!el.isConnected) return;
-      const target = width * Math.round(el.scrollLeft / width);
-      if (Math.abs(el.scrollLeft - target) > 4) {
-        el.scrollTo({ left: target, behavior: 'smooth' });
+      const raw = Math.round(el.scrollLeft / width);
+      const last = zoomSettledRef.current;
+      let target = raw;
+      // 快速甩动（惯性大）只允许前进/后退一页；缓慢拖动按实际落点吸附
+      if (zoomVelocityRef.current > 0.4) {
+        target = Math.max(0, Math.min(images.length - 1, raw > last ? last + 1 : raw < last ? last - 1 : raw));
+      }
+      const targetLeft = width * target;
+      if (Math.abs(el.scrollLeft - targetLeft) > 4) {
+        el.scrollTo({ left: targetLeft, behavior: 'smooth' });
       }
       // 吸附落位后再同步一次主轮播，确保退出时两者完全一致
-      lastZoomIndexRef.current = Math.round(el.scrollLeft / width);
-      syncMainCarousel(lastZoomIndexRef.current);
+      zoomSettledRef.current = target;
+      lastZoomIndexRef.current = target;
+      setCurrentImageIndex(target);
+      syncMainCarousel(target);
     }, 120);
   };
 
@@ -95,7 +132,9 @@ export default function PostMedia({
     prevImagesRef.current = images;
     if (currentImageIndex <= 0 || !scrollRef.current) return;
     const el = scrollRef.current;
-    const target = el.clientWidth * Math.min(currentImageIndex, Math.max(images.length - 1, 0));
+    const targetIndex = Math.min(currentImageIndex, Math.max(images.length - 1, 0));
+    mainSettledRef.current = targetIndex;
+    const target = el.clientWidth * targetIndex;
     if (Math.abs(el.scrollLeft - target) > 4) {
       el.scrollTo({ left: target, behavior: 'auto' });
     }
@@ -107,6 +146,7 @@ export default function PostMedia({
   useEffect(() => {
     if (!zoomed || !zoomScrollRef.current) return;
     const el = zoomScrollRef.current;
+    zoomSettledRef.current = currentImageIndex;
     const raf = requestAnimationFrame(() => {
       el.scrollLeft = el.clientWidth * currentImageIndex;
     });
@@ -122,6 +162,7 @@ export default function PostMedia({
     if (zoomed || !scrollRef.current) return;
     const el = scrollRef.current;
     const target = el.clientWidth * lastZoomIndexRef.current;
+    mainSettledRef.current = lastZoomIndexRef.current;
     if (Math.abs(el.scrollLeft - target) > 4) {
       el.scrollLeft = target;
     }
@@ -138,11 +179,13 @@ export default function PostMedia({
   const scrollToIndex = (index: number) => {
     setCurrentImageIndex(index);
     if (zoomed && zoomScrollRef.current) {
+      zoomSettledRef.current = index;
       const width = zoomScrollRef.current.clientWidth;
       zoomScrollRef.current.scrollTo({ left: width * index, behavior: 'smooth' });
       // 全屏内点箭头/指示点切换时，主轮播同步跟随（退出全屏无追回动画）
       syncMainCarousel(index);
     } else if (scrollRef.current) {
+      mainSettledRef.current = index;
       const width = scrollRef.current.clientWidth;
       scrollRef.current.scrollTo({ left: width * index, behavior: 'smooth' });
     }
