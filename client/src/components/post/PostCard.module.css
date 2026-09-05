@@ -117,27 +117,26 @@
 }
 
 .imageCarousel {
-  display: flex;
+  position: relative;
   width: 100%;
-  height: 100%;
-  overflow-x: auto;
-  /* 手势完全接管：禁原生水平滚动/惯性（WebView 下跨页不可控），垂直留给页面 */
+  overflow: hidden; /* transform 方案：不再滚动，容器裁剪 */
+  /* 手势完全接管：禁原生水平滚动/惯性，垂直留给页面 */
   touch-action: pan-y;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
 }
 
-.imageCarousel::-webkit-scrollbar {
-  display: none;
+/* transform 轨道：GPU 合成器驱动，60fps 丝滑（scrollLeft 走主线程会掉帧） */
+.imageTrack {
+  display: flex;
+  align-items: flex-start; /* 每张图保持自身高度（宽高比），容器取最高图 */
+  will-change: transform;
 }
 
 .image {
-  width: 100%;
+  flex: 0 0 100%;
   height: auto;
   max-height: 520px;
-  flex-shrink: 0;
-  display: block;
   object-fit: contain;
+  display: block;
   background: #000;
 }
 

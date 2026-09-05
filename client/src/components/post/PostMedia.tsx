@@ -4,8 +4,9 @@
  * ============================================================
  * PostDetail 的媒体区（图片轮播/视频/缩放查看）抽取：
  * - 图片轮播 + 指示点 + 左右切换（受控组件，索引/缩放状态由调用方管理）
- * - 详情页主轮播：无自动轮播，滑动吸附翻到下一张完整图
- * - 缩放查看 overlay（全屏）：点击进入/退出，滑动吸附翻页
+ * - 详情页主轮播：无自动轮播，手势跟手翻页（transform 轨道驱动，GPU 合成器 60fps）
+ * - 缩放查看 overlay（全屏）：点击进入/退出，滑动翻页（同样 transform 驱动）
+ * ============================================================
  */
 
 import { useEffect, useRef, RefObject } from 'react';
@@ -30,87 +31,99 @@ export default function PostMedia({
   currentImageIndex, setCurrentImageIndex,
   zoomed, setZoomed,
 }: PostMediaProps) {
+  // viewport（宽度来源 + touch-action）与 transform 轨道
   const scrollRef = useRef<HTMLDivElement>(null);
   const zoomScrollRef = useRef<HTMLDivElement>(null);
+  const mainTrackRef = useRef<HTMLDivElement>(null);
+  const zoomTrackRef = useRef<HTMLDivElement>(null);
+  // 当前轨道像素偏移（0 = 第一张），手势跟手与动画共用
+  const mainOffsetRef = useRef(0);
+  const zoomOffsetRef = useRef(0);
   // 全屏内最后停靠的图片索引（同步写入 ref，退出时以此为准，避免依赖可能过期的 state）
   const lastZoomIndexRef = useRef(0);
   // 上次稳定停靠的图片索引：一次手势最多翻一页（防惯性一下跳过 2 张）
   const mainSettledRef = useRef(0);
   const zoomSettledRef = useRef(0);
+  // transition 结束后的清理定时器
+  const transTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）——
-  // 每个轮播容器：pointerdown 记录起点 → pointermove 手动驱动 scrollLeft（跟手）→
-  // pointerup 按位移/速度决定翻一页并平滑落位。touch-action:none 禁掉原生滚动。
+  const clearTransTimers = () => {
+    transTimersRef.current.forEach(t => clearTimeout(t));
+    transTimersRef.current = [];
+  };
 
-  // 全屏内滚动：实时回写索引，并同步主轮播滚动位置（详情页跟随全屏翻页，
-  // 退出全屏时详情页已停在同一张图，无"翻页追回"动画）；快速甩动最多翻一页
-  const syncMainCarousel = (index: number) => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const target = el.clientWidth * index;
-    if (Math.abs(el.scrollLeft - target) > 4) {
-      el.scrollLeft = target; // 瞬时定位（详情页被全屏遮住，无动画需求）
+  /** 主轮播轨道位移（transform 驱动，合成器线程，不触发 layout） */
+  const setMainOffset = (x: number) => {
+    mainOffsetRef.current = x;
+    if (mainTrackRef.current) {
+      mainTrackRef.current.style.transform = `translate3d(${-x}px, 0, 0)`;
     }
   };
 
+  /** 全屏轮播轨道位移 */
+  const setZoomOffset = (x: number) => {
+    zoomOffsetRef.current = x;
+    if (zoomTrackRef.current) {
+      zoomTrackRef.current.style.transform = `translate3d(${-x}px, 0, 0)`;
+    }
+  };
+
+  /** 轨道落位动画：CSS transition（合成器执行，帧率满格） */
+  const animateTrackTo = (
+    track: HTMLDivElement | null,
+    setOffset: (x: number) => void,
+    index: number,
+    width: number,
+  ) => {
+    if (!track) return;
+    const target = width * index;
+    if (Math.abs(setOffset === setMainOffset ? mainOffsetRef.current : zoomOffsetRef.current - target) < 1) return;
+    track.style.transition = 'transform 260ms cubic-bezier(0.22, 1, 0.36, 1)';
+    setOffset(target);
+    const t = setTimeout(() => {
+      if (track) track.style.transition = 'none';
+    }, 320);
+    transTimersRef.current.push(t);
+  };
+
+  // 全屏滑动时主轮播同步跟随（退出全屏无追回动画）
+  const syncMainCarousel = (index: number) => {
+    const width = scrollRef.current?.clientWidth || 0;
+    setMainOffset(width * index);
+  };
+
+  // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）——
+  // transform 轨道驱动：touchmove 直接写 translate3d（合成器线程，60fps 丝滑）；
+  // 松手用 CSS transition 落位。纵向主导的手势交还浏览器滚动页面。
   const attachGesture = (
-    el: HTMLDivElement | null,
+    viewport: HTMLDivElement | null,
+    track: HTMLDivElement | null,
     getSettled: () => number,
     setSettled: (v: number) => void,
     onMove: (index: number) => void,
+    setOffset: (x: number) => void,
+    getOffset: () => number,
   ) => {
-    if (!el) return () => {};
+    if (!viewport || !track) return () => {};
     let startX = 0;
     let startY = 0;
-    let startLeft = 0;
+    let startOffset = 0;
     let startIndex = 0;
     let active = false;
     let horizontal = false; // 是否已判定为横向手势（横向主导才接管滚动）
     let moveHandler: ((e: TouchEvent) => void) | null = null;
-    // rAF 驱动：touchmove 只更新目标值，每帧应用一次（合并事件/补掉帧，滑动丝滑）
-    let rafId = 0;
-    let animRafId = 0;
-    let targetLeft = 0;
-
-    const cancelFrames = () => {
-      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
-      if (animRafId) { cancelAnimationFrame(animRafId); animRafId = 0; }
-    };
-
-    const scheduleApply = () => {
-      if (rafId) return;
-      rafId = requestAnimationFrame(() => {
-        rafId = 0;
-        if (el.scrollLeft !== targetLeft) el.scrollLeft = targetLeft;
-      });
-    };
-
-    // 松手落位：rAF 自绘 easeOut 动画（WebView 的 smooth 滚动不可靠，不用它）
-    const animateTo = (to: number) => {
-      const from = el.scrollLeft;
-      if (Math.abs(to - from) < 1) { el.scrollLeft = to; return; }
-      const duration = 260;
-      const start = performance.now();
-      const ease = (t: number) => 1 - Math.pow(1 - t, 3);
-      const step = (now: number) => {
-        const t = Math.min(1, (now - start) / duration);
-        el.scrollLeft = from + (to - from) * ease(t);
-        if (t < 1) animRafId = requestAnimationFrame(step);
-        else animRafId = 0;
-      };
-      animRafId = requestAnimationFrame(step);
-    };
 
     const down = (e: PointerEvent) => {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
-      cancelFrames(); // 动画中途再次触摸：从当前位置继续跟手，无缝衔接
+      // 动画中途再次触摸：取消 transition，从当前位置继续跟手，无缝衔接
+      track.style.transition = 'none';
+      clearTransTimers();
       active = true;
       horizontal = false;
       startX = e.clientX;
       startY = e.clientY;
-      startLeft = el.scrollLeft;
+      startOffset = getOffset();
       startIndex = getSettled();
-      targetLeft = startLeft;
       moveHandler = (te: TouchEvent) => {
         if (!active || te.touches.length !== 1) return;
         const touch = te.touches[0];
@@ -123,7 +136,7 @@ export default function PostMedia({
           } else if (Math.abs(dy) > Math.abs(dx) + 2) {
             active = false; // 交给浏览器纵向滚动页面
             if (moveHandler) {
-              el.removeEventListener('touchmove', moveHandler);
+              track.removeEventListener('touchmove', moveHandler);
               moveHandler = null;
             }
             return;
@@ -132,22 +145,21 @@ export default function PostMedia({
           }
         }
         te.preventDefault();
-        targetLeft = startLeft - dx;
-        scheduleApply();
+        setOffset(startOffset - dx);
       };
       // passive:false 才能 preventDefault 禁掉原生惯性滚动
-      el.addEventListener('touchmove', moveHandler, { passive: false });
+      track.addEventListener('touchmove', moveHandler, { passive: false });
     };
 
     const up = (e: PointerEvent) => {
       if (!active) return;
       active = false;
       if (moveHandler) {
-        el.removeEventListener('touchmove', moveHandler);
+        track.removeEventListener('touchmove', moveHandler);
         moveHandler = null;
       }
-      const dx = targetLeft - startLeft; // 正向 = 手指左滑（scrollLeft 增大）= 下一张
-      const width = el.clientWidth || 1;
+      const dx = getOffset() - startOffset; // 正向 = 手指左滑（offset 增大）= 下一张
+      const width = viewport.clientWidth || 1;
       const total = images.length;
       let target = startIndex;
       if (Math.abs(dx) > width * 0.12 || e.pointerType === 'mouse') {
@@ -160,18 +172,17 @@ export default function PostMedia({
       }
       setSettled(target);
       onMove(target);
-      animateTo(width * target);
+      animateTrackTo(track, setOffset, target, width);
     };
 
-    el.addEventListener('pointerdown', down);
-    el.addEventListener('pointerup', up);
-    el.addEventListener('pointercancel', up);
+    track.addEventListener('pointerdown', down);
+    track.addEventListener('pointerup', up);
+    track.addEventListener('pointercancel', up);
     return () => {
-      el.removeEventListener('pointerdown', down);
-      el.removeEventListener('pointerup', up);
-      el.removeEventListener('pointercancel', up);
-      if (moveHandler) el.removeEventListener('touchmove', moveHandler);
-      cancelFrames();
+      track.removeEventListener('pointerdown', down);
+      track.removeEventListener('pointerup', up);
+      track.removeEventListener('pointercancel', up);
+      if (moveHandler) track.removeEventListener('touchmove', moveHandler);
     };
   };
 
@@ -179,9 +190,12 @@ export default function PostMedia({
   useEffect(() => {
     const detach = attachGesture(
       scrollRef.current,
+      mainTrackRef.current,
       () => mainSettledRef.current,
       (v) => { mainSettledRef.current = v; },
       (index) => setCurrentImageIndex(index),
+      setMainOffset,
+      () => mainOffsetRef.current,
     );
     return detach;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -192,39 +206,37 @@ export default function PostMedia({
     if (!zoomed || !zoomScrollRef.current) return;
     const detach = attachGesture(
       zoomScrollRef.current,
+      zoomTrackRef.current,
       () => zoomSettledRef.current,
       (v) => { zoomSettledRef.current = v; lastZoomIndexRef.current = v; },
       (index) => { setCurrentImageIndex(index); lastZoomIndexRef.current = index; syncMainCarousel(index); },
+      setZoomOffset,
+      () => zoomOffsetRef.current,
     );
     return detach;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoomed, images]);
 
   // 首页卡片点开详情页时带图片索引进入：images 首次就绪后主轮播定位到同一张
-  // （post 异步加载，进入时 scrollRef 尚未有图片；ref 对比确保只在首次就绪时执行一次）
+  // （post 异步加载，进入时 track 尚未有图片；ref 对比确保只在首次就绪时执行一次）
   const prevImagesRef = useRef<string[] | null>(null);
   useEffect(() => {
     if (prevImagesRef.current === images) return;
     prevImagesRef.current = images;
     if (currentImageIndex <= 0 || !scrollRef.current) return;
-    const el = scrollRef.current;
     const targetIndex = Math.min(currentImageIndex, Math.max(images.length - 1, 0));
     mainSettledRef.current = targetIndex;
-    const target = el.clientWidth * targetIndex;
-    if (Math.abs(el.scrollLeft - target) > 4) {
-      el.scrollTo({ left: target, behavior: 'auto' });
-    }
+    setMainOffset((scrollRef.current?.clientWidth || 0) * targetIndex);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [images]);
 
-  // 进入全屏：zoomOverlay 条件渲染后 scrollLeft 为 0，需定位到当前图片
+  // 进入全屏：zoomOverlay 条件渲染后轨道为 0，需定位到当前图片
   // （rAF 等一轮布局：图片异步加载不影响 clientWidth，但确保容器已排布）
   useEffect(() => {
     if (!zoomed || !zoomScrollRef.current) return;
-    const el = zoomScrollRef.current;
     zoomSettledRef.current = currentImageIndex;
     const raf = requestAnimationFrame(() => {
-      el.scrollLeft = el.clientWidth * currentImageIndex;
+      setZoomOffset((zoomScrollRef.current?.clientWidth || 0) * currentImageIndex);
     });
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -232,30 +244,30 @@ export default function PostMedia({
 
   // 退出全屏：主轮播对齐到全屏最后停靠的图片。
   // 全屏滑动时主轮播已实时同步（syncMainCarousel），此处仅兜底瞬时对齐，
-  // 不用 smooth——避免退出后看到"自己翻页追过去"的动画；
+  // 不用动画——避免退出后看到"自己翻页追过去"的动画；
   // 以 lastZoomIndexRef 为准，避免读取可能尚未更新的 state
   useEffect(() => {
     if (zoomed || !scrollRef.current) return;
-    const el = scrollRef.current;
-    const target = el.clientWidth * lastZoomIndexRef.current;
+    const target = (scrollRef.current?.clientWidth || 0) * lastZoomIndexRef.current;
     mainSettledRef.current = lastZoomIndexRef.current;
-    if (Math.abs(el.scrollLeft - target) > 4) {
-      el.scrollLeft = target;
-    }
+    setMainOffset(target);
   }, [zoomed]);
+
+  // 卸载时清理 transition 定时器
+  useEffect(() => {
+    return () => clearTransTimers();
+  }, []);
 
   const scrollToIndex = (index: number) => {
     setCurrentImageIndex(index);
     if (zoomed && zoomScrollRef.current) {
       zoomSettledRef.current = index;
-      const width = zoomScrollRef.current.clientWidth;
-      zoomScrollRef.current.scrollTo({ left: width * index, behavior: 'smooth' });
+      animateTrackTo(zoomTrackRef.current, setZoomOffset, index, zoomScrollRef.current.clientWidth || 0);
       // 全屏内点箭头/指示点切换时，主轮播同步跟随（退出全屏无追回动画）
       syncMainCarousel(index);
     } else if (scrollRef.current) {
       mainSettledRef.current = index;
-      const width = scrollRef.current.clientWidth;
-      scrollRef.current.scrollTo({ left: width * index, behavior: 'smooth' });
+      animateTrackTo(mainTrackRef.current, setMainOffset, index, scrollRef.current.clientWidth || 0);
     }
   };
 
@@ -281,19 +293,21 @@ export default function PostMedia({
         ) : (
           <>
             <div className={styles.imageCarousel} ref={scrollRef}>
-              {images.map((url, i) => (
-                <img
-                  key={i}
-                  src={resolveMediaUrl(url) || url}
-                  alt={post.title}
-                  className={styles.image}
-                  // 点击图片进入全屏查看（触摸滑动由浏览器识别为滚动，不会触发 click）
-                  onClick={(e) => {
-                    e.stopPropagation(); // 防止冒泡关闭详情 overlay
-                    setZoomed(true);
-                  }}
-                />
-              ))}
+              <div className={styles.imageTrack} ref={mainTrackRef}>
+                {images.map((url, i) => (
+                  <img
+                    key={i}
+                    src={resolveMediaUrl(url) || url}
+                    alt={post.title}
+                    className={styles.image}
+                    // 点击图片进入全屏查看（触摸滑动由浏览器识别为滚动，不会触发 click）
+                    onClick={(e) => {
+                      e.stopPropagation(); // 防止冒泡关闭详情 overlay
+                      setZoomed(true);
+                    }}
+                  />
+                ))}
+              </div>
             </div>
             <button className={styles.zoomBtn} onClick={(e) => { e.stopPropagation(); setZoomed(true); }} aria-label="放大查看">
               <ZoomIn size={20} />
@@ -336,15 +350,17 @@ export default function PostMedia({
               className={styles.zoomCarousel}
               ref={zoomScrollRef}
             >
-              {images.map((url, i) => (
-                <img
-                  key={i}
-                  src={resolveMediaUrl(url) || url}
-                  alt=""
-                  className={styles.zoomImage}
-                  onClick={(e) => { e.stopPropagation(); setZoomed(false); }}
-                />
-              ))}
+              <div className={styles.zoomTrack} ref={zoomTrackRef}>
+                {images.map((url, i) => (
+                  <img
+                    key={i}
+                    src={resolveMediaUrl(url) || url}
+                    alt=""
+                    className={styles.zoomImage}
+                    onClick={(e) => { e.stopPropagation(); setZoomed(false); }}
+                  />
+                ))}
+              </div>
             </div>
             {images.length > 1 && (
               <button className={`${styles.zoomNav} ${styles.zoomNext}`} onClick={(e) => { e.stopPropagation(); goToNext(e); }} aria-label="下一张">

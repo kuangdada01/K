@@ -70,9 +70,13 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   const [videoReady, setVideoReady] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // transform 轨道：GPU 合成器驱动，60fps 丝滑（scrollLeft 走主线程会掉帧）
+  const trackRef = useRef<HTMLDivElement>(null);
+  // 当前轨道像素偏移（0 = 第一张），供手势跟手与动画共用
+  const offsetRef = useRef(0);
+  const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const heartRef = useRef<SVGSVGElement>(null);
-  const scrollDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 上次稳定停靠的图片索引：手势完全接管分页（一次最多翻一页）
   const settledIndexRef = useRef(0);
   const navigate = useNavigate();
@@ -116,18 +120,6 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
     return () => clearInterval(timer);
   }, [images.length, isPaused, userInteracted, isPartiallyVisible]);
 
-  // index 变化 → 平滑滚动到对应图片（滚动副作用从 state updater 移出；
-  // 防抖回写与平滑动画的竞争是轮播不动的历史根因）
-  useEffect(() => {
-    if (images.length <= 1 || isPaused) return;
-    const el = scrollRef.current;
-    if (!el) return;
-    const target = el.clientWidth * currentImageIndex;
-    if (Math.abs(el.scrollLeft - target) > 4) {
-      el.scrollTo({ left: target, behavior: 'smooth' });
-    }
-  }, [currentImageIndex, images.length, isPaused]);
-
   // 视频：帖子完全可见后稍作延迟再加载播放（快速划过不触发）。
   // 布局由封面图撑起（.videoPoster），视频作为绝对定位覆盖层淡入——
   // 全程零布局跳变，从结构上杜绝闪屏。
@@ -144,10 +136,10 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
       settledIndexRef.current = 0;
     }
   }, [isPartiallyVisible]);
-  // 卸载时清理防抖定时器
+  // 卸载时清理 transition 定时器
   useEffect(() => {
     return () => {
-      if (scrollDebounceRef.current) clearTimeout(scrollDebounceRef.current);
+      if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
     };
   }, []);
   if (!videoShouldBeReady && videoReady) setVideoReady(false);
@@ -237,75 +229,65 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
     void svg.getBoundingClientRect();
   }, [liked]);
 
-  // 用户滚动 → 400ms 防抖回写 index（覆盖自动滚动；时长大于平滑动画，
-  // 自动播放产生的 onScroll 不会把索引拉回，避免与自动滚动打架）
-  const handleScroll = () => {
-    if (scrollDebounceRef.current) clearTimeout(scrollDebounceRef.current);
-    scrollDebounceRef.current = setTimeout(() => {
-      const el = scrollRef.current;
-      if (!el) return;
-      setCurrentImageIndex(Math.round(el.scrollLeft / el.clientWidth));
-    }, 400);
+  // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）——
+  // transform 轨道驱动：touchmove 直接写 translate3d（合成器线程，不触发 layout，
+  // 60fps 丝滑）；松手用 CSS transition（同样走合成器）落位。
+  // 轨道位移基准：offset = index * 容器宽度。
+  const setTrackOffset = (offset: number) => {
+    const track = trackRef.current;
+    if (!track) return;
+    offsetRef.current = offset;
+    track.style.transform = `translate3d(${-offset}px, 0, 0)`;
   };
 
-  // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）——
-  // pointerdown 记录起点 → touchmove preventDefault + 手动驱动 scrollLeft（跟手）→
-  // pointerup 按位移决定翻一页并平滑落位。touch-action:pan-y 禁掉原生水平滚动。
+  // 落位动画：CSS transition（合成器执行，帧率满格）
+  const animateTrackTo = (index: number) => {
+    const track = trackRef.current;
+    if (!track) return;
+    const width = scrollRef.current?.clientWidth || 0;
+    const target = width * index;
+    if (Math.abs(offsetRef.current - target) < 1) return;
+    if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
+    track.style.transition = 'transform 260ms cubic-bezier(0.22, 1, 0.36, 1)';
+    track.style.transform = `translate3d(${-target}px, 0, 0)`;
+    offsetRef.current = target;
+    transitionTimerRef.current = setTimeout(() => {
+      if (trackRef.current) trackRef.current.style.transition = 'none';
+    }, 320);
+  };
+
+  // index 变化 → 轨道动画到对应位置（自动轮播/重置/外部切换统一走这里）
   useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || images.length <= 1) return;
+    if (images.length <= 1 || isPaused) return;
+    animateTrackTo(currentImageIndex);
+  }, [currentImageIndex, images.length, isPaused]);
+
+  useEffect(() => {
+    const track = trackRef.current;
+    if (!track || images.length <= 1) return;
     let startX = 0;
     let startY = 0;
-    let startLeft = 0;
+    let startOffset = 0;
     let startIndex = 0;
     let active = false;
     let horizontal = false; // 是否已判定为横向手势（横向主导才接管滚动）
     let moveHandler: ((e: TouchEvent) => void) | null = null;
-    // rAF 驱动：touchmove 只更新目标值，每帧应用一次（合并事件/补掉帧，滑动丝滑）
-    let rafId = 0;
-    let animRafId = 0;
-    let targetLeft = 0;
-
-    const cancelFrames = () => {
-      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
-      if (animRafId) { cancelAnimationFrame(animRafId); animRafId = 0; }
-    };
-
-    const scheduleApply = () => {
-      if (rafId) return;
-      rafId = requestAnimationFrame(() => {
-        rafId = 0;
-        if (el.scrollLeft !== targetLeft) el.scrollLeft = targetLeft;
-      });
-    };
-
-    // 松手落位：rAF 自绘 easeOut 动画（WebView 的 smooth 滚动不可靠，不用它）
-    const animateTo = (to: number) => {
-      const from = el.scrollLeft;
-      if (Math.abs(to - from) < 1) { el.scrollLeft = to; return; }
-      const duration = 260;
-      const start = performance.now();
-      const ease = (t: number) => 1 - Math.pow(1 - t, 3);
-      const step = (now: number) => {
-        const t = Math.min(1, (now - start) / duration);
-        el.scrollLeft = from + (to - from) * ease(t);
-        if (t < 1) animRafId = requestAnimationFrame(step);
-        else animRafId = 0;
-      };
-      animRafId = requestAnimationFrame(step);
-    };
 
     const down = (e: PointerEvent) => {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       setUserInteracted(true); // 手动触摸后停止自动轮播
-      cancelFrames(); // 动画中途再次触摸：从当前位置继续跟手，无缝衔接
+      // 动画中途再次触摸：取消 transition，从当前位置继续跟手
+      track.style.transition = 'none';
+      if (transitionTimerRef.current) {
+        clearTimeout(transitionTimerRef.current);
+        transitionTimerRef.current = null;
+      }
       active = true;
       horizontal = false;
       startX = e.clientX;
       startY = e.clientY;
-      startLeft = el.scrollLeft;
+      startOffset = offsetRef.current;
       startIndex = settledIndexRef.current;
-      targetLeft = startLeft;
       moveHandler = (te: TouchEvent) => {
         if (!active || te.touches.length !== 1) return;
         const touch = te.touches[0];
@@ -318,7 +300,7 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
           } else if (Math.abs(dy) > Math.abs(dx) + 2) {
             active = false; // 交给浏览器纵向滚动页面
             if (moveHandler) {
-              el.removeEventListener('touchmove', moveHandler);
+              track.removeEventListener('touchmove', moveHandler);
               moveHandler = null;
             }
             return;
@@ -327,21 +309,21 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
           }
         }
         te.preventDefault();
-        targetLeft = startLeft - dx;
-        scheduleApply();
+        setTrackOffset(startOffset - dx);
       };
-      el.addEventListener('touchmove', moveHandler, { passive: false });
+      // passive:false 才能 preventDefault 禁掉原生惯性滚动
+      track.addEventListener('touchmove', moveHandler, { passive: false });
     };
 
     const up = () => {
       if (!active) return;
       active = false;
       if (moveHandler) {
-        el.removeEventListener('touchmove', moveHandler);
+        track.removeEventListener('touchmove', moveHandler);
         moveHandler = null;
       }
-      const dx = targetLeft - startLeft; // 正向 = 手指左滑（scrollLeft 增大）= 下一张
-      const width = el.clientWidth || 1;
+      const dx = offsetRef.current - startOffset; // 正向 = 手指左滑（offset 增大）= 下一张
+      const width = scrollRef.current?.clientWidth || 1;
       let target = startIndex;
       if (Math.abs(dx) > width * 0.12) {
         // 拖动超过 ~1/8 屏 → 翻一页（最多一页，绝不过 2 张）
@@ -353,18 +335,17 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
       }
       settledIndexRef.current = target;
       setCurrentImageIndex(target);
-      animateTo(width * target);
+      animateTrackTo(target);
     };
 
-    el.addEventListener('pointerdown', down);
-    el.addEventListener('pointerup', up);
-    el.addEventListener('pointercancel', up);
+    track.addEventListener('pointerdown', down);
+    track.addEventListener('pointerup', up);
+    track.addEventListener('pointercancel', up);
     return () => {
-      el.removeEventListener('pointerdown', down);
-      el.removeEventListener('pointerup', up);
-      el.removeEventListener('pointercancel', up);
-      if (moveHandler) el.removeEventListener('touchmove', moveHandler);
-      cancelFrames();
+      track.removeEventListener('pointerdown', down);
+      track.removeEventListener('pointerup', up);
+      track.removeEventListener('pointercancel', up);
+      if (moveHandler) track.removeEventListener('touchmove', moveHandler);
     };
   }, [images]);
 
@@ -465,22 +446,20 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
           )
         ) : (
           <>
-            <div
-              className={styles.imageCarousel}
-              ref={scrollRef}
-              onScroll={handleScroll}
-            >
-              {images.map((url, i) => (
-                <img
-                  key={i}
-                  src={resolveMediaUrl(url) || url}
-                  alt={post.title}
-                  className={styles.image}
-                  // P10：首图立即加载撑起布局，其余全部懒加载降低首屏请求
-                  loading={i === 0 ? 'eager' : 'lazy'}
-                  decoding="async"
-                />
-              ))}
+            <div className={styles.imageCarousel} ref={scrollRef}>
+              <div className={styles.imageTrack} ref={trackRef}>
+                {images.map((url, i) => (
+                  <img
+                    key={i}
+                    src={resolveMediaUrl(url) || url}
+                    alt={post.title}
+                    className={styles.image}
+                    // P10：首图立即加载撑起布局，其余全部懒加载降低首屏请求
+                    loading={i === 0 ? 'eager' : 'lazy'}
+                    decoding="async"
+                  />
+                ))}
+              </div>
             </div>
             {images.length > 1 && (
               <div className={styles.imageDots}>
