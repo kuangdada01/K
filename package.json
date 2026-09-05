@@ -8,7 +8,8 @@
     "lint": "npm run lint --prefix shared && npm run lint --prefix server && npm run lint --prefix client",
     "test": "npm test --prefix server",
     "e2e": "playwright test",
-    "install:all": "npm install && npm install --prefix shared && npm install --prefix server && npm install --prefix client"
+    "install:all": "npm install && npm install --prefix shared && npm install --prefix server && npm install --prefix client",
+    "test:client": "npm run test --prefix client"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

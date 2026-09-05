@@ -33,6 +33,9 @@ jobs:
       - name: 测试（server vitest）
         run: npm run test
 
+      - name: 测试（client vitest）
+        run: npm run test:client
+
       - name: E2E 冒烟（Playwright）
         env:
           # E3 修复：build 步骤已产出 dist，webServer 跳过重复构建
