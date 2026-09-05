@@ -127,7 +127,7 @@
 /* transform 轨道：GPU 合成器驱动，60fps 丝滑（scrollLeft 走主线程会掉帧） */
 .imageTrack {
   display: flex;
-  align-items: flex-start; /* 每张图保持自身高度（宽高比），容器取最高图 */
+  align-items: center; /* 横图/高度不足的图垂直居中，不留顶部空隙 */
   will-change: transform;
 }
 

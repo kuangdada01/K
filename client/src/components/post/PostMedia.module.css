@@ -248,7 +248,7 @@
   }
 
   .imageTrack {
-    align-items: flex-start; /* 每张图保持自身高度（宽高比），容器取最高图 */
+    align-items: center; /* 横图/高度不足的图垂直居中 */
   }
 
   .image {
