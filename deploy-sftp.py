@@ -190,7 +190,9 @@ echo APK_PRUNE_DONE
     # ---------- 部署后验证 ----------
     print("\n=== [SFTP] 部署后验证 ===")
     checks = [
-        ("首页/健康", "curl -s -o /dev/null -w 'page(%{http_code}) ' http://127.0.0.1/; curl -s -o /dev/null -w 'health(%{http_code})' http://127.0.0.1:3000/api/health", lambda o: "page(200)" in o and "health(200)" in o),
+        # 全站 HTTPS 后 nginx 对 http://127.0.0.1/ 返回 301，页面检查需跟随重定向
+        # （-k 忽略自指 IP 的证书不匹配，-L 跟随 301 到 https）
+        ("首页/健康", "curl -skL -o /dev/null -w 'page(%{http_code}) ' http://127.0.0.1/; curl -s -o /dev/null -w 'health(%{http_code})' http://127.0.0.1:3000/api/health", lambda o: "page(200)" in o and "health(200)" in o),
         ("dist 时间戳已更新", "stat -c '%y' "+REMOTE_DIR+"/server/dist/index.js", None),
         ("@k/shared 链接", "readlink -f "+REMOTE_DIR+"/server/node_modules/@k/shared", lambda o: o.strip() == REMOTE_DIR+"/shared"),
         ("node_modules 无指向仓库外的符号链接（防旧绝对链接悬空）", "find "+REMOTE_DIR+"/server/node_modules -maxdepth 2 -type l -exec readlink -f {} \\; 2>/dev/null | grep -vc '^"+REMOTE_DIR+"/' || true", lambda o: o.strip() == "0"),

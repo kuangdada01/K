@@ -146,23 +146,24 @@ Write-Host "  上传与远端部署完成 ✓" -ForegroundColor Green
 # Step 5: 验证
 Write-Host "`n[5/6] 本地侧验证服务..." -ForegroundColor Green
 Start-Sleep -Seconds 1
+# 全站 HTTPS（Let's Encrypt）后经 nginx 443 验证；裸 IP 访问证书域名不匹配，需跳过校验
 try {
-    $response = Invoke-WebRequest -Uri "http://$SERVER`:3000/api/health" -TimeoutSec 10 -UseBasicParsing
+    $response = Invoke-WebRequest -Uri "https://$SERVER/api/health" -TimeoutSec 10 -UseBasicParsing -SkipCertificateCheck
     Write-Host "  服务状态: $($response.StatusCode) ✓" -ForegroundColor Green
     Write-Host "  API 响应: $($response.Content)" -ForegroundColor Gray
 } catch {
     Write-Host "  健康检查失败，尝试访问首页..." -ForegroundColor Yellow
     try {
-        $response = Invoke-WebRequest -Uri "http://$SERVER`:3000" -TimeoutSec 10 -UseBasicParsing
+        $response = Invoke-WebRequest -Uri "https://$SERVER/" -TimeoutSec 10 -UseBasicParsing -SkipCertificateCheck
         Write-Host "  首页状态: $($response.StatusCode) ✓" -ForegroundColor Green
     } catch {
-        Write-Host "  服务可能需要几秒钟启动，请稍后访问 http://$SERVER`:3000" -ForegroundColor Yellow
+        Write-Host "  服务可能需要几秒钟启动，请稍后访问 https://$SERVER" -ForegroundColor Yellow
     }
 }
 
 Write-Host "`n=== 部署完成! ===" -ForegroundColor Cyan
-Write-Host "访问地址: http://$SERVER`:3000" -ForegroundColor Green
-Write-Host "管理后台: http://$SERVER`:3000 (使用管理员账号登录)" -ForegroundColor Green
+Write-Host "访问地址: https://$SERVER" -ForegroundColor Green
+Write-Host "管理后台: https://$SERVER (使用管理员账号登录)" -ForegroundColor Green
 
 # 清理临时文件
 Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
