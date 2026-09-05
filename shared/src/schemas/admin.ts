@@ -17,6 +17,14 @@ export const announcementSchema = z.object({
 /** 管理员重置用户密码校验 */
 export const adminResetPasswordSchema = z.object({ password: passwordSchema });
 
+/** 封禁时长校验（仅支持 1/7/30/365 天） */
+export const adminBanSchema = z.object({
+  days: z.union([z.literal(1), z.literal(7), z.literal(30), z.literal(365)], {
+    message: '封禁时长仅支持 1天/1周/1月/1年',
+  }),
+});
+
 /** 请求体类型导出 */
 export type AnnouncementBody = z.infer<typeof announcementSchema>;
 export type AdminResetPasswordBody = z.infer<typeof adminResetPasswordSchema>;
+export type AdminBanBody = z.infer<typeof adminBanSchema>;

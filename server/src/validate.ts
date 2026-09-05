@@ -18,7 +18,7 @@ export function validateBody<T>(schema: ZodType<T>) {
       // multipart 请求中 multer 已把文件写入磁盘，校验失败时清理避免孤儿文件。
       // file.path 是 diskStorage 的落盘绝对路径（uploads / uploads_private 由各路由
       // 的 uploader 决定），直接按绝对路径删除，避免猜子目录删错位置
-      const file = (req as any).file as { path?: string } | undefined;
+      const file = req.file;
       if (file?.path) {
         safeDeleteUpload(file.path);
       }

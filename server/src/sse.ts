@@ -90,3 +90,20 @@ export function notifyAllUsers(type: string, data: Record<string, unknown> = {})
     }
   }
 }
+
+/**
+ * 结束全部 SSE 连接（优雅停机用）
+ * SSE 是长连接，不主动 end 的话 server.close() 的回调永远不会触发
+ */
+export function closeAllStreams(): void {
+  for (const list of subscribers.values()) {
+    for (const res of list) {
+      try {
+        res.end();
+      } catch {
+        /* 忽略 */
+      }
+    }
+  }
+  subscribers.clear();
+}

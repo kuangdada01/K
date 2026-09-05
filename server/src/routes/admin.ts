@@ -28,7 +28,13 @@ import { withImages } from '../lib/image';
 import { safeDeleteFile, deletePostMediaFiles } from '../lib/file';
 import { validateBody } from '../validate';
 import { notifyUser, notifyAllUsers } from '../sse';
-import { announcementSchema, adminResetPasswordSchema, pageQuerySchema, limitQuerySchema } from '@k/shared';
+import {
+  announcementSchema,
+  adminResetPasswordSchema,
+  adminBanSchema,
+  pageQuerySchema,
+  limitQuerySchema,
+} from '@k/shared';
 import * as adminRepo from '../repositories/admin.repo';
 
 const router = Router();
@@ -154,12 +160,10 @@ router.put(
  */
 router.post(
   '/users/:id/ban',
+  validateBody(adminBanSchema),
   asyncHandler(async (req: Request, res: Response) => {
     const userId = parseInt(req.params.id as string);
-    const days = Number(req.body?.days);
-    if (![1, 7, 30, 365].includes(days)) {
-      throw new AppError(400, '封禁时长仅支持 1天/1周/1月/1年');
-    }
+    const { days } = req.body;
     const role = adminRepo.getUserRole(userId);
     if (role === undefined) {
       throw new AppError(404, '用户不存在');

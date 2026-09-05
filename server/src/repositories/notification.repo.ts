@@ -4,7 +4,7 @@
  * ============================================================
  */
 
-import { getDb } from '../db/connection';
+import { stmt } from '../db/connection';
 import { count } from '../db/helpers';
 
 // ============================================================
@@ -27,9 +27,8 @@ export interface NotificationRow {
 
 /** 通知列表（最近50条，自动过滤已删除帖子/评论的孤立通知） */
 export function listNotifications(userId: number): NotificationRow[] {
-  return getDb()
-    .prepare(
-      `
+  return stmt(
+    `
     SELECT n.*, u.username as from_username, u.avatar as from_avatar
     FROM notifications n
     JOIN users u ON u.id = n.from_user_id
@@ -39,8 +38,7 @@ export function listNotifications(userId: number): NotificationRow[] {
     ORDER BY n.created_at DESC
     LIMIT 50
   `
-    )
-    .all(userId) as NotificationRow[];
+  ).all(userId) as NotificationRow[];
 }
 
 export function countUnreadNotifications(userId: number): number {
@@ -48,11 +46,11 @@ export function countUnreadNotifications(userId: number): number {
 }
 
 export function markAllNotificationsRead(userId: number): void {
-  getDb().prepare('UPDATE notifications SET read = 1 WHERE user_id = ?').run(userId);
+  stmt('UPDATE notifications SET read = 1 WHERE user_id = ?').run(userId);
 }
 
 export function markNotificationRead(notifId: number, userId: number): void {
-  getDb().prepare('UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?').run(notifId, userId);
+  stmt('UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?').run(notifId, userId);
 }
 
 /** 插入通知（评论/回复时） */
@@ -64,11 +62,9 @@ export function insertNotification(input: {
   commentId: number;
   content: string;
 }): void {
-  getDb()
-    .prepare(
-      'INSERT INTO notifications (user_id, type, from_user_id, post_id, comment_id, content) VALUES (?, ?, ?, ?, ?, ?)'
-    )
-    .run(input.userId, input.type, input.fromUserId, input.postId, input.commentId, input.content);
+  stmt(
+    'INSERT INTO notifications (user_id, type, from_user_id, post_id, comment_id, content) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(input.userId, input.type, input.fromUserId, input.postId, input.commentId, input.content);
 }
 
 // ============================================================
@@ -89,9 +85,8 @@ export interface AnnouncementRow {
 
 /** 用户可见的公告列表（全局 + 定向），含已读状态 */
 export function listAnnouncements(userId: number): AnnouncementRow[] {
-  return getDb()
-    .prepare(
-      `
+  return stmt(
+    `
     SELECT a.*, u.username as from_username, u.avatar as from_avatar,
       CASE WHEN ar.id IS NOT NULL THEN 1 ELSE 0 END as is_read
     FROM announcements a
@@ -100,13 +95,13 @@ export function listAnnouncements(userId: number): AnnouncementRow[] {
     WHERE a.target_user_id IS NULL OR a.target_user_id = ?
     ORDER BY a.created_at DESC
   `
-    )
-    .all(userId, userId) as AnnouncementRow[];
+  ).all(userId, userId) as AnnouncementRow[];
 }
 
 /** 标记公告已读（INSERT OR IGNORE 防重复） */
 export function markAnnouncementRead(announcementId: number, userId: number): void {
-  getDb()
-    .prepare('INSERT OR IGNORE INTO announcement_reads (announcement_id, user_id) VALUES (?, ?)')
-    .run(announcementId, userId);
+  stmt('INSERT OR IGNORE INTO announcement_reads (announcement_id, user_id) VALUES (?, ?)').run(
+    announcementId,
+    userId
+  );
 }

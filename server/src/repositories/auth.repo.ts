@@ -4,7 +4,7 @@
  * ============================================================
  */
 
-import { getDb } from '../db/connection';
+import { stmt } from '../db/connection';
 
 /** users 表完整行（含密码哈希，仅认证流程使用） */
 export interface AuthUserRow {
@@ -29,34 +29,28 @@ export function findValidCode(
   email: string,
   code: string
 ): { id: number; email: string; code: string; expires: string } | undefined {
-  return getDb()
-    .prepare(
-      "SELECT * FROM verification_codes WHERE email = ? AND code = ? AND datetime(expires) > datetime('now')"
-    )
-    .get(email, code) as { id: number; email: string; code: string; expires: string } | undefined;
+  return stmt(
+    "SELECT * FROM verification_codes WHERE email = ? AND code = ? AND datetime(expires) > datetime('now')"
+  ).get(email, code) as { id: number; email: string; code: string; expires: string } | undefined;
 }
 
 /** 60 秒内是否已发送过验证码 */
 export function hasRecentCode(email: string): boolean {
-  return !!getDb()
-    .prepare(
-      "SELECT created_at FROM verification_codes WHERE email = ? AND datetime(created_at) > datetime('now', '-60 seconds')"
-    )
-    .get(email);
+  return !!stmt(
+    "SELECT created_at FROM verification_codes WHERE email = ? AND datetime(created_at) > datetime('now', '-60 seconds')"
+  ).get(email);
 }
 
 /** 写入新验证码（先清旧，顺带清理全部过期记录防表无限膨胀，P1 修复） */
 export function saveVerificationCode(email: string, code: string, expires: string): void {
-  getDb().prepare("DELETE FROM verification_codes WHERE datetime(expires) < datetime('now')").run();
-  getDb().prepare('DELETE FROM verification_codes WHERE email = ?').run(email);
-  getDb()
-    .prepare('INSERT INTO verification_codes (email, code, expires) VALUES (?, ?, ?)')
-    .run(email, code, expires);
+  stmt("DELETE FROM verification_codes WHERE datetime(expires) < datetime('now')").run();
+  stmt('DELETE FROM verification_codes WHERE email = ?').run(email);
+  stmt('INSERT INTO verification_codes (email, code, expires) VALUES (?, ?, ?)').run(email, code, expires);
 }
 
 /** 删除某邮箱的全部验证码（使用后清理） */
 export function deleteVerificationCodes(email: string): void {
-  getDb().prepare('DELETE FROM verification_codes WHERE email = ?').run(email);
+  stmt('DELETE FROM verification_codes WHERE email = ?').run(email);
 }
 
 // ============================================================
@@ -64,11 +58,11 @@ export function deleteVerificationCodes(email: string): void {
 // ============================================================
 
 export function findUserByEmail(email: string): AuthUserRow | undefined {
-  return getDb().prepare('SELECT * FROM users WHERE email = ?').get(email) as AuthUserRow | undefined;
+  return stmt('SELECT * FROM users WHERE email = ?').get(email) as AuthUserRow | undefined;
 }
 
 export function findUserByUsernameOrEmail(username: string, email: string): { id: number } | undefined {
-  return getDb().prepare('SELECT id FROM users WHERE username = ? OR email = ?').get(username, email) as
+  return stmt('SELECT id FROM users WHERE username = ? OR email = ?').get(username, email) as
     { id: number } | undefined;
 }
 
@@ -87,14 +81,12 @@ export function createUser(
   token_version: number;
   created_at: string;
 } {
-  const result = getDb()
-    .prepare('INSERT INTO users (username, email, password_hash, email_verified) VALUES (?, ?, ?, 1)')
-    .run(username, email, passwordHash);
-  return getDb()
-    .prepare(
-      'SELECT id, username, email, avatar, bio, role, token_version, created_at FROM users WHERE id = ?'
-    )
-    .get(result.lastInsertRowid) as {
+  const result = stmt(
+    'INSERT INTO users (username, email, password_hash, email_verified) VALUES (?, ?, ?, 1)'
+  ).run(username, email, passwordHash);
+  return stmt(
+    'SELECT id, username, email, avatar, bio, role, token_version, created_at FROM users WHERE id = ?'
+  ).get(result.lastInsertRowid) as {
     id: number;
     username: string;
     email: string;
@@ -108,7 +100,8 @@ export function createUser(
 
 /** 更新用户密码（同时递增 token_version，使该用户已签发的 JWT 全部失效） */
 export function updateUserPassword(userId: number, passwordHash: string): void {
-  getDb()
-    .prepare('UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?')
-    .run(passwordHash, userId);
+  stmt('UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?').run(
+    passwordHash,
+    userId
+  );
 }

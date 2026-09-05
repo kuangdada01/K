@@ -4,8 +4,8 @@
  * ============================================================
  */
 
-import { getDb } from '../db/connection';
-import { count } from '../db/helpers';
+import { getDb, stmt } from '../db/connection';
+import { count, escapeLike } from '../db/helpers';
 
 /** 用户管理行（含帖子数） */
 export interface AdminUserRow {
@@ -22,57 +22,57 @@ export interface AdminUserRow {
 
 /** 所有用户列表（含帖子数） */
 export function listUsers(): AdminUserRow[] {
-  return getDb()
-    .prepare(
-      `
+  return stmt(
+    `
     SELECT u.id, u.username, u.email, u.avatar, u.bio, u.role, u.banned_until, u.created_at,
       (SELECT COUNT(*) FROM posts WHERE user_id = u.id) as post_count
     FROM users u ORDER BY u.id ASC
   `
-    )
-    .all() as AdminUserRow[];
+  ).all() as AdminUserRow[];
 }
 
 /** 搜索用户（按用户名或ID，最多10条，用于公告指定用户等场景） */
 export function searchUsers(q: string): { id: number; username: string; avatar: string | null }[] {
   const isId = /^\d+$/.test(q);
   // 统一转义 LIKE 通配符并配合 ESCAPE 子句（B3 修复：含 %/_ 的用户名可正确匹配）
-  const escaped = q.replace(/[%_\\]/g, '\\$&');
+  const escaped = escapeLike(q);
   const likePattern = `%${escaped}%`;
   if (isId) {
-    return getDb()
-      .prepare("SELECT id, username, avatar FROM users WHERE id = ? OR username LIKE ? ESCAPE '\\' LIMIT 10")
-      .all(parseInt(q), likePattern) as { id: number; username: string; avatar: string | null }[];
+    return stmt(
+      "SELECT id, username, avatar FROM users WHERE id = ? OR username LIKE ? ESCAPE '\\' LIMIT 10"
+    ).all(parseInt(q), likePattern) as { id: number; username: string; avatar: string | null }[];
   }
-  return getDb()
-    .prepare("SELECT id, username, avatar FROM users WHERE username LIKE ? ESCAPE '\\' LIMIT 10")
-    .all(likePattern) as { id: number; username: string; avatar: string | null }[];
+  return stmt("SELECT id, username, avatar FROM users WHERE username LIKE ? ESCAPE '\\' LIMIT 10").all(
+    likePattern
+  ) as { id: number; username: string; avatar: string | null }[];
 }
 
 /** 按 ID 查用户（含 email、avatar，删除/重置密码/删号清文件用） */
 export function findUser(userId: number): { id: number; email: string; avatar: string | null } | undefined {
-  return getDb().prepare('SELECT id, email, avatar FROM users WHERE id = ?').get(userId) as
+  return stmt('SELECT id, email, avatar FROM users WHERE id = ?').get(userId) as
     { id: number; email: string; avatar: string | null } | undefined;
 }
 
 /** 查询用户角色（封禁前置校验: 不能封禁管理员） */
 export function getUserRole(userId: number): string | undefined {
-  const row = getDb().prepare('SELECT role FROM users WHERE id = ?').get(userId) as
-    { role: string } | undefined;
+  const row = stmt('SELECT role FROM users WHERE id = ?').get(userId) as { role: string } | undefined;
   return row?.role;
 }
 
-/** 删除用户（外键级联删除关联数据）+ 清理验证码记录 */
+/** 删除用户（外键级联删除关联数据）+ 清理验证码记录（事务保证两删同生共死） */
 export function deleteUser(userId: number, email: string): void {
-  getDb().prepare('DELETE FROM users WHERE id = ?').run(userId);
-  getDb().prepare('DELETE FROM verification_codes WHERE email = ?').run(email);
+  getDb().transaction(() => {
+    stmt('DELETE FROM users WHERE id = ?').run(userId);
+    stmt('DELETE FROM verification_codes WHERE email = ?').run(email);
+  })();
 }
 
 /** 重置用户密码（同时递增 token_version，使该用户已签发的 JWT 全部失效） */
 export function resetUserPassword(userId: number, passwordHash: string): void {
-  getDb()
-    .prepare('UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?')
-    .run(passwordHash, userId);
+  stmt('UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?').run(
+    passwordHash,
+    userId
+  );
 }
 
 /** 管理视图帖子行 */
@@ -96,22 +96,22 @@ export interface AdminPostRow {
 /** 所有帖子（分页，管理视图） */
 export function listAllPosts(page: number, limit: number): { posts: AdminPostRow[]; total: number } {
   const total = count('SELECT COUNT(*) as count FROM posts');
-  const posts = getDb()
-    .prepare(
-      `
+  const posts = stmt(
+    `
     SELECT p.*, u.username, u.avatar
     FROM posts p JOIN users u ON p.user_id = u.id
     ORDER BY p.created_at DESC LIMIT ? OFFSET ?
   `
-    )
-    .all(limit, (page - 1) * limit) as AdminPostRow[];
+  ).all(limit, (page - 1) * limit) as AdminPostRow[];
   return { posts, total };
 }
 
-/** 管理员删除帖子（先删通知再删帖子） */
+/** 管理员删除帖子（先删通知再删帖子，事务保证原子性） */
 export function adminDeletePost(postId: number): void {
-  getDb().prepare('DELETE FROM notifications WHERE post_id = ?').run(postId);
-  getDb().prepare('DELETE FROM posts WHERE id = ?').run(postId);
+  getDb().transaction(() => {
+    stmt('DELETE FROM notifications WHERE post_id = ?').run(postId);
+    stmt('DELETE FROM posts WHERE id = ?').run(postId);
+  })();
 }
 
 // ============================================================
@@ -127,21 +127,21 @@ export interface PostMediaRow {
 
 /** 查询单帖媒体字段（管理端删帖前收集文件路径用） */
 export function findPostMedia(postId: number): PostMediaRow | undefined {
-  return getDb().prepare('SELECT image_url, video_url, video_cover FROM posts WHERE id = ?').get(postId) as
+  return stmt('SELECT image_url, video_url, video_cover FROM posts WHERE id = ?').get(postId) as
     PostMediaRow | undefined;
 }
 
 /** 查询某用户全部帖子的媒体字段（删号前收集文件路径用） */
 export function listUserPostMedia(userId: number): PostMediaRow[] {
-  return getDb()
-    .prepare('SELECT image_url, video_url, video_cover FROM posts WHERE user_id = ?')
-    .all(userId) as PostMediaRow[];
+  return stmt('SELECT image_url, video_url, video_cover FROM posts WHERE user_id = ?').all(
+    userId
+  ) as PostMediaRow[];
 }
 
 /** 查询某用户私密图片文件名列表（uploads_private，DB 只存文件名） */
 export function listUserPrivateImageNames(userId: number): string[] {
   return (
-    getDb().prepare('SELECT image_url FROM private_images WHERE user_id = ?').all(userId) as {
+    stmt('SELECT image_url FROM private_images WHERE user_id = ?').all(userId) as {
       image_url: string;
     }[]
   ).map((r) => r.image_url);
@@ -150,9 +150,9 @@ export function listUserPrivateImageNames(userId: number): string[] {
 /** 查询某用户发出的带图私信文件名列表（uploads_private，DB 只存文件名） */
 export function listUserMessageImageNames(userId: number): string[] {
   return (
-    getDb()
-      .prepare('SELECT image_url FROM messages WHERE sender_id = ? AND image_url IS NOT NULL')
-      .all(userId) as { image_url: string }[]
+    stmt('SELECT image_url FROM messages WHERE sender_id = ? AND image_url IS NOT NULL').all(userId) as {
+      image_url: string;
+    }[]
   ).map((r) => r.image_url);
 }
 
@@ -177,36 +177,32 @@ export function createAnnouncement(input: {
   targetUserId: number | null;
   fromUserId: number;
 }): AdminAnnouncementRow {
-  const result = getDb()
-    .prepare('INSERT INTO announcements (title, content, target_user_id, from_user_id) VALUES (?, ?, ?, ?)')
-    .run(input.title, input.content, input.targetUserId || null, input.fromUserId);
-  return getDb()
-    .prepare('SELECT * FROM announcements WHERE id = ?')
-    .get(result.lastInsertRowid) as AdminAnnouncementRow;
+  const result = stmt(
+    'INSERT INTO announcements (title, content, target_user_id, from_user_id) VALUES (?, ?, ?, ?)'
+  ).run(input.title, input.content, input.targetUserId || null, input.fromUserId);
+  return stmt('SELECT * FROM announcements WHERE id = ?').get(result.lastInsertRowid) as AdminAnnouncementRow;
 }
 
 /** 所有公告列表（含目标用户名） */
 export function listAllAnnouncements(): AdminAnnouncementRow[] {
-  return getDb()
-    .prepare(
-      `
+  return stmt(
+    `
     SELECT a.*, u.username as target_username
     FROM announcements a
     LEFT JOIN users u ON a.target_user_id = u.id
     ORDER BY a.created_at DESC
   `
-    )
-    .all() as AdminAnnouncementRow[];
+  ).all() as AdminAnnouncementRow[];
 }
 
 /** 删除公告 */
 export function deleteAnnouncement(id: number): void {
-  getDb().prepare('DELETE FROM announcements WHERE id = ?').run(id);
+  stmt('DELETE FROM announcements WHERE id = ?').run(id);
 }
 
 /** 封禁/解封用户（bannedUntil 为 ISO-8601 时间或 null） */
 export function setBanStatus(userId: number, bannedUntil: string | null): void {
-  getDb().prepare('UPDATE users SET banned_until = ? WHERE id = ?').run(bannedUntil, userId);
+  stmt('UPDATE users SET banned_until = ? WHERE id = ?').run(bannedUntil, userId);
 }
 
 /** 实时认证状态（单查询供 authMiddleware / SSE / 语音 WS 校验用） */
@@ -218,6 +214,6 @@ export interface AuthStateRow {
 
 /** 查询用户实时认证状态：角色、封禁截止时间、令牌版本（用户不存在返回 undefined） */
 export function getAuthState(userId: number): AuthStateRow | undefined {
-  return getDb().prepare('SELECT role, banned_until, token_version FROM users WHERE id = ?').get(userId) as
+  return stmt('SELECT role, banned_until, token_version FROM users WHERE id = ?').get(userId) as
     AuthStateRow | undefined;
 }

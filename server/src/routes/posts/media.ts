@@ -163,7 +163,7 @@ router.post(
     const uploadId = typeof req.body.uploadId === 'string' ? req.body.uploadId.trim() : '';
     const chunkIndex = parseInt(req.body.chunkIndex as string, 10);
     const totalChunks = parseInt(req.body.totalChunks as string, 10);
-    const chunkFile = (req as any).file as Express.Multer.File | undefined;
+    const chunkFile = req.file;
     if (!TEMP_VIDEO_NAME_RE.test(uploadId)) {
       throw new AppError(400, '无效的上传ID');
     }

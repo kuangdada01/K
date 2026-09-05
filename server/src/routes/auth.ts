@@ -213,15 +213,17 @@ router.post(
  * POST /api/auth/forgot-password - 发送密码重置验证码
  *
  * 请求体:
- * - email: 已注册的邮箱地址
+ * - email: 邮箱地址
  *
  * 成功响应 (200):
  * - message: "验证码已发送至邮箱"
  *
  * 错误响应:
  * - 400: 邮箱格式错误 或 60秒内已发送
- * - 404: 该邮箱未注册
  * - 500: 邮件发送失败
+ *
+ * 防邮箱枚举：无论邮箱是否注册，成功响应一致（未注册不真正发信）；
+ * 频控与验证码记录对未注册邮箱同样生效，避免"第二次请求 400"侧信道
  */
 router.post(
   '/forgot-password',
@@ -230,13 +232,7 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const { email } = req.body;
 
-    // 检查邮箱是否已注册
-    const user = authRepo.findUserByEmail(email);
-    if (!user) {
-      throw new AppError(404, '该邮箱未注册');
-    }
-
-    // 检查60秒内是否已发送过
+    // 检查60秒内是否已发送过（对未注册邮箱同样生效）
     if (authRepo.hasRecentCode(email)) {
       throw new AppError(400, '发送过于频繁，请60秒后再试');
     }
@@ -248,12 +244,16 @@ router.post(
     // 删除该邮箱旧的验证码，插入新的
     authRepo.saveVerificationCode(email, code, expires);
 
-    // 发送邮件（重置密码验证码）；与历史行为一致：发送环节失败统一返回"验证码发送失败"
-    try {
-      await sendVerificationCode(email, code, 'reset');
-    } catch (err) {
-      logger.error({ err }, '发送验证码失败');
-      throw new AppError(500, '验证码发送失败');
+    // 仅对已注册邮箱真正发信；未注册静默跳过，响应保持一致
+    const user = authRepo.findUserByEmail(email);
+    if (user) {
+      // 发送邮件（重置密码验证码）；与历史行为一致：发送环节失败统一返回"验证码发送失败"
+      try {
+        await sendVerificationCode(email, code, 'reset');
+      } catch (err) {
+        logger.error({ err }, '发送验证码失败');
+        throw new AppError(500, '验证码发送失败');
+      }
     }
 
     res.json({ message: '验证码已发送至邮箱' });

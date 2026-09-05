@@ -90,7 +90,8 @@ export interface LiveToken {
 export function verifyLiveToken(token: string): LiveToken | undefined {
   let decoded: TokenPayload;
   try {
-    decoded = jwt.verify(token, JWT_SECRET) as TokenPayload;
+    // 显式钉死签名算法：即使未来密钥形态变化，也不接受 alg 头指定的其他算法
+    decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as TokenPayload;
   } catch {
     return undefined;
   }
@@ -170,7 +171,7 @@ export function adminMiddleware(req: Request, res: Response, next: NextFunction)
  * @returns 签名后的 JWT token 字符串（7天有效期）
  */
 export function generateToken(user: { id: number; username: string; role?: string; tv?: number }): string {
-  return jwt.sign(user, JWT_SECRET, { expiresIn: '7d' });
+  return jwt.sign(user, JWT_SECRET, { expiresIn: '7d', algorithm: 'HS256' });
 }
 
 /**

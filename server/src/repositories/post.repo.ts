@@ -9,8 +9,8 @@
  * 与原"登录/未登录"两套 SQL 的行为完全一致。
  */
 
-import { getDb } from '../db/connection';
-import { count, uid } from '../db/helpers';
+import { getDb, stmt } from '../db/connection';
+import { count, escapeLike, uid } from '../db/helpers';
 import { AppError } from '../middleware/error';
 
 // ============================================================
@@ -92,9 +92,13 @@ export function listPosts(
   userId?: number
 ): { posts: PostWithUser[]; total: number } {
   const total = count('SELECT COUNT(*) as count FROM posts');
-  const posts = getDb()
-    .prepare(`${POST_FEED_SELECT} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`)
-    .all(uid(userId), uid(userId), uid(userId), limit, (page - 1) * limit) as PostWithUser[];
+  const posts = stmt(`${POST_FEED_SELECT} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`).all(
+    uid(userId),
+    uid(userId),
+    uid(userId),
+    limit,
+    (page - 1) * limit
+  ) as PostWithUser[];
   return { posts, total };
 }
 
@@ -111,48 +115,48 @@ export function searchPosts(
       'SELECT COUNT(*) as count FROM posts p JOIN post_tags pt ON pt.post_id = p.id WHERE pt.tag = ?',
       tag
     );
-    const posts = getDb()
-      .prepare(
-        `
+    const posts = stmt(
+      `
         ${POST_FEED_SELECT}
         JOIN post_tags pt ON pt.post_id = p.id
         WHERE pt.tag = ?
         ORDER BY p.created_at DESC
         LIMIT ? OFFSET ?
       `
-      )
-      .all(uid(userId), uid(userId), uid(userId), tag, limit, (page - 1) * limit) as PostWithUser[];
+    ).all(uid(userId), uid(userId), uid(userId), tag, limit, (page - 1) * limit) as PostWithUser[];
     return { posts, total };
   }
 
-  const escapedKeyword = keyword.replace(/[%_]/g, '\\$&');
+  const escapedKeyword = escapeLike(keyword);
   const likePattern = `%${escapedKeyword}%`;
   const total = count(
     "SELECT COUNT(*) as count FROM posts p WHERE p.title LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\'",
     likePattern,
     likePattern
   );
-  const posts = getDb()
-    .prepare(
-      `${POST_FEED_SELECT} WHERE p.title LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\' ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
-    )
-    .all(
-      uid(userId),
-      uid(userId),
-      uid(userId),
-      likePattern,
-      likePattern,
-      limit,
-      (page - 1) * limit
-    ) as PostWithUser[];
+  const posts = stmt(
+    `${POST_FEED_SELECT} WHERE p.title LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\' ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
+  ).all(
+    uid(userId),
+    uid(userId),
+    uid(userId),
+    likePattern,
+    likePattern,
+    limit,
+    (page - 1) * limit
+  ) as PostWithUser[];
   return { posts, total };
 }
 
 /** 单个帖子详情 */
 export function getPostById(postId: number, userId?: number): PostWithUser | undefined {
-  return getDb()
-    .prepare(`${POST_DETAIL_SELECT} WHERE p.id = ?`)
-    .get(uid(userId), uid(userId), uid(userId), uid(userId), postId) as PostWithUser | undefined;
+  return stmt(`${POST_DETAIL_SELECT} WHERE p.id = ?`).get(
+    uid(userId),
+    uid(userId),
+    uid(userId),
+    uid(userId),
+    postId
+  ) as PostWithUser | undefined;
 }
 
 /** 用户帖子列表（公开，无登录状态列；按置顶+时间排序） */
@@ -162,9 +166,8 @@ export function listUserPosts(
   limit: number
 ): { posts: PostWithUser[]; total: number } {
   const total = count('SELECT COUNT(*) as count FROM posts WHERE user_id = ?', targetUserId);
-  const posts = getDb()
-    .prepare(
-      `
+  const posts = stmt(
+    `
     SELECT p.*, u.username, u.avatar,
       (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
       (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count
@@ -174,16 +177,14 @@ export function listUserPosts(
     ORDER BY p.pinned DESC, p.created_at DESC
     LIMIT ? OFFSET ?
   `
-    )
-    .all(targetUserId, limit, (page - 1) * limit) as PostWithUser[];
+  ).all(targetUserId, limit, (page - 1) * limit) as PostWithUser[];
   return { posts, total };
 }
 
 /** 当前用户收藏的帖子（按收藏时间倒序；登录状态列: liked + bookmarked=1） */
 export function listBookmarkedPosts(userId: number): PostWithUser[] {
-  return getDb()
-    .prepare(
-      `
+  return stmt(
+    `
     SELECT p.*, u.username, u.avatar,
       (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
       (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
@@ -195,15 +196,13 @@ export function listBookmarkedPosts(userId: number): PostWithUser[] {
     WHERE b.user_id = ?
     ORDER BY b.created_at DESC
   `
-    )
-    .all(userId, userId) as PostWithUser[];
+  ).all(userId, userId) as PostWithUser[];
 }
 
 /** 当前用户转发的帖子（按转发时间倒序；登录状态列: liked + reposted=1） */
 export function listRepostedPosts(userId: number): PostWithUser[] {
-  return getDb()
-    .prepare(
-      `
+  return stmt(
+    `
     SELECT p.*, u.username, u.avatar,
       (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
       (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
@@ -215,8 +214,7 @@ export function listRepostedPosts(userId: number): PostWithUser[] {
     WHERE r.user_id = ?
     ORDER BY r.created_at DESC
   `
-    )
-    .all(userId, userId) as PostWithUser[];
+  ).all(userId, userId) as PostWithUser[];
 }
 
 // ============================================================
@@ -232,11 +230,9 @@ export function createPost(input: {
   closeComments: number;
   pinned: number;
 }): PostWithUser {
-  const result = getDb()
-    .prepare(
-      'INSERT INTO posts (user_id, image_url, title, description, close_comments, pinned) VALUES (?, ?, ?, ?, ?, ?)'
-    )
-    .run(input.userId, input.imageUrl, input.title, input.description, input.closeComments, input.pinned);
+  const result = stmt(
+    'INSERT INTO posts (user_id, image_url, title, description, close_comments, pinned) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(input.userId, input.imageUrl, input.title, input.description, input.closeComments, input.pinned);
   return getCreatedPost(Number(result.lastInsertRowid))!;
 }
 
@@ -249,43 +245,38 @@ export function createVideoPost(input: {
   closeComments: number;
   pinned: number;
 }): PostWithUser {
-  const result = getDb()
-    .prepare(
-      'INSERT INTO posts (user_id, image_url, title, description, close_comments, pinned, video_url, video_cover) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-    )
-    .run(
-      input.userId,
-      '[]',
-      '',
-      input.description,
-      input.closeComments,
-      input.pinned,
-      input.videoUrl,
-      input.videoCover
-    );
+  const result = stmt(
+    'INSERT INTO posts (user_id, image_url, title, description, close_comments, pinned, video_url, video_cover) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    input.userId,
+    '[]',
+    '',
+    input.description,
+    input.closeComments,
+    input.pinned,
+    input.videoUrl,
+    input.videoCover
+  );
   return getCreatedPost(Number(result.lastInsertRowid))!;
 }
 
 /** 创建响应形状（计数为 0，无登录状态列——与原路由一致） */
 export function getCreatedPost(postId: number): PostWithUser | undefined {
-  return getDb()
-    .prepare(
-      `
+  return stmt(
+    `
     SELECT p.*, u.username, u.avatar,
       0 as like_count, 0 as comment_count
     FROM posts p
     JOIN users u ON p.user_id = u.id
     WHERE p.id = ?
   `
-    )
-    .get(postId) as PostWithUser | undefined;
+  ).get(postId) as PostWithUser | undefined;
 }
 
 /** 编辑响应形状（含计数，无登录状态列——与原路由一致） */
 export function getPostWithCounts(postId: number): PostWithUser | undefined {
-  return getDb()
-    .prepare(
-      `
+  return stmt(
+    `
     SELECT p.*, u.username, u.avatar,
       (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
       (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count
@@ -293,8 +284,7 @@ export function getPostWithCounts(postId: number): PostWithUser | undefined {
     JOIN users u ON p.user_id = u.id
     WHERE p.id = ?
   `
-    )
-    .get(postId) as PostWithUser | undefined;
+  ).get(postId) as PostWithUser | undefined;
 }
 
 /** 更新自己的帖子（图片列表/描述/评论开关/置顶） */
@@ -306,24 +296,21 @@ export function updatePost(input: {
   closeComments: number;
   pinned: number;
 }): PostWithUser | undefined {
-  const result = getDb()
-    .prepare(
-      'UPDATE posts SET image_url = ?, description = ?, close_comments = ?, pinned = ? WHERE id = ? AND user_id = ?'
-    )
-    .run(input.imageUrl, input.description, input.closeComments, input.pinned, input.postId, input.userId);
+  const result = stmt(
+    'UPDATE posts SET image_url = ?, description = ?, close_comments = ?, pinned = ? WHERE id = ? AND user_id = ?'
+  ).run(input.imageUrl, input.description, input.closeComments, input.pinned, input.postId, input.userId);
   if (result.changes === 0) return undefined;
   return getPostWithCounts(input.postId);
 }
 
 /** 查询自己的帖子原始行（编辑/删除前置检查） */
 export function findOwnPost(postId: number, userId: number): PostRow | undefined {
-  return getDb().prepare('SELECT * FROM posts WHERE id = ? AND user_id = ?').get(postId, userId) as
-    PostRow | undefined;
+  return stmt('SELECT * FROM posts WHERE id = ? AND user_id = ?').get(postId, userId) as PostRow | undefined;
 }
 
 /** 删除帖子（外键级联自动删除评论、点赞、通知等） */
 export function deletePost(postId: number): void {
-  getDb().prepare('DELETE FROM posts WHERE id = ?').run(postId);
+  stmt('DELETE FROM posts WHERE id = ?').run(postId);
 }
 
 // ============================================================
@@ -332,10 +319,9 @@ export function deletePost(postId: number): void {
 
 /** 同步帖子话题（发帖/编辑后调用：先删后插，与 description 解析结果保持一致） */
 export function syncPostTags(postId: number, tags: string[]): void {
-  const db = getDb();
-  db.transaction(() => {
-    db.prepare('DELETE FROM post_tags WHERE post_id = ?').run(postId);
-    const insert = db.prepare('INSERT OR IGNORE INTO post_tags (post_id, tag) VALUES (?, ?)');
+  getDb().transaction(() => {
+    stmt('DELETE FROM post_tags WHERE post_id = ?').run(postId);
+    const insert = stmt('INSERT OR IGNORE INTO post_tags (post_id, tag) VALUES (?, ?)');
     for (const tag of tags) insert.run(postId, tag);
   })();
 }
@@ -346,21 +332,21 @@ export function syncPostTags(postId: number, tags: string[]): void {
 
 /** 前置校验帖子存在，不存在则抛 404（替代外键约束导致的 500） */
 function requirePost(postId: number): void {
-  const exists = getDb().prepare('SELECT 1 FROM posts WHERE id = ?').get(postId);
+  const exists = stmt('SELECT 1 FROM posts WHERE id = ?').get(postId);
   if (!exists) throw new AppError(404, '帖子不存在');
 }
 
 /** 点赞（INSERT OR IGNORE 防重复），返回最新点赞数 */
 export function likePost(userId: number, postId: number): number {
   requirePost(postId);
-  getDb().prepare('INSERT OR IGNORE INTO likes (user_id, post_id) VALUES (?, ?)').run(userId, postId);
+  stmt('INSERT OR IGNORE INTO likes (user_id, post_id) VALUES (?, ?)').run(userId, postId);
   return countPostLikes(postId);
 }
 
 /** 取消点赞，返回最新点赞数 */
 export function unlikePost(userId: number, postId: number): number {
   requirePost(postId);
-  getDb().prepare('DELETE FROM likes WHERE user_id = ? AND post_id = ?').run(userId, postId);
+  stmt('DELETE FROM likes WHERE user_id = ? AND post_id = ?').run(userId, postId);
   return countPostLikes(postId);
 }
 
@@ -375,13 +361,11 @@ function countPostLikes(postId: number): number {
 /** 记录分享（每用户每帖只计一次），返回分享数与状态 */
 export function sharePost(userId: number, postId: number): { share_count: number; shared: boolean } {
   requirePost(postId);
-  const result = getDb()
-    .prepare('INSERT OR IGNORE INTO shares (user_id, post_id) VALUES (?, ?)')
-    .run(userId, postId);
+  const result = stmt('INSERT OR IGNORE INTO shares (user_id, post_id) VALUES (?, ?)').run(userId, postId);
   if (result.changes === 1) {
-    getDb().prepare('UPDATE posts SET share_count = share_count + 1 WHERE id = ?').run(postId);
+    stmt('UPDATE posts SET share_count = share_count + 1 WHERE id = ?').run(postId);
   }
-  const row = getDb().prepare('SELECT share_count FROM posts WHERE id = ?').get(postId) as
+  const row = stmt('SELECT share_count FROM posts WHERE id = ?').get(postId) as
     { share_count: number } | undefined;
   return { share_count: row?.share_count || 0, shared: true };
 }
@@ -393,13 +377,13 @@ export function sharePost(userId: number, postId: number): { share_count: number
 /** 收藏帖子 */
 export function bookmarkPost(userId: number, postId: number): void {
   requirePost(postId);
-  getDb().prepare('INSERT OR IGNORE INTO bookmarks (user_id, post_id) VALUES (?, ?)').run(userId, postId);
+  stmt('INSERT OR IGNORE INTO bookmarks (user_id, post_id) VALUES (?, ?)').run(userId, postId);
 }
 
 /** 取消收藏 */
 export function unbookmarkPost(userId: number, postId: number): void {
   requirePost(postId);
-  getDb().prepare('DELETE FROM bookmarks WHERE user_id = ? AND post_id = ?').run(userId, postId);
+  stmt('DELETE FROM bookmarks WHERE user_id = ? AND post_id = ?').run(userId, postId);
 }
 
 // ============================================================
@@ -409,13 +393,11 @@ export function unbookmarkPost(userId: number, postId: number): void {
 /** 转发（每用户每帖只计一次），返回转发数与状态 */
 export function repostPost(userId: number, postId: number): { reposted: boolean; repost_count: number } {
   requirePost(postId);
-  const result = getDb()
-    .prepare('INSERT OR IGNORE INTO reposts (user_id, post_id) VALUES (?, ?)')
-    .run(userId, postId);
+  const result = stmt('INSERT OR IGNORE INTO reposts (user_id, post_id) VALUES (?, ?)').run(userId, postId);
   if (result.changes === 1) {
-    getDb().prepare('UPDATE posts SET repost_count = repost_count + 1 WHERE id = ?').run(postId);
+    stmt('UPDATE posts SET repost_count = repost_count + 1 WHERE id = ?').run(postId);
   }
-  const row = getDb().prepare('SELECT repost_count FROM posts WHERE id = ?').get(postId) as
+  const row = stmt('SELECT repost_count FROM posts WHERE id = ?').get(postId) as
     { repost_count: number } | undefined;
   return { reposted: true, repost_count: row?.repost_count || 0 };
 }
@@ -423,11 +405,11 @@ export function repostPost(userId: number, postId: number): { reposted: boolean;
 /** 取消转发，返回转发数与状态 */
 export function unrepostPost(userId: number, postId: number): { reposted: boolean; repost_count: number } {
   requirePost(postId);
-  const result = getDb().prepare('DELETE FROM reposts WHERE user_id = ? AND post_id = ?').run(userId, postId);
+  const result = stmt('DELETE FROM reposts WHERE user_id = ? AND post_id = ?').run(userId, postId);
   if (result.changes === 1) {
-    getDb().prepare('UPDATE posts SET repost_count = MAX(0, repost_count - 1) WHERE id = ?').run(postId);
+    stmt('UPDATE posts SET repost_count = MAX(0, repost_count - 1) WHERE id = ?').run(postId);
   }
-  const row = getDb().prepare('SELECT repost_count FROM posts WHERE id = ?').get(postId) as
+  const row = stmt('SELECT repost_count FROM posts WHERE id = ?').get(postId) as
     { repost_count: number } | undefined;
   return { reposted: false, repost_count: row?.repost_count || 0 };
 }
