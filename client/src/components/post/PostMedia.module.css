@@ -25,6 +25,8 @@
   overflow: hidden; /* transform 方案：不再滚动，容器裁剪 */
   /* 手势完全接管：禁原生水平滚动/惯性（WebView 下跨页不可控），垂直滚动留给页面 */
   touch-action: pan-y;
+  /* 空白区域黑色填充 */
+  background: #000;
 }
 
 /* transform 轨道：GPU 合成器驱动，60fps 丝滑（scrollLeft 走主线程会掉帧） */
@@ -170,6 +172,8 @@
   overflow: hidden; /* transform 方案：不再滚动，容器裁剪 */
   /* 手势完全接管：禁原生水平滚动/惯性 */
   touch-action: pan-y;
+  /* 空白区域黑色填充 */
+  background: #000;
   /* 防止图片被拖拽/长按选中干扰滑动 */
   -webkit-user-drag: none;
   user-select: none;

@@ -122,6 +122,8 @@
   overflow: hidden; /* transform 方案：不再滚动，容器裁剪 */
   /* 手势完全接管：禁原生水平滚动/惯性，垂直留给页面 */
   touch-action: pan-y;
+  /* 空白区域黑色填充（横图上下留白、加载中均黑底） */
+  background: #000;
 }
 
 /* transform 轨道：GPU 合成器驱动，60fps 丝滑（scrollLeft 走主线程会掉帧） */
