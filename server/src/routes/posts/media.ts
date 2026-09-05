@@ -91,11 +91,14 @@ function normalizeVideoToMp4(dir: string, name: string): string {
   return to;
 }
 
-/** 启动时清理超过 24 小时未发布的临时视频文件 */
+/** 启动时清理超过 24 小时未发布的临时视频文件（目录不存在则创建——全新环境/CI 无 uploads/temp） */
 (() => {
   try {
     const tempDir = PATHS.uploadsTemp;
-    if (!fs.existsSync(tempDir)) return;
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+      return;
+    }
     const cutoff = Date.now() - 24 * 3600 * 1000;
     for (const name of fs.readdirSync(tempDir)) {
       const p = path.join(tempDir, name);
@@ -183,6 +186,8 @@ router.post('/video-chunk', authMiddleware, chunkUpload.single('chunk'), asyncHa
   const tempPath = path.join(PATHS.uploadsTemp, uploadId);
   // 首片清理旧残留（大小检查前执行，否则重传会被旧残留体积误拒）
   try {
+    // 目录缺失则创建（memoryStorage 不像 diskStorage 那样自动建目录）
+    fs.mkdirSync(PATHS.uploadsTemp, { recursive: true });
     if (chunkIndex === 0 && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
     // 累计超出总量上限：拒绝并删除半成品（防改小单片大小绕过 totalChunks 上限）
     const existing = fs.existsSync(tempPath) ? fs.statSync(tempPath).size : 0;
