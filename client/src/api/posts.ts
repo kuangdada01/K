@@ -115,40 +115,46 @@ export async function createVideoPostChunked(
   // 生成与服务端一致的 temp 文件名（白名单校验）
   const rand = Math.floor(Math.random() * 1_000_000_000);
   const uploadId = `temp-${Date.now()}-${rand}.mp4`;
-  for (let i = 0; i < totalChunks; i++) {
-    const start = i * CHUNK_SIZE;
-    const end = Math.min(start + CHUNK_SIZE, videoFile.size);
-    const chunk = videoFile.slice(start, end);
-    const fd = new FormData();
-    fd.append('uploadId', uploadId);
-    fd.append('chunkIndex', String(i));
-    fd.append('totalChunks', String(totalChunks));
-    fd.append('chunk', chunk, `chunk-${i}`);
-    // 单片失败重试 2 次，避免弱网直接闪退式失败
-    let lastErr: any = null;
-    for (let retry = 0; retry < 3; retry++) {
-      try {
-        await nativeFetchUpload('/posts/video-chunk', fd, 'POST');
-        lastErr = null;
-        break;
-      } catch (e) {
-        lastErr = e;
-        if (retry < 2) await new Promise(r => setTimeout(r, 500 * (retry + 1)));
+  try {
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, videoFile.size);
+      const chunk = videoFile.slice(start, end);
+      const fd = new FormData();
+      fd.append('uploadId', uploadId);
+      fd.append('chunkIndex', String(i));
+      fd.append('totalChunks', String(totalChunks));
+      fd.append('chunk', chunk, `chunk-${i}`);
+      // 单片失败重试 2 次，避免弱网直接闪退式失败
+      let lastErr: any = null;
+      for (let retry = 0; retry < 3; retry++) {
+        try {
+          await nativeFetchUpload('/posts/video-chunk', fd, 'POST');
+          lastErr = null;
+          break;
+        } catch (e) {
+          lastErr = e;
+          if (retry < 2) await new Promise(r => setTimeout(r, 500 * (retry + 1)));
+        }
       }
+      if (lastErr) throw lastErr;
+      onProgress?.(Math.round(((i + 1) / totalChunks) * 90)); // 90% 为分片阶段
     }
-    if (lastErr) throw lastErr;
-    onProgress?.(Math.round(((i + 1) / totalChunks) * 90)); // 90% 为分片阶段
+    // 分片完成后走现有 video_url 流程（服务端会移动并转码、生成封面）
+    const finalFd = new FormData();
+    finalFd.append('video_url', `/uploads/temp/${uploadId}`);
+    if (coverFile) finalFd.append('cover', coverFile);
+    finalFd.append('description', description);
+    if (closeComments) finalFd.append('close_comments', '1');
+    if (pinned) finalFd.append('pinned', '1');
+    const post = await nativeFetchUpload<Post>('/posts/video', finalFd, 'POST');
+    onProgress?.(100);
+    return post;
+  } catch (e) {
+    // 失败时清理服务端半成品分片文件并释放上传会话，避免占用并发配额
+    api.delete('/posts/video-temp', { data: { url: `/uploads/temp/${uploadId}` } }).catch(() => {});
+    throw e;
   }
-  // 分片完成后走现有 video_url 流程（服务端会移动并转码、生成封面）
-  const finalFd = new FormData();
-  finalFd.append('video_url', `/uploads/temp/${uploadId}`);
-  if (coverFile) finalFd.append('cover', coverFile);
-  finalFd.append('description', description);
-  if (closeComments) finalFd.append('close_comments', '1');
-  if (pinned) finalFd.append('pinned', '1');
-  const post = await nativeFetchUpload<Post>('/posts/video', finalFd, 'POST');
-  onProgress?.(100);
-  return post;
 }
 
 /** 上传临时视频（发布前预览）- 原生同样走 fetch */

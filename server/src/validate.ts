@@ -8,17 +8,19 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { ZodType } from 'zod';
-import { safeDeleteFile } from './lib/file';
+import { safeDeleteUpload } from './lib/file';
 
 /** 校验请求体，通过后把解析结果写回 req.body */
 export function validateBody<T>(schema: ZodType<T>) {
   return (req: Request, res: Response, next: NextFunction) => {
     const result = schema.safeParse(req.body);
     if (!result.success) {
-      // multipart 请求中 multer 已把文件写入磁盘，校验失败时清理避免孤儿文件
-      const file = (req as any).file as { filename?: string } | undefined;
-      if (file?.filename) {
-        safeDeleteFile(`/uploads/${file.filename}`);
+      // multipart 请求中 multer 已把文件写入磁盘，校验失败时清理避免孤儿文件。
+      // file.path 是 diskStorage 的落盘绝对路径（uploads / uploads_private 由各路由
+      // 的 uploader 决定），直接按绝对路径删除，避免猜子目录删错位置
+      const file = (req as any).file as { path?: string } | undefined;
+      if (file?.path) {
+        safeDeleteUpload(file.path);
       }
       const message = result.error.issues[0]?.message || '参数错误';
       res.status(400).json({ error: message });

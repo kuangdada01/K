@@ -20,10 +20,12 @@
  */
 
 import { Router, Request, Response } from 'express';
+import path from 'path';
 import bcrypt from 'bcryptjs';
 import { authMiddleware, adminMiddleware } from '../middleware/auth';
 import { asyncHandler, AppError } from '../middleware/error';
 import { withImages } from '../lib/image';
+import { safeDeleteFile, deletePostMediaFiles } from '../lib/file';
 import { validateBody } from '../validate';
 import { notifyUser, notifyAllUsers } from '../sse';
 import { announcementSchema, adminResetPasswordSchema, pageQuerySchema, limitQuerySchema } from '@k/shared';
@@ -72,6 +74,8 @@ router.get('/users/search', asyncHandler(async (req: Request, res: Response) => 
  * DELETE /api/admin/users/:id - 删除用户
  *
  * 级联删除: 用户的帖子、评论、点赞、消息等会被数据库外键自动删除
+ * 磁盘清理: 头像、帖子媒体、私密图片、私信图片（先收集路径 → 删库 → 删文件，
+ * 顺序保证中途失败最多留下孤儿文件，不会产生指向已删文件的死链）
  *
  * 验证: 不能删除自己的账号
  */
@@ -84,7 +88,30 @@ router.delete('/users/:id', asyncHandler(async (req: Request, res: Response) => 
   if (!user) {
     throw new AppError(404, '用户不存在');
   }
+
+  // 删库前收集全部磁盘文件引用（级联删除后行已不在，无从查起）
+  const postMedia = adminRepo.listUserPostMedia(userId);
+  const privateImageNames = adminRepo.listUserPrivateImageNames(userId);
+  const messageImageNames = adminRepo.listUserMessageImageNames(userId);
+
   adminRepo.deleteUser(userId, user.email);
+
+  // 头像
+  if (user.avatar) {
+    safeDeleteFile(user.avatar, 'uploads/avatars');
+  }
+  // 帖子媒体（图片/视频/封面）
+  for (const media of postMedia) {
+    deletePostMediaFiles(media);
+  }
+  // 私密图片与私信图片（uploads_private，DB 只存文件名）
+  for (const name of privateImageNames) {
+    safeDeleteFile(`/uploads_private/${path.basename(name)}`, 'uploads_private');
+  }
+  for (const name of messageImageNames) {
+    safeDeleteFile(`/uploads_private/${path.basename(name)}`, 'uploads_private');
+  }
+
   res.json({ success: true });
 }));
 
@@ -169,14 +196,16 @@ router.get('/posts', asyncHandler(async (req: Request, res: Response) => {
 /**
  * DELETE /api/admin/posts/:id - 删除帖子
  *
- * 先删除相关通知，再删除帖子
+ * 先删除相关通知，再删除帖子；媒体文件（图片/视频/封面）同步清理
  */
 router.delete('/posts/:id', asyncHandler(async (req: Request, res: Response) => {
   const postId = parseInt(req.params.id as string);
-  if (!adminRepo.postExists(postId)) {
+  const media = adminRepo.findPostMedia(postId);
+  if (!media) {
     throw new AppError(404, '帖子不存在');
   }
   adminRepo.adminDeletePost(postId);
+  deletePostMediaFiles(media);
   res.json({ success: true });
 }));
 

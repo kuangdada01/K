@@ -10,7 +10,7 @@ import { PATHS } from '../../config';
 import { authMiddleware, optionalAuth } from '../../middleware/auth';
 import { asyncHandler, AppError } from '../../middleware/error';
 import { withImages, imageFileFilter, compressImage } from '../../lib/image';
-import { safeDeleteFile } from '../../lib/file';
+import { safeDeleteFile, parseImageUrlArray, deletePostMediaFiles } from '../../lib/file';
 import { pageQuerySchema, limitQuerySchema, extractTags } from '@k/shared';
 import { createUploader, timestampFilename } from '../../lib/upload';
 import * as postRepo from '../../repositories/post.repo';
@@ -28,15 +28,6 @@ const imageUpload = createUploader({
   maxSize: 10 * 1024 * 1024,
   fileFilter: imageFileFilter,
 });
-
-/** 解析数据库 image_url（JSON 数组；旧格式单个 URL 字符串兜底为单元素数组） */
-function parseImageUrlArray(imageUrl: string): string[] {
-  try {
-    return JSON.parse(imageUrl);
-  } catch {
-    return [imageUrl];
-  }
-}
 
 // ============================================================
 // 帖子搜索端点
@@ -289,23 +280,8 @@ router.delete('/:id', authMiddleware, asyncHandler(async (req: Request, res: Res
     throw new AppError(404, '帖子不存在或无权删除');
   }
 
-  // 删除图片文件
-  const imageUrls = parseImageUrlArray(post.image_url);
-  for (const url of imageUrls) {
-    safeDeleteFile(url);
-  }
-
-  // 删除视频文件
-  if (post.video_url) {
-    safeDeleteFile(post.video_url);
-  }
-
-  // 删除视频封面
-  if (post.video_cover) {
-    safeDeleteFile(post.video_cover);
-  }
-
-  // 删除帖子（外键级联会自动删除评论、点赞、通知等）
+  // 删除媒体文件（图片/视频/封面），再删记录（外键级联会自动删除评论、点赞、通知等）
+  deletePostMediaFiles(post);
   postRepo.deletePost(postId);
   res.json({ message: 'Post deleted' });
 }));

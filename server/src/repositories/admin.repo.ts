@@ -45,9 +45,9 @@ export function searchUsers(q: string): { id: number; username: string; avatar: 
   ).all(likePattern) as { id: number; username: string; avatar: string | null }[];
 }
 
-/** 按 ID 查用户（含 email，删除/重置密码用） */
-export function findUser(userId: number): { id: number; email: string } | undefined {
-  return getDb().prepare('SELECT id, email FROM users WHERE id = ?').get(userId) as { id: number; email: string } | undefined;
+/** 按 ID 查用户（含 email、avatar，删除/重置密码/删号清文件用） */
+export function findUser(userId: number): { id: number; email: string; avatar: string | null } | undefined {
+  return getDb().prepare('SELECT id, email, avatar FROM users WHERE id = ?').get(userId) as { id: number; email: string; avatar: string | null } | undefined;
 }
 
 /** 查询用户角色（封禁前置校验: 不能封禁管理员） */
@@ -96,15 +96,45 @@ export function listAllPosts(page: number, limit: number): { posts: AdminPostRow
   return { posts, total };
 }
 
-/** 帖子是否存在 */
-export function postExists(postId: number): boolean {
-  return !!getDb().prepare('SELECT id FROM posts WHERE id = ?').get(postId);
-}
-
 /** 管理员删除帖子（先删通知再删帖子） */
 export function adminDeletePost(postId: number): void {
   getDb().prepare('DELETE FROM notifications WHERE post_id = ?').run(postId);
   getDb().prepare('DELETE FROM posts WHERE id = ?').run(postId);
+}
+
+// ============================================================
+// 删号/删帖前的磁盘文件收集（文件路径删库后无从查起，必须先查后删）
+// ============================================================
+
+/** 帖子媒体字段 */
+export interface PostMediaRow {
+  image_url: string;
+  video_url: string | null;
+  video_cover: string | null;
+}
+
+/** 查询单帖媒体字段（管理端删帖前收集文件路径用） */
+export function findPostMedia(postId: number): PostMediaRow | undefined {
+  return getDb().prepare('SELECT image_url, video_url, video_cover FROM posts WHERE id = ?')
+    .get(postId) as PostMediaRow | undefined;
+}
+
+/** 查询某用户全部帖子的媒体字段（删号前收集文件路径用） */
+export function listUserPostMedia(userId: number): PostMediaRow[] {
+  return getDb().prepare('SELECT image_url, video_url, video_cover FROM posts WHERE user_id = ?')
+    .all(userId) as PostMediaRow[];
+}
+
+/** 查询某用户私密图片文件名列表（uploads_private，DB 只存文件名） */
+export function listUserPrivateImageNames(userId: number): string[] {
+  return (getDb().prepare('SELECT image_url FROM private_images WHERE user_id = ?')
+    .all(userId) as { image_url: string }[]).map((r) => r.image_url);
+}
+
+/** 查询某用户发出的带图私信文件名列表（uploads_private，DB 只存文件名） */
+export function listUserMessageImageNames(userId: number): string[] {
+  return (getDb().prepare('SELECT image_url FROM messages WHERE sender_id = ? AND image_url IS NOT NULL')
+    .all(userId) as { image_url: string }[]).map((r) => r.image_url);
 }
 
 // ============================================================

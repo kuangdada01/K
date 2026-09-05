@@ -113,7 +113,36 @@ const chunkUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 6 * 1024 * 1024 }, // 单片 5MB + 余量
 });
+
+/** 分片上传总量上限（与单次上传 300MB 对齐，追加时校验） */
+const MAX_VIDEO_BYTES = 300 * 1024 * 1024;
+/** 分片数上限 = 总量上限 / 客户端切片大小 5MB（multer 单片 6MB 仅作硬保护） */
+const MAX_TOTAL_CHUNKS = Math.ceil(MAX_VIDEO_BYTES / (5 * 1024 * 1024));
+/** 同一用户并发分片上传上限（防批量 uploadId 占满磁盘） */
+const MAX_CONCURRENT_CHUNK_UPLOADS = 3;
+/** 上传会话 TTL（与临时文件 24h 清理周期一致） */
+const CHUNK_UPLOAD_TTL = 24 * 3600 * 1000;
+
+/**
+ * 分片上传会话注册表：uploadId → 属主与创建时间
+ * uploadId 由客户端生成、全局可猜，必须绑定属主，否则任意认证用户
+ * 可向他人进行中的上传追加分片（污染视频内容）或无限追加写满磁盘。
+ * 回收：POST /video 消费、DELETE /video-temp 放弃时显式删除；
+ * 文件已不存在或超过 TTL 的条目在各请求前惰性清理。
+ */
+const chunkUploadOwners = new Map<string, { userId: number; createdAt: number }>();
+
+function pruneChunkUploads(): void {
+  const cutoff = Date.now() - CHUNK_UPLOAD_TTL;
+  for (const [id, entry] of chunkUploadOwners) {
+    if (entry.createdAt < cutoff || !fs.existsSync(path.join(PATHS.uploadsTemp, id))) {
+      chunkUploadOwners.delete(id);
+    }
+  }
+}
+
 router.post('/video-chunk', authMiddleware, chunkUpload.single('chunk'), asyncHandler(async (req: Request, res: Response) => {
+  pruneChunkUploads();
   const uploadId = typeof req.body.uploadId === 'string' ? req.body.uploadId.trim() : '';
   const chunkIndex = parseInt(req.body.chunkIndex as string, 10);
   const totalChunks = parseInt(req.body.totalChunks as string, 10);
@@ -124,20 +153,49 @@ router.post('/video-chunk', authMiddleware, chunkUpload.single('chunk'), asyncHa
   if (!Number.isInteger(chunkIndex) || !Number.isInteger(totalChunks) || chunkIndex < 0 || chunkIndex >= totalChunks) {
     throw new AppError(400, '无效的分片参数');
   }
+  if (totalChunks > MAX_TOTAL_CHUNKS) {
+    throw new AppError(400, '视频超过大小限制');
+  }
   if (!chunkFile || !chunkFile.buffer || chunkFile.buffer.length === 0) {
     throw new AppError(400, '分片数据缺失');
   }
-  const tempPath = path.join(PATHS.uploadsTemp, uploadId);
-  // 首片清理旧残留，续片追加
-  try {
-    if (chunkIndex === 0) {
-      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+  const userId = req.user!.id;
+  const owner = chunkUploadOwners.get(uploadId);
+  if (chunkIndex === 0) {
+    // 首片 = 新建/重传：他人占用中的会话不可抢占
+    if (owner && owner.userId !== userId) {
+      throw new AppError(403, '该上传已被其他用户占用');
     }
-    // 追加写入（不存在则创建）
+    const userUploads = [...chunkUploadOwners.values()].filter((e) => e.userId === userId).length;
+    if (!owner && userUploads >= MAX_CONCURRENT_CHUNK_UPLOADS) {
+      throw new AppError(400, '同时进行的上传任务过多，请稍后再试');
+    }
+    chunkUploadOwners.set(uploadId, { userId, createdAt: Date.now() });
+  } else {
+    // 续片：必须存在会话且属主本人
+    if (!owner) {
+      throw new AppError(400, '上传会话已失效，请重新上传');
+    }
+    if (owner.userId !== userId) {
+      throw new AppError(403, '无权继续该上传');
+    }
+  }
+  const tempPath = path.join(PATHS.uploadsTemp, uploadId);
+  // 首片清理旧残留（大小检查前执行，否则重传会被旧残留体积误拒）
+  try {
+    if (chunkIndex === 0 && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    // 累计超出总量上限：拒绝并删除半成品（防改小单片大小绕过 totalChunks 上限）
+    const existing = fs.existsSync(tempPath) ? fs.statSync(tempPath).size : 0;
+    if (existing + chunkFile.buffer.length > MAX_VIDEO_BYTES) {
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      throw new AppError(400, '视频超过大小限制');
+    }
+    // 续片追加（不存在则创建）
     fs.appendFileSync(tempPath, chunkFile.buffer);
     const stat = fs.statSync(tempPath);
     res.json({ ok: true, received: chunkIndex + 1, totalChunks, size: stat.size });
-  } catch {
+  } catch (err) {
+    if (err instanceof AppError) throw err;
     throw new AppError(500, '分片写入失败');
   }
 }));
@@ -186,6 +244,8 @@ router.delete('/video-temp', authMiddleware, asyncHandler(async (req: Request, r
     throw new AppError(400, '无效的视频引用');
   }
   safeDeleteFile(`/uploads/temp/${name}`, 'uploads');
+  // 放弃上传：同步释放分片上传会话（文件删除后惰性回收也会兜底）
+  chunkUploadOwners.delete(name);
   res.json({ ok: true });
 }));
 
@@ -228,6 +288,8 @@ router.post('/video', authMiddleware, videoFields, asyncHandler(async (req: Requ
       throw new AppError(400, '视频已失效，请重新选择视频');
     }
     fs.renameSync(tempPath, finalPath);
+    // 分片上传会话随文件消费而结束
+    chunkUploadOwners.delete(name);
     // 兼容旧客户端残留的非 .mp4 临时文件名：统一规范化并入队转码
     const normalizedName = normalizeVideoToMp4(PATHS.uploads, name);
     enqueueVideoTranscode(path.join(PATHS.uploads, normalizedName), normalizedName);
