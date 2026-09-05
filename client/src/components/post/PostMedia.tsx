@@ -67,15 +67,50 @@ export default function PostMedia({
     let active = false;
     let horizontal = false; // 是否已判定为横向手势（横向主导才接管滚动）
     let moveHandler: ((e: TouchEvent) => void) | null = null;
+    // rAF 驱动：touchmove 只更新目标值，每帧应用一次（合并事件/补掉帧，滑动丝滑）
+    let rafId = 0;
+    let animRafId = 0;
+    let targetLeft = 0;
+
+    const cancelFrames = () => {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+      if (animRafId) { cancelAnimationFrame(animRafId); animRafId = 0; }
+    };
+
+    const scheduleApply = () => {
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        if (el.scrollLeft !== targetLeft) el.scrollLeft = targetLeft;
+      });
+    };
+
+    // 松手落位：rAF 自绘 easeOut 动画（WebView 的 smooth 滚动不可靠，不用它）
+    const animateTo = (to: number) => {
+      const from = el.scrollLeft;
+      if (Math.abs(to - from) < 1) { el.scrollLeft = to; return; }
+      const duration = 260;
+      const start = performance.now();
+      const ease = (t: number) => 1 - Math.pow(1 - t, 3);
+      const step = (now: number) => {
+        const t = Math.min(1, (now - start) / duration);
+        el.scrollLeft = from + (to - from) * ease(t);
+        if (t < 1) animRafId = requestAnimationFrame(step);
+        else animRafId = 0;
+      };
+      animRafId = requestAnimationFrame(step);
+    };
 
     const down = (e: PointerEvent) => {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
+      cancelFrames(); // 动画中途再次触摸：从当前位置继续跟手，无缝衔接
       active = true;
       horizontal = false;
       startX = e.clientX;
       startY = e.clientY;
       startLeft = el.scrollLeft;
       startIndex = getSettled();
+      targetLeft = startLeft;
       moveHandler = (te: TouchEvent) => {
         if (!active || te.touches.length !== 1) return;
         const touch = te.touches[0];
@@ -83,9 +118,9 @@ export default function PostMedia({
         const dy = touch.clientY - startY;
         if (!horizontal) {
           // 首次位移判定方向：横向主导才接管，纵向主导（浏览页面）立即放手
-          if (Math.abs(dx) > Math.abs(dy) + 4) {
+          if (Math.abs(dx) > Math.abs(dy) + 2) {
             horizontal = true;
-          } else if (Math.abs(dy) > Math.abs(dx) + 4) {
+          } else if (Math.abs(dy) > Math.abs(dx) + 2) {
             active = false; // 交给浏览器纵向滚动页面
             if (moveHandler) {
               el.removeEventListener('touchmove', moveHandler);
@@ -97,8 +132,8 @@ export default function PostMedia({
           }
         }
         te.preventDefault();
-        const dxMove = touch.clientX - startX;
-        el.scrollLeft = startLeft - dxMove;
+        targetLeft = startLeft - dx;
+        scheduleApply();
       };
       // passive:false 才能 preventDefault 禁掉原生惯性滚动
       el.addEventListener('touchmove', moveHandler, { passive: false });
@@ -111,7 +146,7 @@ export default function PostMedia({
         el.removeEventListener('touchmove', moveHandler);
         moveHandler = null;
       }
-      const dx = el.scrollLeft - startLeft; // 正向 = 手指左滑（scrollLeft 增大）= 下一张
+      const dx = targetLeft - startLeft; // 正向 = 手指左滑（scrollLeft 增大）= 下一张
       const width = el.clientWidth || 1;
       const total = images.length;
       let target = startIndex;
@@ -125,7 +160,7 @@ export default function PostMedia({
       }
       setSettled(target);
       onMove(target);
-      el.scrollTo({ left: width * target, behavior: 'smooth' });
+      animateTo(width * target);
     };
 
     el.addEventListener('pointerdown', down);
@@ -136,6 +171,7 @@ export default function PostMedia({
       el.removeEventListener('pointerup', up);
       el.removeEventListener('pointercancel', up);
       if (moveHandler) el.removeEventListener('touchmove', moveHandler);
+      cancelFrames();
     };
   };
 
