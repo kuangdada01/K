@@ -14,7 +14,7 @@
 import { useInfiniteQuery } from '@tanstack/react-query';
 import type { InfiniteData } from '@tanstack/react-query';
 import type { QueryClient } from '@tanstack/react-query';
-import api from '../api/http';
+import { listPosts } from '../api/posts';
 import type { PostListResponse } from '../api/posts';
 import type { Post } from '../types';
 
@@ -58,13 +58,7 @@ export function updatePostsFeed(queryClient: QueryClient, updater: (posts: Post[
 export function usePostsFeed() {
   return useInfiniteQuery({
     queryKey: postsFeedKey,
-    queryFn: async ({ pageParam }) => {
-      const res = await api.get(`/posts`, {
-        params: { page: pageParam, limit: 20 },
-        timeout: 10000,
-      });
-      return res.data as PostListResponse;
-    },
+    queryFn: ({ pageParam }) => listPosts(pageParam, 20, { timeout: 10000 }),
     initialPageParam: 1,
     getNextPageParam: (last) => (last.page < last.totalPages ? last.page + 1 : undefined),
     staleTime: Infinity,

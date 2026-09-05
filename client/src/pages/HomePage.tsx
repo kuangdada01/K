@@ -19,7 +19,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
-import api from '../api/http';
+import { follow, listRecommended } from '../api/friends';
 import PostCard from '../components/post/PostCard';
 import PostDetail from '../components/post/PostDetail';
 const LazyProfileOverlay = lazy(() => import('../components/profile/ProfileOverlay'));
@@ -120,12 +120,15 @@ export default function HomePage() {
 
   // Initial load: 推荐关注（游客也可看到，服务端返回随机用户）
   useEffect(() => {
-    api
-      .get('/friends/recommend')
-      .then((res) => {
-        setRecommendUsers(res.data.users);
+    let cancelled = false;
+    listRecommended()
+      .then(({ users }) => {
+        if (!cancelled) setRecommendUsers(users);
       })
       .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Pull-to-refresh — 用 ref 直接操作 DOM，零延迟跟手
@@ -158,9 +161,9 @@ export default function HomePage() {
         refetch();
       }
     };
-    events.on('post:created', handler as any);
+    events.on('post:created', handler);
     return () => {
-      events.off('post:created', handler as any);
+      events.off('post:created', handler);
     };
   }, [refetch, queryClient]);
 
@@ -291,7 +294,7 @@ export default function HomePage() {
       return;
     }
     try {
-      await api.post(`/friends/${u.id}`);
+      await follow(u.id);
       setFollowStatus(u.id, true);
       setRemovingIds((prev) => new Set(prev).add(u.id));
       setTimeout(() => {

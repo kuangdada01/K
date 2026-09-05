@@ -22,12 +22,13 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { postsFeedKey, updatePostsFeed } from '../../hooks/usePostsFeed';
 import api from '../../api/http';
+import { getApiErrorMessage } from '../../api/http';
 import { User, Post } from '../../types';
 import { fileToPreviewUrl } from '../../utils';
 import { useAuth } from '../../context/AuthContext';
 import { useFollow } from '../../state/cache';
 import { useFollowUser } from '../../hooks/useFollowUser';
-import { useEvent } from '../../context/CreateContext';
+import { useEvent } from '../../context/EventContext';
 import { events } from '../../state/events';
 import { showToast } from '../ui/Toast';
 import ConfirmDialog from '../ui/ConfirmDialog';
@@ -383,8 +384,8 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
       setPrivateDeletedIds(new Set());
       setShowPrivateFolder(false);
       showToast('保存成功！');
-    } catch (err: any) {
-      showToast(err.response?.data?.error || '保存失败');
+    } catch (err) {
+      showToast(getApiErrorMessage(err, '保存失败'));
     }
   };
 
@@ -409,9 +410,8 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
       setProfileUser((prev) => (prev ? { ...prev, username: res.data.username, bio: res.data.bio } : prev));
       updateUser(res.data);
       setEditing(false);
-    } catch (err: any) {
-      const msg = err.response?.data?.error || '保存失败';
-      alert(msg);
+    } catch (err) {
+      alert(getApiErrorMessage(err, '保存失败'));
     }
   };
 

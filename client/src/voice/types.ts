@@ -14,6 +14,31 @@ export type VoiceStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' |
 /** 语音质量等级（每个成员自报自身网络状况，服务器广播给全房间展示） */
 export type VoiceQualityLevel = 'good' | 'fair' | 'poor';
 
+/** WebRTC 信令载荷（server/voice/hub.ts 转发的 offer/answer/ICE candidate） */
+export type VoiceSignalPayload =
+  | { type: 'offer'; sdp: string }
+  | { type: 'answer'; sdp: string }
+  | { type: 'candidate'; candidate: RTCIceCandidateInit };
+
+/** 服务端信令 WS 消息（与 server/src/voice/hub.ts 的广播结构一一对应；未知类型在 switch 中静默忽略） */
+export type VoiceServerMessage =
+  | {
+      type: 'joined';
+      self?: { userId: number; username?: string; avatar?: string | null };
+      participants: VoiceParticipant[];
+    }
+  | { type: 'peer-joined'; participant: VoiceParticipant }
+  | { type: 'peer-left'; userId: number }
+  | { type: 'mute-changed'; userId: number; muted: boolean }
+  | { type: 'peer-quality'; userId: number; level: VoiceQualityLevel }
+  | { type: 'signal'; from: number; data: VoiceSignalPayload }
+  | { type: 'share-changed'; userId: number; active: boolean; audio: boolean }
+  | { type: 'share-force-stop' }
+  | { type: 'chat'; message: VoiceChatMessage }
+  | { type: 'chat-cleared' }
+  | { type: 'room-closed'; reason?: string }
+  | { type: 'error'; message?: string };
+
 /** 屏幕共享质量档位（极清 = 1080p60；mesh 上行 = 观看数 × 码率，人多建议降档） */
 export type ShareQuality = '1080p60' | '1080p30' | '720p30';
 

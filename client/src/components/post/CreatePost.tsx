@@ -22,11 +22,12 @@ import { ImagePlus, Video, X } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { useQueryClient } from '@tanstack/react-query';
 import ConfirmDialog from '../ui/ConfirmDialog';
+import { getApiErrorMessage } from '../../api/http';
 import VideoCoverEditor from './VideoCoverEditor';
 import PostDescriptionPanel from './PostDescriptionPanel';
 import { useAuth } from '../../context/AuthContext';
 import { useVoiceInRoom } from '../../context/VoiceContext';
-import { useEvent } from '../../context/CreateContext';
+import { useEvent } from '../../context/EventContext';
 import { events } from '../../state/events';
 import { updatePostsFeed } from '../../hooks/usePostsFeed';
 import { showToast } from '../ui/Toast';
@@ -344,12 +345,10 @@ export default function CreatePost() {
         return;
       }
       setVideoError(false);
-      // 仅在视频可解码且非超大文件时自动截帧；超大文件跳过以防 OOM，依赖服务端兜底
+      // 仅在视频可解码且非超大文件时自动截帧；超大文件跳过以防 OOM（不留日志），依赖服务端兜底
       const isLarge = (videoFile?.size || 0) > 150 * 1024 * 1024;
       if (!isLarge) {
         extractFrame(0);
-      } else {
-        console.log('跳过自动截帧（超大文件），由服务端兜底');
       }
     } catch (e) {
       console.error('handleVideoLoaded 失败', e);
@@ -499,8 +498,8 @@ export default function CreatePost() {
       // 发布成功后回收大文件 Blob URL，释放内存
       handleRemoveVideo();
       handleClose();
-    } catch (err: any) {
-      const msg = err.response?.data?.error || err.message || '发布失败';
+    } catch (err) {
+      const msg = getApiErrorMessage(err, '发布失败');
       // 分片失败时提示已上传进度，便于重试
       if (uploadProgress > 0 && uploadProgress < 100) {
         showToast(`${msg}（已传 ${uploadProgress}%）`);

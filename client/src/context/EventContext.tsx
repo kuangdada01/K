@@ -12,7 +12,7 @@
  * - 在组件中调用 useEvent() 获取状态和方法
  */
 
-import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useMemo, ReactNode } from 'react';
 
 /** 编辑帖子时传入的数据结构 */
 export interface EditPostData {
@@ -53,22 +53,22 @@ export function EventProvider({ children }: { children: ReactNode }) {
   const openEdit = useCallback((post: EditPostData) => setEditPost(post), []);
   const closeEdit = useCallback(() => setEditPost(null), []);
 
-  return (
-    <EventContext.Provider
-      value={{
-        showCreate,
-        openCreate,
-        closeCreate,
-        editPost,
-        openEdit,
-        closeEdit,
-        onEditSave,
-        setOnEditSave,
-      }}
-    >
-      {children}
-    </EventContext.Provider>
+  // value 记忆化：避免每次渲染都生成新对象导致全体消费者无效重渲染
+  const value = useMemo(
+    () => ({
+      showCreate,
+      openCreate,
+      closeCreate,
+      editPost,
+      openEdit,
+      closeEdit,
+      onEditSave,
+      setOnEditSave,
+    }),
+    [showCreate, openCreate, closeCreate, editPost, openEdit, closeEdit, onEditSave, setOnEditSave]
   );
+
+  return <EventContext.Provider value={value}>{children}</EventContext.Provider>;
 }
 
 /**

@@ -5,7 +5,7 @@
  * 集中定义端点与参数类型，替代散落各处的字符串 URL 拼接。
  */
 
-import api from './http';
+import api, { ApiError } from './http';
 import { Capacitor } from '@capacitor/core';
 import { getApiBaseUrl } from '../config';
 import type { Post, Comment, PaginatedResponse } from '../types';
@@ -31,21 +31,23 @@ async function nativeFetchUpload<T>(
   let res: Response;
   try {
     res = await fetch(url, { method, headers, body: formData });
-  } catch (e: any) {
+  } catch (e) {
     // 网络层直接崩溃（如 OOM 前的 Failed to fetch）转为可读错误
-    const err: any = new Error(e?.message || '网络异常，可能是文件过大导致内存不足');
-    err.response = { data: { error: '上传失败：文件过大或内存不足，请尝试压缩后重传' } };
-    throw err;
+    throw new ApiError(e instanceof Error ? e.message : '网络异常，可能是文件过大导致内存不足', {
+      data: { error: '上传失败：文件过大或内存不足，请尝试压缩后重传' },
+    });
   }
   if (!res.ok) {
-    const err: any = new Error(`HTTP ${res.status}`);
     try {
       const data = await res.json();
-      err.response = { data, status: res.status };
-    } catch {
-      err.response = { data: { error: `上传失败（${res.status}）` }, status: res.status };
+      throw new ApiError(`HTTP ${res.status}`, { data, status: res.status });
+    } catch (parseErr) {
+      if (parseErr instanceof ApiError) throw parseErr;
+      throw new ApiError(`HTTP ${res.status}`, {
+        data: { error: `上传失败（${res.status}）` },
+        status: res.status,
+      });
     }
-    throw err;
   }
   return (await res.json()) as T;
 }
@@ -58,8 +60,8 @@ export interface PostListResponse {
 }
 
 /** 信息流列表 */
-export function listPosts(page = 1, limit = 20): Promise<PostListResponse> {
-  return api.get(`/posts`, { params: { page, limit } }).then((r) => r.data);
+export function listPosts(page = 1, limit = 20, opts?: { timeout?: number }): Promise<PostListResponse> {
+  return api.get(`/posts`, { params: { page, limit }, timeout: opts?.timeout }).then((r) => r.data);
 }
 
 /** 搜索帖子（q=关键词模糊匹配；tag=话题精确匹配，优先于 q） */
@@ -136,7 +138,7 @@ export async function createVideoPostChunked(
       fd.append('totalChunks', String(totalChunks));
       fd.append('chunk', chunk, `chunk-${i}`);
       // 单片失败重试 2 次，避免弱网直接闪退式失败
-      let lastErr: any = null;
+      let lastErr: unknown = null;
       for (let retry = 0; retry < 3; retry++) {
         try {
           await nativeFetchUpload('/posts/video-chunk', fd, 'POST');

@@ -29,6 +29,7 @@ import TaggedText from '../TaggedText';
 const LazyProfileOverlay = lazy(() => import('../profile/ProfileOverlay'));
 import ConfirmDialog from '../ui/ConfirmDialog';
 import api from '../../api/http';
+import { isAxiosError } from 'axios';
 import { Post, Comment } from '../../types';
 import { computeInitialCollapsedIds, buildVisibleComments } from '../../lib/comments';
 import { useAuth } from '../../context/AuthContext';
@@ -39,7 +40,7 @@ import { useFollowUser } from '../../hooks/useFollowUser';
 import { useLikePost } from '../../hooks/useLikePost';
 import { useRepostPost } from '../../hooks/useRepostPost';
 import { useBookmarkPost } from '../../hooks/useBookmarkPost';
-import { useEvent } from '../../context/CreateContext';
+import { useEvent } from '../../context/EventContext';
 import { events } from '../../state/events';
 import { showToast } from '../ui/Toast';
 import { resolveMediaUrl } from '../../utils';
@@ -269,8 +270,8 @@ export default function PostDetail({
       setNewComment('');
       setReplyingTo(null);
       setTimeout(() => commentsEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
-    } catch (err: any) {
-      if (err.response?.status === 403) {
+    } catch (err) {
+      if (isAxiosError(err) && err.response?.status === 403) {
         showToast('此帖子已关闭评论');
       }
     } finally {

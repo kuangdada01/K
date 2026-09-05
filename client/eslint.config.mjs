@@ -28,7 +28,9 @@ export default tseslint.config(
       'react-hooks/set-state-in-effect': 'warn',
       'react-hooks/immutability': 'warn',
       'react-hooks/refs': 'warn',
-      '@typescript-eslint/no-explicit-any': 'off',
+      // 显式 any 全部清偿（catch 用 getApiErrorMessage、WS 消息用 VoiceServerMessage 判别联合、
+      // Android 桥用 Window 接口扩展），重新开启为 error 防止回潮
+      '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
     },
   }

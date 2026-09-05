@@ -18,8 +18,9 @@ import { extractTags } from '@k/shared';
 import { useImageGridDrag } from '../../hooks/useImageGridDrag';
 import EmojiPicker from '../EmojiPicker';
 import ConfirmDialog from '../ui/ConfirmDialog';
+import { getApiErrorMessage } from '../../api/http';
 import { useAuth } from '../../context/AuthContext';
-import { useEvent, type EditPostData } from '../../context/CreateContext';
+import { useEvent, type EditPostData } from '../../context/EventContext';
 import { events } from '../../state/events';
 import { showToast } from '../ui/Toast';
 import { updatePost } from '../../api/posts';
@@ -175,9 +176,8 @@ export default function EditPost() {
       events.emit('post:updated', editPost.id);
       doClose();
       onEditSave?.();
-    } catch (err: any) {
-      const msg = err.response?.data?.error || '保存失败';
-      showToast(msg);
+    } catch (err) {
+      showToast(getApiErrorMessage(err, '保存失败'));
     } finally {
       setSubmitting(false);
     }

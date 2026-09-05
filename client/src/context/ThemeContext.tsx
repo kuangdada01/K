@@ -20,6 +20,16 @@ import { StatusBar, Style } from '@capacitor/status-bar';
 
 type ThemeMode = 'light' | 'dark' | 'system';
 
+/** Android 原生注入的桥（Capacitor 插件不可用时的兜底通道） */
+declare global {
+  interface Window {
+    AndroidBridge?: {
+      setWindowBackgroundColor?: (color: string) => void;
+      setAppThemeMode?: (mode: ThemeMode) => void;
+    };
+  }
+}
+
 interface ThemeContextValue {
   /** 用户选择的主题模式 */
   mode: ThemeMode;
@@ -66,14 +76,12 @@ function updateDataTheme(theme: 'light' | 'dark') {
  * 关键：system 模式传 Style.Default，让 Capacitor 插件自主跟随系统变化
  */
 function applyStatusBar(mode: ThemeMode) {
-  const isNative = Capacitor.isNativePlatform() || !!(window as any).AndroidBridge;
+  const isNative = Capacitor.isNativePlatform() || !!window.AndroidBridge;
   if (!isNative) return;
 
   let capacitorStyle = Style.Default;
   if (mode === 'light') capacitorStyle = Style.Light;
   else if (mode === 'dark') capacitorStyle = Style.Dark;
-
-  console.log(`[Theme] applyStatusBar: mode=${mode} capacitorStyle=${capacitorStyle}`);
 
   StatusBar.setStyle({ style: capacitorStyle }).catch((e) => {
     console.warn('[Theme] Capacitor StatusBar.setStyle failed:', e);
@@ -89,7 +97,7 @@ function applyStatusBar(mode: ThemeMode) {
   });
 
   try {
-    const bridge = (window as any).AndroidBridge;
+    const bridge = window.AndroidBridge;
     // Android 16 强制 edge-to-edge：上面的 setBackgroundColor 会被系统忽略，
     // 状态栏条透出的是 DecorView 背景色，必须显式设置才能跟随应用内主题
     // （应用内深色是 CSS 级切换，系统 uiMode 不变，values-night 不会激活）

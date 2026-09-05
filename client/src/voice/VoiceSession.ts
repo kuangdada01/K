@@ -37,6 +37,8 @@ import {
   type VoiceSelfInfo,
   type VoiceSessionCallbacks,
   type VoiceStatus,
+  type VoiceServerMessage,
+  type VoiceSignalPayload,
 } from './types';
 
 // 共享类型与预设收敛在 ./types；这里 re-export 保持既有 import 路径不变
@@ -406,9 +408,9 @@ export class VoiceSession {
     };
 
     this.ws.onmessage = (e) => {
-      let msg: any;
+      let msg: VoiceServerMessage;
       try {
-        msg = JSON.parse(String(e.data));
+        msg = JSON.parse(String(e.data)) as VoiceServerMessage;
       } catch {
         return;
       }
@@ -460,7 +462,7 @@ export class VoiceSession {
     return true;
   }
 
-  private handleServerMessage(msg: any): void {
+  private handleServerMessage(msg: VoiceServerMessage): void {
     switch (msg.type) {
       case 'joined': {
         // 访客身份回传：未登录进房时 userId 由服务端分配（负数），用其校正占位身份。
@@ -766,7 +768,7 @@ export class VoiceSession {
     }
   }
 
-  private async handleSignal(from: number, data: any): Promise<void> {
+  private async handleSignal(from: number, data: VoiceSignalPayload): Promise<void> {
     const entry = this.peers.get(from);
     if (!entry) return;
 

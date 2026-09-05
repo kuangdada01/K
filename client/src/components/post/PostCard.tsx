@@ -18,7 +18,7 @@ import { useState, useEffect, useRef, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MessageCircle, Share2, Repeat2 } from 'lucide-react';
 import RepostCheck from '../icons/RepostCheck';
-import api from '../../api/http';
+import { followStatus } from '../../api/friends';
 import { Post } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useVoiceInRoom } from '../../context/VoiceContext';
@@ -195,11 +195,10 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   useEffect(() => {
     if (!user || post.user_id === user.id) return;
     if (getFollowStatus(post.user_id) !== undefined) return; // 渲染期已同步
-    api
-      .get(`/friends/status/${post.user_id}`)
-      .then((res) => {
-        setIsFollowing(res.data.is_following);
-        setFollowStatus(post.user_id, res.data.is_following);
+    followStatus(post.user_id)
+      .then(({ is_following }) => {
+        setIsFollowing(is_following);
+        setFollowStatus(post.user_id, is_following);
       })
       .catch(() => {});
   }, [post.user_id, user, getFollowStatus, setFollowStatus]);

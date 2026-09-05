@@ -19,7 +19,7 @@ import { queryClient } from './state/queryClient';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { VoiceProvider, useVoiceInRoom } from './context/VoiceContext';
 import { ThemeProvider } from './context/ThemeContext';
-import { EventProvider, useEvent } from './context/CreateContext';
+import { EventProvider, useEvent } from './context/EventContext';
 import { MusicProvider } from './context/MusicContext';
 import MusicPlayer from './components/MusicPlayer';
 import Sidebar from './components/Sidebar';

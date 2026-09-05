@@ -11,7 +11,7 @@
  * ============================================================
  */
 
-import axios from 'axios';
+import axios, { isAxiosError } from 'axios';
 import { getApiBaseUrl } from '../config';
 import { showToast } from '../components/ui/Toast';
 import { queryClient } from '../state/queryClient';
@@ -62,5 +62,28 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+/**
+ * 原生 fetch 上传路径抛出的错误：与 Axios 错误结构兼容（response.data.error），
+ * 让调用方能用统一的 getApiErrorMessage 提取文案
+ */
+export class ApiError extends Error {
+  response: { data: { error?: string }; status?: number };
+
+  constructor(message: string, response: { data: { error?: string }; status?: number }) {
+    super(message);
+    this.response = response;
+  }
+}
+
+/** 从任意抛出值提取可展示的错误文案（Axios/ApiError 优先取服务端 error 字段） */
+export function getApiErrorMessage(err: unknown, fallback: string): string {
+  if (isAxiosError(err)) {
+    const data = err.response?.data as { error?: string } | undefined;
+    return data?.error || fallback;
+  }
+  if (err instanceof ApiError) return err.response.data.error || fallback;
+  return err instanceof Error ? err.message : fallback;
+}
 
 export default api;

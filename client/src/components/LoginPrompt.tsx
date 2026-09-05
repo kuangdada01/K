@@ -18,6 +18,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { Send, Loader2, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import api from '../api/http';
+import { getApiErrorMessage } from '../api/http';
 import styles from './LoginPrompt.module.css';
 
 interface LoginPromptProps {
@@ -110,8 +111,8 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
           return prev - 1;
         });
       }, 1000);
-    } catch (err: any) {
-      setError(err.response?.data?.error || '验证码发送失败');
+    } catch (err) {
+      setError(getApiErrorMessage(err, '验证码发送失败'));
     } finally {
       setSending(false);
     }
@@ -125,8 +126,8 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
     try {
       await login(email, password);
       handleClose();
-    } catch (err: any) {
-      setError(err.response?.data?.error || '登录失败');
+    } catch (err) {
+      setError(getApiErrorMessage(err, '登录失败'));
     } finally {
       setLoading(false);
     }
@@ -151,8 +152,8 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
     try {
       await register(username, email, password, code);
       handleClose();
-    } catch (err: any) {
-      setError(err.response?.data?.error || '注册失败');
+    } catch (err) {
+      setError(getApiErrorMessage(err, '注册失败'));
     } finally {
       setLoading(false);
     }
@@ -178,8 +179,8 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
       await api.post('/auth/reset-password', { email, code, password });
       setSuccess('密码重置成功，请使用新密码登录');
       switchMode('login');
-    } catch (err: any) {
-      setError(err.response?.data?.error || '密码重置失败');
+    } catch (err) {
+      setError(getApiErrorMessage(err, '密码重置失败'));
     } finally {
       setLoading(false);
     }

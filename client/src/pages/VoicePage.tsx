@@ -31,6 +31,7 @@ import { useAuth } from '../context/AuthContext';
 import { useVoice, useVoiceRealtime } from '../context/VoiceContext';
 import { listVoiceRooms, createVoiceRoom, deleteVoiceRoom, clearVoiceRoomMessages } from '../api/voice';
 import { showToast } from '../components/ui/Toast';
+import { getApiErrorMessage } from '../api/http';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
 import Avatar from '../components/ui/Avatar';
 import VoiceShareStage from '../components/VoiceShareStage';
@@ -277,8 +278,8 @@ export default function VoicePage() {
       setNewDesc('');
       refreshRooms();
       showToast(`房间「${res.room.name}」已创建`);
-    } catch (e: any) {
-      showToast(e?.response?.data?.error || '创建失败');
+    } catch (e) {
+      showToast(getApiErrorMessage(e, '创建失败'));
     }
   };
 
@@ -287,8 +288,8 @@ export default function VoicePage() {
     try {
       await deleteVoiceRoom(deletingRoom.id);
       showToast('房间已删除');
-    } catch (e: any) {
-      showToast(e?.response?.data?.error || '删除失败');
+    } catch (e) {
+      showToast(getApiErrorMessage(e, '删除失败'));
     }
     setDeletingRoom(null);
     refreshRooms();
@@ -313,8 +314,8 @@ export default function VoicePage() {
     try {
       await clearVoiceRoomMessages(voice.activeRoomId);
       showToast('聊天记录已清空');
-    } catch (e: any) {
-      showToast(e?.response?.data?.error || '清空失败');
+    } catch (e) {
+      showToast(getApiErrorMessage(e, '清空失败'));
     }
   };
 

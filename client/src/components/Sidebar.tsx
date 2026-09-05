@@ -28,7 +28,7 @@ import {
   AudioLines,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { useEvent } from '../context/CreateContext';
+import { useEvent } from '../context/EventContext';
 import { useVoiceInRoom } from '../context/VoiceContext';
 import { events } from '../state/events';
 import { useSse } from '../hooks/useSse';
@@ -59,7 +59,7 @@ export default function Sidebar() {
       ]);
       const notifCount = notifRes.data.unread_count || 0;
       const msgCount = (convRes.data.conversations || []).reduce(
-        (sum: number, c: any) => sum + (c.unread_count || 0),
+        (sum: number, c: { unread_count?: number }) => sum + (c.unread_count || 0),
         0
       );
       const serverTotal = notifCount + msgCount;
