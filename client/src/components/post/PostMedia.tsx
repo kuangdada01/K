@@ -78,11 +78,11 @@ export default function PostMedia({
     if (!track) return;
     const target = width * index;
     if (Math.abs(setOffset === setMainOffset ? mainOffsetRef.current : zoomOffsetRef.current - target) < 1) return;
-    track.style.transition = 'transform 260ms cubic-bezier(0.22, 1, 0.36, 1)';
+    track.style.transition = 'transform 400ms cubic-bezier(0.22, 1, 0.36, 1)';
     setOffset(target);
     const t = setTimeout(() => {
       if (track) track.style.transition = 'none';
-    }, 320);
+    }, 460);
     transTimersRef.current.push(t);
   };
 

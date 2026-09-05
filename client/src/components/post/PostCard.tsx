@@ -248,12 +248,12 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
     const target = width * index;
     if (Math.abs(offsetRef.current - target) < 1) return;
     if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
-    track.style.transition = 'transform 260ms cubic-bezier(0.22, 1, 0.36, 1)';
+    track.style.transition = 'transform 400ms cubic-bezier(0.22, 1, 0.36, 1)';
     track.style.transform = `translate3d(${-target}px, 0, 0)`;
     offsetRef.current = target;
     transitionTimerRef.current = setTimeout(() => {
       if (trackRef.current) trackRef.current.style.transition = 'none';
-    }, 320);
+    }, 460);
   };
 
   // index 变化 → 轨道动画到对应位置（自动轮播/重置/外部切换统一走这里）
