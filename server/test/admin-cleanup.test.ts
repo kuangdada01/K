@@ -77,14 +77,16 @@ describe('管理员删帖的文件清理', () => {
     const img2 = makeFile(PATHS.uploads, `ac-${uniq}-2.jpg`);
     const video = makeFile(PATHS.uploads, `ac-${uniq}.mp4`);
     const cover = makeFile(PATHS.uploads, `ac-${uniq}-cover.jpg`);
-    const postId = Number(db.prepare(
-      'INSERT INTO posts (user_id, image_url, video_url, video_cover) VALUES (?, ?, ?, ?)'
-    ).run(
-      userId,
-      JSON.stringify([`/uploads/${path.basename(img1)}`, `/uploads/${path.basename(img2)}`]),
-      `/uploads/${path.basename(video)}`,
-      `/uploads/${path.basename(cover)}`
-    ).lastInsertRowid);
+    const postId = Number(
+      db
+        .prepare('INSERT INTO posts (user_id, image_url, video_url, video_cover) VALUES (?, ?, ?, ?)')
+        .run(
+          userId,
+          JSON.stringify([`/uploads/${path.basename(img1)}`, `/uploads/${path.basename(img2)}`]),
+          `/uploads/${path.basename(video)}`,
+          `/uploads/${path.basename(cover)}`
+        ).lastInsertRowid
+    );
 
     const { status } = await api('DELETE', `/api/admin/posts/${postId}`, adminToken);
     expect(status).toBe(200);
@@ -107,16 +109,30 @@ describe('管理员删号的文件清理', () => {
     const privateImg = makeFile(PATHS.uploadsPrivate, `ac-${uniq}-private.jpg`);
     const msgImg = makeFile(PATHS.uploadsPrivate, `ac-${uniq}-msg.jpg`);
 
-    db.prepare('UPDATE users SET avatar = ? WHERE id = ?')
-      .run(`/uploads/avatars/${path.basename(avatar)}`, userId);
-    db.prepare('INSERT INTO posts (user_id, image_url, video_url) VALUES (?, ?, ?)')
-      .run(userId, JSON.stringify([`/uploads/${path.basename(postImg)}`]), `/uploads/${path.basename(postVideo)}`);
-    db.prepare('INSERT INTO private_images (user_id, image_url) VALUES (?, ?)')
-      .run(userId, path.basename(privateImg));
-    db.prepare('INSERT INTO messages (sender_id, receiver_id, content, image_url) VALUES (?, ?, ?, ?)')
-      .run(userId, adminId, 'hi', path.basename(msgImg));
-    db.prepare('INSERT INTO verification_codes (email, code, expires) VALUES (?, ?, ?)')
-      .run('victim@test.com', '123456', new Date(Date.now() + 3600_000).toISOString());
+    db.prepare('UPDATE users SET avatar = ? WHERE id = ?').run(
+      `/uploads/avatars/${path.basename(avatar)}`,
+      userId
+    );
+    db.prepare('INSERT INTO posts (user_id, image_url, video_url) VALUES (?, ?, ?)').run(
+      userId,
+      JSON.stringify([`/uploads/${path.basename(postImg)}`]),
+      `/uploads/${path.basename(postVideo)}`
+    );
+    db.prepare('INSERT INTO private_images (user_id, image_url) VALUES (?, ?)').run(
+      userId,
+      path.basename(privateImg)
+    );
+    db.prepare('INSERT INTO messages (sender_id, receiver_id, content, image_url) VALUES (?, ?, ?, ?)').run(
+      userId,
+      adminId,
+      'hi',
+      path.basename(msgImg)
+    );
+    db.prepare('INSERT INTO verification_codes (email, code, expires) VALUES (?, ?, ?)').run(
+      'victim@test.com',
+      '123456',
+      new Date(Date.now() + 3600_000).toISOString()
+    );
 
     const { status } = await api('DELETE', `/api/admin/users/${userId}`, adminToken);
     expect(status).toBe(200);
@@ -125,6 +141,8 @@ describe('管理员删号的文件清理', () => {
       expect(fs.existsSync(p)).toBe(false);
     }
     expect(db.prepare('SELECT COUNT(*) as c FROM users WHERE id = ?').get(userId)).toEqual({ c: 0 });
-    expect(db.prepare('SELECT COUNT(*) as c FROM verification_codes WHERE email = ?').get('victim@test.com')).toEqual({ c: 0 });
+    expect(
+      db.prepare('SELECT COUNT(*) as c FROM verification_codes WHERE email = ?').get('victim@test.com')
+    ).toEqual({ c: 0 });
   });
 });

@@ -24,8 +24,9 @@ export default function AnnouncementPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get('/announcements')
-      .then(res => setAnnouncements(res.data.announcements))
+    api
+      .get('/announcements')
+      .then((res) => setAnnouncements(res.data.announcements))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
@@ -33,7 +34,7 @@ export default function AnnouncementPage() {
   const markRead = async (id: number) => {
     try {
       await api.put(`/announcements/${id}/read`);
-      setAnnouncements(prev => prev.map(a => a.id === id ? { ...a, is_read: 1 } : a));
+      setAnnouncements((prev) => prev.map((a) => (a.id === id ? { ...a, is_read: 1 } : a)));
       events.emit('badge:changed', { source: 'ann' });
     } catch {}
   };
@@ -55,7 +56,7 @@ export default function AnnouncementPage() {
         </div>
       ) : (
         <div className={styles.list}>
-          {announcements.map(a => (
+          {announcements.map((a) => (
             <div
               key={a.id}
               className={`${styles.card} ${a.is_read ? '' : styles.unread}`}

@@ -111,20 +111,24 @@ function isRoomOwner(req: Request, room: VoiceRoomRow): boolean {
  * 在线人数来自 WS 内存态；有人的房间排前，同级按创建时间倒序。
  * isCreator 逐查看者计算（登录用户比 creator_id，访客比 creator_ip），服务端不泄露 creator_ip。
  */
-router.get('/rooms', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
-  const viewerIp = req.user ? undefined : getClientIp(req);
-  const occupancy = voiceHub.getOccupancy();
-  const rooms = voiceRepo.listRooms().map((row) => {
-    const room = voiceRepo.toVoiceRoom(row);
-    room.participantCount = occupancy.get(row.id) ?? 0;
-    room.isCreator = req.user
-      ? row.creator_id === req.user.id
-      : row.creator_ip !== null && row.creator_ip === viewerIp;
-    return room;
-  });
-  rooms.sort((a, b) => (b.participantCount! - a.participantCount!) || (b.created_at > a.created_at ? 1 : -1));
-  res.json({ rooms });
-}));
+router.get(
+  '/rooms',
+  optionalAuth,
+  asyncHandler(async (req: Request, res: Response) => {
+    const viewerIp = req.user ? undefined : getClientIp(req);
+    const occupancy = voiceHub.getOccupancy();
+    const rooms = voiceRepo.listRooms().map((row) => {
+      const room = voiceRepo.toVoiceRoom(row);
+      room.participantCount = occupancy.get(row.id) ?? 0;
+      room.isCreator = req.user
+        ? row.creator_id === req.user.id
+        : row.creator_ip !== null && row.creator_ip === viewerIp;
+      return room;
+    });
+    rooms.sort((a, b) => b.participantCount! - a.participantCount! || (b.created_at > a.created_at ? 1 : -1));
+    res.json({ rooms });
+  })
+);
 
 /**
  * POST /api/voice/rooms - 创建房间
@@ -132,25 +136,30 @@ router.get('/rooms', optionalAuth, asyncHandler(async (req: Request, res: Respon
  * 认证: voiceAuth（登录用户或未登录访客均可创建）
  * 创建者快照: 登录用户取 users 表实时值；访客取占位名并以 IP 作为所有权锚点。
  */
-router.post('/rooms', voiceAuth, validateBody(createVoiceRoomSchema), asyncHandler(async (req: Request, res: Response) => {
-  const { name, description } = req.body;
-  const user = req.user!;
-  let row: VoiceRoomRow;
-  if (user.id > 0) {
-    const safe = getSafeUser(user.id);
-    row = voiceRepo.createRoom(user.id, name, description ?? '', {
-      creatorName: safe?.username ?? user.username,
-      creatorAvatar: safe?.avatar ?? null,
-    });
-  } else {
-    row = voiceRepo.createRoom(user.id, name, description ?? '', {
-      creatorName: user.username,
-      creatorAvatar: null,
-      creatorIp: (req as VoiceAuthRequest).voiceGuestIp,
-    });
-  }
-  res.status(201).json({ room: { ...voiceRepo.toVoiceRoom(row), participantCount: 0 } });
-}));
+router.post(
+  '/rooms',
+  voiceAuth,
+  validateBody(createVoiceRoomSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { name, description } = req.body;
+    const user = req.user!;
+    let row: VoiceRoomRow;
+    if (user.id > 0) {
+      const safe = getSafeUser(user.id);
+      row = voiceRepo.createRoom(user.id, name, description ?? '', {
+        creatorName: safe?.username ?? user.username,
+        creatorAvatar: safe?.avatar ?? null,
+      });
+    } else {
+      row = voiceRepo.createRoom(user.id, name, description ?? '', {
+        creatorName: user.username,
+        creatorAvatar: null,
+        creatorIp: (req as VoiceAuthRequest).voiceGuestIp,
+      });
+    }
+    res.status(201).json({ room: { ...voiceRepo.toVoiceRoom(row), participantCount: 0 } });
+  })
+);
 
 /**
  * DELETE /api/voice/rooms/:id - 删除房间
@@ -158,16 +167,20 @@ router.post('/rooms', voiceAuth, validateBody(createVoiceRoomSchema), asyncHandl
  * 认证: voiceAuth（创建者或管理员；访客以 IP 判定所有权）
  * 房间内在线成员会收到 room-closed 并被断开；聊天记录随房间一起清除。
  */
-router.delete('/rooms/:id', voiceAuth, asyncHandler(async (req: Request, res: Response) => {
-  const id = Number(req.params.id);
-  if (!Number.isInteger(id)) throw new AppError(400, '参数错误');
-  const room = voiceRepo.getRoomById(id);
-  if (!room) throw new AppError(404, '房间不存在');
-  if (!isRoomOwner(req, room)) throw new AppError(403, '只有房间创建者或管理员可以删除房间');
-  voiceRepo.deleteRoom(id);
-  voiceHub.closeRoom(id, '房间已被删除');
-  res.json({ success: true });
-}));
+router.delete(
+  '/rooms/:id',
+  voiceAuth,
+  asyncHandler(async (req: Request, res: Response) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) throw new AppError(400, '参数错误');
+    const room = voiceRepo.getRoomById(id);
+    if (!room) throw new AppError(404, '房间不存在');
+    if (!isRoomOwner(req, room)) throw new AppError(403, '只有房间创建者或管理员可以删除房间');
+    voiceRepo.deleteRoom(id);
+    voiceHub.closeRoom(id, '房间已被删除');
+    res.json({ success: true });
+  })
+);
 
 /**
  * GET /api/voice/rooms/:id/messages - 聊天记录（持久化历史）
@@ -176,24 +189,27 @@ router.delete('/rooms/:id', voiceAuth, asyncHandler(async (req: Request, res: Re
  * 游标分页: before_id 向更早翻、after_id 向更新翻（加入房间后补拉增量），
  * limit 默认 50、上限 100。房间不存在返回 404。
  */
-router.get('/rooms/:id/messages', asyncHandler(async (req: Request, res: Response) => {
-  const roomId = Number(req.params.id);
-  if (!Number.isInteger(roomId)) throw new AppError(400, '参数错误');
-  const room = voiceRepo.getRoomById(roomId);
-  if (!room) throw new AppError(404, '房间不存在');
+router.get(
+  '/rooms/:id/messages',
+  asyncHandler(async (req: Request, res: Response) => {
+    const roomId = Number(req.params.id);
+    if (!Number.isInteger(roomId)) throw new AppError(400, '参数错误');
+    const room = voiceRepo.getRoomById(roomId);
+    if (!room) throw new AppError(404, '房间不存在');
 
-  const limitRaw = Number(req.query.limit ?? 50);
-  const limit = Number.isInteger(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 50;
-  const beforeId = parseCursor(req.query.before_id, 'before_id');
-  const afterId = parseCursor(req.query.after_id, 'after_id');
+    const limitRaw = Number(req.query.limit ?? 50);
+    const limit = Number.isInteger(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 50;
+    const beforeId = parseCursor(req.query.before_id, 'before_id');
+    const afterId = parseCursor(req.query.after_id, 'after_id');
 
-  const { messages, has_more } = voiceChatRepo.listRoomMessages(roomId, {
-    beforeId,
-    afterId,
-    limit,
-  });
-  res.json({ messages, has_more });
-}));
+    const { messages, has_more } = voiceChatRepo.listRoomMessages(roomId, {
+      beforeId,
+      afterId,
+      limit,
+    });
+    res.json({ messages, has_more });
+  })
+);
 
 /**
  * DELETE /api/voice/rooms/:id/messages - 清空聊天记录
@@ -201,16 +217,20 @@ router.get('/rooms/:id/messages', asyncHandler(async (req: Request, res: Respons
  * 认证: voiceAuth（权限同删除房间）
  * 在线成员即时收到 { type: 'chat-cleared' } 清空本地列表（离线成员下次进房自然看不到旧记录）。
  */
-router.delete('/rooms/:id/messages', voiceAuth, asyncHandler(async (req: Request, res: Response) => {
-  const roomId = Number(req.params.id);
-  if (!Number.isInteger(roomId)) throw new AppError(400, '参数错误');
-  const room = voiceRepo.getRoomById(roomId);
-  if (!room) throw new AppError(404, '房间不存在');
-  if (!isRoomOwner(req, room)) throw new AppError(403, '只有房间创建者或管理员可以清空聊天记录');
-  voiceChatRepo.deleteRoomMessages(roomId);
-  voiceHub.broadcast(roomId, { type: 'chat-cleared' });
-  res.json({ success: true });
-}));
+router.delete(
+  '/rooms/:id/messages',
+  voiceAuth,
+  asyncHandler(async (req: Request, res: Response) => {
+    const roomId = Number(req.params.id);
+    if (!Number.isInteger(roomId)) throw new AppError(400, '参数错误');
+    const room = voiceRepo.getRoomById(roomId);
+    if (!room) throw new AppError(404, '房间不存在');
+    if (!isRoomOwner(req, room)) throw new AppError(403, '只有房间创建者或管理员可以清空聊天记录');
+    voiceChatRepo.deleteRoomMessages(roomId);
+    voiceHub.broadcast(roomId, { type: 'chat-cleared' });
+    res.json({ success: true });
+  })
+);
 
 /**
  * GET /api/voice/ice - WebRTC ICE 服务器配置
@@ -218,19 +238,22 @@ router.delete('/rooms/:id/messages', voiceAuth, asyncHandler(async (req: Request
  * 认证: 可选（公开；仅 STUN/TURN 地址，无敏感信息）
  * 服务端配了 TURN 环境变量时追加中继配置。
  */
-router.get('/ice', asyncHandler(async (_req: Request, res: Response) => {
-  // 每次请求构建新数组返回（历史 bug：曾向模块级数组 push TURN 条目，
-  // 每请求一次叠加一条，客户端 ICE 候选收集被重复项拖慢）
-  const iceServers = [...ICE_BASE_SERVERS];
-  if (env.VOICE_TURN_URL) {
-    iceServers.push({
-      urls: env.VOICE_TURN_URL,
-      ...(env.VOICE_TURN_USERNAME ? { username: env.VOICE_TURN_USERNAME } : {}),
-      ...(env.VOICE_TURN_CREDENTIAL ? { credential: env.VOICE_TURN_CREDENTIAL } : {}),
-    });
-  }
-  res.json({ iceServers });
-}));
+router.get(
+  '/ice',
+  asyncHandler(async (_req: Request, res: Response) => {
+    // 每次请求构建新数组返回（历史 bug：曾向模块级数组 push TURN 条目，
+    // 每请求一次叠加一条，客户端 ICE 候选收集被重复项拖慢）
+    const iceServers = [...ICE_BASE_SERVERS];
+    if (env.VOICE_TURN_URL) {
+      iceServers.push({
+        urls: env.VOICE_TURN_URL,
+        ...(env.VOICE_TURN_USERNAME ? { username: env.VOICE_TURN_USERNAME } : {}),
+        ...(env.VOICE_TURN_CREDENTIAL ? { credential: env.VOICE_TURN_CREDENTIAL } : {}),
+      });
+    }
+    res.json({ iceServers });
+  })
+);
 
 /** 解析游标查询参数（正整数，非法值报 400；缺省返回 undefined） */
 function parseCursor(raw: unknown, name: string): number | undefined {

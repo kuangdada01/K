@@ -48,7 +48,10 @@ const videoUpload = createUploader({
       }
       return;
     }
-    if (VIDEO_EXTS.includes(ext) && (file.mimetype.startsWith('video/') || file.mimetype === 'application/octet-stream')) {
+    if (
+      VIDEO_EXTS.includes(ext) &&
+      (file.mimetype.startsWith('video/') || file.mimetype === 'application/octet-stream')
+    ) {
       cb(null, true);
     } else {
       cb(new Error('仅支持视频格式文件'));
@@ -67,7 +70,10 @@ const videoTempUpload = createUploader({
   maxSize: 300 * 1024 * 1024,
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (VIDEO_EXTS.includes(ext) && (file.mimetype.startsWith('video/') || file.mimetype === 'application/octet-stream')) {
+    if (
+      VIDEO_EXTS.includes(ext) &&
+      (file.mimetype.startsWith('video/') || file.mimetype === 'application/octet-stream')
+    ) {
       cb(null, true);
     } else {
       cb(new Error('仅支持视频格式文件'));
@@ -105,9 +111,13 @@ function normalizeVideoToMp4(dir: string, name: string): string {
       try {
         const st = fs.statSync(p);
         if (st.isFile() && st.mtimeMs < cutoff) fs.unlinkSync(p);
-      } catch { /* 忽略单个文件错误 */ }
+      } catch {
+        /* 忽略单个文件错误 */
+      }
     }
-  } catch { /* 忽略 */ }
+  } catch {
+    /* 忽略 */
+  }
 })();
 
 // 分片上传：原生 App 大文件（>50M）走此接口，避免单次 300M FormData 一次性进内存导致 WebView OOM 闪退
@@ -144,66 +154,76 @@ function pruneChunkUploads(): void {
   }
 }
 
-router.post('/video-chunk', authMiddleware, chunkUpload.single('chunk'), asyncHandler(async (req: Request, res: Response) => {
-  pruneChunkUploads();
-  const uploadId = typeof req.body.uploadId === 'string' ? req.body.uploadId.trim() : '';
-  const chunkIndex = parseInt(req.body.chunkIndex as string, 10);
-  const totalChunks = parseInt(req.body.totalChunks as string, 10);
-  const chunkFile = (req as any).file as Express.Multer.File | undefined;
-  if (!TEMP_VIDEO_NAME_RE.test(uploadId)) {
-    throw new AppError(400, '无效的上传ID');
-  }
-  if (!Number.isInteger(chunkIndex) || !Number.isInteger(totalChunks) || chunkIndex < 0 || chunkIndex >= totalChunks) {
-    throw new AppError(400, '无效的分片参数');
-  }
-  if (totalChunks > MAX_TOTAL_CHUNKS) {
-    throw new AppError(400, '视频超过大小限制');
-  }
-  if (!chunkFile || !chunkFile.buffer || chunkFile.buffer.length === 0) {
-    throw new AppError(400, '分片数据缺失');
-  }
-  const userId = req.user!.id;
-  const owner = chunkUploadOwners.get(uploadId);
-  if (chunkIndex === 0) {
-    // 首片 = 新建/重传：他人占用中的会话不可抢占
-    if (owner && owner.userId !== userId) {
-      throw new AppError(403, '该上传已被其他用户占用');
+router.post(
+  '/video-chunk',
+  authMiddleware,
+  chunkUpload.single('chunk'),
+  asyncHandler(async (req: Request, res: Response) => {
+    pruneChunkUploads();
+    const uploadId = typeof req.body.uploadId === 'string' ? req.body.uploadId.trim() : '';
+    const chunkIndex = parseInt(req.body.chunkIndex as string, 10);
+    const totalChunks = parseInt(req.body.totalChunks as string, 10);
+    const chunkFile = (req as any).file as Express.Multer.File | undefined;
+    if (!TEMP_VIDEO_NAME_RE.test(uploadId)) {
+      throw new AppError(400, '无效的上传ID');
     }
-    const userUploads = [...chunkUploadOwners.values()].filter((e) => e.userId === userId).length;
-    if (!owner && userUploads >= MAX_CONCURRENT_CHUNK_UPLOADS) {
-      throw new AppError(400, '同时进行的上传任务过多，请稍后再试');
+    if (
+      !Number.isInteger(chunkIndex) ||
+      !Number.isInteger(totalChunks) ||
+      chunkIndex < 0 ||
+      chunkIndex >= totalChunks
+    ) {
+      throw new AppError(400, '无效的分片参数');
     }
-    chunkUploadOwners.set(uploadId, { userId, createdAt: Date.now() });
-  } else {
-    // 续片：必须存在会话且属主本人
-    if (!owner) {
-      throw new AppError(400, '上传会话已失效，请重新上传');
-    }
-    if (owner.userId !== userId) {
-      throw new AppError(403, '无权继续该上传');
-    }
-  }
-  const tempPath = path.join(PATHS.uploadsTemp, uploadId);
-  // 首片清理旧残留（大小检查前执行，否则重传会被旧残留体积误拒）
-  try {
-    // 目录缺失则创建（memoryStorage 不像 diskStorage 那样自动建目录）
-    fs.mkdirSync(PATHS.uploadsTemp, { recursive: true });
-    if (chunkIndex === 0 && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-    // 累计超出总量上限：拒绝并删除半成品（防改小单片大小绕过 totalChunks 上限）
-    const existing = fs.existsSync(tempPath) ? fs.statSync(tempPath).size : 0;
-    if (existing + chunkFile.buffer.length > MAX_VIDEO_BYTES) {
-      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+    if (totalChunks > MAX_TOTAL_CHUNKS) {
       throw new AppError(400, '视频超过大小限制');
     }
-    // 续片追加（不存在则创建）
-    fs.appendFileSync(tempPath, chunkFile.buffer);
-    const stat = fs.statSync(tempPath);
-    res.json({ ok: true, received: chunkIndex + 1, totalChunks, size: stat.size });
-  } catch (err) {
-    if (err instanceof AppError) throw err;
-    throw new AppError(500, '分片写入失败');
-  }
-}));
+    if (!chunkFile || !chunkFile.buffer || chunkFile.buffer.length === 0) {
+      throw new AppError(400, '分片数据缺失');
+    }
+    const userId = req.user!.id;
+    const owner = chunkUploadOwners.get(uploadId);
+    if (chunkIndex === 0) {
+      // 首片 = 新建/重传：他人占用中的会话不可抢占
+      if (owner && owner.userId !== userId) {
+        throw new AppError(403, '该上传已被其他用户占用');
+      }
+      const userUploads = [...chunkUploadOwners.values()].filter((e) => e.userId === userId).length;
+      if (!owner && userUploads >= MAX_CONCURRENT_CHUNK_UPLOADS) {
+        throw new AppError(400, '同时进行的上传任务过多，请稍后再试');
+      }
+      chunkUploadOwners.set(uploadId, { userId, createdAt: Date.now() });
+    } else {
+      // 续片：必须存在会话且属主本人
+      if (!owner) {
+        throw new AppError(400, '上传会话已失效，请重新上传');
+      }
+      if (owner.userId !== userId) {
+        throw new AppError(403, '无权继续该上传');
+      }
+    }
+    const tempPath = path.join(PATHS.uploadsTemp, uploadId);
+    // 首片清理旧残留（大小检查前执行，否则重传会被旧残留体积误拒）
+    try {
+      // 目录缺失则创建（memoryStorage 不像 diskStorage 那样自动建目录）
+      fs.mkdirSync(PATHS.uploadsTemp, { recursive: true });
+      if (chunkIndex === 0 && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+      // 累计超出总量上限：拒绝并删除半成品（防改小单片大小绕过 totalChunks 上限）
+      const existing = fs.existsSync(tempPath) ? fs.statSync(tempPath).size : 0;
+      if (existing + chunkFile.buffer.length > MAX_VIDEO_BYTES) {
+        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
+        throw new AppError(400, '视频超过大小限制');
+      }
+      // 续片追加（不存在则创建）
+      fs.appendFileSync(tempPath, chunkFile.buffer);
+      const stat = fs.statSync(tempPath);
+      res.json({ ok: true, received: chunkIndex + 1, totalChunks, size: stat.size });
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new AppError(500, '分片写入失败');
+    }
+  })
+);
 
 /**
  * POST /api/posts/video-temp - 上传视频到临时目录（发布前预览）
@@ -216,43 +236,52 @@ router.post('/video-chunk', authMiddleware, chunkUpload.single('chunk'), asyncHa
  *
  * 成功响应 (201): { url: '/uploads/temp/xxx.mp4' }
  */
-router.post('/video-temp', authMiddleware, videoTempUpload.single('video'), asyncHandler(async (req: Request, res: Response) => {
-  const videoFile = req.file;
-  if (!videoFile) {
-    throw new AppError(400, '请选择视频');
-  }
+router.post(
+  '/video-temp',
+  authMiddleware,
+  videoTempUpload.single('video'),
+  asyncHandler(async (req: Request, res: Response) => {
+    const videoFile = req.file;
+    if (!videoFile) {
+      throw new AppError(400, '请选择视频');
+    }
 
-  // 拒绝过小/被截断的视频文件（如云端文件只上传了文件头）
-  if (videoFile.size < 1024) {
-    safeDeleteFile(`/uploads/temp/${videoFile.filename}`, 'uploads');
-    throw new AppError(400, '视频文件无效或不完整，请重新选择后再发布');
-  }
+    // 拒绝过小/被截断的视频文件（如云端文件只上传了文件头）
+    if (videoFile.size < 1024) {
+      safeDeleteFile(`/uploads/temp/${videoFile.filename}`, 'uploads');
+      throw new AppError(400, '视频文件无效或不完整，请重新选择后再发布');
+    }
 
-  // 统一改存 .mp4 扩展名，后台串行转码为浏览器通用格式（H.264 mp4）。
-  // 不阻塞本次响应：转码完成后同 URL 原地替换内容，预览即可播放；
-  // 转码前 HEVC 等格式在部分浏览器可能暂时无法播放。
-  const name = normalizeVideoToMp4(PATHS.uploadsTemp, videoFile.filename);
-  enqueueVideoTranscode(path.join(PATHS.uploadsTemp, name), name);
+    // 统一改存 .mp4 扩展名，后台串行转码为浏览器通用格式（H.264 mp4）。
+    // 不阻塞本次响应：转码完成后同 URL 原地替换内容，预览即可播放；
+    // 转码前 HEVC 等格式在部分浏览器可能暂时无法播放。
+    const name = normalizeVideoToMp4(PATHS.uploadsTemp, videoFile.filename);
+    enqueueVideoTranscode(path.join(PATHS.uploadsTemp, name), name);
 
-  res.status(201).json({ url: `/uploads/temp/${name}` });
-}));
+    res.status(201).json({ url: `/uploads/temp/${name}` });
+  })
+);
 
 /**
  * DELETE /api/posts/video-temp - 删除临时视频（放弃发布时清理）
  *
  * 请求体: { url: '/uploads/temp/xxx.mp4' }
  */
-router.delete('/video-temp', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const url = typeof req.body?.url === 'string' ? req.body.url : '';
-  const name = path.basename(url);
-  if (!TEMP_VIDEO_NAME_RE.test(name)) {
-    throw new AppError(400, '无效的视频引用');
-  }
-  safeDeleteFile(`/uploads/temp/${name}`, 'uploads');
-  // 放弃上传：同步释放分片上传会话（文件删除后惰性回收也会兜底）
-  chunkUploadOwners.delete(name);
-  res.json({ ok: true });
-}));
+router.delete(
+  '/video-temp',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const url = typeof req.body?.url === 'string' ? req.body.url : '';
+    const name = path.basename(url);
+    if (!TEMP_VIDEO_NAME_RE.test(name)) {
+      throw new AppError(400, '无效的视频引用');
+    }
+    safeDeleteFile(`/uploads/temp/${name}`, 'uploads');
+    // 放弃上传：同步释放分片上传会话（文件删除后惰性回收也会兜底）
+    chunkUploadOwners.delete(name);
+    res.json({ ok: true });
+  })
+);
 
 /**
  * POST /api/posts/video - 创建视频帖子
@@ -273,86 +302,93 @@ const videoFields = videoUpload.fields([
   { name: 'video', maxCount: 1 },
   { name: 'cover', maxCount: 1 },
 ]);
-router.post('/video', authMiddleware, videoFields, asyncHandler(async (req: Request, res: Response) => {
-  const files = req.files as { [fieldname: string]: Express.Multer.File[] };
-  const uploadedVideo = files?.video?.[0];
-  const coverFile = files?.cover?.[0];
-  const videoUrlField = typeof req.body.video_url === 'string' ? req.body.video_url.trim() : '';
+router.post(
+  '/video',
+  authMiddleware,
+  videoFields,
+  asyncHandler(async (req: Request, res: Response) => {
+    const files = req.files as { [fieldname: string]: Express.Multer.File[] };
+    const uploadedVideo = files?.video?.[0];
+    const coverFile = files?.cover?.[0];
+    const videoUrlField = typeof req.body.video_url === 'string' ? req.body.video_url.trim() : '';
 
-  let videoUrl: string;
+    let videoUrl: string;
 
-  if (videoUrlField) {
-    // 使用选择视频时已上传的临时文件，移动到正式目录
-    const name = path.basename(videoUrlField);
-    if (!TEMP_VIDEO_NAME_RE.test(name)) {
-      throw new AppError(400, '无效的视频引用');
+    if (videoUrlField) {
+      // 使用选择视频时已上传的临时文件，移动到正式目录
+      const name = path.basename(videoUrlField);
+      if (!TEMP_VIDEO_NAME_RE.test(name)) {
+        throw new AppError(400, '无效的视频引用');
+      }
+      const tempPath = path.join(PATHS.uploadsTemp, name);
+      const finalPath = path.join(PATHS.uploads, name);
+      if (!fs.existsSync(tempPath)) {
+        throw new AppError(400, '视频已失效，请重新选择视频');
+      }
+      fs.renameSync(tempPath, finalPath);
+      // 分片上传会话随文件消费而结束
+      chunkUploadOwners.delete(name);
+      // 兼容旧客户端残留的非 .mp4 临时文件名：统一规范化并入队转码
+      const normalizedName = normalizeVideoToMp4(PATHS.uploads, name);
+      enqueueVideoTranscode(path.join(PATHS.uploads, normalizedName), normalizedName);
+      videoUrl = `/uploads/${normalizedName}`;
+    } else {
+      if (!uploadedVideo) {
+        throw new AppError(400, '请选择视频');
+      }
+
+      // 二次验证视频文件类型（防御性检查，fileFilter 已拦截大部分非法文件）
+      const videoExt = path.extname(uploadedVideo.originalname).toLowerCase();
+      if (!uploadedVideo.mimetype.startsWith('video/') && !VIDEO_EXTS.includes(videoExt)) {
+        // 删除已上传的文件
+        safeDeleteFile(`/uploads/${uploadedVideo.filename}`, 'uploads');
+        throw new AppError(400, '仅支持视频格式文件');
+      }
+
+      // 拒绝过小/被截断的视频文件（如云端文件只上传了文件头）
+      if (uploadedVideo.size < 1024) {
+        safeDeleteFile(`/uploads/${uploadedVideo.filename}`, 'uploads');
+        if (coverFile) safeDeleteFile(`/uploads/${coverFile.filename}`, 'uploads');
+        throw new AppError(400, '视频文件无效或不完整，请重新选择后再发布');
+      }
+
+      // 统一改存 .mp4 扩展名，后台串行转码（发布立即成功，转码完成后原地替换）
+      const normalizedName = normalizeVideoToMp4(PATHS.uploads, uploadedVideo.filename);
+      enqueueVideoTranscode(path.join(PATHS.uploads, normalizedName), normalizedName);
+      videoUrl = `/uploads/${normalizedName}`;
     }
-    const tempPath = path.join(PATHS.uploadsTemp, name);
-    const finalPath = path.join(PATHS.uploads, name);
-    if (!fs.existsSync(tempPath)) {
-      throw new AppError(400, '视频已失效，请重新选择视频');
-    }
-    fs.renameSync(tempPath, finalPath);
-    // 分片上传会话随文件消费而结束
-    chunkUploadOwners.delete(name);
-    // 兼容旧客户端残留的非 .mp4 临时文件名：统一规范化并入队转码
-    const normalizedName = normalizeVideoToMp4(PATHS.uploads, name);
-    enqueueVideoTranscode(path.join(PATHS.uploads, normalizedName), normalizedName);
-    videoUrl = `/uploads/${normalizedName}`;
-  } else {
-    if (!uploadedVideo) {
-      throw new AppError(400, '请选择视频');
-    }
 
-    // 二次验证视频文件类型（防御性检查，fileFilter 已拦截大部分非法文件）
-    const videoExt = path.extname(uploadedVideo.originalname).toLowerCase();
-    if (!uploadedVideo.mimetype.startsWith('video/') && !VIDEO_EXTS.includes(videoExt)) {
-      // 删除已上传的文件
-      safeDeleteFile(`/uploads/${uploadedVideo.filename}`, 'uploads');
-      throw new AppError(400, '仅支持视频格式文件');
+    // 封面：优先用客户端截取的封面图；缺失时服务端自动从视频截帧兜底
+    // （客户端 canvas 截帧可能失败：浏览器解不了 HEVC、同值 seek 不触发 seeked 等）
+    let videoCover: string | null = null;
+    if (coverFile) {
+      const coverPath = await compressImage(path.join(PATHS.uploads, coverFile.filename), {
+        maxWidth: POST_IMAGE_MAX,
+      });
+      videoCover = `/uploads/${path.basename(coverPath)}`;
+    } else {
+      const videoAbs = path.join(PATHS.uploads, path.basename(videoUrl));
+      const coverAbs = videoAbs.replace(/\.[^.]+$/, '.jpg');
+      const generated = await generateVideoCover(videoAbs, coverAbs);
+      if (generated) videoCover = `/uploads/${path.basename(generated)}`;
     }
 
-    // 拒绝过小/被截断的视频文件（如云端文件只上传了文件头）
-    if (uploadedVideo.size < 1024) {
-      safeDeleteFile(`/uploads/${uploadedVideo.filename}`, 'uploads');
-      if (coverFile) safeDeleteFile(`/uploads/${coverFile.filename}`, 'uploads');
-      throw new AppError(400, '视频文件无效或不完整，请重新选择后再发布');
-    }
+    const description = req.body.description || '';
+    const closeComments = req.body.close_comments === '1' ? 1 : 0;
+    const pinned = req.body.pinned === '1' ? 1 : 0;
 
-    // 统一改存 .mp4 扩展名，后台串行转码（发布立即成功，转码完成后原地替换）
-    const normalizedName = normalizeVideoToMp4(PATHS.uploads, uploadedVideo.filename);
-    enqueueVideoTranscode(path.join(PATHS.uploads, normalizedName), normalizedName);
-    videoUrl = `/uploads/${normalizedName}`;
-  }
+    const post = postRepo.createVideoPost({
+      userId: req.user!.id,
+      videoUrl,
+      videoCover,
+      description,
+      closeComments,
+      pinned,
+    });
+    postRepo.syncPostTags(post.id, extractTags(description));
 
-  // 封面：优先用客户端截取的封面图；缺失时服务端自动从视频截帧兜底
-  // （客户端 canvas 截帧可能失败：浏览器解不了 HEVC、同值 seek 不触发 seeked 等）
-  let videoCover: string | null = null;
-  if (coverFile) {
-    const coverPath = await compressImage(path.join(PATHS.uploads, coverFile.filename), { maxWidth: POST_IMAGE_MAX });
-    videoCover = `/uploads/${path.basename(coverPath)}`;
-  } else {
-    const videoAbs = path.join(PATHS.uploads, path.basename(videoUrl));
-    const coverAbs = videoAbs.replace(/\.[^.]+$/, '.jpg');
-    const generated = await generateVideoCover(videoAbs, coverAbs);
-    if (generated) videoCover = `/uploads/${path.basename(generated)}`;
-  }
-
-  const description = req.body.description || '';
-  const closeComments = req.body.close_comments === '1' ? 1 : 0;
-  const pinned = req.body.pinned === '1' ? 1 : 0;
-
-  const post = postRepo.createVideoPost({
-    userId: req.user!.id,
-    videoUrl,
-    videoCover,
-    description,
-    closeComments,
-    pinned,
-  });
-  postRepo.syncPostTags(post.id, extractTags(description));
-
-  res.status(201).json(withImages(post));
-}));
+    res.status(201).json(withImages(post));
+  })
+);
 
 export default router;

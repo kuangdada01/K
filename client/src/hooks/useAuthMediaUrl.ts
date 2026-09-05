@@ -29,8 +29,9 @@ export function useAuthMediaUrl(url: string | null | undefined): string | null {
     // 去掉 /api 前缀交给 axios（baseURL 已含 /api），以 blob 拉取后生成 objectURL
     let cancelled = false;
     let created: string | null = null;
-    api.get(url!.replace(/^\/api/, ''), { responseType: 'blob' })
-      .then(res => {
+    api
+      .get(url!.replace(/^\/api/, ''), { responseType: 'blob' })
+      .then((res) => {
         if (cancelled) return;
         created = URL.createObjectURL(res.data);
         setObjectUrl(created);

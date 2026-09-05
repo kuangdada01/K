@@ -60,5 +60,3 @@ test('未登录互动弹出登录窗口', async ({ page }) => {
   await likeBtn.click();
   await expect(page.locator('input[placeholder="邮箱"]').first()).toBeVisible();
 });
-
-

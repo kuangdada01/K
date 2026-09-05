@@ -48,7 +48,9 @@
   border: 1px solid var(--border-color);
   border-radius: 12px;
   cursor: pointer;
-  transition: transform 0.15s, box-shadow 0.15s;
+  transition:
+    transform 0.15s,
+    box-shadow 0.15s;
 }
 
 .card:hover {

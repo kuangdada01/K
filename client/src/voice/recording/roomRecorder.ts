@@ -75,8 +75,12 @@ export class RoomRecorder {
       }
       this.pcmWorkletPromise = ctx.audioWorklet
         .addModule(RecorderWorkletUrl)
-        .then(() => { this.pcmWorkletModuleOk = true; })
-        .catch(() => { /* 加载失败：录音回退 ScriptProcessor */ });
+        .then(() => {
+          this.pcmWorkletModuleOk = true;
+        })
+        .catch(() => {
+          /* 加载失败：录音回退 ScriptProcessor */
+        });
     }
     return this.pcmWorkletPromise;
   }
@@ -178,7 +182,7 @@ export class RoomRecorder {
         chunks.length > 0 ? new Blob(chunks, { type: mime }) : null,
         mime,
         roomName,
-        startedAt,
+        startedAt
       );
     };
     if (rec) {
@@ -230,7 +234,9 @@ export class RoomRecorder {
       try {
         this.pcmSource = ctx.createMediaStreamSource(this.recDest.stream);
         const node = new AudioWorkletNode(ctx, RECORDER_WORKLET_NAME, {
-          numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2],
+          numberOfInputs: 1,
+          numberOfOutputs: 1,
+          outputChannelCount: [2],
         });
         node.port.onmessage = (e) => {
           // teardown 后仍在途的迟到消息不再入列
@@ -301,20 +307,40 @@ export class RoomRecorder {
       const node = this.pcmWorklet;
       this.pcmWorklet = null;
       node.port.onmessage = null;
-      try { node.disconnect(); } catch { /* 已断开 */ }
-      try { node.port.close(); } catch { /* 已关闭 */ }
+      try {
+        node.disconnect();
+      } catch {
+        /* 已断开 */
+      }
+      try {
+        node.port.close();
+      } catch {
+        /* 已关闭 */
+      }
     }
     if (this.pcmProcessor) {
       this.pcmProcessor.onaudioprocess = null;
-      try { this.pcmProcessor.disconnect(); } catch { /* 已断开 */ }
+      try {
+        this.pcmProcessor.disconnect();
+      } catch {
+        /* 已断开 */
+      }
       this.pcmProcessor = null;
     }
     if (this.pcmSource) {
-      try { this.pcmSource.disconnect(); } catch { /* 已断开 */ }
+      try {
+        this.pcmSource.disconnect();
+      } catch {
+        /* 已断开 */
+      }
       this.pcmSource = null;
     }
     if (this.pcmSilenceGain) {
-      try { this.pcmSilenceGain.disconnect(); } catch { /* 已断开 */ }
+      try {
+        this.pcmSilenceGain.disconnect();
+      } catch {
+        /* 已断开 */
+      }
       this.pcmSilenceGain = null;
     }
     this.pcmCh0Slices = [];
@@ -325,19 +351,39 @@ export class RoomRecorder {
   /** 断开并释放混音相关节点（对已断开节点操作会抛错，逐个兜底） */
   private dispose(): void {
     if (this.recLocalGain) {
-      try { this.localGain?.disconnect(this.recLocalGain); } catch { /* 已断开 */ }
-      try { this.recLocalGain.disconnect(); } catch { /* 已断开 */ }
+      try {
+        this.localGain?.disconnect(this.recLocalGain);
+      } catch {
+        /* 已断开 */
+      }
+      try {
+        this.recLocalGain.disconnect();
+      } catch {
+        /* 已断开 */
+      }
       this.recLocalGain = null;
     }
     if (this.recBus) {
       for (const gain of this.attachedGains) {
-        try { gain.disconnect(this.recBus); } catch { /* 已断开 */ }
+        try {
+          gain.disconnect(this.recBus);
+        } catch {
+          /* 已断开 */
+        }
       }
-      try { this.recBus.disconnect(); } catch { /* 已断开 */ }
+      try {
+        this.recBus.disconnect();
+      } catch {
+        /* 已断开 */
+      }
       this.recBus = null;
     }
     if (this.recLimiter) {
-      try { this.recLimiter.disconnect(); } catch { /* 已断开 */ }
+      try {
+        this.recLimiter.disconnect();
+      } catch {
+        /* 已断开 */
+      }
       this.recLimiter = null;
     }
     this.recDest = null;

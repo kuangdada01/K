@@ -10,7 +10,7 @@
   -webkit-backdrop-filter: blur(18px) saturate(180%);
 }
 
-[data-theme="dark"] .card {
+[data-theme='dark'] .card {
   background: var(--bg-frosted);
   border-color: rgba(38, 43, 53, 0.95);
 }
@@ -34,10 +34,12 @@
   gap: 10px;
   padding: 10px 0;
   border-top: 1px solid rgba(210, 221, 210, 0.76);
-  transition: opacity 0.4s ease, transform 0.4s ease;
+  transition:
+    opacity 0.4s ease,
+    transform 0.4s ease;
 }
 
-[data-theme="dark"] .item {
+[data-theme='dark'] .item {
   border-top-color: rgba(38, 43, 53, 0.72);
 }
 
@@ -76,14 +78,16 @@
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
-  transition: background 0.15s, opacity 0.15s;
+  transition:
+    background 0.15s,
+    opacity 0.15s;
 }
 
 .followBtn:hover {
   opacity: 0.85;
 }
 
-[data-theme="dark"] .followBtn {
+[data-theme='dark'] .followBtn {
   border: 1px solid rgba(201, 169, 98, 0.22);
 }
 

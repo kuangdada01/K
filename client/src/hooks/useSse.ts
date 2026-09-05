@@ -18,7 +18,9 @@ export type SseEventHandler = (type: string, data: Record<string, unknown>) => v
 export function useSse(userId: number | null | undefined, onEvent: SseEventHandler): void {
   const handlerRef = useRef(onEvent);
   // ref 同步放在 effect 中，避免渲染期访问 ref（react-hooks/refs）
-  useEffect(() => { handlerRef.current = onEvent; }, [onEvent]);
+  useEffect(() => {
+    handlerRef.current = onEvent;
+  }, [onEvent]);
 
   useEffect(() => {
     if (!userId) return;

@@ -1,4 +1,13 @@
-import { createContext, useContext, useRef, useState, useEffect, ReactNode, useCallback, useMemo } from 'react';
+import {
+  createContext,
+  useContext,
+  useRef,
+  useState,
+  useEffect,
+  ReactNode,
+  useCallback,
+  useMemo,
+} from 'react';
 import { getApiBaseUrl, resolveMediaUrl } from '../config';
 import { events } from '../state/events';
 
@@ -57,12 +66,14 @@ export function MusicProvider({ children }: { children: ReactNode }) {
   // 用 ref 保存最新回调，避免 audio 事件监听器捕获首渲染的陈旧闭包
   // （ref 写入放在 effect 中，渲染期写 ref 会被 react-hooks/refs 拦截）
   const songsRef = useRef(songs);
-  useEffect(() => { songsRef.current = songs; }, [songs]);
+  useEffect(() => {
+    songsRef.current = songs;
+  }, [songs]);
   const nextRef = useRef<() => void>(() => {});
   useEffect(() => {
     nextRef.current = () => {
       const len = songsRef.current.length;
-      setCurrentIndex(prev => (len > 0 ? (prev + 1) % len : 0));
+      setCurrentIndex((prev) => (len > 0 ? (prev + 1) % len : 0));
       setIsPlaying(true);
     };
   });
@@ -76,7 +87,9 @@ export function MusicProvider({ children }: { children: ReactNode }) {
   // P6：暂停/恢复音乐改走事件总线（PostDetail 开视频时发 music:pause / 关闭时 music:resume），
   // 不再让 PostDetail 整包消费 MusicContext。isPlaying 用 ref 读取避免触发重渲染。
   const isPlayingRef = useRef(isPlaying);
-  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+  useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
   // 仅当暂停确实由 music:pause 事件触发时，music:resume 才恢复播放
   // （用户手动暂停后打开/关闭视频不应误恢复音乐）
   const pausedByEventRef = useRef(false);
@@ -164,13 +177,13 @@ export function MusicProvider({ children }: { children: ReactNode }) {
 
   const next = useCallback(() => {
     const len = songs.length;
-    setCurrentIndex(prev => (len > 0 ? (prev + 1) % len : 0));
+    setCurrentIndex((prev) => (len > 0 ? (prev + 1) % len : 0));
     setIsPlaying(true);
   }, [songs.length]);
 
   const prev = useCallback(() => {
     const len = songs.length;
-    setCurrentIndex(prev => (len > 0 ? (prev - 1 + len) % len : 0));
+    setCurrentIndex((prev) => (len > 0 ? (prev - 1 + len) % len : 0));
     setIsPlaying(true);
   }, [songs.length]);
 
@@ -187,32 +200,44 @@ export function MusicProvider({ children }: { children: ReactNode }) {
 
   const getAudioElement = useCallback(() => audioRef.current, []);
 
-  const value = useMemo<MusicContextType>(() => ({
-    currentSong,
-    isPlaying,
-    currentIndex,
-    duration,
-    songs,
-    loading,
-    play,
-    pause,
-    togglePlay,
-    next,
-    prev,
-    seek,
-    playSong,
-    refreshSongs: fetchSongs,
-    getAudioElement,
-  }), [
-    currentSong, isPlaying, currentIndex, duration, songs, loading,
-    play, pause, togglePlay, next, prev, seek, playSong, fetchSongs, getAudioElement,
-  ]);
-
-  return (
-    <MusicContext.Provider value={value}>
-      {children}
-    </MusicContext.Provider>
+  const value = useMemo<MusicContextType>(
+    () => ({
+      currentSong,
+      isPlaying,
+      currentIndex,
+      duration,
+      songs,
+      loading,
+      play,
+      pause,
+      togglePlay,
+      next,
+      prev,
+      seek,
+      playSong,
+      refreshSongs: fetchSongs,
+      getAudioElement,
+    }),
+    [
+      currentSong,
+      isPlaying,
+      currentIndex,
+      duration,
+      songs,
+      loading,
+      play,
+      pause,
+      togglePlay,
+      next,
+      prev,
+      seek,
+      playSong,
+      fetchSongs,
+      getAudioElement,
+    ]
   );
+
+  return <MusicContext.Provider value={value}>{children}</MusicContext.Provider>;
 }
 
 export function useMusic() {

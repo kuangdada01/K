@@ -46,7 +46,9 @@ export default function ChatComposer({
         <div className={styles.quotePreview}>
           <div className={styles.quoteContent}>
             <span className={styles.quoteUser}>{quoteMsg.sender_username}</span>
-            <span className={styles.quoteText}>{quoteMsg.image_url ? '[图片]' : quoteMsg.content || '[消息]'}</span>
+            <span className={styles.quoteText}>
+              {quoteMsg.image_url ? '[图片]' : quoteMsg.content || '[消息]'}
+            </span>
           </div>
           <button className={styles.quoteClose} onClick={() => setQuoteMsg(null)} aria-label="取消引用">
             <X size={16} />
@@ -57,7 +59,7 @@ export default function ChatComposer({
       <div className={styles.inputWrapper}>
         <div className={styles.inputContainer}>
           <EmojiPicker
-            onSelect={(emoji) => setText(prev => prev + emoji)}
+            onSelect={(emoji) => setText((prev) => prev + emoji)}
             onOpen={() => {}}
             onClose={() => {}}
           />
@@ -82,8 +84,10 @@ export default function ChatComposer({
             className={styles.input}
             placeholder="发送消息..."
             value={text}
-            onChange={e => setText(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submit();
+            }}
           />
         </div>
         <button

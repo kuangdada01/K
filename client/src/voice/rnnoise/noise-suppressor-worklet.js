@@ -26,18 +26,18 @@ import { leastCommonMultiple } from './math';
 const PROCESSOR_NAME = 'k-voice-denoiser';
 
 // ---- VAD 门控自适应能量恢复参数（Node 实测调优） ----
-const VAD_ATTACK = 0.3;      // 语音概率上升平滑系数（帧级 10ms）
-const VAD_RELEASE = 0.05;    // 语音概率下降平滑系数
-const VAD_LO = 0.55;         // smoothstep 下限（低于=视为噪声）
-const VAD_HI = 0.9;          // smoothstep 上限（高于=确定为语音）
-const GAIN_MAX = 1.36;       // 最大补偿增益（= 1/0.736，对应 RNNoise 语音衰减量）
-const GAIN_ATTACK = 0.6;     // 增益上升平滑（快 attack，避免开头几帧人声仍被压）
-const GAIN_RELEASE = 0.08;   // 增益下降平滑（慢 release，避免增益骤降产生咔哒）
+const VAD_ATTACK = 0.3; // 语音概率上升平滑系数（帧级 10ms）
+const VAD_RELEASE = 0.05; // 语音概率下降平滑系数
+const VAD_LO = 0.55; // smoothstep 下限（低于=视为噪声）
+const VAD_HI = 0.9; // smoothstep 上限（高于=确定为语音）
+const GAIN_MAX = 1.36; // 最大补偿增益（= 1/0.736，对应 RNNoise 语音衰减量）
+const GAIN_ATTACK = 0.6; // 增益上升平滑（快 attack，避免开头几帧人声仍被压）
+const GAIN_RELEASE = 0.08; // 增益下降平滑（慢 release，避免增益骤降产生咔哒）
 // 噪声底门控：仅当"RNNoise 明显压制了非语音帧能量（降噪后 < 50%）且噪声可闻"时启用补偿
 const NF_RATIO_THRESHOLD = 0.5;
-const NF_RMS_MIN = 0.003;    // 环境噪声 RMS 下限（低于此视为安静房间）
-const NF_SMOOTH = 0.1;       // 噪声底估计平滑
-const EN_SMOOTH = 0.03;      // 启用状态平滑（防开关抖动）
+const NF_RMS_MIN = 0.003; // 环境噪声 RMS 下限（低于此视为安静房间）
+const NF_SMOOTH = 0.1; // 噪声底估计平滑
+const EN_SMOOTH = 0.03; // 启用状态平滑（防开关抖动）
 
 /** smoothstep（频段/增益过渡用） */
 function smoothstep(x, lo, hi) {
@@ -60,11 +60,11 @@ class KNoiseSuppressorWorklet extends AudioWorkletProcessor {
     this._denoisedBufferIndx = 0;
 
     // ---- 能量恢复状态 ----
-    this._vadSm = 0;      // 平滑语音概率
-    this._gainSm = 1;     // 平滑补偿增益
+    this._vadSm = 0; // 平滑语音概率
+    this._gainSm = 1; // 平滑补偿增益
     this._noiseFloor = 1; // 非语音帧上 降噪输出/原始输入 能量比（1=未压制）
-    this._rawNoiseRms = 0;// 非语音帧原始 RMS（环境噪声量级）
-    this._enableSm = 0;   // 补偿启用状态（0..1 平滑）
+    this._rawNoiseRms = 0; // 非语音帧原始 RMS（环境噪声量级）
+    this._enableSm = 0; // 补偿启用状态（0..1 平滑）
   }
 
   process(inputs, outputs) {
@@ -110,8 +110,7 @@ class KNoiseSuppressorWorklet extends AudioWorkletProcessor {
       }
 
       // 补偿启用判定：噪声底被明显压制 + 环境噪声可闻
-      const shouldEnable =
-        this._noiseFloor < NF_RATIO_THRESHOLD && this._rawNoiseRms > NF_RMS_MIN;
+      const shouldEnable = this._noiseFloor < NF_RATIO_THRESHOLD && this._rawNoiseRms > NF_RMS_MIN;
       this._enableSm += ((shouldEnable ? 1 : 0) - this._enableSm) * EN_SMOOTH;
 
       // 语音门（VAD 平滑 → 0..1）
@@ -145,13 +144,7 @@ class KNoiseSuppressorWorklet extends AudioWorkletProcessor {
       // 欠载（unsent < outData.length，主线程/调度抖动时发生）时写已有部分，
       // 其余保持静音（output 每个量子初始为 0），避免整帧跳过产生不连续咔哒
       const n = Math.min(unsent, outData.length);
-      outData.set(
-        this._circularBuffer.subarray(
-          this._denoisedBufferIndx,
-          this._denoisedBufferIndx + n
-        ),
-        0
-      );
+      outData.set(this._circularBuffer.subarray(this._denoisedBufferIndx, this._denoisedBufferIndx + n), 0);
       this._denoisedBufferIndx += n;
     }
 

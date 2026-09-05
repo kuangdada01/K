@@ -45,15 +45,14 @@ export function listRooms(db: Database = getDb()): VoiceRoomRow[] {
   return db
     .prepare(
       `SELECT ${ROOM_COLUMNS} FROM voice_rooms
-       ORDER BY created_at DESC`,
+       ORDER BY created_at DESC`
     )
     .all() as VoiceRoomRow[];
 }
 
 export function getRoomById(roomId: number, db: Database = getDb()): VoiceRoomRow | undefined {
-  return db
-    .prepare(`SELECT ${ROOM_COLUMNS} FROM voice_rooms WHERE id = ?`)
-    .get(roomId) as VoiceRoomRow | undefined;
+  return db.prepare(`SELECT ${ROOM_COLUMNS} FROM voice_rooms WHERE id = ?`).get(roomId) as
+    VoiceRoomRow | undefined;
 }
 
 export interface CreateVoiceRoomOptions {
@@ -69,7 +68,7 @@ export function createRoom(
   name: string,
   description: string,
   opts: CreateVoiceRoomOptions = {},
-  db: Database = getDb(),
+  db: Database = getDb()
 ): VoiceRoomRow {
   // 访客负数 id 无法通过 creator_id 外键（生产库 foreign_keys=ON），
   // 落库统一归一为 0 占位；访客房间的所有权判定以 creator_ip 为唯一锚点
@@ -77,9 +76,16 @@ export function createRoom(
   const result = db
     .prepare(
       `INSERT INTO voice_rooms (name, description, creator_id, creator_name, creator_avatar, creator_ip)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?)`
     )
-    .run(name, description, storedCreatorId, opts.creatorName ?? '', opts.creatorAvatar ?? null, opts.creatorIp ?? null);
+    .run(
+      name,
+      description,
+      storedCreatorId,
+      opts.creatorName ?? '',
+      opts.creatorAvatar ?? null,
+      opts.creatorIp ?? null
+    );
   const room = getRoomById(Number(result.lastInsertRowid), db);
   if (!room) throw new Error('创建语音房间失败：写入后无法读取');
   return room;

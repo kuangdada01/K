@@ -26,11 +26,11 @@ router.get('/', (_req, res) => {
     const musicExtensions = ['.mp3', '.flac', '.wav', '.ogg', '.m4a', '.aac'];
 
     const songs = files
-      .filter(file => {
+      .filter((file) => {
         const ext = path.extname(file).toLowerCase();
         return musicExtensions.includes(ext);
       })
-      .map(file => {
+      .map((file) => {
         const name = path.basename(file, path.extname(file));
         // 尝试从文件名解析艺术家和标题 (格式: "艺术家 - 标题" 或直接用文件名作为标题)
         const parts = name.split(' - ');

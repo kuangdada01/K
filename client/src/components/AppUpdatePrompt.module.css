@@ -44,7 +44,9 @@
   color: var(--text-secondary);
   cursor: pointer;
   border-radius: 50%;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .close:hover {
@@ -101,7 +103,9 @@
   font-size: 15px;
   font-weight: 600;
   cursor: pointer;
-  transition: opacity 0.15s, transform 0.1s;
+  transition:
+    opacity 0.15s,
+    transform 0.1s;
 }
 
 .primary:hover {
@@ -121,7 +125,9 @@
   color: var(--text-secondary);
   font-size: 14px;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .secondary:hover {
@@ -130,21 +136,41 @@
 }
 
 @keyframes updateFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes updateFadeOut {
-  from { opacity: 1; }
-  to { opacity: 0; }
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 
 @keyframes updateScaleIn {
-  from { transform: scale(0.92); opacity: 0; }
-  to { transform: scale(1); opacity: 1; }
+  from {
+    transform: scale(0.92);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 @keyframes updateScaleOut {
-  from { transform: scale(1); opacity: 1; }
-  to { transform: scale(0.92); opacity: 0; }
+  from {
+    transform: scale(1);
+    opacity: 1;
+  }
+  to {
+    transform: scale(0.92);
+    opacity: 0;
+  }
 }

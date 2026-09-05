@@ -23,9 +23,7 @@ beforeAll(() => {
   createSchema(db);
   setDbForTests(db);
 
-  const insertUser = db.prepare(
-    "INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')"
-  );
+  const insertUser = db.prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')");
   insertUser.run('alice', 'alice@test.com');
   insertUser.run('bob', 'bob@test.com');
 });
@@ -49,8 +47,9 @@ function createPostWithTags(userId: number, description: string) {
 }
 
 function tagsOf(postId: number): string[] {
-  return (db.prepare('SELECT tag FROM post_tags WHERE post_id = ? ORDER BY id').all(postId) as { tag: string }[])
-    .map(r => r.tag);
+  return (
+    db.prepare('SELECT tag FROM post_tags WHERE post_id = ? ORDER BY id').all(postId) as { tag: string }[]
+  ).map((r) => r.tag);
 }
 
 describe('extractTags 解析规则', () => {

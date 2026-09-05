@@ -15,7 +15,9 @@ describe('config', () => {
   it('路径常量指向预期位置', () => {
     expect(SERVER_ROOT.endsWith('server')).toBe(true);
     expect(PATHS.uploads.endsWith('uploads')).toBe(true);
-    expect(PATHS.uploadsTemp.endsWith('uploads\\temp') || PATHS.uploadsTemp.endsWith('uploads/temp')).toBe(true);
+    expect(PATHS.uploadsTemp.endsWith('uploads\\temp') || PATHS.uploadsTemp.endsWith('uploads/temp')).toBe(
+      true
+    );
     expect(PATHS.avatars.endsWith('avatars')).toBe(true);
     expect(PATHS.books.endsWith('books')).toBe(true);
     expect(PATHS.db.endsWith('k.db')).toBe(true);

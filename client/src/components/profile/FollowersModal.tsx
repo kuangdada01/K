@@ -45,15 +45,17 @@ export default function FollowersModal({ type, userId, onClose }: FollowersModal
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const endpoint = type === 'followers'
-      ? `/friends/followers/${userId}`
-      : `/friends/following/${userId}`;
+    const endpoint = type === 'followers' ? `/friends/followers/${userId}` : `/friends/following/${userId}`;
 
-    api.get(endpoint).then(res => {
-      setUsers(res.data.users || []);
-    }).catch(() => {
-      showToast('加载失败');
-    }).finally(() => setLoading(false));
+    api
+      .get(endpoint)
+      .then((res) => {
+        setUsers(res.data.users || []);
+      })
+      .catch(() => {
+        showToast('加载失败');
+      })
+      .finally(() => setLoading(false));
   }, [type, userId]);
 
   // 关闭处理（定义在 effect 之前：effect 会引用它，且 useCallback 保证依赖稳定）
@@ -75,7 +77,7 @@ export default function FollowersModal({ type, userId, onClose }: FollowersModal
     try {
       await api.post(`/friends/${targetId}`);
       setFollowStatus(targetId, true);
-      setUsers(prev => prev.map(u => u.id === targetId ? { ...u, is_following: 1 } : u));
+      setUsers((prev) => prev.map((u) => (u.id === targetId ? { ...u, is_following: 1 } : u)));
       showToast('ヾ(≧▽≦*)o关注成功！');
     } catch {
       showToast('关注失败');
@@ -86,7 +88,7 @@ export default function FollowersModal({ type, userId, onClose }: FollowersModal
     try {
       await api.delete(`/friends/${targetId}`);
       setFollowStatus(targetId, false);
-      setUsers(prev => prev.map(u => u.id === targetId ? { ...u, is_following: 0 } : u));
+      setUsers((prev) => prev.map((u) => (u.id === targetId ? { ...u, is_following: 0 } : u)));
       showToast('o(TヘTo)取消关注成功！');
     } catch {
       showToast('取消关注失败');
@@ -101,14 +103,14 @@ export default function FollowersModal({ type, userId, onClose }: FollowersModal
   const title = type === 'followers' ? '粉丝' : '关注';
 
   const filteredUsers = searchKeyword.trim()
-    ? users.filter(u => u.username.toLowerCase().includes(searchKeyword.trim().toLowerCase()))
+    ? users.filter((u) => u.username.toLowerCase().includes(searchKeyword.trim().toLowerCase()))
     : users;
 
   return (
     <div className={`${styles.overlay} ${closing ? styles.closing : ''}`} onClick={handleClose}>
       <div
         className={`${styles.modal} ${closing ? styles.closing : ''}`}
-        onClick={e => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
       >
         <div className={styles.header}>
           <h3 className={styles.title}>{title}</h3>
@@ -124,7 +126,7 @@ export default function FollowersModal({ type, userId, onClose }: FollowersModal
             className={styles.searchInput}
             placeholder="搜索用户名"
             value={searchKeyword}
-            onChange={e => setSearchKeyword(e.target.value)}
+            onChange={(e) => setSearchKeyword(e.target.value)}
           />
         </div>
 
@@ -133,33 +135,33 @@ export default function FollowersModal({ type, userId, onClose }: FollowersModal
             <div className={styles.empty}>加载中...</div>
           ) : filteredUsers.length === 0 ? (
             <div className={styles.empty}>
-              {searchKeyword.trim() ? '未找到相关用户' : (type === 'followers' ? '暂无粉丝' : '暂无关注')}
+              {searchKeyword.trim() ? '未找到相关用户' : type === 'followers' ? '暂无粉丝' : '暂无关注'}
             </div>
           ) : (
-            filteredUsers.map(user => (
-              <div
-                key={user.id}
-                className={styles.item}
-                onClick={() => handleUserClick(user.id)}
-              >
+            filteredUsers.map((user) => (
+              <div key={user.id} className={styles.item} onClick={() => handleUserClick(user.id)}>
                 <Avatar src={user.avatar} username={user.username} size={40} />
                 <div className={styles.itemInfo}>
                   <div className={styles.itemName}>{user.username}</div>
-                  {user.bio && (
-                    <div className={styles.itemBio}>{user.bio}</div>
-                  )}
+                  {user.bio && <div className={styles.itemBio}>{user.bio}</div>}
                 </div>
                 {user.is_following ? (
                   <button
                     className={`${styles.btn} ${styles.following}`}
-                    onClick={e => { e.stopPropagation(); handleUnfollow(user.id); }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleUnfollow(user.id);
+                    }}
                   >
                     已关注
                   </button>
                 ) : (
                   <button
                     className={styles.btn}
-                    onClick={e => { e.stopPropagation(); handleFollow(user.id); }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleFollow(user.id);
+                    }}
                   >
                     关注
                   </button>

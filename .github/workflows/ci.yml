@@ -24,6 +24,9 @@ jobs:
       - name: 安装依赖（npm ci 一步完成，E3 修复：此前 npm install + install:all 根目录装两遍且可能改写 lockfile）
         run: npm ci && npm ci --prefix shared && npm ci --prefix server && npm ci --prefix client
 
+      - name: Prettier 格式检查
+        run: npm run format:check
+
       - name: 构建（shared → server → client）
         run: npm run build
 

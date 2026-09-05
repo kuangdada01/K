@@ -44,19 +44,31 @@ export default function CommentItem({
   onDelete,
 }: CommentItemProps) {
   return (
-    <div key={comment.id} id={`comment-${comment.id}`} className={`${styles.comment} ${isReply ? styles.replyItem : ''}`}>
-      <div className={styles.avatarLink} onClick={() => onProfileClick(comment.user_id)} style={{ cursor: 'pointer' }}>
+    <div
+      key={comment.id}
+      id={`comment-${comment.id}`}
+      className={`${styles.comment} ${isReply ? styles.replyItem : ''}`}
+    >
+      <div
+        className={styles.avatarLink}
+        onClick={() => onProfileClick(comment.user_id)}
+        style={{ cursor: 'pointer' }}
+      >
         {comment.avatar ? (
           <img src={resolveMediaUrl(comment.avatar) || ''} alt="" className={styles.avatar} />
         ) : (
-          <div className={styles.avatarPlaceholder}>
-            {comment.username.charAt(0).toUpperCase()}
-          </div>
+          <div className={styles.avatarPlaceholder}>{comment.username.charAt(0).toUpperCase()}</div>
         )}
       </div>
       <div ref={innerRef} style={{ flex: 1 }} className={activeHighlighted ? styles.highlight : ''}>
         <div className={styles.content}>
-          <span className={styles.usernameLink} onClick={() => onProfileClick(comment.user_id)} style={{ cursor: 'pointer' }}>{comment.username}</span>
+          <span
+            className={styles.usernameLink}
+            onClick={() => onProfileClick(comment.user_id)}
+            style={{ cursor: 'pointer' }}
+          >
+            {comment.username}
+          </span>
           {isReply && comment.parent_username && (
             <span className={styles.replyTag}>@{comment.parent_username}</span>
           )}
@@ -64,17 +76,11 @@ export default function CommentItem({
         </div>
         <div className={styles.actionsRow}>
           <span className={styles.time}>{formatAbsoluteTime(comment.created_at)}</span>
-          <button
-            className={styles.replyBtn}
-            onClick={() => onReply(comment)}
-          >
+          <button className={styles.replyBtn} onClick={() => onReply(comment)}>
             回复
           </button>
           {!isReply && hasReplies && (
-            <button
-              className={styles.collapseBtn}
-              onClick={() => onToggleReplies(comment.id)}
-            >
+            <button className={styles.collapseBtn} onClick={() => onToggleReplies(comment.id)}>
               {isCollapsed ? (
                 <>
                   <ChevronDown size={14} />
@@ -99,11 +105,7 @@ export default function CommentItem({
           {comment.like_count > 0 && <span>{comment.like_count}</span>}
         </button>
         {comment.user_id === currentUserId && (
-          <button
-            className={styles.deleteBtn}
-            onClick={() => onDelete(comment.id)}
-            title="删除评论"
-          >
+          <button className={styles.deleteBtn} onClick={() => onDelete(comment.id)} title="删除评论">
             <Trash2 size={13} />
           </button>
         )}

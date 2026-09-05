@@ -1,5 +1,5 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
 // 移除 HTML 中 script/link 标签的 crossorigin 属性
 // Capacitor Android WebView 中 crossorigin 会导致 ERR_CONNECTION_REFUSED
@@ -38,7 +38,13 @@ export default defineConfig({
           if (id.includes('@breezystack/lamejs')) return 'lamejs';
           // HEIC 解码 WASM（libheif-js，约 1.4MB），仅选到 HEIC 图时经动态 import 按需加载，须独立成块
           if (id.includes('libheif')) return 'heic-decoder';
-          if (id.includes('react-router') || id.includes('/react/') || id.includes('react-dom') || id.includes('scheduler')) return 'react';
+          if (
+            id.includes('react-router') ||
+            id.includes('/react/') ||
+            id.includes('react-dom') ||
+            id.includes('scheduler')
+          )
+            return 'react';
           if (id.includes('@tanstack')) return 'query';
           if (id.includes('axios')) return 'http';
           return 'vendor';
@@ -71,4 +77,4 @@ export default defineConfig({
       },
     },
   },
-})
+});

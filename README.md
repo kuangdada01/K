@@ -31,7 +31,7 @@
 - **SSE** — 实时推送（新私信/通知/公告），心跳保活
 - **pino** — 结构化日志
 - **nodemailer** — 邮箱验证码
-- **Vitest** — 单元测试（`server/test`，11 文件 70 用例）
+- **Vitest** — 单元测试（`server/test`，13 文件 82 用例）
 
 ### 共享（shared）
 
@@ -193,7 +193,7 @@ docker run -p 3000:3000 -v $(pwd)/server/uploads:/app/server/uploads k
 #### 轻量部署（仅前端变更时，推荐）
 
 - 只改了 `client/`（如 CSS/组件）时无需整包重发：`deploy-client-lite.py` 只上传 `client/dist` + `client/public`。
-- 用法：打包 `cd client && tar -czf /tmp/k-client-only.tar.gz dist public`，然后 `DEPLOY_PASSWORD=... python deploy-client-lite.py --package <tar.gz>`。
+- 用法：打包 `cd client && tar -czf /tmp/k-client-only.tar.gz dist public`，然后 `DEPLOY_PASSWORD=... python deploy-client-lite.py --server <IP> --package <tar.gz>`。
 - 远端自动将当前 `dist` 备份为 `dist.bak-时间戳`（保留最近 3 份）再解压覆盖，并校验首页/health 与产物落地。
 - 注意：Windows 下 Python 需用真实路径（不认 Git Bash 的 `/tmp` 虚拟路径）；脚本依赖 paramiko，建议用系统 Python 运行。
 
@@ -201,25 +201,25 @@ docker run -p 3000:3000 -v $(pwd)/server/uploads:/app/server/uploads k
 
 ## API 概览
 
-| 路径 | 说明 |
-|------|------|
-| `/api/auth` | 注册（邮箱验证码）、登录、忘记密码、当前用户 |
-| `/api/posts` | 帖子 CRUD、点赞/评论/收藏/转发/分享、视频与临时视频上传 |
-| `/api/users` | 用户资料、头像、私密图片 |
-| `/api/messages` | 私信会话列表、消息收发、清除/撤回 |
-| `/api/friends` | 关注/取关、粉丝列表、搜索、推荐、状态 |
-| `/api/notifications` | 评论/回复通知、已读 |
-| `/api/admin` | 管理后台（用户/帖子/公告管理） |
-| `/api/announcements` | 公告列表、定向推送、已读 |
-| `/api/books` | 电子书列表/详情/章节 |
-| `/api/music` | 音乐列表 |
-| `/api/events` | SSE 实时事件流（私信/通知/公告） |
-| `/api/voice` | 语音房间（创建/加入、WebSocket 信令 `/api/voice/ws`） |
-| `/api/health` | 健康检查 |
+| 路径                 | 说明                                                            |
+| -------------------- | --------------------------------------------------------------- |
+| `/api/auth`          | 注册（邮箱验证码）、登录、忘记密码、当前用户                    |
+| `/api/posts`         | 帖子 CRUD、点赞/评论/收藏/转发/分享、视频与临时视频上传         |
+| `/api/users`         | 用户资料、头像、私密图片                                        |
+| `/api/messages`      | 私信会话列表、消息收发、清除/撤回                               |
+| `/api/friends`       | 关注/取关、粉丝列表、搜索、推荐、状态                           |
+| `/api/notifications` | 评论/回复通知、已读                                             |
+| `/api/admin`         | 管理后台（用户/帖子/公告管理）                                  |
+| `/api/announcements` | 公告列表、定向推送、已读                                        |
+| `/api/books`         | 电子书列表/详情/章节                                            |
+| `/api/music`         | 音乐列表                                                        |
+| `/api/events`        | SSE 实时事件流（私信/通知/公告）                                |
+| `/api/voice`         | 语音房间（创建/加入、WebSocket 信令 `/api/voice/ws`）           |
+| `/api/app/version`   | App 更新检测（配置 `APP_VERSION`/`APP_APK_URL` 后返回最新版本） |
+| `/api/health`        | 健康检查                                                        |
 
 ---
 
 ## License
 
 MIT
-

@@ -75,37 +75,65 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const privateFileInputRef = useRef<HTMLInputElement>(null);
 
-  const isOwnProfile = !!(embeddedUserId ? (currentUser && embeddedUserId === currentUser.id) : (!id || (currentUser && parseInt(id) === currentUser.id)));
+  const isOwnProfile = !!(embeddedUserId
+    ? currentUser && embeddedUserId === currentUser.id
+    : !id || (currentUser && parseInt(id) === currentUser.id));
   const userId = embeddedUserId || (id ? parseInt(id) : currentUser?.id);
 
   // 全部实时：点赞/转发/评论/删除/新增/更新/关注 均同步本页
   useEffect(() => {
     const onDeleted = (deletedId: number) => {
-      setPosts(prev => prev.filter(p => p.id !== deletedId));
-      setBookmarkedPosts(prev => prev.filter(p => p.id !== deletedId));
-      setRepostedPosts(prev => prev.filter(p => p.id !== deletedId));
+      setPosts((prev) => prev.filter((p) => p.id !== deletedId));
+      setBookmarkedPosts((prev) => prev.filter((p) => p.id !== deletedId));
+      setRepostedPosts((prev) => prev.filter((p) => p.id !== deletedId));
     };
     const onLike = ({ postId, liked, likeCount }: { postId: number; liked: boolean; likeCount: number }) => {
-      const upd = (p: Post) => p.id === postId ? { ...p, liked: liked ? 1 : 0, like_count: likeCount } : p;
-      setPosts(prev => prev.map(upd));
-      setBookmarkedPosts(prev => prev.map(upd));
-      setRepostedPosts(prev => prev.map(upd));
+      const upd = (p: Post) => (p.id === postId ? { ...p, liked: liked ? 1 : 0, like_count: likeCount } : p);
+      setPosts((prev) => prev.map(upd));
+      setBookmarkedPosts((prev) => prev.map(upd));
+      setRepostedPosts((prev) => prev.map(upd));
     };
-    const onRepost = ({ postId, reposted, repostCount }: { postId: number; reposted: boolean; repostCount: number }) => {
-      const upd = (p: Post) => p.id === postId ? { ...p, reposted: reposted ? 1 : 0, repost_count: repostCount } : p;
-      setPosts(prev => prev.map(upd));
-      setBookmarkedPosts(prev => prev.map(upd));
-      setRepostedPosts(prev => prev.map(upd));
+    const onRepost = ({
+      postId,
+      reposted,
+      repostCount,
+    }: {
+      postId: number;
+      reposted: boolean;
+      repostCount: number;
+    }) => {
+      const upd = (p: Post) =>
+        p.id === postId ? { ...p, reposted: reposted ? 1 : 0, repost_count: repostCount } : p;
+      setPosts((prev) => prev.map(upd));
+      setBookmarkedPosts((prev) => prev.map(upd));
+      setRepostedPosts((prev) => prev.map(upd));
     };
     const onComment = ({ postId, commentCount }: { postId: number; commentCount: number }) => {
-      const upd = (p: Post) => p.id === postId ? { ...p, comment_count: commentCount } : p;
-      setPosts(prev => prev.map(upd));
-      setBookmarkedPosts(prev => prev.map(upd));
-      setRepostedPosts(prev => prev.map(upd));
+      const upd = (p: Post) => (p.id === postId ? { ...p, comment_count: commentCount } : p);
+      setPosts((prev) => prev.map(upd));
+      setBookmarkedPosts((prev) => prev.map(upd));
+      setRepostedPosts((prev) => prev.map(upd));
     };
-    const onFollow = (uid: number) => { if (uid === userId) { const c = getFollowStatus(uid); if (c !== undefined) setIsFollowing(c); } };
-    const onCreated = () => { if (userId) api.get(`/users/${userId}/posts`).then(r => setPosts(r.data.posts)).catch(() => {}); };
-    const onUpdated = () => { if (userId) api.get(`/users/${userId}/posts`).then(r => setPosts(r.data.posts)).catch(() => {}); };
+    const onFollow = (uid: number) => {
+      if (uid === userId) {
+        const c = getFollowStatus(uid);
+        if (c !== undefined) setIsFollowing(c);
+      }
+    };
+    const onCreated = () => {
+      if (userId)
+        api
+          .get(`/users/${userId}/posts`)
+          .then((r) => setPosts(r.data.posts))
+          .catch(() => {});
+    };
+    const onUpdated = () => {
+      if (userId)
+        api
+          .get(`/users/${userId}/posts`)
+          .then((r) => setPosts(r.data.posts))
+          .catch(() => {});
+    };
     events.on('post:deleted', onDeleted);
     events.on('post:like', onLike);
     events.on('post:repost', onRepost);
@@ -168,8 +196,9 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
   // 加载收藏帖子
   useEffect(() => {
     if (activeTab !== 'bookmarks' || !isOwnProfile) return;
-    api.get('/posts/bookmarks/me')
-      .then(res => {
+    api
+      .get('/posts/bookmarks/me')
+      .then((res) => {
         setBookmarkedPosts(res.data.posts);
       })
       .catch(() => {
@@ -183,8 +212,9 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
   // 加载转发帖子
   useEffect(() => {
     if (activeTab !== 'reposts' || !isOwnProfile) return;
-    api.get('/posts/reposts/me')
-      .then(res => {
+    api
+      .get('/posts/reposts/me')
+      .then((res) => {
         setRepostedPosts(res.data.posts);
       })
       .catch(() => {
@@ -240,7 +270,7 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
       const res = await api.post('/users/avatar', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      setProfileUser(prev => prev ? { ...prev, avatar: res.data.avatar } : prev);
+      setProfileUser((prev) => (prev ? { ...prev, avatar: res.data.avatar } : prev));
       updateUser(res.data);
     } catch {}
   };
@@ -255,9 +285,9 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
     const pid = deletePostId;
     try {
       await api.delete(`/posts/${pid}`);
-      setPosts(prev => prev.filter(p => p.id !== pid));
+      setPosts((prev) => prev.filter((p) => p.id !== pid));
       // 同步信息流缓存，回到首页立即生效（staleTime: Infinity 不会自动重取）
-      updatePostsFeed(queryClient, prev => prev.filter(p => p.id !== pid));
+      updatePostsFeed(queryClient, (prev) => prev.filter((p) => p.id !== pid));
       queryClient.invalidateQueries({ queryKey: postsFeedKey });
       events.emit('post:deleted', pid);
       showToast('删除成功！');
@@ -268,7 +298,10 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
   const handleEditPost = (post: Post, e: React.MouseEvent) => {
     e.stopPropagation();
     // 视频帖子 withImages 会产出 ['[]'] 脏数据，需过滤；图文帖子才保留 images
-    const cleanImages = post.video_url ? [] : (post.images?.filter(u => u !== '[]' && u !== '["[]"]') || [post.image_url].filter(u => u !== '[]' && u !== '["[]"]'));
+    const cleanImages = post.video_url
+      ? []
+      : post.images?.filter((u) => u !== '[]' && u !== '["[]"]') ||
+        [post.image_url].filter((u) => u !== '[]' && u !== '["[]"]');
     openEdit({
       id: post.id,
       description: post.description || '',
@@ -281,7 +314,7 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
     setOnEditSave(() => () => {
       // Refresh posts after edit
       if (userId) {
-        api.get(`/users/${userId}/posts`).then(res => {
+        api.get(`/users/${userId}/posts`).then((res) => {
           setPosts(res.data.posts);
         });
       }
@@ -300,27 +333,28 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
 
   const handleAddPrivateImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    const visibleCount = privateImages.filter(img => !privateDeletedIds.has(img.id)).length + privateNewFiles.length;
+    const visibleCount =
+      privateImages.filter((img) => !privateDeletedIds.has(img.id)).length + privateNewFiles.length;
     const remaining = 10 - visibleCount;
     const toAdd = files.slice(0, remaining);
     if (toAdd.length === 0) return;
     // HEIC/HEIF 经 WASM 实时转 JPEG 预览，其余格式直接 blob URL
     const newItems = await Promise.all(
-      toAdd.map(async file => ({ file, preview: await fileToPreviewUrl(file) }))
+      toAdd.map(async (file) => ({ file, preview: await fileToPreviewUrl(file) }))
     );
-    setPrivateNewFiles(prev => [...prev, ...newItems]);
+    setPrivateNewFiles((prev) => [...prev, ...newItems]);
     e.target.value = '';
   };
 
   const handleRemovePrivateNewFile = (index: number) => {
-    setPrivateNewFiles(prev => {
+    setPrivateNewFiles((prev) => {
       URL.revokeObjectURL(prev[index].preview);
       return prev.filter((_, i) => i !== index);
     });
   };
 
   const handleToggleDeletePrivate = (id: number) => {
-    setPrivateDeletedIds(prev => {
+    setPrivateDeletedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -355,7 +389,7 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
   };
 
   const handleCancelPrivateFolder = () => {
-    privateNewFiles.forEach(item => URL.revokeObjectURL(item.preview));
+    privateNewFiles.forEach((item) => URL.revokeObjectURL(item.preview));
     setPrivateNewFiles([]);
     setPrivateDeletedIds(new Set());
     setShowPrivateFolder(false);
@@ -363,8 +397,8 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
 
   const getAllPrivateImages = (): PrivateZoomItem[] => {
     const existing = privateImages
-      .filter(img => !privateDeletedIds.has(img.id))
-      .map(img => ({ type: 'existing' as const, url: img.image_url, id: img.id }));
+      .filter((img) => !privateDeletedIds.has(img.id))
+      .map((img) => ({ type: 'existing' as const, url: img.image_url, id: img.id }));
     const newOnes = privateNewFiles.map((item, i) => ({ type: 'new' as const, url: item.preview, index: i }));
     return [...existing, ...newOnes];
   };
@@ -372,7 +406,7 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
   const handleSaveProfile = async () => {
     try {
       const res = await api.put('/users/me', { username, bio });
-      setProfileUser(prev => prev ? { ...prev, username: res.data.username, bio: res.data.bio } : prev);
+      setProfileUser((prev) => (prev ? { ...prev, username: res.data.username, bio: res.data.bio } : prev));
       updateUser(res.data);
       setEditing(false);
     } catch (err: any) {
@@ -398,7 +432,10 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
         bio={bio}
         setUsername={setUsername}
         setBio={setBio}
-        onBack={() => { if (onBack) onBack(); else window.history.back(); }}
+        onBack={() => {
+          if (onBack) onBack();
+          else window.history.back();
+        }}
         fileInputRef={fileInputRef}
         onAvatarUpload={handleAvatarUpload}
         onToggleEdit={() => setEditing(!editing)}
@@ -426,9 +463,12 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
       />
 
       {selectedPostId && (
-        <PostDetail postId={selectedPostId} onClose={() => {
-          setSelectedPostId(null);
-        }} />
+        <PostDetail
+          postId={selectedPostId}
+          onClose={() => {
+            setSelectedPostId(null);
+          }}
+        />
       )}
 
       {showPrivateFolder && (
@@ -458,11 +498,7 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
       )}
 
       {showFollowModal && userId && (
-        <FollowersModal
-          type={showFollowModal}
-          userId={userId}
-          onClose={() => setShowFollowModal(null)}
-        />
+        <FollowersModal type={showFollowModal} userId={userId} onClose={() => setShowFollowModal(null)} />
       )}
     </div>
   );

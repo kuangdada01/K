@@ -58,14 +58,16 @@ export default function PostDescriptionPanel({
           ref={textareaRef}
           className={panel.textarea}
           value={description}
-          onChange={e => onChange(e.target.value)}
+          onChange={(e) => onChange(e.target.value)}
           maxLength={2000}
           autoFocus
         />
         {descriptionTags.length > 0 && (
           <div className={panel.tagPreview}>
-            {descriptionTags.map(tag => (
-              <span key={tag} className={panel.tagChip}>#{tag}</span>
+            {descriptionTags.map((tag) => (
+              <span key={tag} className={panel.tagChip}>
+                #{tag}
+              </span>
             ))}
           </div>
         )}
@@ -94,13 +96,19 @@ export default function PostDescriptionPanel({
           <div className={panel.advancedOptions}>
             <label className={panel.toggleLabel}>
               <span>关闭评论</span>
-              <div className={`${panel.toggle} ${closeComments ? panel.on : ''}`} onClick={() => onCloseCommentsChange(!closeComments)}>
+              <div
+                className={`${panel.toggle} ${closeComments ? panel.on : ''}`}
+                onClick={() => onCloseCommentsChange(!closeComments)}
+              >
                 <div className={panel.toggleKnob} />
               </div>
             </label>
             <label className={panel.toggleLabel}>
               <span>置顶</span>
-              <div className={`${panel.toggle} ${pinned ? panel.on : ''}`} onClick={() => onPinnedChange(!pinned)}>
+              <div
+                className={`${panel.toggle} ${pinned ? panel.on : ''}`}
+                onClick={() => onPinnedChange(!pinned)}
+              >
                 <div className={panel.toggleKnob} />
               </div>
             </label>

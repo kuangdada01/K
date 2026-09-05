@@ -55,13 +55,18 @@ export class ShareStatsMonitor {
   start(): void {
     this.stop();
     this.timer = window.setInterval(() => {
-      this.measure().catch(() => { /* 统计失败忽略，下轮再试 */ });
+      this.measure().catch(() => {
+        /* 统计失败忽略，下轮再试 */
+      });
     }, SHARE_STATS_INTERVAL_MS);
   }
 
   /** 停止采样并清空字节缓存（共享结束/会话销毁时调用） */
   stop(): void {
-    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
     this.lastOutbound.clear();
   }
 
@@ -87,15 +92,19 @@ export class ShareStatsMonitor {
         if (r.type !== 'outbound-rtp' || (r as { kind?: string }).kind !== 'video') continue;
         sampled = true;
         const o = r as RTCStats & {
-          framesPerSecond?: number; frameWidth?: number; frameHeight?: number;
-          qualityLimitationReason?: string; bytesSent?: number;
+          framesPerSecond?: number;
+          frameWidth?: number;
+          frameHeight?: number;
+          qualityLimitationReason?: string;
+          bytesSent?: number;
         };
         if (o.framesPerSecond) fps = Math.max(fps, o.framesPerSecond);
         if (!width && o.frameWidth) {
           width = o.frameWidth;
           height = o.frameHeight ?? 0;
         }
-        if (o.qualityLimitationReason && o.qualityLimitationReason !== 'none') limitation = o.qualityLimitationReason;
+        if (o.qualityLimitationReason && o.qualityLimitationReason !== 'none')
+          limitation = o.qualityLimitationReason;
         if (typeof o.bytesSent === 'number') {
           const prev = this.lastOutbound.get(sender);
           if (prev) {
@@ -120,9 +129,16 @@ export class ShareStatsMonitor {
     // 让 UI 仍能提示捕获帧率限制（窗口/标签共享 30fps）
     if (!sampled && this.deps.getPeerCount() === 0) {
       this.deps.onStats({
-        fps: 0, bitrate: 0, width: 0, height: 0,
-        captureWidth, captureHeight, limitation: 'none',
-        captureFps, autoDowngraded: this.autoDowngraded, resolutionDownscaled: false,
+        fps: 0,
+        bitrate: 0,
+        width: 0,
+        height: 0,
+        captureWidth,
+        captureHeight,
+        limitation: 'none',
+        captureFps,
+        autoDowngraded: this.autoDowngraded,
+        resolutionDownscaled: false,
       });
       return;
     }
@@ -144,8 +160,16 @@ export class ShareStatsMonitor {
           // 降档本身会触发 UI 档位变化；再发一帧统计让提示条即时出现
           this.deps.onAutoDowngrade();
           this.deps.onStats({
-            fps, bitrate, width, height, captureWidth, captureHeight,
-            limitation, captureFps, autoDowngraded, resolutionDownscaled,
+            fps,
+            bitrate,
+            width,
+            height,
+            captureWidth,
+            captureHeight,
+            limitation,
+            captureFps,
+            autoDowngraded,
+            resolutionDownscaled,
           });
           return;
         }
@@ -155,8 +179,16 @@ export class ShareStatsMonitor {
     }
 
     this.deps.onStats({
-      fps, bitrate, width, height, captureWidth, captureHeight,
-      limitation, captureFps, autoDowngraded, resolutionDownscaled,
+      fps,
+      bitrate,
+      width,
+      height,
+      captureWidth,
+      captureHeight,
+      limitation,
+      captureFps,
+      autoDowngraded,
+      resolutionDownscaled,
     });
   }
 }

@@ -33,8 +33,12 @@ export class Denoiser {
       }
       this.modulePromise = ctx.audioWorklet
         .addModule(NoiseSuppressorWorkletUrl)
-        .then(() => { this.moduleOk = true; })
-        .catch(() => { /* 不支持/加载失败：降级为浏览器 NS + 直连 */ });
+        .then(() => {
+          this.moduleOk = true;
+        })
+        .catch(() => {
+          /* 不支持/加载失败：降级为浏览器 NS + 直连 */
+        });
     }
     return this.modulePromise;
   }
@@ -59,7 +63,11 @@ export class Denoiser {
   /** 销毁降噪节点（切换开关时重建，保证 RNNoise 内部状态/环形缓冲全新） */
   dispose(): void {
     if (!this.node) return;
-    try { this.node.disconnect(); } catch { /* 已断开 */ }
+    try {
+      this.node.disconnect();
+    } catch {
+      /* 已断开 */
+    }
     this.node = null;
   }
 }

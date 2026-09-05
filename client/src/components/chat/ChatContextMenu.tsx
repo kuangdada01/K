@@ -32,7 +32,10 @@ export default function ChatContextMenu({ contextMenu, onCopy, onQuote, onRecall
   let arrowPos: 'top' | 'bottom' = 'bottom';
   if (x + menuWidth > window.innerWidth) x = window.innerWidth - menuWidth - 8;
   if (x < 0) x = 8;
-  if (y < 0) { y = rect.bottom + gap; arrowPos = 'top'; }
+  if (y < 0) {
+    y = rect.bottom + gap;
+    arrowPos = 'top';
+  }
   // 角标水平位置：对准气泡中心
   const arrowX = rect.left + rect.width / 2 - x;
 
@@ -40,7 +43,7 @@ export default function ChatContextMenu({ contextMenu, onCopy, onQuote, onRecall
     <div
       className={`${styles.menu} ${arrowPos === 'top' ? styles.arrowTop : styles.arrowBottom}`}
       style={{ left: x, top: y, '--arrow-x': `${arrowX}px` } as React.CSSProperties}
-      onClick={e => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
     >
       <button className={styles.item} onClick={() => onCopy(contextMenu.msgId)}>
         <Copy size={15} />

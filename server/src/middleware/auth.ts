@@ -25,13 +25,15 @@ import { getAuthState } from '../repositories/admin.repo';
  * 生产环境必须通过环境变量 JWT_SECRET 设置强密钥，否则拒绝启动
  * 开发环境使用默认值（方便 clone 即用）
  */
-const JWT_SECRET = process.env.JWT_SECRET || (() => {
-  if (process.env.NODE_ENV === 'production') {
-    console.error('FATAL: JWT_SECRET 环境变量未设置，生产环境拒绝启动');
-    process.exit(1);
-  }
-  return 'k-dev-jwt-secret';
-})();
+const JWT_SECRET =
+  process.env.JWT_SECRET ||
+  (() => {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('FATAL: JWT_SECRET 环境变量未设置，生产环境拒绝启动');
+      process.exit(1);
+    }
+    return 'k-dev-jwt-secret';
+  })();
 
 export { JWT_SECRET };
 
@@ -49,9 +51,9 @@ declare global {
     interface Request {
       /** 当前认证用户信息（由 authMiddleware 注入） */
       user?: {
-        id: number;        // 用户ID
-        username: string;  // 用户名
-        role?: string;     // 角色: 'user' | 'admin'
+        id: number; // 用户ID
+        username: string; // 用户名
+        role?: string; // 角色: 'user' | 'admin'
       };
     }
   }

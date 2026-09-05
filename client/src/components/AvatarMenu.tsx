@@ -48,7 +48,15 @@ interface AvatarMenuProps {
 
 type ThemeOption = { key: 'system' | 'light' | 'dark'; label: string; icon: React.ReactNode };
 
-export default function AvatarMenu({ placement = 'right', showUsername = false, subtitle, size = 40, iconMode = false, wrapperClassName = '', triggerClassName = '' }: AvatarMenuProps) {
+export default function AvatarMenu({
+  placement = 'right',
+  showUsername = false,
+  subtitle,
+  size = 40,
+  iconMode = false,
+  wrapperClassName = '',
+  triggerClassName = '',
+}: AvatarMenuProps) {
   // openPath: 打开菜单时的路由路径（null = 关闭）。
   // 渲染期派生 open：路由切换后 openPath !== location.pathname，菜单自动隐藏。
   const [openPath, setOpenPath] = useState<string | null>(null);
@@ -178,71 +186,87 @@ export default function AvatarMenu({ placement = 'right', showUsername = false, 
         )}
       </button>
 
-      {open && createPortal(
-        <div
-          ref={menuRef}
-          className={`${styles.menu} ${window.matchMedia('(max-width: 768px)').matches ? styles.menuSheet : styles.menuFloat}`}
-          style={getMenuStyle()}
-          role="menu"
-        >
-          {/* 用户信息头 */}
-          <div className={styles.menuHeader}>
-            {user ? (
-              <>
-                <Avatar src={user.avatar} username={user.username} size={44} className={styles.menuAvatar} />
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            className={`${styles.menu} ${window.matchMedia('(max-width: 768px)').matches ? styles.menuSheet : styles.menuFloat}`}
+            style={getMenuStyle()}
+            role="menu"
+          >
+            {/* 用户信息头 */}
+            <div className={styles.menuHeader}>
+              {user ? (
+                <>
+                  <Avatar
+                    src={user.avatar}
+                    username={user.username}
+                    size={44}
+                    className={styles.menuAvatar}
+                  />
+                  <div className={styles.menuUserInfo}>
+                    <strong>{user.username}</strong>
+                    {user.bio && <small>{user.bio}</small>}
+                  </div>
+                </>
+              ) : (
                 <div className={styles.menuUserInfo}>
-                  <strong>{user.username}</strong>
-                  {user.bio && <small>{user.bio}</small>}
+                  <strong>未登录</strong>
+                  <small>登录后即可互动</small>
                 </div>
-              </>
-            ) : (
-              <div className={styles.menuUserInfo}>
-                <strong>未登录</strong>
-                <small>登录后即可互动</small>
-              </div>
+              )}
+            </div>
+
+            {user && (
+              <Link to="/profile" className={styles.item} onClick={close} role="menuitem">
+                <span className={styles.itemIcon}>
+                  <User size={16} />
+                </span>
+                <span>个人主页</span>
+              </Link>
             )}
-          </div>
 
-          {user && (
-            <Link to="/profile" className={styles.item} onClick={close} role="menuitem">
-              <span className={styles.itemIcon}><User size={16} /></span>
-              <span>个人主页</span>
-            </Link>
-          )}
+            {/* 主题切换 */}
+            <div className={styles.sectionLabel}>主题</div>
+            {themeOptions.map((opt) => (
+              <button
+                key={opt.key}
+                className={`${styles.item} ${mode === opt.key ? styles.itemActive : ''}`}
+                onClick={() => setMode(opt.key)}
+                role="menuitemradio"
+                aria-checked={mode === opt.key}
+              >
+                <span className={styles.itemIcon}>{opt.icon}</span>
+                <span>{opt.label}</span>
+                {mode === opt.key && <Check size={14} className={styles.itemCheck} />}
+              </button>
+            ))}
 
-          {/* 主题切换 */}
-          <div className={styles.sectionLabel}>主题</div>
-          {themeOptions.map(opt => (
-            <button
-              key={opt.key}
-              className={`${styles.item} ${mode === opt.key ? styles.itemActive : ''}`}
-              onClick={() => setMode(opt.key)}
-              role="menuitemradio"
-              aria-checked={mode === opt.key}
-            >
-              <span className={styles.itemIcon}>{opt.icon}</span>
-              <span>{opt.label}</span>
-              {mode === opt.key && <Check size={14} className={styles.itemCheck} />}
-            </button>
-          ))}
+            <div className={styles.divider} />
 
-          <div className={styles.divider} />
-
-          {/* 退出登录 / 登录 */}
-          {user ? (
-            <button className={`${styles.item} ${styles.itemDanger}`} onClick={handleLogout} role="menuitem">
-              <span className={styles.itemIcon}><LogOut size={16} /></span>
-              <span>退出登录</span>
-            </button>
-          ) : (
-            <button className={`${styles.item} ${styles.itemLogin}`} onClick={handleLogin} role="menuitem">
-              <span className={styles.itemIcon}><LogIn size={16} /></span>
-              <span>登录</span>
-            </button>
-          )}
-        </div>,
-        document.body
-      )}
+            {/* 退出登录 / 登录 */}
+            {user ? (
+              <button
+                className={`${styles.item} ${styles.itemDanger}`}
+                onClick={handleLogout}
+                role="menuitem"
+              >
+                <span className={styles.itemIcon}>
+                  <LogOut size={16} />
+                </span>
+                <span>退出登录</span>
+              </button>
+            ) : (
+              <button className={`${styles.item} ${styles.itemLogin}`} onClick={handleLogin} role="menuitem">
+                <span className={styles.itemIcon}>
+                  <LogIn size={16} />
+                </span>
+                <span>登录</span>
+              </button>
+            )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

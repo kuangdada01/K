@@ -60,9 +60,13 @@ export default function VideoCoverEditor({
     <div className={`${composer.overlay}${closing ? ` ${composer.closing}` : ''}`}>
       <div className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}>
         <div className={composer.overlayHeader}>
-          <button className={composer.overlayBtn} data-back onClick={onBack}>后退</button>
+          <button className={composer.overlayBtn} data-back onClick={onBack}>
+            后退
+          </button>
           <span className={composer.overlayTitle}>选择封面</span>
-          <button className={`${composer.overlayBtn} ${composer.primary}`} onClick={onNext}>下一步</button>
+          <button className={`${composer.overlayBtn} ${composer.primary}`} onClick={onNext}>
+            下一步
+          </button>
         </div>
         <div className={styles.coverLayout}>
           <div className={styles.coverLeft}>
@@ -81,7 +85,9 @@ export default function VideoCoverEditor({
                     onVideoLoaded();
                   }}
                   onCanPlay={() => {
-                    try { videoRef.current?.pause(); } catch {}
+                    try {
+                      videoRef.current?.pause();
+                    } catch {}
                   }}
                   onError={onVideoError}
                   className={styles.coverVideo}
@@ -112,20 +118,38 @@ export default function VideoCoverEditor({
                   {videoFile ? (
                     <>
                       <Video size={32} style={{ opacity: 0.6 }} />
-                      <div style={{ fontWeight: 600 }}>{videoFile.name} ({(videoFile.size/1024/1024).toFixed(1)}MB)</div>
+                      <div style={{ fontWeight: 600 }}>
+                        {videoFile.name} ({(videoFile.size / 1024 / 1024).toFixed(1)}MB)
+                      </div>
                       {videoError ? (
-                        <div style={{ fontSize: 12, color: '#ffb74d' }}>该视频无法预览（常见于 iPhone HEVC/MOV 或 WebView 解码限制）<br />可直接点“下一步”或手动上传封面，发布后服务端自动转码</div>
+                        <div style={{ fontSize: 12, color: '#ffb74d' }}>
+                          该视频无法预览（常见于 iPhone HEVC/MOV 或 WebView 解码限制）
+                          <br />
+                          可直接点“下一步”或手动上传封面，发布后服务端自动转码
+                        </div>
                       ) : (
-                        <div style={{ fontSize: 12, opacity: 0.8 }}>预览加载中…（若持续黑屏请点“下一步”手动上传封面）</div>
+                        <div style={{ fontSize: 12, opacity: 0.8 }}>
+                          预览加载中…（若持续黑屏请点“下一步”手动上传封面）
+                        </div>
                       )}
                       <button
                         onClick={onRetryPreview}
-                        style={{ marginTop: 8, padding: '6px 12px', background: 'var(--accent)', color: 'var(--on-accent)', border: 'none', borderRadius: 6, fontSize: 12 }}
+                        style={{
+                          marginTop: 8,
+                          padding: '6px 12px',
+                          background: 'var(--accent)',
+                          color: 'var(--on-accent)',
+                          border: 'none',
+                          borderRadius: 6,
+                          fontSize: 12,
+                        }}
                       >
                         重试预览
                       </button>
                     </>
-                  ) : '无预览'}
+                  ) : (
+                    '无预览'
+                  )}
                 </div>
               )}
             </div>
@@ -144,7 +168,13 @@ export default function VideoCoverEditor({
               {videoCoverPreview && (
                 <img src={videoCoverPreview} alt="封面预览" className={styles.coverImage} />
               )}
-              <input ref={coverInputRef} type="file" accept="image/jpeg,image/jpg,image/png,image/gif,image/webp,image/avif,image/heic,image/heif" style={{ display: 'none' }} onChange={onCoverFileSelect} />
+              <input
+                ref={coverInputRef}
+                type="file"
+                accept="image/jpeg,image/jpg,image/png,image/gif,image/webp,image/avif,image/heic,image/heif"
+                style={{ display: 'none' }}
+                onChange={onCoverFileSelect}
+              />
             </div>
             <div className={styles.coverSection}>
               <div className={styles.coverSectionTitle}>或从视频截取</div>

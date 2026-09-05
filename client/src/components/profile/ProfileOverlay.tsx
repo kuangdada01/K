@@ -21,7 +21,11 @@ export default function ProfileOverlay({ userId, onClose }: ProfileOverlayProps)
   }, [onClose]);
 
   return (
-    <div className={`profile-overlay${closing ? ' closing' : ''}`} data-back onClick={e => e.stopPropagation()}>
+    <div
+      className={`profile-overlay${closing ? ' closing' : ''}`}
+      data-back
+      onClick={(e) => e.stopPropagation()}
+    >
       <Profile embeddedUserId={userId} onBack={handleClose} />
     </div>
   );

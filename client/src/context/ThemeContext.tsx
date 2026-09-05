@@ -81,9 +81,8 @@ function applyStatusBar(mode: ThemeMode) {
 
   // 状态栏底色随主题：WebView 非 edge-to-edge（从状态栏下方开始），
   // styles.xml 只能定死一个启动色，运行时明暗切换在这里跟随
-  const effective: 'light' | 'dark' = mode === 'system'
-    ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-    : mode;
+  const effective: 'light' | 'dark' =
+    mode === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : mode;
   const bgColor = effective === 'dark' ? '#0d0f14' : '#eef2ee';
   StatusBar.setBackgroundColor({ color: bgColor }).catch((e) => {
     console.warn('[Theme] Capacitor StatusBar.setBackgroundColor failed:', e);
@@ -96,7 +95,7 @@ function applyStatusBar(mode: ThemeMode) {
     // （应用内深色是 CSS 级切换，系统 uiMode 不变，values-night 不会激活）
     bridge?.setWindowBackgroundColor?.(bgColor);
     bridge?.setAppThemeMode?.(mode);
-  } catch { }
+  } catch {}
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -152,11 +151,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     return () => mql.removeEventListener('change', handler);
   }, [mode]);
 
-  return (
-    <ThemeContext.Provider value={{ mode, resolved, setMode }}>
-      {children}
-    </ThemeContext.Provider>
-  );
+  return <ThemeContext.Provider value={{ mode, resolved, setMode }}>{children}</ThemeContext.Provider>;
 }
 
 export function useTheme() {

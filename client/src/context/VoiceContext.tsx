@@ -86,7 +86,11 @@ export interface VoiceContextValue {
 // 的组件（语音页面/共享舞台）才会随连续说话状态重渲染，其余只是读 inRoom 的
 // PostCard/Sidebar/CreatePost 不受影响。
 const VoiceContext = createContext<VoiceContextValue | null>(null);
-const VoiceRealtimeContext = createContext<{ speaking: Set<number>; peerQuality: Record<number, VoiceQualityLevel>; shareStats: ShareStats | null } | null>(null);
+const VoiceRealtimeContext = createContext<{
+  speaking: Set<number>;
+  peerQuality: Record<number, VoiceQualityLevel>;
+  shareStats: ShareStats | null;
+} | null>(null);
 
 export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
@@ -100,19 +104,17 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   /** 麦克风降噪开关（默认关；偏好持久化在 localStorage，刷新后保持） */
   const [noiseReduction, setNoiseReduction] = useState<boolean>(
-    () => localStorage.getItem(NOISE_REDUCTION_KEY) === '1',
+    () => localStorage.getItem(NOISE_REDUCTION_KEY) === '1'
   );
   /** 音乐模式（默认关；偏好持久化在 localStorage，刷新后保持） */
-  const [musicMode, setMusicMode] = useState<boolean>(
-    () => localStorage.getItem(MUSIC_MODE_KEY) === '1',
-  );
+  const [musicMode, setMusicMode] = useState<boolean>(() => localStorage.getItem(MUSIC_MODE_KEY) === '1');
   // ---- 屏幕共享（userId 与 stream 分开存：状态广播先到、画面流随重协商后到） ----
   const [shareUserId, setShareUserId] = useState<number | null>(null);
   const [shareStream, setShareStream] = useState<MediaStream | null>(null);
   const [shareAudio, setShareAudio] = useState(false);
   const [shareQuality, setShareQualityState] = useState<ShareQuality>('1080p60');
   const [shareSharpText, setShareSharpTextState] = useState<boolean>(
-    () => localStorage.getItem('voice:shareSharpText') === '1',
+    () => localStorage.getItem('voice:shareSharpText') === '1'
   );
   const [shareMuted, setShareMuted] = useState(true);
   const [shareStats, setShareStats] = useState<ShareStats | null>(null);
@@ -128,15 +130,17 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const lastFetchedIdRef = useRef<number | null>(null);
   /** messages 的镜像 ref：翻页等回调读取首条 id 时避免把 messages 塞进依赖 */
   const messagesRef = useRef<VoiceChatMessage[]>([]);
-  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const share = useMemo<VoiceShareState | null>(
     () => (shareUserId === null ? null : { userId: shareUserId, stream: shareStream, audio: shareAudio }),
-    [shareUserId, shareStream, shareAudio],
+    [shareUserId, shareStream, shareAudio]
   );
   const canScreenShare = useMemo(
     () => typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia,
-    [],
+    []
   );
 
   const clearSavedRoom = useCallback(() => sessionStorage.removeItem(ACTIVE_ROOM_KEY), []);
@@ -161,82 +165,87 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     lastFetchedIdRef.current = null;
   }, []);
 
-  const join = useCallback((roomId: number, roomName?: string) => {
-    if (sessionRef.current) return;
-    // 记录活跃房间：刷新后自动回房；关闭标签页时 sessionStorage 一并销毁
-    sessionStorage.setItem(ACTIVE_ROOM_KEY, JSON.stringify({ roomId, name: roomName ?? null }));
-    setActiveRoomId(roomId);
-    if (roomName) setActiveRoomName(roomName);
+  const join = useCallback(
+    (roomId: number, roomName?: string) => {
+      if (sessionRef.current) return;
+      // 记录活跃房间：刷新后自动回房；关闭标签页时 sessionStorage 一并销毁
+      sessionStorage.setItem(ACTIVE_ROOM_KEY, JSON.stringify({ roomId, name: roomName ?? null }));
+      setActiveRoomId(roomId);
+      if (roomName) setActiveRoomName(roomName);
 
-    const session = new VoiceSession(
-      user
-        ? { userId: user.id, username: user.username, avatar: user.avatar }
-        // 未登录访客：占位身份，真实负数 id 由服务端分配后经 joined.self 回传校正
-        : { userId: 0, username: '未登录', avatar: null },
-      {
-        onStatus: (s) => {
-          setStatus(s);
-          if (s === 'ended') clearSavedRoom();
-        },
-        onParticipants: (list) => setParticipants(list),
-        onSpeaking: (userId, isSpeaking) => {
-          setSpeaking(prev => {
-            const next = new Set(prev);
-            if (isSpeaking) next.add(userId); else next.delete(userId);
-            return next;
-          });
-        },
-        onError: (message) => showToast(message),
-        onClosed: (reason) => showToast(reason),
-        onPeerQuality: (userId, level) => setPeerQuality(prev => {
-          if (level === null) {
-            // 成员离开/断线重连：删除残留的质量状态
-            if (!(userId in prev)) return prev;
-            const next = { ...prev };
-            delete next[userId];
-            return next;
-          }
-          return { ...prev, [userId]: level };
-        }),
-        onRecordingChange: (rec, at) => {
-          setIsRecording(rec);
-          setRecordingStartedAt(at);
-        },
-        onShareChanged: (info) => {
-          setShareUserId(info.userId);
-          setShareAudio(info.audio);
-        },
-        onShareVideo: (stream) => setShareStream(stream),
-        onShareStats: (stats) => setShareStats(stats),
-        onShareQualityChange: (q) => setShareQualityState(q),
-        // 文字聊天：实时消息按 id 去重追加（防与服务端历史拉取竞态重复）
-        onChatMessage: (message) => {
-          setMessages(prev => (prev.some(m => m.id === message.id) ? prev : [...prev, message]));
-          if (lastFetchedIdRef.current === null || message.id > lastFetchedIdRef.current) {
-            lastFetchedIdRef.current = message.id;
-          }
-          // 暴露最近一条实时消息（朗读新消息等实时消费；历史补拉不经过这里）
-          setLiveMessage(message);
-        },
-        // 房间聊天被创建者/管理员清空：本地同步清空（游标保留，后续只追新）
-        onChatCleared: () => {
-          setMessages([]);
-          setChatHasMore(false);
-        },
-      },
-    );
-    sessionRef.current = session;
-    setShareQualityState(session.getShareQuality());
-    setShareSharpTextState(session.getShareSharpText());
-    setShareMuted(session.getShareMuted());
-    session.join(roomId).catch(() => {
-      session.leave();
-      if (sessionRef.current === session) sessionRef.current = null;
-      clearSavedRoom();
-      resetState();
-      showToast('无法启动语音，请检查浏览器是否支持麦克风');
-    });
-  }, [user, clearSavedRoom, resetState]);
+      const session = new VoiceSession(
+        user
+          ? { userId: user.id, username: user.username, avatar: user.avatar }
+          : // 未登录访客：占位身份，真实负数 id 由服务端分配后经 joined.self 回传校正
+            { userId: 0, username: '未登录', avatar: null },
+        {
+          onStatus: (s) => {
+            setStatus(s);
+            if (s === 'ended') clearSavedRoom();
+          },
+          onParticipants: (list) => setParticipants(list),
+          onSpeaking: (userId, isSpeaking) => {
+            setSpeaking((prev) => {
+              const next = new Set(prev);
+              if (isSpeaking) next.add(userId);
+              else next.delete(userId);
+              return next;
+            });
+          },
+          onError: (message) => showToast(message),
+          onClosed: (reason) => showToast(reason),
+          onPeerQuality: (userId, level) =>
+            setPeerQuality((prev) => {
+              if (level === null) {
+                // 成员离开/断线重连：删除残留的质量状态
+                if (!(userId in prev)) return prev;
+                const next = { ...prev };
+                delete next[userId];
+                return next;
+              }
+              return { ...prev, [userId]: level };
+            }),
+          onRecordingChange: (rec, at) => {
+            setIsRecording(rec);
+            setRecordingStartedAt(at);
+          },
+          onShareChanged: (info) => {
+            setShareUserId(info.userId);
+            setShareAudio(info.audio);
+          },
+          onShareVideo: (stream) => setShareStream(stream),
+          onShareStats: (stats) => setShareStats(stats),
+          onShareQualityChange: (q) => setShareQualityState(q),
+          // 文字聊天：实时消息按 id 去重追加（防与服务端历史拉取竞态重复）
+          onChatMessage: (message) => {
+            setMessages((prev) => (prev.some((m) => m.id === message.id) ? prev : [...prev, message]));
+            if (lastFetchedIdRef.current === null || message.id > lastFetchedIdRef.current) {
+              lastFetchedIdRef.current = message.id;
+            }
+            // 暴露最近一条实时消息（朗读新消息等实时消费；历史补拉不经过这里）
+            setLiveMessage(message);
+          },
+          // 房间聊天被创建者/管理员清空：本地同步清空（游标保留，后续只追新）
+          onChatCleared: () => {
+            setMessages([]);
+            setChatHasMore(false);
+          },
+        }
+      );
+      sessionRef.current = session;
+      setShareQualityState(session.getShareQuality());
+      setShareSharpTextState(session.getShareSharpText());
+      setShareMuted(session.getShareMuted());
+      session.join(roomId).catch(() => {
+        session.leave();
+        if (sessionRef.current === session) sessionRef.current = null;
+        clearSavedRoom();
+        resetState();
+        showToast('无法启动语音，请检查浏览器是否支持麦克风');
+      });
+    },
+    [user, clearSavedRoom, resetState]
+  );
 
   const leave = useCallback(() => {
     sessionRef.current?.leave();
@@ -280,11 +289,11 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       .then(({ messages: fetched, has_more }) => {
         if (cancelled) return;
         if (fetched.length > 0) {
-          setMessages(prev => {
-            const seen = new Set(prev.map(m => m.id));
-            return [...prev, ...fetched.filter(m => !seen.has(m.id))];
+          setMessages((prev) => {
+            const seen = new Set(prev.map((m) => m.id));
+            return [...prev, ...fetched.filter((m) => !seen.has(m.id))];
           });
-          const maxId = Math.max(...fetched.map(m => m.id));
+          const maxId = Math.max(...fetched.map((m) => m.id));
           if (lastFetchedIdRef.current === null || maxId > lastFetchedIdRef.current) {
             lastFetchedIdRef.current = maxId;
           }
@@ -294,7 +303,9 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       .catch(() => {
         // 拉取失败静默：下次重连会再次追赶，实时消息不受影响
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [status, activeRoomId]);
 
   const sendChat = useCallback((content: string): boolean => {
@@ -308,9 +319,9 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     setChatLoadingMore(true);
     getVoiceRoomMessages(roomId, { beforeId: first.id, limit: 50 })
       .then(({ messages: older, has_more }) => {
-        setMessages(prev => {
-          const seen = new Set(prev.map(m => m.id));
-          return [...older.filter(m => !seen.has(m.id)), ...prev];
+        setMessages((prev) => {
+          const seen = new Set(prev.map((m) => m.id));
+          return [...older.filter((m) => !seen.has(m.id)), ...prev];
         });
         setChatHasMore(has_more);
       })
@@ -364,12 +375,15 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       session.stopScreenShare();
       return;
     }
-    session.startScreenShare().then(result => {
-      if (result === 'unsupported') showToast('当前浏览器不支持屏幕共享');
-      // 用户在选择器里取消：静默不打扰
-    }).catch(e => {
-      showToast('屏幕共享启动失败：' + (e?.message ?? '未知错误'));
-    });
+    session
+      .startScreenShare()
+      .then((result) => {
+        if (result === 'unsupported') showToast('当前浏览器不支持屏幕共享');
+        // 用户在选择器里取消：静默不打扰
+      })
+      .catch((e) => {
+        showToast('屏幕共享启动失败：' + (e?.message ?? '未知错误'));
+      });
   }, []);
 
   const setShareQuality = useCallback((q: ShareQuality) => {
@@ -378,7 +392,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const toggleShareSharpText = useCallback(() => {
-    setShareSharpTextState(prev => {
+    setShareSharpTextState((prev) => {
       const next = !prev;
       sessionRef.current?.setShareSharpText(next);
       return next;
@@ -386,7 +400,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const toggleShareMuted = useCallback(() => {
-    setShareMuted(prev => {
+    setShareMuted((prev) => {
       const next = !prev;
       sessionRef.current?.setShareMuted(next);
       return next;
@@ -394,56 +408,88 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setMicVolume = useCallback((v: number) => sessionRef.current?.setMicVolume(v), []);
-  const setPeerVolume = useCallback((userId: number, v: number) => sessionRef.current?.setPeerVolume(userId, v), []);
+  const setPeerVolume = useCallback(
+    (userId: number, v: number) => sessionRef.current?.setPeerVolume(userId, v),
+    []
+  );
   const getPeerVolume = useCallback((userId: number) => sessionRef.current?.getPeerVolume(userId) ?? 1, []);
   const getMicVolume = useCallback(() => sessionRef.current?.getMicVolume() ?? 1, []);
 
   // P5 修复：主值用 useMemo 稳定化（依赖列表体现真实变化），高频 speaking/peerQuality/shareStats
   // 拆到 VoiceRealtimeContext，避免整个订阅树随说话状态每秒多次重渲染。
-  const voiceValue = useMemo<VoiceContextValue>(() => ({
-    status,
-    participants,
-    inRoom: status === 'connecting' || status === 'connected' || status === 'reconnecting',
-    activeRoomId,
-    activeRoomName,
-    join,
-    leave,
-    toggleMute,
-    toggleRecording,
-    isRecording,
-    recordingStartedAt,
-    setMicVolume,
-    setPeerVolume,
-    getPeerVolume,
-    getMicVolume,
-    noiseReduction,
-    toggleNoiseReduction,
-    musicMode,
-    toggleMusicMode,
-    share,
-    canScreenShare,
-    toggleScreenShare,
-    shareQuality,
-    setShareQuality,
-    shareSharpText,
-    toggleShareSharpText,
-    shareMuted,
-    toggleShareMuted,
-    messages,
-    chatHasMore,
-    chatLoadingMore,
-    sendChat,
-    loadMoreChat,
-    liveMessage,
-  }), [
-    status, participants, activeRoomId, activeRoomName,
-    join, leave, toggleMute, toggleRecording, isRecording, recordingStartedAt,
-    setMicVolume, setPeerVolume, getPeerVolume, getMicVolume,
-    noiseReduction, toggleNoiseReduction, musicMode, toggleMusicMode,
-    share, canScreenShare, toggleScreenShare, shareQuality, setShareQuality,
-    shareSharpText, toggleShareSharpText, shareMuted, toggleShareMuted,
-    messages, chatHasMore, chatLoadingMore, sendChat, loadMoreChat, liveMessage,
-  ]);
+  const voiceValue = useMemo<VoiceContextValue>(
+    () => ({
+      status,
+      participants,
+      inRoom: status === 'connecting' || status === 'connected' || status === 'reconnecting',
+      activeRoomId,
+      activeRoomName,
+      join,
+      leave,
+      toggleMute,
+      toggleRecording,
+      isRecording,
+      recordingStartedAt,
+      setMicVolume,
+      setPeerVolume,
+      getPeerVolume,
+      getMicVolume,
+      noiseReduction,
+      toggleNoiseReduction,
+      musicMode,
+      toggleMusicMode,
+      share,
+      canScreenShare,
+      toggleScreenShare,
+      shareQuality,
+      setShareQuality,
+      shareSharpText,
+      toggleShareSharpText,
+      shareMuted,
+      toggleShareMuted,
+      messages,
+      chatHasMore,
+      chatLoadingMore,
+      sendChat,
+      loadMoreChat,
+      liveMessage,
+    }),
+    [
+      status,
+      participants,
+      activeRoomId,
+      activeRoomName,
+      join,
+      leave,
+      toggleMute,
+      toggleRecording,
+      isRecording,
+      recordingStartedAt,
+      setMicVolume,
+      setPeerVolume,
+      getPeerVolume,
+      getMicVolume,
+      noiseReduction,
+      toggleNoiseReduction,
+      musicMode,
+      toggleMusicMode,
+      share,
+      canScreenShare,
+      toggleScreenShare,
+      shareQuality,
+      setShareQuality,
+      shareSharpText,
+      toggleShareSharpText,
+      shareMuted,
+      toggleShareMuted,
+      messages,
+      chatHasMore,
+      chatLoadingMore,
+      sendChat,
+      loadMoreChat,
+      liveMessage,
+    ]
+  );
 
   const realtimeValue = useMemo(
     () => ({ speaking, peerQuality, shareStats }),
@@ -452,9 +498,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <VoiceContext.Provider value={voiceValue}>
-      <VoiceRealtimeContext.Provider value={realtimeValue}>
-        {children}
-      </VoiceRealtimeContext.Provider>
+      <VoiceRealtimeContext.Provider value={realtimeValue}>{children}</VoiceRealtimeContext.Provider>
     </VoiceContext.Provider>
   );
 }
@@ -466,7 +510,11 @@ export function useVoice(): VoiceContextValue {
 }
 
 /** 只订阅实时高频状态（说话/网络质量/共享统计）。低频组件不应调用它。 */
-export function useVoiceRealtime(): { speaking: Set<number>; peerQuality: Record<number, VoiceQualityLevel>; shareStats: ShareStats | null } {
+export function useVoiceRealtime(): {
+  speaking: Set<number>;
+  peerQuality: Record<number, VoiceQualityLevel>;
+  shareStats: ShareStats | null;
+} {
   const realtime = useContext(VoiceRealtimeContext);
   if (!realtime) throw new Error('useVoiceRealtime 必须在 VoiceProvider 内使用');
   return realtime;

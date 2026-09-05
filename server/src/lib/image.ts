@@ -36,7 +36,9 @@ export function parseImageUrls(imageUrl: string): string[] {
  * @param post - 数据库查询返回的帖子对象
  * @returns 添加了 images 字段的新对象
  */
-export function withImages<T extends { image_url: string }>(post: T | null): (T & { images: string[] }) | null {
+export function withImages<T extends { image_url: string }>(
+  post: T | null
+): (T & { images: string[] }) | null {
   if (!post) return null;
   return { ...post, images: parseImageUrls(post.image_url) };
 }
@@ -52,7 +54,11 @@ export const IMAGE_MIME_RE = /^image\/(jpeg|png|gif|webp|avif|heic|heif)$/;
  * 仅允许 jpg/png/gif/webp/avif/heic/heif，且扩展名与 mimetype 必须同时命中白名单
  * （两者均可被客户端伪造，双校验确保落盘文件名后缀一定是安全图片类型）
  */
-export function imageFileFilter(_req: Express.Request, file: Express.Multer.File, cb: (error: Error | null, acceptFile?: boolean) => void) {
+export function imageFileFilter(
+  _req: Express.Request,
+  file: Express.Multer.File,
+  cb: (error: Error | null, acceptFile?: boolean) => void
+) {
   const extOk = IMAGE_EXT_RE.test(path.extname(file.originalname).toLowerCase());
   const mimeOk = IMAGE_MIME_RE.test(file.mimetype);
   if (extOk && mimeOk) {

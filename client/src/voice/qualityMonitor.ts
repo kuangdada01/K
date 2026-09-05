@@ -56,12 +56,17 @@ export class QualityMonitor {
 
   start(): void {
     this.timer = window.setInterval(() => {
-      this.measure().catch(() => { /* 统计失败忽略，下轮再试 */ });
+      this.measure().catch(() => {
+        /* 统计失败忽略，下轮再试 */
+      });
     }, QUALITY_INTERVAL_MS);
   }
 
   stop(): void {
-    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
   }
 
   /** 广播质量更新（去重后透传给上层） */
@@ -107,7 +112,10 @@ export class QualityMonitor {
 
     for (const { userId, pc } of peers) {
       const counters = this.counters.get(userId) ?? {
-        lastPacketsLost: 0, lastPacketsReceived: 0, lastConcealedSamples: 0, lastTotalSamples: 0,
+        lastPacketsLost: 0,
+        lastPacketsReceived: 0,
+        lastConcealedSamples: 0,
+        lastTotalSamples: 0,
       };
       let lost = 0;
       let received = 0;
@@ -117,9 +125,15 @@ export class QualityMonitor {
       const stats = await pc.getStats();
       stats.forEach((r: RTCStats) => {
         const report = r as {
-          type: string; kind?: string; packetsLost?: number; packetsReceived?: number;
-          nominated?: boolean; state?: string; currentRoundTripTime?: number;
-          concealedSamples?: number; totalSamplesReceived?: number;
+          type: string;
+          kind?: string;
+          packetsLost?: number;
+          packetsReceived?: number;
+          nominated?: boolean;
+          state?: string;
+          currentRoundTripTime?: number;
+          concealedSamples?: number;
+          totalSamplesReceived?: number;
         };
         if (report.type === 'inbound-rtp' && report.kind === 'audio') {
           lost += Math.max(0, report.packetsLost ?? 0);
@@ -128,9 +142,11 @@ export class QualityMonitor {
           // 隐藏率是"电流声/机器声"最直接的观测指标（丢包率看不出 FEC 已兜住的部分）
           concealed += Math.max(0, report.concealedSamples ?? 0);
           samples += Math.max(0, report.totalSamplesReceived ?? 0);
-        } else if (report.type === 'candidate-pair'
-          && (report.nominated === true || report.state === 'succeeded')
-          && typeof report.currentRoundTripTime === 'number') {
+        } else if (
+          report.type === 'candidate-pair' &&
+          (report.nominated === true || report.state === 'succeeded') &&
+          typeof report.currentRoundTripTime === 'number'
+        ) {
           peerRtts.push(report.currentRoundTripTime);
         }
       });
@@ -159,13 +175,21 @@ export class QualityMonitor {
     this.deps.report(level);
   }
 
-  private grade(lost: number, received: number, rtts: number[], concealed: number, samples: number): VoiceQualityLevel {
+  private grade(
+    lost: number,
+    received: number,
+    rtts: number[],
+    concealed: number,
+    samples: number
+  ): VoiceQualityLevel {
     const lossRate = lost + received > 0 ? lost / (lost + received) : 0;
     const avgRtt = rtts.length > 0 ? rtts.reduce((a, b) => a + b, 0) / rtts.length : 0;
     // 隐藏率：无样本（连接未建立/浏览器不报）时不参与降级
     const concealRate = samples > 0 ? concealed / samples : 0;
-    if (lossRate > QUALITY_LOSS_POOR || avgRtt > QUALITY_RTT_POOR || concealRate > QUALITY_CONCEAL_POOR) return 'poor';
-    if (lossRate > QUALITY_LOSS_FAIR || avgRtt > QUALITY_RTT_FAIR || concealRate > QUALITY_CONCEAL_FAIR) return 'fair';
+    if (lossRate > QUALITY_LOSS_POOR || avgRtt > QUALITY_RTT_POOR || concealRate > QUALITY_CONCEAL_POOR)
+      return 'poor';
+    if (lossRate > QUALITY_LOSS_FAIR || avgRtt > QUALITY_RTT_FAIR || concealRate > QUALITY_CONCEAL_FAIR)
+      return 'fair';
     return 'good';
   }
 }

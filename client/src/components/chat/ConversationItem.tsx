@@ -31,9 +31,7 @@ export default function ConversationItem({ conv, active, onClick }: Conversation
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
         <span className={styles.time}>{formatLastMessageTime(conv.last_message_at)}</span>
-        {conv.unread_count > 0 && (
-          <span className={styles.badge}>{conv.unread_count}</span>
-        )}
+        {conv.unread_count > 0 && <span className={styles.badge}>{conv.unread_count}</span>}
       </div>
     </button>
   );

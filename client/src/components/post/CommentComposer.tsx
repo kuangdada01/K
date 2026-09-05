@@ -62,11 +62,7 @@ export default function CommentComposer({
           ref={inputRef}
           className={`${styles.input}${!isLoggedIn ? ` ${styles.inputLocked}` : ''}`}
           placeholder={
-            isLoggedIn
-              ? replyingTo
-                ? `回复 @${replyingTo.username}...`
-                : '添加评论...'
-              : '登录后即可评论'
+            isLoggedIn ? (replyingTo ? `回复 @${replyingTo.username}...` : '添加评论...') : '登录后即可评论'
           }
           value={value}
           onChange={(e) => onChange(e.target.value)}

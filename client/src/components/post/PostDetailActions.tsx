@@ -83,11 +83,7 @@ export default function PostDetailActions({
         {reposted ? <RepostCheck size={28} /> : <Repeat2 size={28} />}
         {repostCount > 0 && <span className={styles.actionCount}>{repostCount}</span>}
       </button>
-      <button
-        className={`${styles.actionBtn} ${styles.shareTooltip}`}
-        onClick={onShare}
-        aria-label="分享"
-      >
+      <button className={`${styles.actionBtn} ${styles.shareTooltip}`} onClick={onShare} aria-label="分享">
         <Share2 size={24} />
         {shareCount > 0 && <span className={styles.actionCount}>{shareCount}</span>}
         {showTooltip && <span className={styles.shareTooltipText}>已复制链接</span>}

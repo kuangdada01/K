@@ -11,7 +11,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  AudioLines, Mic, MicOff, AudioWaveform, Headphones, Plus, Trash2, Volume2, Radio,
+  AudioLines,
+  Mic,
+  MicOff,
+  AudioWaveform,
+  Headphones,
+  Plus,
+  Trash2,
+  Volume2,
+  Radio,
   Music, // 音乐模式图标（高保真立体声档）
   Circle, // 录制按钮空闲态的实心圆点
   LogOut, // 退出房间图标；水平镜像后：门在右侧、箭头朝左
@@ -83,7 +91,10 @@ export default function VoicePage() {
   /** 已朗读过的消息 id：防止打开开关瞬间补读开关前的最后一条实时消息 */
   const lastReadMsgIdRef = useRef<number | null>(null);
   /** 可用语音缓存（getVoices 异步就绪，voiceschanged 事件刷新） */
-  const voicesRef = useRef<{ zh: SpeechSynthesisVoice | null; en: SpeechSynthesisVoice | null }>({ zh: null, en: null });
+  const voicesRef = useRef<{ zh: SpeechSynthesisVoice | null; en: SpeechSynthesisVoice | null }>({
+    zh: null,
+    en: null,
+  });
 
   /** 停止朗读（打断当前 + 清状态） */
   const stopTTS = useCallback(() => {
@@ -94,35 +105,55 @@ export default function VoicePage() {
   }, [ttsSupported]);
 
   /** 朗读一条消息：新消息打断正在播的旧消息（最新优先），播完自动复位 */
-  const speakMessage = useCallback((id: number, text: string, lang: 'zh' | 'en') => {
-    if (!ttsSupported) return;
-    const synth = window.speechSynthesis;
-    // 先打断正在播的（若正在播同一条则是"再点停止"语义，由调用方处理）
-    synth.cancel();
-    speakingRef.current = false;
-    setSpeakingMsgId(id);
-    const utter = new SpeechSynthesisUtterance(text);
-    utter.lang = lang === 'zh' ? 'zh-CN' : 'en-US';
-    const voice = lang === 'zh' ? voicesRef.current.zh : voicesRef.current.en;
-    if (voice) utter.voice = voice;
-    utter.onend = () => { speakingRef.current = false; setSpeakingMsgId(null); };
-    utter.onerror = () => { speakingRef.current = false; setSpeakingMsgId(null); };
-    // Chrome 在 cancel 后立即 speak 可能静默失败（crbug 已知问题），
-    // 延迟到下一个宏任务再播，避开 cancel 的内部异步清理窗口
-    setTimeout(() => { if (!speakingRef.current) synth.speak(utter); }, 0);
-  }, [ttsSupported]);
+  const speakMessage = useCallback(
+    (id: number, text: string, lang: 'zh' | 'en') => {
+      if (!ttsSupported) return;
+      const synth = window.speechSynthesis;
+      // 先打断正在播的（若正在播同一条则是"再点停止"语义，由调用方处理）
+      synth.cancel();
+      speakingRef.current = false;
+      setSpeakingMsgId(id);
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = lang === 'zh' ? 'zh-CN' : 'en-US';
+      const voice = lang === 'zh' ? voicesRef.current.zh : voicesRef.current.en;
+      if (voice) utter.voice = voice;
+      utter.onend = () => {
+        speakingRef.current = false;
+        setSpeakingMsgId(null);
+      };
+      utter.onerror = () => {
+        speakingRef.current = false;
+        setSpeakingMsgId(null);
+      };
+      // Chrome 在 cancel 后立即 speak 可能静默失败（crbug 已知问题），
+      // 延迟到下一个宏任务再播，避开 cancel 的内部异步清理窗口
+      setTimeout(() => {
+        if (!speakingRef.current) synth.speak(utter);
+      }, 0);
+    },
+    [ttsSupported]
+  );
 
   /** 点击消息手动朗读（自己的消息也可读）；再点正在朗读的同一消息 → 停止 */
-  const handleSpeakMessage = useCallback((m: VoiceChatMessage) => {
-    if (!ttsSupported) { showToast('当前浏览器不支持朗读'); return; }
-    if (speakingMsgId === m.id) { stopTTS(); return; }
-    // 语言只按消息内容判定（666 → 中文"六六六"；英文内容 → 英文语音）
-    speakMessage(m.id, `${m.username}说${m.content}`, detectSpeakLang(m.content));
-  }, [ttsSupported, speakingMsgId, stopTTS, speakMessage]);
+  const handleSpeakMessage = useCallback(
+    (m: VoiceChatMessage) => {
+      if (!ttsSupported) {
+        showToast('当前浏览器不支持朗读');
+        return;
+      }
+      if (speakingMsgId === m.id) {
+        stopTTS();
+        return;
+      }
+      // 语言只按消息内容判定（666 → 中文"六六六"；英文内容 → 英文语音）
+      speakMessage(m.id, `${m.username}说${m.content}`, detectSpeakLang(m.content));
+    },
+    [ttsSupported, speakingMsgId, stopTTS, speakMessage]
+  );
 
   /** 朗读开关：开=自动朗读新消息，关=立即停止并清队列 */
   const toggleTTS = useCallback(() => {
-    setTtsEnabled(prev => {
+    setTtsEnabled((prev) => {
       const next = !prev;
       localStorage.setItem(CHAT_TTS_KEY, next ? '1' : '0');
       if (next) {
@@ -141,8 +172,8 @@ export default function VoicePage() {
     const loadVoices = () => {
       const voices = window.speechSynthesis.getVoices();
       voicesRef.current = {
-        zh: voices.find(v => v.lang.toLowerCase().startsWith('zh')) ?? null,
-        en: voices.find(v => v.lang.toLowerCase().startsWith('en')) ?? null,
+        zh: voices.find((v) => v.lang.toLowerCase().startsWith('zh')) ?? null,
+        en: voices.find((v) => v.lang.toLowerCase().startsWith('en')) ?? null,
       };
     };
     loadVoices();
@@ -172,20 +203,24 @@ export default function VoicePage() {
   // 页面切到后台：停止朗读（避免标签页不可见时还在出声）
   useEffect(() => {
     if (!ttsSupported) return;
-    const onVisibility = () => { if (document.hidden) queueMicrotask(stopTTS); };
+    const onVisibility = () => {
+      if (document.hidden) queueMicrotask(stopTTS);
+    };
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
   }, [ttsSupported, stopTTS]);
 
   const refreshRooms = useCallback(() => {
     listVoiceRooms()
-      .then(res => setRooms(res.rooms || []))
-      .catch(() => { /* 静默失败，保留下次刷新 */ });
+      .then((res) => setRooms(res.rooms || []))
+      .catch(() => {
+        /* 静默失败，保留下次刷新 */
+      });
   }, []);
 
   useEffect(() => {
     listVoiceRooms()
-      .then(res => setRooms(res.rooms || []))
+      .then((res) => setRooms(res.rooms || []))
       .catch(() => setRooms([]))
       .finally(() => setLoading(false));
   }, []);
@@ -217,7 +252,10 @@ export default function VoicePage() {
   };
 
   const handleJoin = (room: VoiceRoom) => {
-    if ((room.participantCount ?? 0) >= VOICE_MAX_ROOM_SIZE) { showToast('房间已满'); return; }
+    if ((room.participantCount ?? 0) >= VOICE_MAX_ROOM_SIZE) {
+      showToast('房间已满');
+      return;
+    }
     // 未登录用户以访客身份进入（服务端分配负数 id，显示"未登录-N"）
     voice.join(room.id, room.name);
     setMicVolume(voice.getMicVolume());
@@ -227,7 +265,10 @@ export default function VoicePage() {
 
   const handleCreate = async () => {
     const name = newName.trim();
-    if (!name) { showToast('请输入房间名'); return; }
+    if (!name) {
+      showToast('请输入房间名');
+      return;
+    }
     try {
       // 未登录用户也可以创建房间（服务端以访客身份分配创建者归属）
       const res = await createVoiceRoom(name, newDesc.trim() || undefined);
@@ -292,7 +333,7 @@ export default function VoicePage() {
     const isSharingSelf = !!voice.share && voice.share.userId === self?.userId;
     // 当前房间的创建者身份来自轮询的房间列表（isCreator 由服务端按访问者计算，
     // 访客创建者按 IP 归属；游客/管理员同样可管理）
-    const currentRoom = rooms.find(r => r.id === voice.activeRoomId) ?? null;
+    const currentRoom = rooms.find((r) => r.id === voice.activeRoomId) ?? null;
     const canClearChat = currentRoom !== null && (currentRoom.isCreator === true || user?.role === 'admin');
     return (
       <div className={styles.page}>
@@ -303,7 +344,9 @@ export default function VoicePage() {
           <div className={styles.roomTitleWrap}>
             <h1 className={styles.roomTitle}>{voice.activeRoomName ?? '语音房间'}</h1>
             <span className={styles.roomCount}>
-              {voice.status === 'reconnecting' ? '重连中…' : `${voice.participants.length}/${VOICE_MAX_ROOM_SIZE} 人在线`}
+              {voice.status === 'reconnecting'
+                ? '重连中…'
+                : `${voice.participants.length}/${VOICE_MAX_ROOM_SIZE} 人在线`}
             </span>
           </div>
         </div>
@@ -312,7 +355,7 @@ export default function VoicePage() {
         {voice.share && <VoiceShareStage />}
 
         <div className={styles.memberGrid}>
-          {voice.participants.map(p => (
+          {voice.participants.map((p) => (
             <MemberCard
               key={p.userId}
               participant={p}
@@ -336,11 +379,13 @@ export default function VoicePage() {
               className={`${styles.ttsBtn} ${ttsEnabled ? styles.ttsOn : styles.ttsOff}`}
               onClick={toggleTTS}
               disabled={!ttsSupported}
-              title={!ttsSupported
-                ? '当前浏览器不支持朗读'
-                : ttsEnabled
-                  ? '关闭新消息自动朗读'
-                  : '开启新消息自动朗读（自动识别中英文）'}
+              title={
+                !ttsSupported
+                  ? '当前浏览器不支持朗读'
+                  : ttsEnabled
+                    ? '关闭新消息自动朗读'
+                    : '开启新消息自动朗读（自动识别中英文）'
+              }
             >
               <Volume2 size={13} />
               <span>{ttsEnabled ? '朗读开' : '朗读'}</span>
@@ -359,7 +404,7 @@ export default function VoicePage() {
           <div
             className={styles.chatList}
             ref={chatListRef}
-            onScroll={e => {
+            onScroll={(e) => {
               const el = e.currentTarget;
               autoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
             }}
@@ -377,7 +422,7 @@ export default function VoicePage() {
                     {voice.chatLoadingMore ? '加载中…' : '加载更早的消息'}
                   </button>
                 )}
-                {chatMessages.map(m => {
+                {chatMessages.map((m) => {
                   const mine = self !== undefined && m.sender_id === self.userId;
                   return (
                     <div
@@ -389,7 +434,10 @@ export default function VoicePage() {
                       <Avatar src={m.avatar} username={m.username} size={26} />
                       <div className={styles.chatMsgBody}>
                         <div className={styles.chatMsgMeta}>
-                          <span className={styles.chatMsgName}>{m.username}{mine ? '（我）' : ''}</span>
+                          <span className={styles.chatMsgName}>
+                            {m.username}
+                            {mine ? '（我）' : ''}
+                          </span>
                           <span className={styles.chatMsgTime}>{formatChatTime(m.created_at)}</span>
                         </div>
                         <div className={styles.chatMsgText}>{m.content}</div>
@@ -406,8 +454,8 @@ export default function VoicePage() {
               placeholder="输入消息，回车发送（500字以内）"
               value={chatDraft}
               maxLength={500}
-              onChange={e => setChatDraft(e.target.value)}
-              onKeyDown={e => {
+              onChange={(e) => setChatDraft(e.target.value)}
+              onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleSendChat();
               }}
             />
@@ -440,9 +488,13 @@ export default function VoicePage() {
             className={`${styles.noiseBtn} ${voice.noiseReduction ? styles.noiseOn : styles.noiseOff}`}
             onClick={voice.toggleNoiseReduction}
             disabled={voice.musicMode}
-            title={voice.musicMode
-              ? '音乐模式下处理链已关闭（降噪与音乐保真互斥）'
-              : voice.noiseReduction ? '关闭降噪（恢复原声）' : '打开降噪：只保留人声，降低风扇/空调等环境声'}
+            title={
+              voice.musicMode
+                ? '音乐模式下处理链已关闭（降噪与音乐保真互斥）'
+                : voice.noiseReduction
+                  ? '关闭降噪（恢复原声）'
+                  : '打开降噪：只保留人声，降低风扇/空调等环境声'
+            }
           >
             <AudioWaveform size={16} />
             <span>{voice.noiseReduction ? '降噪开' : '降噪'}</span>
@@ -451,9 +503,11 @@ export default function VoicePage() {
           <button
             className={`${styles.noiseBtn} ${voice.musicMode ? styles.noiseOn : styles.noiseOff}`}
             onClick={voice.toggleMusicMode}
-            title={voice.musicMode
-              ? '关闭音乐模式（恢复语音优化档：降噪/回声消除/抗丢包冗余）'
-              : '音乐模式：音质升为 96k 立体声，关闭回声消除与降噪（适合播放/演唱音乐，请佩戴耳机）'}
+            title={
+              voice.musicMode
+                ? '关闭音乐模式（恢复语音优化档：降噪/回声消除/抗丢包冗余）'
+                : '音乐模式：音质升为 96k 立体声，关闭回声消除与降噪（适合播放/演唱音乐，请佩戴耳机）'
+            }
           >
             <Music size={16} />
             <span>{voice.musicMode ? '音乐开' : '音乐'}</span>
@@ -463,7 +517,11 @@ export default function VoicePage() {
             <button
               className={`${styles.shareBtn} ${isSharingSelf ? styles.shareOn : styles.shareOff}`}
               onClick={voice.toggleScreenShare}
-              title={isSharingSelf ? '停止屏幕共享' : '共享屏幕给全房间（整屏共享受浏览器限制约 30-40fps；共享标签页/应用窗口可更流畅。观看者越多越占上传带宽）'}
+              title={
+                isSharingSelf
+                  ? '停止屏幕共享'
+                  : '共享屏幕给全房间（整屏共享受浏览器限制约 30-40fps；共享标签页/应用窗口可更流畅。观看者越多越占上传带宽）'
+              }
             >
               <MonitorUp size={16} />
               <span>{isSharingSelf ? '停止共享' : '共享屏幕'}</span>
@@ -479,7 +537,8 @@ export default function VoicePage() {
               <>
                 <span className={styles.recDot} />
                 <span className={styles.recTime}>
-                  {String(Math.floor(recSeconds / 60)).padStart(2, '0')}:{String(recSeconds % 60).padStart(2, '0')}
+                  {String(Math.floor(recSeconds / 60)).padStart(2, '0')}:
+                  {String(recSeconds % 60).padStart(2, '0')}
                 </span>
               </>
             ) : (
@@ -496,7 +555,7 @@ export default function VoicePage() {
             <VolumeSlider
               value={micVolume}
               max={1}
-              onChange={v => {
+              onChange={(v) => {
                 setMicVolume(v);
                 voice.setMicVolume(v);
               }}
@@ -515,10 +574,14 @@ export default function VoicePage() {
     <div className={styles.page}>
       <div className={styles.header}>
         <h1>语音</h1>
-        <button className={styles.createBtn} onClick={() => {
-          // 未登录用户也可以创建房间（以访客身份）
-          setCreating(true); setTimeout(() => nameInputRef.current?.focus(), 50);
-        }}>
+        <button
+          className={styles.createBtn}
+          onClick={() => {
+            // 未登录用户也可以创建房间（以访客身份）
+            setCreating(true);
+            setTimeout(() => nameInputRef.current?.focus(), 50);
+          }}
+        >
           <Plus size={16} />
           <span>创建房间</span>
         </button>
@@ -533,7 +596,7 @@ export default function VoicePage() {
         </div>
       ) : (
         <div className={styles.roomList}>
-          {rooms.map(room => {
+          {rooms.map((room) => {
             const count = room.participantCount ?? 0;
             const active = count > 0;
             // 删除权限：房间创建者（含访客创建者，isCreator 由服务端按访问者计算）或管理员
@@ -567,7 +630,7 @@ export default function VoicePage() {
       {/* 创建房间弹层 */}
       {creating && (
         <div className={styles.modalMask} onClick={() => setCreating(false)}>
-          <div className={styles.modal} onClick={e => e.stopPropagation()}>
+          <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
             <h2>创建语音房间</h2>
             <input
               ref={nameInputRef}
@@ -575,18 +638,22 @@ export default function VoicePage() {
               placeholder="房间名（1-30字）"
               value={newName}
               maxLength={30}
-              onChange={e => setNewName(e.target.value)}
+              onChange={(e) => setNewName(e.target.value)}
             />
             <input
               className={styles.input}
               placeholder="简介（可选，100字以内）"
               value={newDesc}
               maxLength={100}
-              onChange={e => setNewDesc(e.target.value)}
+              onChange={(e) => setNewDesc(e.target.value)}
             />
             <div className={styles.modalActions}>
-              <button className={styles.cancelBtn} onClick={() => setCreating(false)}>取消</button>
-              <button className={styles.confirmBtn} onClick={handleCreate}>创建</button>
+              <button className={styles.cancelBtn} onClick={() => setCreating(false)}>
+                取消
+              </button>
+              <button className={styles.confirmBtn} onClick={handleCreate}>
+                创建
+              </button>
             </div>
           </div>
         </div>
@@ -606,7 +673,12 @@ export default function VoicePage() {
 
 /** 参与者卡片：头像 + 说话光环 + 静音标识 + 右上角网络质量点 + 单人音量条 */
 function MemberCard({
-  participant, speaking, isSelf, quality, onVolume, getVolume,
+  participant,
+  speaking,
+  isSelf,
+  quality,
+  onVolume,
+  getVolume,
 }: {
   participant: VoiceParticipant;
   speaking: boolean;
@@ -638,14 +710,15 @@ function MemberCard({
         )}
       </div>
       <div className={styles.memberName}>
-        {participant.username}{isSelf ? '（我）' : ''}
+        {participant.username}
+        {isSelf ? '（我）' : ''}
       </div>
       {!isSelf && (
         <div className={styles.peerVolume}>
           <Volume2 size={13} />
           <VolumeSlider
             value={volume}
-            onChange={v => {
+            onChange={(v) => {
               setVolume(v);
               onVolume(participant.userId, v);
             }}
@@ -657,15 +730,26 @@ function MemberCard({
 }
 
 /** 音量滑条（4px 细轨道，填充随值变化；max 默认 1，麦克风用 1.5 配合总线压限拉高低声麦） */
-function VolumeSlider({ value, onChange, max = 1 }: { value: number; onChange: (v: number) => void; max?: number }) {
+function VolumeSlider({
+  value,
+  onChange,
+  max = 1,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+  max?: number;
+}) {
   const pct = Math.round(Math.min(1, Math.max(0, value / max)) * 100);
   return (
     <input
-      type="range" min={0} max={max} step={0.05}
+      type="range"
+      min={0}
+      max={max}
+      step={0.05}
       className={styles.slider}
       style={{ background: `linear-gradient(to right, var(--accent) ${pct}%, var(--bg-secondary) ${pct}%)` }}
       value={value}
-      onChange={e => onChange(Number(e.target.value))}
+      onChange={(e) => onChange(Number(e.target.value))}
     />
   );
 }

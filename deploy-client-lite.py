@@ -9,7 +9,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--server", default="120.25.100.193")
+    ap.add_argument("--server", required=True, help="目标服务器 IP（不内置默认值：公开仓库不暴露生产地址）")
     ap.add_argument("--package", required=True)
     a = ap.parse_args()
     pwd = os.environ.get("DEPLOY_PASSWORD", "").strip()

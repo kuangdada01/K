@@ -26,7 +26,12 @@ interface ProfilePostGridProps {
 
 /** 单个帖子格 */
 function PostGridItem({
-  post, isOwnProfile, onPostClick, onEditPost, onDeletePost, showPin,
+  post,
+  isOwnProfile,
+  onPostClick,
+  onEditPost,
+  onDeletePost,
+  showPin,
 }: {
   post: Post;
   isOwnProfile: boolean;
@@ -36,10 +41,7 @@ function PostGridItem({
   showPin: boolean;
 }) {
   return (
-    <div
-      className={styles.item}
-      onClick={() => onPostClick(post.id)}
-    >
+    <div className={styles.item} onClick={() => onPostClick(post.id)}>
       {showPin && !!post.pinned && (
         <div className={styles.pinBadge}>
           <Pin size={24} fill="white" />
@@ -86,9 +88,17 @@ function PostGridItem({
 }
 
 export default function ProfilePostGrid({
-  activeTab, setActiveTab, isOwnProfile, posts, bookmarkedPosts,
-  loadingBookmarks, repostedPosts, loadingReposts,
-  onPostClick, onEditPost, onDeletePost,
+  activeTab,
+  setActiveTab,
+  isOwnProfile,
+  posts,
+  bookmarkedPosts,
+  loadingBookmarks,
+  repostedPosts,
+  loadingReposts,
+  onPostClick,
+  onEditPost,
+  onDeletePost,
 }: ProfilePostGridProps) {
   return (
     <div style={{ paddingTop: 0 }}>
@@ -123,7 +133,7 @@ export default function ProfilePostGrid({
       {activeTab === 'posts' ? (
         posts.length > 0 ? (
           <div className={styles.grid}>
-            {posts.map(post => (
+            {posts.map((post) => (
               <PostGridItem
                 key={post.id}
                 post={post}
@@ -148,7 +158,7 @@ export default function ProfilePostGrid({
           </div>
         ) : bookmarkedPosts.length > 0 ? (
           <div className={styles.grid}>
-            {bookmarkedPosts.map(post => (
+            {bookmarkedPosts.map((post) => (
               <PostGridItem
                 key={post.id}
                 post={post}
@@ -166,31 +176,29 @@ export default function ProfilePostGrid({
             <div className={styles.emptyText}>还没有收藏</div>
           </div>
         )
+      ) : loadingReposts ? (
+        <div className={styles.empty}>
+          <div className={styles.emptyText}>加载中...</div>
+        </div>
+      ) : repostedPosts.length > 0 ? (
+        <div className={styles.grid}>
+          {repostedPosts.map((post) => (
+            <PostGridItem
+              key={post.id}
+              post={post}
+              isOwnProfile={isOwnProfile}
+              showPin={false}
+              onPostClick={onPostClick}
+              onEditPost={onEditPost}
+              onDeletePost={onDeletePost}
+            />
+          ))}
+        </div>
       ) : (
-        loadingReposts ? (
-          <div className={styles.empty}>
-            <div className={styles.emptyText}>加载中...</div>
-          </div>
-        ) : repostedPosts.length > 0 ? (
-          <div className={styles.grid}>
-            {repostedPosts.map(post => (
-              <PostGridItem
-                key={post.id}
-                post={post}
-                isOwnProfile={isOwnProfile}
-                showPin={false}
-                onPostClick={onPostClick}
-                onEditPost={onEditPost}
-                onDeletePost={onDeletePost}
-              />
-            ))}
-          </div>
-        ) : (
-          <div className={styles.empty}>
-            <Repeat2 size={48} className={styles.emptyIcon} />
-            <div className={styles.emptyText}>还没有转发</div>
-          </div>
-        )
+        <div className={styles.empty}>
+          <Repeat2 size={48} className={styles.emptyIcon} />
+          <div className={styles.emptyText}>还没有转发</div>
+        </div>
       )}
     </div>
   );

@@ -47,10 +47,13 @@ router.use(authMiddleware, adminMiddleware);
  *
  * 返回所有用户信息，包含每个用户的帖子数量
  */
-router.get('/users', asyncHandler(async (_req: Request, res: Response) => {
-  const users = adminRepo.listUsers();
-  res.json({ users });
-}));
+router.get(
+  '/users',
+  asyncHandler(async (_req: Request, res: Response) => {
+    const users = adminRepo.listUsers();
+    res.json({ users });
+  })
+);
 
 /**
  * GET /api/admin/users/search - 搜索用户（按用户名或ID）
@@ -60,15 +63,18 @@ router.get('/users', asyncHandler(async (_req: Request, res: Response) => {
  *
  * 最多返回10条结果，用于公告指定用户等场景
  */
-router.get('/users/search', asyncHandler(async (req: Request, res: Response) => {
-  const q = (req.query.q as string || '').trim();
-  if (!q) {
-    res.json({ users: [] });
-    return;
-  }
-  const users = adminRepo.searchUsers(q);
-  res.json({ users });
-}));
+router.get(
+  '/users/search',
+  asyncHandler(async (req: Request, res: Response) => {
+    const q = ((req.query.q as string) || '').trim();
+    if (!q) {
+      res.json({ users: [] });
+      return;
+    }
+    const users = adminRepo.searchUsers(q);
+    res.json({ users });
+  })
+);
 
 /**
  * DELETE /api/admin/users/:id - 删除用户
@@ -79,41 +85,44 @@ router.get('/users/search', asyncHandler(async (req: Request, res: Response) => 
  *
  * 验证: 不能删除自己的账号
  */
-router.delete('/users/:id', asyncHandler(async (req: Request, res: Response) => {
-  const userId = parseInt(req.params.id as string);
-  if (userId === req.user!.id) {
-    throw new AppError(400, '不能删除自己的账号');
-  }
-  const user = adminRepo.findUser(userId);
-  if (!user) {
-    throw new AppError(404, '用户不存在');
-  }
+router.delete(
+  '/users/:id',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = parseInt(req.params.id as string);
+    if (userId === req.user!.id) {
+      throw new AppError(400, '不能删除自己的账号');
+    }
+    const user = adminRepo.findUser(userId);
+    if (!user) {
+      throw new AppError(404, '用户不存在');
+    }
 
-  // 删库前收集全部磁盘文件引用（级联删除后行已不在，无从查起）
-  const postMedia = adminRepo.listUserPostMedia(userId);
-  const privateImageNames = adminRepo.listUserPrivateImageNames(userId);
-  const messageImageNames = adminRepo.listUserMessageImageNames(userId);
+    // 删库前收集全部磁盘文件引用（级联删除后行已不在，无从查起）
+    const postMedia = adminRepo.listUserPostMedia(userId);
+    const privateImageNames = adminRepo.listUserPrivateImageNames(userId);
+    const messageImageNames = adminRepo.listUserMessageImageNames(userId);
 
-  adminRepo.deleteUser(userId, user.email);
+    adminRepo.deleteUser(userId, user.email);
 
-  // 头像
-  if (user.avatar) {
-    safeDeleteFile(user.avatar, 'uploads/avatars');
-  }
-  // 帖子媒体（图片/视频/封面）
-  for (const media of postMedia) {
-    deletePostMediaFiles(media);
-  }
-  // 私密图片与私信图片（uploads_private，DB 只存文件名）
-  for (const name of privateImageNames) {
-    safeDeleteFile(`/uploads_private/${path.basename(name)}`, 'uploads_private');
-  }
-  for (const name of messageImageNames) {
-    safeDeleteFile(`/uploads_private/${path.basename(name)}`, 'uploads_private');
-  }
+    // 头像
+    if (user.avatar) {
+      safeDeleteFile(user.avatar, 'uploads/avatars');
+    }
+    // 帖子媒体（图片/视频/封面）
+    for (const media of postMedia) {
+      deletePostMediaFiles(media);
+    }
+    // 私密图片与私信图片（uploads_private，DB 只存文件名）
+    for (const name of privateImageNames) {
+      safeDeleteFile(`/uploads_private/${path.basename(name)}`, 'uploads_private');
+    }
+    for (const name of messageImageNames) {
+      safeDeleteFile(`/uploads_private/${path.basename(name)}`, 'uploads_private');
+    }
 
-  res.json({ success: true });
-}));
+    res.json({ success: true });
+  })
+);
 
 /**
  * PUT /api/admin/users/:id/password - 重置用户密码
@@ -121,17 +130,21 @@ router.delete('/users/:id', asyncHandler(async (req: Request, res: Response) => 
  * 请求体:
  * - password: 新密码（至少6个字符）
  */
-router.put('/users/:id/password', validateBody(adminResetPasswordSchema), asyncHandler(async (req: Request, res: Response) => {
-  const userId = parseInt(req.params.id as string);
-  const { password } = req.body;
-  const user = adminRepo.findUser(userId);
-  if (!user) {
-    throw new AppError(404, '用户不存在');
-  }
-  const hash = await bcrypt.hash(password, 10);
-  adminRepo.resetUserPassword(userId, hash);
-  res.json({ success: true });
-}));
+router.put(
+  '/users/:id/password',
+  validateBody(adminResetPasswordSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = parseInt(req.params.id as string);
+    const { password } = req.body;
+    const user = adminRepo.findUser(userId);
+    if (!user) {
+      throw new AppError(404, '用户不存在');
+    }
+    const hash = await bcrypt.hash(password, 10);
+    adminRepo.resetUserPassword(userId, hash);
+    res.json({ success: true });
+  })
+);
 
 /**
  * POST /api/admin/users/:id/ban - 封禁用户
@@ -139,36 +152,42 @@ router.put('/users/:id/password', validateBody(adminResetPasswordSchema), asyncH
  * 请求体: { days: 1 | 7 | 30 | 365 }
  * 封禁期间用户仅可浏览（GET），所有写操作返回 403
  */
-router.post('/users/:id/ban', asyncHandler(async (req: Request, res: Response) => {
-  const userId = parseInt(req.params.id as string);
-  const days = Number(req.body?.days);
-  if (![1, 7, 30, 365].includes(days)) {
-    throw new AppError(400, '封禁时长仅支持 1天/1周/1月/1年');
-  }
-  const role = adminRepo.getUserRole(userId);
-  if (role === undefined) {
-    throw new AppError(404, '用户不存在');
-  }
-  if (role === 'admin') {
-    throw new AppError(400, '不能封禁管理员账号');
-  }
-  const bannedUntil = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
-  adminRepo.setBanStatus(userId, bannedUntil);
-  res.json({ success: true, banned_until: bannedUntil });
-}));
+router.post(
+  '/users/:id/ban',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = parseInt(req.params.id as string);
+    const days = Number(req.body?.days);
+    if (![1, 7, 30, 365].includes(days)) {
+      throw new AppError(400, '封禁时长仅支持 1天/1周/1月/1年');
+    }
+    const role = adminRepo.getUserRole(userId);
+    if (role === undefined) {
+      throw new AppError(404, '用户不存在');
+    }
+    if (role === 'admin') {
+      throw new AppError(400, '不能封禁管理员账号');
+    }
+    const bannedUntil = new Date(Date.now() + days * 24 * 3600 * 1000).toISOString();
+    adminRepo.setBanStatus(userId, bannedUntil);
+    res.json({ success: true, banned_until: bannedUntil });
+  })
+);
 
 /**
  * POST /api/admin/users/:id/unban - 解封用户
  */
-router.post('/users/:id/unban', asyncHandler(async (req: Request, res: Response) => {
-  const userId = parseInt(req.params.id as string);
-  const user = adminRepo.findUser(userId);
-  if (!user) {
-    throw new AppError(404, '用户不存在');
-  }
-  adminRepo.setBanStatus(userId, null);
-  res.json({ success: true, banned_until: null });
-}));
+router.post(
+  '/users/:id/unban',
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = parseInt(req.params.id as string);
+    const user = adminRepo.findUser(userId);
+    if (!user) {
+      throw new AppError(404, '用户不存在');
+    }
+    adminRepo.setBanStatus(userId, null);
+    res.json({ success: true, banned_until: null });
+  })
+);
 
 // ============================================================
 // 帖子管理端点
@@ -181,33 +200,39 @@ router.post('/users/:id/unban', asyncHandler(async (req: Request, res: Response)
  * - page: 页码（默认1）
  * - limit: 每页数量（默认20）
  */
-router.get('/posts', asyncHandler(async (req: Request, res: Response) => {
-  const page = pageQuerySchema.parse(req.query.page);
-  const limit = limitQuerySchema.parse(req.query.limit);
+router.get(
+  '/posts',
+  asyncHandler(async (req: Request, res: Response) => {
+    const page = pageQuerySchema.parse(req.query.page);
+    const limit = limitQuerySchema.parse(req.query.limit);
 
-  const { posts, total } = adminRepo.listAllPosts(page, limit);
+    const { posts, total } = adminRepo.listAllPosts(page, limit);
 
-  // 解析图片JSON
-  const postsWithImages = posts.map((p) => withImages(p));
+    // 解析图片JSON
+    const postsWithImages = posts.map((p) => withImages(p));
 
-  res.json({ posts: postsWithImages, total, page, totalPages: Math.ceil(total / limit) });
-}));
+    res.json({ posts: postsWithImages, total, page, totalPages: Math.ceil(total / limit) });
+  })
+);
 
 /**
  * DELETE /api/admin/posts/:id - 删除帖子
  *
  * 先删除相关通知，再删除帖子；媒体文件（图片/视频/封面）同步清理
  */
-router.delete('/posts/:id', asyncHandler(async (req: Request, res: Response) => {
-  const postId = parseInt(req.params.id as string);
-  const media = adminRepo.findPostMedia(postId);
-  if (!media) {
-    throw new AppError(404, '帖子不存在');
-  }
-  adminRepo.adminDeletePost(postId);
-  deletePostMediaFiles(media);
-  res.json({ success: true });
-}));
+router.delete(
+  '/posts/:id',
+  asyncHandler(async (req: Request, res: Response) => {
+    const postId = parseInt(req.params.id as string);
+    const media = adminRepo.findPostMedia(postId);
+    if (!media) {
+      throw new AppError(404, '帖子不存在');
+    }
+    adminRepo.adminDeletePost(postId);
+    deletePostMediaFiles(media);
+    res.json({ success: true });
+  })
+);
 
 // ============================================================
 // 公告管理端点
@@ -221,43 +246,53 @@ router.delete('/posts/:id', asyncHandler(async (req: Request, res: Response) => 
  * - content: 公告内容
  * - target_user_id: 目标用户ID（可选，为空则为全体公告）
  */
-router.post('/announcements', validateBody(announcementSchema), asyncHandler(async (req: Request, res: Response) => {
-  const { title, content, target_user_id } = req.body;
+router.post(
+  '/announcements',
+  validateBody(announcementSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { title, content, target_user_id } = req.body;
 
-  const announcement = adminRepo.createAnnouncement({
-    title,
-    content,
-    targetUserId: target_user_id || null,
-    fromUserId: req.user!.id,
-  });
+    const announcement = adminRepo.createAnnouncement({
+      title,
+      content,
+      targetUserId: target_user_id || null,
+      fromUserId: req.user!.id,
+    });
 
-  res.status(201).json(announcement);
+    res.status(201).json(announcement);
 
-  // 实时推送公告事件（定向推送目标用户，全体公告推送所有在线用户）
-  if (target_user_id) {
-    notifyUser(target_user_id, 'announcement', { announcement_id: announcement.id });
-  } else {
-    notifyAllUsers('announcement', { announcement_id: announcement.id });
-  }
-}));
+    // 实时推送公告事件（定向推送目标用户，全体公告推送所有在线用户）
+    if (target_user_id) {
+      notifyUser(target_user_id, 'announcement', { announcement_id: announcement.id });
+    } else {
+      notifyAllUsers('announcement', { announcement_id: announcement.id });
+    }
+  })
+);
 
 /**
  * GET /api/admin/announcements - 获取所有公告列表
  *
  * 返回所有公告，包含目标用户名（如有）
  */
-router.get('/announcements', asyncHandler(async (_req: Request, res: Response) => {
-  const announcements = adminRepo.listAllAnnouncements();
-  res.json({ announcements });
-}));
+router.get(
+  '/announcements',
+  asyncHandler(async (_req: Request, res: Response) => {
+    const announcements = adminRepo.listAllAnnouncements();
+    res.json({ announcements });
+  })
+);
 
 /**
  * DELETE /api/admin/announcements/:id - 删除公告
  */
-router.delete('/announcements/:id', asyncHandler(async (req: Request, res: Response) => {
-  const id = parseInt(req.params.id as string);
-  adminRepo.deleteAnnouncement(id);
-  res.json({ success: true });
-}));
+router.delete(
+  '/announcements/:id',
+  asyncHandler(async (req: Request, res: Response) => {
+    const id = parseInt(req.params.id as string);
+    adminRepo.deleteAnnouncement(id);
+    res.json({ success: true });
+  })
+);
 
 export default router;

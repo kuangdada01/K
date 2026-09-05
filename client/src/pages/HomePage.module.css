@@ -54,7 +54,10 @@
   color: var(--accent);
   background: transparent;
   border: none;
-  transition: transform 0.12s ease, opacity 0.12s ease, color 0.12s ease;
+  transition:
+    transform 0.12s ease,
+    opacity 0.12s ease,
+    color 0.12s ease;
 }
 
 .searchBtn:active {
@@ -149,5 +152,7 @@
 }
 
 @keyframes homePullSpin {
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 }

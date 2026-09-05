@@ -32,9 +32,21 @@ interface ConversationSidebarProps {
 }
 
 export default function ConversationSidebar({
-  user, followSearch, setFollowSearch, showFollowResults, setShowFollowResults,
-  searchResults, onNavigateProfile, activeTab, setActiveTab, unreadNotifs,
-  conversations, selectedPartnerId, onSelectConversation, notifications, onNotificationClick,
+  user,
+  followSearch,
+  setFollowSearch,
+  showFollowResults,
+  setShowFollowResults,
+  searchResults,
+  onNavigateProfile,
+  activeTab,
+  setActiveTab,
+  unreadNotifs,
+  conversations,
+  selectedPartnerId,
+  onSelectConversation,
+  notifications,
+  onNotificationClick,
 }: ConversationSidebarProps) {
   return (
     <div className={styles.sidebar}>
@@ -48,7 +60,7 @@ export default function ConversationSidebar({
             className={styles.followSearchInput}
             placeholder="搜索用户"
             value={followSearch}
-            onChange={e => setFollowSearch(e.target.value)}
+            onChange={(e) => setFollowSearch(e.target.value)}
             onFocus={() => setShowFollowResults(true)}
             onBlur={() => {
               setTimeout(() => setShowFollowResults(false), 200);
@@ -57,11 +69,11 @@ export default function ConversationSidebar({
         </div>
         {showFollowResults && searchResults.length > 0 && (
           <div className={styles.followResults}>
-            {searchResults.map(u => (
+            {searchResults.map((u) => (
               <button
                 key={u.id}
                 className={styles.followItem}
-                onMouseDown={e => {
+                onMouseDown={(e) => {
                   e.preventDefault();
                   setFollowSearch('');
                   setShowFollowResults(false);
@@ -93,25 +105,21 @@ export default function ConversationSidebar({
         </button>
       </div>
       <div className={styles.list}>
-        {activeTab === 'messages' && conversations.map(conv => (
-          <ConversationItem
-            key={conv.partner_id}
-            conv={conv}
-            active={selectedPartnerId === conv.partner_id}
-            onClick={onSelectConversation}
-          />
-        ))}
-        {activeTab === 'notifications' && notifications.map(notif => (
-          <NotificationItem
-            key={notif.id}
-            notif={notif}
-            onClick={onNotificationClick}
-          />
-        ))}
+        {activeTab === 'messages' &&
+          conversations.map((conv) => (
+            <ConversationItem
+              key={conv.partner_id}
+              conv={conv}
+              active={selectedPartnerId === conv.partner_id}
+              onClick={onSelectConversation}
+            />
+          ))}
+        {activeTab === 'notifications' &&
+          notifications.map((notif) => (
+            <NotificationItem key={notif.id} notif={notif} onClick={onNotificationClick} />
+          ))}
         {activeTab === 'notifications' && notifications.length === 0 && (
-          <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)' }}>
-            暂无通知
-          </div>
+          <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-secondary)' }}>暂无通知</div>
         )}
       </div>
     </div>

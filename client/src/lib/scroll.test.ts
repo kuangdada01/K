@@ -4,13 +4,7 @@
  * （jsdom 无布局，scrollTop 读写不回显，不做断言）
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import {
-  getScrollTarget,
-  loadPersistedScrollY,
-  persistScrollY,
-  readScrollY,
-  writeScrollY,
-} from './scroll';
+import { getScrollTarget, loadPersistedScrollY, persistScrollY, readScrollY, writeScrollY } from './scroll';
 
 afterEach(() => {
   document.querySelector('.main-content')?.remove();

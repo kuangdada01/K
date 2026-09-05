@@ -69,7 +69,9 @@
   background: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius, 16px);
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 
 .roomActive {
@@ -150,7 +152,9 @@
   background: none;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
+  transition:
+    color 0.15s,
+    background 0.15s;
 }
 
 .deleteBtn:hover {
@@ -355,7 +359,9 @@
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s, opacity 0.15s;
+  transition:
+    background 0.15s,
+    opacity 0.15s;
 }
 
 .micBtn:disabled {
@@ -389,7 +395,9 @@
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .noiseBtn:hover {
@@ -429,7 +437,9 @@
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .shareBtn:hover {
@@ -464,7 +474,9 @@
   cursor: pointer;
   background: var(--bg-btn-secondary, var(--bg-secondary));
   color: var(--text-primary);
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .recBtn:hover {
@@ -490,7 +502,8 @@
 }
 
 @keyframes recPulse {
-  0%, 100% {
+  0%,
+  100% {
     opacity: 1;
     transform: scale(1);
   }
@@ -562,7 +575,9 @@
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: color 0.15s, background 0.15s;
+  transition:
+    color 0.15s,
+    background 0.15s;
 }
 
 .chatClearBtn:hover {
@@ -581,7 +596,10 @@
   border-radius: 8px;
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, opacity 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    opacity 0.15s;
 }
 
 .ttsBtn:disabled {
@@ -719,7 +737,9 @@
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s, opacity 0.15s;
+  transition:
+    background 0.15s,
+    opacity 0.15s;
 }
 
 .chatSendBtn:hover:not(:disabled) {

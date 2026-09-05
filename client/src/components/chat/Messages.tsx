@@ -42,7 +42,7 @@ function mergeMessagePages(prev: Message[], newMsgs: Message[]): Message[] {
   if (lastPrev && lastNew && lastPrev.id === lastNew.id && prev.length >= newMsgs.length) return prev;
   if (prev.length === 0 && newMsgs.length === 0) return prev;
   // 合并：保留已加载的更早消息，用最新页补齐/更新
-  const byId = new Map(prev.map(m => [m.id, m]));
+  const byId = new Map(prev.map((m) => [m.id, m]));
   for (const m of newMsgs) byId.set(m.id, m);
   return [...byId.values()].sort((a, b) => a.id - b.id);
 }
@@ -69,7 +69,9 @@ export default function Messages() {
   const [selectedPostId, setSelectedPostId] = useState<number | null>(null);
   const [highlightCommentId, setHighlightCommentId] = useState<number | null>(null);
   const [followSearch, setFollowSearch] = useState('');
-  const [searchResults, setSearchResults] = useState<{ id: number; username: string; avatar: string | null }[]>([]);
+  const [searchResults, setSearchResults] = useState<
+    { id: number; username: string; avatar: string | null }[]
+  >([]);
   const [showFollowResults, setShowFollowResults] = useState(false);
   const chatMessagesRef = useRef<HTMLDivElement>(null);
   const scrollSentinelRef = useRef<HTMLDivElement>(null);
@@ -82,7 +84,9 @@ export default function Messages() {
   const hasMoreRef = useRef(false);
   const loadingOlderRef = useRef(false);
 
-  useEffect(() => { messagesRef.current = messages; }, [messages]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   // 返回键：处理对话和标签页的返回逻辑
   // 安卓端主 Tab 退出由 App.tsx 统一处理，此处仅处理对话关闭
@@ -112,7 +116,7 @@ export default function Messages() {
         api.get('/notifications'),
       ]);
       // 合并本地已清除的未读状态，防止服务器未及时更新导致角标回弹
-      const merged = (convRes.data.conversations as Conversation[]).map(conv => {
+      const merged = (convRes.data.conversations as Conversation[]).map((conv) => {
         const clearedAt = clearedUnreadRef.current.get(conv.partner_id);
         if (clearedAt !== undefined) {
           if (conv.unread_count === 0) {
@@ -146,20 +150,26 @@ export default function Messages() {
       const res = await api.get(`/messages/${partnerId}`, { params: { limit: 50 } });
       const newMsgs = res.data.messages as Message[];
       hasMoreRef.current = !!res.data.has_more;
-      setMessages(prev => mergeMessagePages(prev, newMsgs));
+      setMessages((prev) => mergeMessagePages(prev, newMsgs));
     } catch {}
   }, [userId]);
 
   // 渲染期同步 selectedPartner（prev 值模式）：仅当 partner 变化时调整，
   // 替代 effect 内同步 setState（react-hooks/set-state-in-effect）
   const activePartnerId = userId ? parseInt(userId) : null;
-  const activeConv = activePartnerId !== null ? conversations.find(c => c.partner_id === activePartnerId) : undefined;
+  const activeConv =
+    activePartnerId !== null ? conversations.find((c) => c.partner_id === activePartnerId) : undefined;
   if (activePartnerId !== null && selectedPartner?.partner_id !== activePartnerId) {
-    setSelectedPartner(activeConv ?? {
-      partner_id: activePartnerId,
-      username: '', avatar: null,
-      last_message: '', last_message_at: '', unread_count: 0,
-    });
+    setSelectedPartner(
+      activeConv ?? {
+        partner_id: activePartnerId,
+        username: '',
+        avatar: null,
+        last_message: '',
+        last_message_at: '',
+        unread_count: 0,
+      }
+    );
   }
 
   // Load messages when partner selected + poll for new messages
@@ -169,14 +179,18 @@ export default function Messages() {
     initialScrollRef.current = true;
 
     // 骨架 partner（本体已在渲染期同步）：用户名/头像异步填充
-    const conv = conversations.find(c => c.partner_id === partnerId);
+    const conv = conversations.find((c) => c.partner_id === partnerId);
     if (!conv) {
-      api.get(`/users/${partnerId}`).then(res => {
-        setSelectedPartner(prev => prev?.partner_id === partnerId ? {
-          ...prev,
-          username: res.data.username,
-          avatar: res.data.avatar,
-        } : prev);
+      api.get(`/users/${partnerId}`).then((res) => {
+        setSelectedPartner((prev) =>
+          prev?.partner_id === partnerId
+            ? {
+                ...prev,
+                username: res.data.username,
+                avatar: res.data.avatar,
+              }
+            : prev
+        );
       });
     }
 
@@ -188,7 +202,7 @@ export default function Messages() {
         const res = await api.get(`/messages/${pid}`, { params: { limit: 50 } });
         const newMsgs = res.data.messages as Message[];
         hasMoreRef.current = !!res.data.has_more;
-        setMessages(prev => mergeMessagePages(prev, newMsgs));
+        setMessages((prev) => mergeMessagePages(prev, newMsgs));
       } catch {}
     };
     pollMessages();
@@ -222,8 +236,8 @@ export default function Messages() {
       const olderMsgs = res.data.messages as Message[];
       hasMoreRef.current = !!res.data.has_more;
       if (olderMsgs.length > 0) {
-        setMessages(prev => {
-          const byId = new Map(prev.map(m => [m.id, m]));
+        setMessages((prev) => {
+          const byId = new Map(prev.map((m) => [m.id, m]));
           for (const m of olderMsgs) byId.set(m.id, m);
           return [...byId.values()].sort((a, b) => a.id - b.id);
         });
@@ -233,7 +247,8 @@ export default function Messages() {
           }
         });
       }
-    } catch {} finally {
+    } catch {
+    } finally {
       loadingOlderRef.current = false;
     }
   }, [userId]);
@@ -327,7 +342,7 @@ export default function Messages() {
         payload.quotedMessageId = quoteMsg.id;
       }
       const res = await api.post('/messages', payload);
-      setMessages(prev => [...prev, res.data]);
+      setMessages((prev) => [...prev, res.data]);
       setQuoteMsg(null);
       requestAnimationFrame(() => {
         const el = chatMessagesRef.current;
@@ -360,7 +375,7 @@ export default function Messages() {
       const res = await api.post('/messages', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      setMessages(prev => [...prev, res.data]);
+      setMessages((prev) => [...prev, res.data]);
       requestAnimationFrame(() => {
         const el = chatMessagesRef.current;
         if (el) el.scrollTop = 0; // column-reverse: 0 = 底部
@@ -396,13 +411,16 @@ export default function Messages() {
   // 长按触发（移动端）
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleTouchStart = useCallback((e: React.TouchEvent, msg: Message) => {
-    const target = e.currentTarget;
-    longPressTimer.current = setTimeout(() => {
-      const isSent = msg.sender_id === user?.id;
-      setContextMenu({ msgId: msg.id, isSent, rect: target.getBoundingClientRect() });
-    }, 500);
-  }, [user]);
+  const handleTouchStart = useCallback(
+    (e: React.TouchEvent, msg: Message) => {
+      const target = e.currentTarget;
+      longPressTimer.current = setTimeout(() => {
+        const isSent = msg.sender_id === user?.id;
+        setContextMenu({ msgId: msg.id, isSent, rect: target.getBoundingClientRect() });
+      }, 500);
+    },
+    [user]
+  );
 
   const handleTouchEnd = useCallback(() => {
     if (longPressTimer.current) {
@@ -419,32 +437,44 @@ export default function Messages() {
   }, []);
 
   // 右键触发（Web 端）
-  const handleContextMenu = useCallback((e: React.MouseEvent, msg: Message) => {
-    e.preventDefault();
-    const isSent = msg.sender_id === user?.id;
-    setContextMenu({ msgId: msg.id, isSent, rect: e.currentTarget.getBoundingClientRect() });
-  }, [user]);
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent, msg: Message) => {
+      e.preventDefault();
+      const isSent = msg.sender_id === user?.id;
+      setContextMenu({ msgId: msg.id, isSent, rect: e.currentTarget.getBoundingClientRect() });
+    },
+    [user]
+  );
 
   // 复制消息
-  const handleCopy = useCallback((msgId: number) => {
-    const msg = messages.find(m => m.id === msgId);
-    if (!msg) return;
-    navigator.clipboard.writeText(msg.content).then(() => {
-      showToast('已复制');
-    }).catch(() => {
-      showToast('复制失败');
-    });
-    setContextMenu(null);
-  }, [messages]);
+  const handleCopy = useCallback(
+    (msgId: number) => {
+      const msg = messages.find((m) => m.id === msgId);
+      if (!msg) return;
+      navigator.clipboard
+        .writeText(msg.content)
+        .then(() => {
+          showToast('已复制');
+        })
+        .catch(() => {
+          showToast('复制失败');
+        });
+      setContextMenu(null);
+    },
+    [messages]
+  );
 
   // 引用消息
-  const handleQuote = useCallback((msgId: number) => {
-    const msg = messages.find(m => m.id === msgId);
-    if (!msg) return;
-    setQuoteMsg(msg);
-    setContextMenu(null);
-    chatInputRef.current?.focus();
-  }, [messages]);
+  const handleQuote = useCallback(
+    (msgId: number) => {
+      const msg = messages.find((m) => m.id === msgId);
+      if (!msg) return;
+      setQuoteMsg(msg);
+      setContextMenu(null);
+      chatInputRef.current?.focus();
+    },
+    [messages]
+  );
 
   // 跳转到原消息
   const scrollToMessage = useCallback((msgId: number) => {
@@ -461,7 +491,7 @@ export default function Messages() {
     setContextMenu(null);
     try {
       await api.delete(`/messages/single/${msgId}`);
-      setMessages(prev => prev.filter(m => m.id !== msgId));
+      setMessages((prev) => prev.filter((m) => m.id !== msgId));
       showToast('消息已撤回');
     } catch {
       showToast('撤回失败');
@@ -473,9 +503,9 @@ export default function Messages() {
     // 立即清除该会话的本地未读角标，并用 ref 阻止轮询回弹
     if (c.unread_count > 0) {
       clearedUnreadRef.current.set(c.partner_id, c.unread_count);
-      setConversations(prev => prev.map(cc =>
-        cc.partner_id === c.partner_id ? { ...cc, unread_count: 0 } : cc
-      ));
+      setConversations((prev) =>
+        prev.map((cc) => (cc.partner_id === c.partner_id ? { ...cc, unread_count: 0 } : cc))
+      );
       events.emit('badge:changed', { source: 'msg', count: c.unread_count });
     }
     navigate(`/messages/${c.partner_id}`);
@@ -484,8 +514,8 @@ export default function Messages() {
   const handleNotificationClick = (n: Notification) => {
     if (!n.read) {
       api.put(`/notifications/${n.id}/read`).catch(() => {});
-      setNotifications(prev => prev.map(nn => nn.id === n.id ? { ...nn, read: 1 } : nn));
-      setUnreadNotifs(prev => Math.max(0, prev - 1));
+      setNotifications((prev) => prev.map((nn) => (nn.id === n.id ? { ...nn, read: 1 } : nn)));
+      setUnreadNotifs((prev) => Math.max(0, prev - 1));
       events.emit('badge:changed', { source: 'notif' }); // 通知侧边栏刷新未读数
     }
     if (n.post_id) {
@@ -528,7 +558,9 @@ export default function Messages() {
             setQuoteMsg={setQuoteMsg}
             imageInputRef={imageInputRef}
             chatInputRef={chatInputRef}
-            onBack={() => { window.history.back(); }}
+            onBack={() => {
+              window.history.back();
+            }}
             onClear={handleClearMessages}
             onSend={handleSend}
             onSendImage={handleSendImage}
@@ -544,9 +576,7 @@ export default function Messages() {
         )}
       </div>
 
-      {zoomImage && (
-        <ChatZoomOverlay zoomImage={zoomImage} zoomClosing={zoomClosing} onClose={closeZoom} />
-      )}
+      {zoomImage && <ChatZoomOverlay zoomImage={zoomImage} zoomClosing={zoomClosing} onClose={closeZoom} />}
 
       {contextMenu && (
         <ChatContextMenu
@@ -566,7 +596,15 @@ export default function Messages() {
       )}
 
       {selectedPostId && (
-        <PostDetail postId={selectedPostId} highlightCommentId={highlightCommentId} onClose={() => { postDetailHandledBack.current = true; setSelectedPostId(null); setHighlightCommentId(null); }} />
+        <PostDetail
+          postId={selectedPostId}
+          highlightCommentId={highlightCommentId}
+          onClose={() => {
+            postDetailHandledBack.current = true;
+            setSelectedPostId(null);
+            setHighlightCommentId(null);
+          }}
+        />
       )}
     </div>
   );

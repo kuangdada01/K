@@ -49,36 +49,41 @@ function MessageBubble({
 
   return (
     <Fragment key={msg.id}>
-      <div
-        className={`${styles.row} ${isSent ? styles.sent : styles.received}`}
-        data-msg-id={msg.id}
-      >
+      <div className={`${styles.row} ${isSent ? styles.sent : styles.received}`} data-msg-id={msg.id}>
         <Avatar src={avatar} username={name || ''} size={32} className={styles.msgAvatar} />
         <div
           className={`${styles.bubbleWrapper} ${isSent ? styles.sent : styles.received}`}
-          onContextMenu={e => onContextMenu(e, msg)}
-          onTouchStart={e => onTouchStart(e, msg)}
+          onContextMenu={(e) => onContextMenu(e, msg)}
+          onTouchStart={(e) => onTouchStart(e, msg)}
           onTouchEnd={onTouchEnd}
           onTouchMove={onTouchMove}
         >
           {msg.image_url ? (
             imageUrl ? (
-              <img src={imageUrl} alt="图片" className={styles.messageImage} onClick={() => onZoomImage(imageUrl)} />
+              <img
+                src={imageUrl}
+                alt="图片"
+                className={styles.messageImage}
+                onClick={() => onZoomImage(imageUrl)}
+              />
             ) : null
           ) : (
-            <div className={`${styles.message} ${isSent ? styles.sent : styles.received}`}>
-              {msg.content}
-            </div>
+            <div className={`${styles.message} ${isSent ? styles.sent : styles.received}`}>{msg.content}</div>
           )}
           {msg.quoted_message_id && (
-            <div className={`${styles.messageQuote} ${isSent ? styles.sent : styles.received}`} onClick={() => onScrollToMessage(msg.quoted_message_id!)}>
+            <div
+              className={`${styles.messageQuote} ${isSent ? styles.sent : styles.received}`}
+              onClick={() => onScrollToMessage(msg.quoted_message_id!)}
+            >
               {quotedImageUrl && !msg.quoted_content ? (
                 <div className={styles.quoteImg}>
                   <div className={styles.quoteUserName}>{msg.quoted_sender_username}:</div>
                   <img className={styles.quoteThumb} src={quotedImageUrl} alt="" />
                 </div>
               ) : (
-                <span>{msg.quoted_sender_username}: {msg.quoted_content || '[消息]'}</span>
+                <span>
+                  {msg.quoted_sender_username}: {msg.quoted_content || '[消息]'}
+                </span>
               )}
             </div>
           )}

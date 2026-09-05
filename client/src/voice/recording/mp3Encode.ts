@@ -55,9 +55,7 @@ function floatToInt16(samples: Float32Array): Int16Array {
 }
 
 /** lamejs 支持的采样率集合（WebAudio 常见 44.1k/48k 均在内） */
-const MP3_SUPPORTED_RATES = new Set<number>([
-  8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000,
-]);
+const MP3_SUPPORTED_RATES = new Set<number>([8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000]);
 
 /** 不在 lamejs 支持集内的采样率统一归一到 44.1k（线性重采样，时长不变） */
 function normalizeMp3SampleRate(rate: number): number {
@@ -86,7 +84,10 @@ export function concatFloat32(slices: Float32Array[]): Float32Array {
   for (const s of slices) total += s.length;
   const out = new Float32Array(total);
   let offset = 0;
-  for (const s of slices) { out.set(s, offset); offset += s.length; }
+  for (const s of slices) {
+    out.set(s, offset);
+    offset += s.length;
+  }
   return out;
 }
 
@@ -103,7 +104,7 @@ export async function encodePcmToMp3(mono: Float32Array, sampleRate: number): Pr
     // 拷贝进新 ArrayBuffer 以满足 BlobPart 的精确类型（lamejs 返回值是 ArrayBufferLike）
     const encoded = new Uint8Array(encoder.encodeBuffer(int16.subarray(i, i + BLOCK)));
     if (encoded.length > 0) parts.push(encoded);
-    if ((i / BLOCK) % 200 === 0) await new Promise(r => setTimeout(r, 0));
+    if ((i / BLOCK) % 200 === 0) await new Promise((r) => setTimeout(r, 0));
   }
   const tail = new Uint8Array(encoder.flush());
   if (tail.length > 0) parts.push(tail);
@@ -147,21 +148,25 @@ export async function finalizeRecording(
   raw: Blob | null,
   mime: string,
   roomName: string,
-  startedAt: number,
+  startedAt: number
 ): Promise<void> {
   if (pcm && pcm.length > 0) {
     try {
       const mp3 = await encodePcmToMp3(pcm, sampleRate);
       downloadBlob(mp3, buildRecordingFileName(roomName, startedAt, 'mp3'));
       return;
-    } catch { /* PCM 编码失败则继续尝试解码路径 */ }
+    } catch {
+      /* PCM 编码失败则继续尝试解码路径 */
+    }
   }
   if (raw && raw.size > 0) {
     try {
       const mp3 = await blobToMp3(raw);
       downloadBlob(mp3, buildRecordingFileName(roomName, startedAt, 'mp3'));
       return;
-    } catch { /* 解码失败，兜底原始格式 */ }
+    } catch {
+      /* 解码失败，兜底原始格式 */
+    }
     downloadBlob(raw, buildRecordingFileName(roomName, startedAt, rawExtension(mime)));
   }
 }

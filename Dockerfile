@@ -53,7 +53,11 @@ COPY --from=build /app/client/dist ./client/dist
 RUN cd server && npm ci --omit=dev --no-audit --no-fund
 
 # E4：非 root 运行（uploads/k.db 等可写路径由 VOLUME 挂载，宿主授权）
-RUN useradd -r -m app && chown -R app:app /app
+# k.db 必须预建为空文件：VOLUME 声明的路径若不存在，Docker 会创建为"目录"，
+# better-sqlite3 打不开目录会导致全新 docker run 直接崩溃
+RUN useradd -r -m app \
+  && touch /app/server/k.db \
+  && chown -R app:app /app
 USER app
 
 # 持久化数据目录与数据库

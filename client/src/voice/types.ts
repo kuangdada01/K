@@ -20,11 +20,14 @@ export type ShareQuality = '1080p60' | '1080p30' | '720p30';
 /** 质量档位 → 编码参数（scale 分辨率下采样倍率；degradation 带宽不足时的降级策略）。
  *  码率上限给足：实际发送码率由 WebRTC 按网络可用带宽自适应（0 ~ 上限），
  *  mesh 拓扑下共享者上行 = 观看数 × 实际码率。 */
-export const SHARE_QUALITY_PRESETS: Record<ShareQuality, {
-  maxBitrate: number;
-  scale: number;
-  degradation: 'maintain-framerate' | 'maintain-resolution' | 'balanced';
-}> = {
+export const SHARE_QUALITY_PRESETS: Record<
+  ShareQuality,
+  {
+    maxBitrate: number;
+    scale: number;
+    degradation: 'maintain-framerate' | 'maintain-resolution' | 'balanced';
+  }
+> = {
   // 1080p60 动态画面（视频/游戏）实测 BWE 自适应会给到 12M 上下，上限给足让拥塞控制按需取值
   '1080p60': { maxBitrate: 30_000_000, scale: 1, degradation: 'maintain-framerate' },
   // 1080p30 动态画面实测会顶满 8M 上限仍偏紧（高动态内容 10M 才接近清晰），提到 10M

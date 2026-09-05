@@ -23,18 +23,18 @@
      --bg-page  页面底色 #0d0f14 / 卡片表面 #161a22 / 鎏金强调 #c9a962
    ============================================================ */
 :root {
-  --bg-page: #eef2ee;            /* 页面底色（青瓷） */
-  --bg-primary: #ffffff;         /* 卡片/表面（白瓷） */
-  --bg-secondary: #ffffff;       /* 次级表面 */
-  --bg-hover: #dfe8df;           /* 悬停/浅表面 */
-  --border-color: #d2ddd2;       /* 瓷缘灰绿 */
+  --bg-page: #eef2ee; /* 页面底色（青瓷） */
+  --bg-primary: #ffffff; /* 卡片/表面（白瓷） */
+  --bg-secondary: #ffffff; /* 次级表面 */
+  --bg-hover: #dfe8df; /* 悬停/浅表面 */
+  --border-color: #d2ddd2; /* 瓷缘灰绿 */
   --text-primary: #1f2b26;
   --text-secondary: #55645d;
   --text-muted: #82948b;
-  --accent: #2f5d50;             /* 松柏深绿 */
+  --accent: #2f5d50; /* 松柏深绿 */
   --accent-hover: #24493e;
   --accent-soft: rgba(47, 93, 80, 0.15);
-  --on-accent: #f5faf6;          /* 强调色上的文字 */
+  --on-accent: #f5faf6; /* 强调色上的文字 */
   --danger: #b5544a;
   --danger-hover: #a3473e;
   --success: #3a7d5c;
@@ -60,7 +60,7 @@
 }
 
 /* 暗色模式变量覆盖（玄夜鎏金） */
-[data-theme="dark"] {
+[data-theme='dark'] {
   --bg-page: #0d0f14;
   --bg-primary: #161a22;
   --bg-secondary: #1e232d;
@@ -69,10 +69,10 @@
   --text-primary: #e8e6e1;
   --text-secondary: #a8abaf;
   --text-muted: #6d7178;
-  --accent: #c9a962;             /* 鎏金 */
+  --accent: #c9a962; /* 鎏金 */
   --accent-hover: #d9bd7c;
   --accent-soft: rgba(201, 169, 98, 0.18);
-  --on-accent: #0d0f14;          /* 金底用深字 */
+  --on-accent: #0d0f14; /* 金底用深字 */
   --danger: #e0586b;
   --danger-hover: #ea7080;
   --success: #7fbf8f;
@@ -104,7 +104,15 @@
 }
 
 body {
-  font-family: 'MiSans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family:
+    'MiSans',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
   background-color: var(--bg-page);
   color: var(--text-primary);
   line-height: 1.5;
@@ -114,13 +122,16 @@ body {
   overflow-y: auto;
 }
 
-input, textarea, select {
+input,
+textarea,
+select {
   font-family: inherit;
   font-size: 16px;
   color: inherit;
 }
 
-button, a {
+button,
+a {
   touch-action: manipulation;
 }
 
@@ -129,7 +140,12 @@ a {
   color: inherit;
 }
 
-h1, h2, h3, h4, h5, h6 {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
   color: inherit;
 }
 
@@ -141,7 +157,8 @@ button {
   color: inherit;
 }
 
-input, textarea {
+input,
+textarea {
   font-family: inherit;
 }
 

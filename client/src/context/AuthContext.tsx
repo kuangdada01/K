@@ -25,16 +25,16 @@ import { User, AuthResponse } from '../types';
 
 /** 认证上下文类型定义 */
 interface AuthContextType {
-  user: User | null;                                      // 当前用户信息（null=未登录）
-  token: string | null;                                   // JWT token
-  loading: boolean;                                       // 是否正在加载（验证token中）
-  login: (email: string, password: string) => Promise<void>;    // 登录方法
+  user: User | null; // 当前用户信息（null=未登录）
+  token: string | null; // JWT token
+  loading: boolean; // 是否正在加载（验证token中）
+  login: (email: string, password: string) => Promise<void>; // 登录方法
   register: (username: string, email: string, password: string, code: string) => Promise<void>; // 注册方法
-  logout: () => void;                                     // 登出方法
-  updateUser: (user: User) => void;                       // 更新用户信息（如修改资料后）
-  showLoginPrompt: boolean;                               // 是否显示登录提示弹窗
-  openLoginPrompt: () => void;                            // 打开登录提示弹窗
-  closeLoginPrompt: () => void;                           // 关闭登录提示弹窗
+  logout: () => void; // 登出方法
+  updateUser: (user: User) => void; // 更新用户信息（如修改资料后）
+  showLoginPrompt: boolean; // 是否显示登录提示弹窗
+  openLoginPrompt: () => void; // 打开登录提示弹窗
+  closeLoginPrompt: () => void; // 关闭登录提示弹窗
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -62,8 +62,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   /** 应用启动时验证 token */
   useEffect(() => {
     if (token) {
-      api.get('/auth/me')
-        .then(res => setUser(res.data))
+      api
+        .get('/auth/me')
+        .then((res) => setUser(res.data))
         .catch(() => {
           // token 无效或已过期，清除本地存储
           localStorage.removeItem('k_token');
@@ -81,13 +82,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const anyFollowCached = queryClient
       .getQueryCache()
       .getAll()
-      .some(q => Array.isArray(q.queryKey) && q.queryKey[0] === 'cache' && q.queryKey[1] === 'follow');
+      .some((q) => Array.isArray(q.queryKey) && q.queryKey[0] === 'cache' && q.queryKey[1] === 'follow');
     if (anyFollowCached) return;
-    myFollowing().then(res => {
-      if (Array.isArray(res.friends)) {
-        seedFollowedUsers(res.friends.map(f => f.id));
-      }
-    }).catch(() => {});
+    myFollowing()
+      .then((res) => {
+        if (Array.isArray(res.friends)) {
+          seedFollowedUsers(res.friends.map((f) => f.id));
+        }
+      })
+      .catch(() => {});
   }, [user]);
 
   /** 监听 token 过期事件（由 api.ts 401 拦截器触发） */
@@ -135,7 +138,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, register, logout, updateUser, showLoginPrompt, openLoginPrompt, closeLoginPrompt }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        token,
+        loading,
+        login,
+        register,
+        logout,
+        updateUser,
+        showLoginPrompt,
+        openLoginPrompt,
+        closeLoginPrompt,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

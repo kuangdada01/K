@@ -27,7 +27,12 @@ export default function NotificationItem({ notif, onClick }: NotificationItemPro
       <div className={styles.info}>
         <div className={styles.username}>{notif.from_username}</div>
         <div className={styles.preview}>
-          {notif.type === 'reply' ? '回复了你的评论' : notif.type === 'comment' ? '评论了你的帖子' : '给你发了消息'}: {notif.content}
+          {notif.type === 'reply'
+            ? '回复了你的评论'
+            : notif.type === 'comment'
+              ? '评论了你的帖子'
+              : '给你发了消息'}
+          : {notif.content}
         </div>
       </div>
       <div className={styles.right}>

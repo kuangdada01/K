@@ -48,7 +48,9 @@ describe('useFollowUser', () => {
     mocks.user = null;
     const { result } = setup();
     let ok: boolean | undefined;
-    act(() => { ok = result.current.requireLogin(); });
+    act(() => {
+      ok = result.current.requireLogin();
+    });
     expect(ok).toBe(false);
     expect(mocks.openLoginPrompt).toHaveBeenCalledTimes(1);
   });
@@ -56,7 +58,9 @@ describe('useFollowUser', () => {
   it('requireLogin：已登录返回 true 且不弹窗', () => {
     const { result } = setup();
     let ok: boolean | undefined;
-    act(() => { ok = result.current.requireLogin(); });
+    act(() => {
+      ok = result.current.requireLogin();
+    });
     expect(ok).toBe(true);
     expect(mocks.openLoginPrompt).not.toHaveBeenCalled();
   });
@@ -66,7 +70,9 @@ describe('useFollowUser', () => {
     const handler = vi.fn();
     events.on('follow:changed', handler);
     let res: { is_following: boolean; followers_count: number } | undefined;
-    await act(async () => { res = await result.current.follow(7); });
+    await act(async () => {
+      res = await result.current.follow(7);
+    });
     expect(mocks.follow).toHaveBeenCalledWith(7);
     expect(qc.getQueryData(['cache', 'follow', 7])).toBe(true);
     expect(handler).toHaveBeenCalledWith(7);
@@ -78,7 +84,9 @@ describe('useFollowUser', () => {
     qc.setQueryData(['cache', 'follow', 7], true); // 预置已关注
     const handler = vi.fn();
     events.on('follow:changed', handler);
-    await act(async () => { await result.current.unfollow(7); });
+    await act(async () => {
+      await result.current.unfollow(7);
+    });
     expect(mocks.unfollow).toHaveBeenCalledWith(7);
     expect(qc.getQueryData(['cache', 'follow', 7])).toBe(false);
     expect(handler).toHaveBeenCalledWith(7);

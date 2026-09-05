@@ -16,25 +16,25 @@ import { createContext, useContext, useState, useCallback, ReactNode } from 'rea
 
 /** 编辑帖子时传入的数据结构 */
 export interface EditPostData {
-  id: number;                // 帖子ID
-  description: string;       // 帖子描述
-  images: string[];          // 当前图片列表
-  closeComments: boolean;    // 是否关闭评论
-  pinned: boolean;           // 是否置顶
-  videoUrl?: string | null;  // 视频URL（视频帖子时有值）
+  id: number; // 帖子ID
+  description: string; // 帖子描述
+  images: string[]; // 当前图片列表
+  closeComments: boolean; // 是否关闭评论
+  pinned: boolean; // 是否置顶
+  videoUrl?: string | null; // 视频URL（视频帖子时有值）
   videoCover?: string | null; // 视频封面URL
 }
 
 /** 全局事件上下文类型定义 */
 interface EventContextType {
   // 帖子相关
-  showCreate: boolean;                          // 是否显示创建帖子模态框
-  openCreate: () => void;                       // 打开创建模态框
-  closeCreate: () => void;                      // 关闭创建模态框
-  editPost: EditPostData | null;                // 编辑中的帖子数据（null=不在编辑状态）
-  openEdit: (post: EditPostData) => void;       // 打开编辑模态框
-  closeEdit: () => void;                        // 关闭编辑模态框
-  onEditSave?: () => void;                      // 编辑保存后的回调函数
+  showCreate: boolean; // 是否显示创建帖子模态框
+  openCreate: () => void; // 打开创建模态框
+  closeCreate: () => void; // 关闭创建模态框
+  editPost: EditPostData | null; // 编辑中的帖子数据（null=不在编辑状态）
+  openEdit: (post: EditPostData) => void; // 打开编辑模态框
+  closeEdit: () => void; // 关闭编辑模态框
+  onEditSave?: () => void; // 编辑保存后的回调函数
   setOnEditSave: (callback: () => void) => void; // 注册编辑保存回调
 }
 
@@ -54,11 +54,18 @@ export function EventProvider({ children }: { children: ReactNode }) {
   const closeEdit = useCallback(() => setEditPost(null), []);
 
   return (
-    <EventContext.Provider value={{
-      showCreate, openCreate, closeCreate,
-      editPost, openEdit, closeEdit,
-      onEditSave, setOnEditSave,
-    }}>
+    <EventContext.Provider
+      value={{
+        showCreate,
+        openCreate,
+        closeCreate,
+        editPost,
+        openEdit,
+        closeEdit,
+        onEditSave,
+        setOnEditSave,
+      }}
+    >
       {children}
     </EventContext.Provider>
   );

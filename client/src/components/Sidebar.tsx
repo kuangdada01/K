@@ -16,7 +16,17 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Home, Search, MessageCircle, PlusSquare, User, Megaphone, Shield, BookOpen, AudioLines } from 'lucide-react';
+import {
+  Home,
+  Search,
+  MessageCircle,
+  PlusSquare,
+  User,
+  Megaphone,
+  Shield,
+  BookOpen,
+  AudioLines,
+} from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useEvent } from '../context/CreateContext';
 import { useVoiceInRoom } from '../context/VoiceContext';
@@ -49,7 +59,8 @@ export default function Sidebar() {
       ]);
       const notifCount = notifRes.data.unread_count || 0;
       const msgCount = (convRes.data.conversations || []).reduce(
-        (sum: number, c: any) => sum + (c.unread_count || 0), 0
+        (sum: number, c: any) => sum + (c.unread_count || 0),
+        0
       );
       const serverTotal = notifCount + msgCount;
 
@@ -89,16 +100,18 @@ export default function Sidebar() {
         const delta = payload.count ?? 1;
         if (delta > 0) {
           pendingReads.current += delta;
-          setUnreadCount(prevCount => Math.max(0, prevCount - delta));
+          setUnreadCount((prevCount) => Math.max(0, prevCount - delta));
         }
       } else if (payload.source === 'notif') {
         pendingReads.current += 1;
-        setUnreadCount(prevCount => Math.max(0, prevCount - 1));
+        setUnreadCount((prevCount) => Math.max(0, prevCount - 1));
       }
       loadUnread();
     };
     events.on('badge:changed', handler);
-    return () => { events.off('badge:changed', handler); };
+    return () => {
+      events.off('badge:changed', handler);
+    };
   }, [user, loadUnread]);
 
   const isActive = (path: string) => {
@@ -106,8 +119,7 @@ export default function Sidebar() {
     return location.pathname.startsWith(path);
   };
 
-  const itemClass = (path: string) =>
-    `${styles.item} ${isActive(path) ? styles.active : ''}`;
+  const itemClass = (path: string) => `${styles.item} ${isActive(path) ? styles.active : ''}`;
 
   const lastHomeClickRef = useRef(0);
   const goHome = (e: React.MouseEvent) => {
@@ -121,7 +133,9 @@ export default function Sidebar() {
         if (target === window) window.scrollTo({ top: 0, behavior: 'smooth' });
         else (target as HTMLElement).scrollTo({ top: 0, behavior: 'smooth' });
         // 清除持久化的滚动，避免切页后又被 useScrollRestore 拉回原位
-        try { sessionStorage.removeItem('home_scrollY'); } catch {}
+        try {
+          sessionStorage.removeItem('home_scrollY');
+        } catch {}
         return;
       }
       saveHomeScrollPosition();
@@ -138,11 +152,15 @@ export default function Sidebar() {
 
       <div className={styles.nav}>
         <Link to="/" className={itemClass('/')} onClick={goHome}>
-          <span className={styles.itemIcon}><Home size={22} /></span>
+          <span className={styles.itemIcon}>
+            <Home size={22} />
+          </span>
           <span className={styles.itemLabel}>首页</span>
         </Link>
         <Link to="/explore" className={`${itemClass('/explore')} ${styles.itemSearch}`} onClick={goHome}>
-          <span className={styles.itemIcon}><Search size={22} /></span>
+          <span className={styles.itemIcon}>
+            <Search size={22} />
+          </span>
           <span className={styles.itemLabel}>搜索</span>
         </Link>
         {user && (
@@ -156,7 +174,9 @@ export default function Sidebar() {
         )}
         {user && (
           <button className={styles.item} onClick={openCreate}>
-            <span className={styles.itemIcon}><PlusSquare size={22} /></span>
+            <span className={styles.itemIcon}>
+              <PlusSquare size={22} />
+            </span>
             <span className={styles.itemLabel}>分享</span>
           </button>
         )}
@@ -170,11 +190,15 @@ export default function Sidebar() {
           </Link>
         )}
         <Link to="/books" className={itemClass('/books')} onClick={goHome}>
-          <span className={styles.itemIcon}><BookOpen size={22} /></span>
+          <span className={styles.itemIcon}>
+            <BookOpen size={22} />
+          </span>
           <span className={styles.itemLabel}>图书</span>
         </Link>
         <Link to="/voice" className={itemClass('/voice')} onClick={goHome}>
-          <span className={styles.itemIcon}><AudioLines size={22} /></span>
+          <span className={styles.itemIcon}>
+            <AudioLines size={22} />
+          </span>
           <span className={styles.itemLabel}>
             语音
             {inRoom && <span className={styles.voiceDot} title="语音进行中" />}
@@ -182,13 +206,17 @@ export default function Sidebar() {
         </Link>
         {user && (
           <Link to="/profile" className={itemClass('/profile')} onClick={goHome}>
-            <span className={styles.itemIcon}><User size={22} /></span>
+            <span className={styles.itemIcon}>
+              <User size={22} />
+            </span>
             <span className={styles.itemLabel}>主页</span>
           </Link>
         )}
         {user?.role === 'admin' && (
           <Link to="/admin" className={itemClass('/admin')} onClick={goHome}>
-            <span className={styles.itemIcon}><Shield size={22} /></span>
+            <span className={styles.itemIcon}>
+              <Shield size={22} />
+            </span>
             <span className={styles.itemLabel}>管理</span>
           </Link>
         )}

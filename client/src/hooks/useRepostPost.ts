@@ -22,7 +22,10 @@ export function useRepostPost(postId: number) {
   const [repostCount, setRepostCount] = useState(0);
 
   const toggle = useCallback(async () => {
-    if (!user) { openLoginPrompt(); return; }
+    if (!user) {
+      openLoginPrompt();
+      return;
+    }
     const wasReposted = reposted;
     const prevCount = repostCount;
     const newCount = wasReposted ? prevCount - 1 : prevCount + 1;

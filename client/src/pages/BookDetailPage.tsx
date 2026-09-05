@@ -25,8 +25,9 @@ export default function BookDetailPage() {
   const [error, setError] = useState('');
 
   useEffect(() => {
-    api.get(`/books/${id}`)
-      .then(res => setBook(res.data))
+    api
+      .get(`/books/${id}`)
+      .then((res) => setBook(res.data))
       .catch(() => setError('图书不存在'))
       .finally(() => setLoading(false));
   }, [id]);
@@ -49,7 +50,9 @@ export default function BookDetailPage() {
         <div className={styles.empty}>
           <BookOpen size={48} />
           <p>{error || '图书不存在'}</p>
-          <Link to="/books" className={styles.backLink}>返回图书列表</Link>
+          <Link to="/books" className={styles.backLink}>
+            返回图书列表
+          </Link>
         </div>
       </div>
     );
@@ -72,7 +75,9 @@ export default function BookDetailPage() {
           <div className={styles.info}>
             <div className={styles.title}>{book.title}</div>
             {book.author && <div className={styles.author}>{book.author}</div>}
-            <div className={styles.meta}>{book.volumeCount} 卷 · {book.chapterCount} 章</div>
+            <div className={styles.meta}>
+              {book.volumeCount} 卷 · {book.chapterCount} 章
+            </div>
             {book.description && <div className={styles.desc}>{book.description}</div>}
           </div>
         </div>

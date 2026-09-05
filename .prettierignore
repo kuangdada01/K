@@ -4,6 +4,7 @@ build
 uploads
 books
 android
+archive
 *.lock
 package-lock.json
 k.db*

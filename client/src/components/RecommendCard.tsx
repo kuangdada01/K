@@ -28,15 +28,13 @@ export default function RecommendCard({ users, removingIds, onFollow }: Recommen
     <div className={styles.card}>
       <div className={styles.title}>推荐关注</div>
       <div className={styles.list}>
-        {users.map(u => (
+        {users.map((u) => (
           <div key={u.id} className={`${styles.item}${removingIds.has(u.id) ? ` ${styles.removing}` : ''}`}>
             <Link to={`/profile/${u.id}`} className={styles.itemLink} onClick={saveHomeScrollPosition}>
               {u.avatar ? (
                 <img src={resolveMediaUrl(u.avatar) || ''} alt="" className={styles.itemAvatar} />
               ) : (
-                <div className={styles.itemAvatarPlaceholder}>
-                  {u.username.charAt(0).toUpperCase()}
-                </div>
+                <div className={styles.itemAvatarPlaceholder}>{u.username.charAt(0).toUpperCase()}</div>
               )}
               <div className={styles.itemInfo}>
                 <div className={styles.itemName}>{u.username}</div>
@@ -48,9 +46,7 @@ export default function RecommendCard({ users, removingIds, onFollow }: Recommen
             </button>
           </div>
         ))}
-        {users.length === 0 && (
-          <div className={styles.empty}>暂无推荐</div>
-        )}
+        {users.length === 0 && <div className={styles.empty}>暂无推荐</div>}
       </div>
     </div>
   );

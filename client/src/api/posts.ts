@@ -18,7 +18,11 @@ import type { Post, Comment, PaginatedResponse } from '../types';
  *   由 Chromium 网络栈流式发送，不经 JS 桥接；同时不手动设置 Content-Type（让浏览器自动生成 boundary）。
  *   失败时抛出的错误对象兼容 axios 的 err.response?.data?.error 读取。
  */
-async function nativeFetchUpload<T>(path: string, formData: FormData, method: 'POST' | 'PUT' = 'POST'): Promise<T> {
+async function nativeFetchUpload<T>(
+  path: string,
+  formData: FormData,
+  method: 'POST' | 'PUT' = 'POST'
+): Promise<T> {
   const token = localStorage.getItem('k_token');
   const url = `${getApiBaseUrl()}${path}`;
   const headers: Record<string, string> = {};
@@ -55,27 +59,29 @@ export interface PostListResponse {
 
 /** 信息流列表 */
 export function listPosts(page = 1, limit = 20): Promise<PostListResponse> {
-  return api.get(`/posts`, { params: { page, limit } }).then(r => r.data);
+  return api.get(`/posts`, { params: { page, limit } }).then((r) => r.data);
 }
 
 /** 搜索帖子（q=关键词模糊匹配；tag=话题精确匹配，优先于 q） */
 export function searchPosts(q: string, page = 1, limit = 20, tag?: string): Promise<PostListResponse> {
-  return api.get('/posts/search', { params: tag ? { tag, page, limit } : { q, page, limit } }).then(r => r.data);
+  return api
+    .get('/posts/search', { params: tag ? { tag, page, limit } : { q, page, limit } })
+    .then((r) => r.data);
 }
 
 /** 帖子详情（含评论） */
 export function getPost(postId: number): Promise<{ post: Post; comments: Comment[] }> {
-  return api.get(`/posts/${postId}`).then(r => r.data);
+  return api.get(`/posts/${postId}`).then((r) => r.data);
 }
 
 /** 收藏列表 */
 export function myBookmarks(): Promise<{ posts: Post[] }> {
-  return api.get('/posts/bookmarks/me').then(r => r.data);
+  return api.get('/posts/bookmarks/me').then((r) => r.data);
 }
 
 /** 转发列表 */
 export function myReposts(): Promise<{ posts: Post[] }> {
-  return api.get('/posts/reposts/me').then(r => r.data);
+  return api.get('/posts/reposts/me').then((r) => r.data);
 }
 
 /**
@@ -87,7 +93,9 @@ export function createImagePost(formData: FormData): Promise<Post> {
   if (Capacitor.isNativePlatform()) {
     return nativeFetchUpload<Post>('/posts', formData, 'POST');
   }
-  return api.post('/posts', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 0 }).then(r => r.data);
+  return api
+    .post('/posts', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 0 })
+    .then((r) => r.data);
 }
 
 /** 创建视频帖子（multipart）- 原生走 fetch 流式上传防闪退 */
@@ -95,7 +103,9 @@ export function createVideoPost(formData: FormData): Promise<Post> {
   if (Capacitor.isNativePlatform()) {
     return nativeFetchUpload<Post>('/posts/video', formData, 'POST');
   }
-  return api.post('/posts/video', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 0 }).then(r => r.data);
+  return api
+    .post('/posts/video', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 0 })
+    .then((r) => r.data);
 }
 
 /**
@@ -134,7 +144,7 @@ export async function createVideoPostChunked(
           break;
         } catch (e) {
           lastErr = e;
-          if (retry < 2) await new Promise(r => setTimeout(r, 500 * (retry + 1)));
+          if (retry < 2) await new Promise((r) => setTimeout(r, 500 * (retry + 1)));
         }
       }
       if (lastErr) throw lastErr;
@@ -162,12 +172,14 @@ export function uploadTempVideo(formData: FormData): Promise<{ url: string }> {
   if (Capacitor.isNativePlatform()) {
     return nativeFetchUpload<{ url: string }>('/posts/video-temp', formData, 'POST');
   }
-  return api.post('/posts/video-temp', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 0 }).then(r => r.data);
+  return api
+    .post('/posts/video-temp', formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 0 })
+    .then((r) => r.data);
 }
 
 /** 删除临时视频 */
 export function deleteTempVideo(url: string): Promise<unknown> {
-  return api.delete('/posts/video-temp', { data: { url } }).then(r => r.data);
+  return api.delete('/posts/video-temp', { data: { url } }).then((r) => r.data);
 }
 
 /** 编辑帖子（multipart，新增图片可能达9×10MB，同样禁用超时避免误报失败） */
@@ -175,72 +187,77 @@ export function updatePost(postId: number, formData: FormData): Promise<Post> {
   if (Capacitor.isNativePlatform()) {
     return nativeFetchUpload<Post>(`/posts/${postId}`, formData, 'PUT');
   }
-  return api.put(`/posts/${postId}`, formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 0 }).then(r => r.data);
+  return api
+    .put(`/posts/${postId}`, formData, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 0 })
+    .then((r) => r.data);
 }
 
 /** 删除帖子 */
 export function deletePost(postId: number): Promise<unknown> {
-  return api.delete(`/posts/${postId}`).then(r => r.data);
+  return api.delete(`/posts/${postId}`).then((r) => r.data);
 }
 
 /** 点赞 */
 export function likePost(postId: number): Promise<{ liked: boolean; like_count: number }> {
-  return api.post(`/posts/${postId}/like`).then(r => r.data);
+  return api.post(`/posts/${postId}/like`).then((r) => r.data);
 }
 
 /** 取消点赞 */
 export function unlikePost(postId: number): Promise<{ liked: boolean; like_count: number }> {
-  return api.delete(`/posts/${postId}/like`).then(r => r.data);
+  return api.delete(`/posts/${postId}/like`).then((r) => r.data);
 }
 
 /** 分享 */
 export function sharePost(postId: number): Promise<{ share_count: number; shared: boolean }> {
-  return api.post(`/posts/${postId}/share`).then(r => r.data);
+  return api.post(`/posts/${postId}/share`).then((r) => r.data);
 }
 
 /** 收藏 */
 export function bookmarkPost(postId: number): Promise<{ bookmarked: boolean }> {
-  return api.post(`/posts/${postId}/bookmark`).then(r => r.data);
+  return api.post(`/posts/${postId}/bookmark`).then((r) => r.data);
 }
 
 /** 取消收藏 */
 export function unbookmarkPost(postId: number): Promise<{ bookmarked: boolean }> {
-  return api.delete(`/posts/${postId}/bookmark`).then(r => r.data);
+  return api.delete(`/posts/${postId}/bookmark`).then((r) => r.data);
 }
 
 /** 转发 */
 export function repostPost(postId: number): Promise<{ reposted: boolean; repost_count: number }> {
-  return api.post(`/posts/${postId}/repost`).then(r => r.data);
+  return api.post(`/posts/${postId}/repost`).then((r) => r.data);
 }
 
 /** 取消转发 */
 export function unrepostPost(postId: number): Promise<{ reposted: boolean; repost_count: number }> {
-  return api.delete(`/posts/${postId}/repost`).then(r => r.data);
+  return api.delete(`/posts/${postId}/repost`).then((r) => r.data);
 }
 
 /** 评论列表 */
 export function listComments(postId: number): Promise<{ comments: Comment[] }> {
-  return api.get(`/posts/${postId}/comments`).then(r => r.data);
+  return api.get(`/posts/${postId}/comments`).then((r) => r.data);
 }
 
 /** 发表评论 */
-export function createComment(postId: number, body: { content: string; parentId?: number | null }): Promise<Comment> {
-  return api.post(`/posts/${postId}/comments`, body).then(r => r.data);
+export function createComment(
+  postId: number,
+  body: { content: string; parentId?: number | null }
+): Promise<Comment> {
+  return api.post(`/posts/${postId}/comments`, body).then((r) => r.data);
 }
 
 /** 删除评论 */
 export function deleteComment(commentId: number): Promise<{ message: string }> {
-  return api.delete(`/posts/comments/${commentId}`).then(r => r.data);
+  return api.delete(`/posts/comments/${commentId}`).then((r) => r.data);
 }
 
 /** 点赞评论 */
 export function likeComment(commentId: number): Promise<{ liked: boolean; like_count: number }> {
-  return api.post(`/posts/comments/${commentId}/like`).then(r => r.data);
+  return api.post(`/posts/comments/${commentId}/like`).then((r) => r.data);
 }
 
 /** 取消评论点赞 */
 export function unlikeComment(commentId: number): Promise<{ liked: boolean; like_count: number }> {
-  return api.delete(`/posts/comments/${commentId}/like`).then(r => r.data);
+  return api.delete(`/posts/comments/${commentId}/like`).then((r) => r.data);
 }
 
 // PaginatedResponse 引用保持向后兼容

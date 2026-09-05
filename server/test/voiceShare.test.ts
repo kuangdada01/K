@@ -34,9 +34,7 @@ beforeAll(async () => {
   createSchema(db);
   setDbForTests(db);
 
-  const insertUser = db.prepare(
-    "INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')"
-  );
+  const insertUser = db.prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')");
   aliceId = Number(insertUser.run('alice', 'alice@test.com').lastInsertRowid);
   bobId = Number(insertUser.run('bob', 'bob@test.com').lastInsertRowid);
   aliceToken = generateToken({ id: aliceId, username: 'alice' });
@@ -60,9 +58,16 @@ function connect(token: string): Promise<WebSocket> {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/api/voice/ws?token=${token}`);
     (ws as any).__msgs = [];
     ws.on('message', (raw) => {
-      try { (ws as any).__msgs.push(JSON.parse(String(raw))); } catch { /* 忽略非 JSON */ }
+      try {
+        (ws as any).__msgs.push(JSON.parse(String(raw)));
+      } catch {
+        /* 忽略非 JSON */
+      }
     });
-    ws.on('open', () => { clients.push(ws); resolve(ws); });
+    ws.on('open', () => {
+      clients.push(ws);
+      resolve(ws);
+    });
     ws.on('error', reject);
   });
 }
@@ -70,7 +75,10 @@ function connect(token: string): Promise<WebSocket> {
 function waitFor(ws: WebSocket, predicate: (msg: any) => boolean, timeoutMs = 3000): Promise<any> {
   const msgs: any[] = (ws as any).__msgs ?? [];
   return new Promise((resolve, reject) => {
-    const cleanup = () => { clearTimeout(timer); ws.off('message', check); };
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off('message', check);
+    };
     const check = () => {
       const idx = msgs.findIndex(predicate);
       if (idx >= 0) {
@@ -149,10 +157,14 @@ describe('语音房间屏幕共享', () => {
     // 幂等：bob 重复 share-start 不产生第二条 active 广播
     await waitFor(bob, (m) => m.type === 'share-changed' && m.active === true && m.userId === bobId);
     const bobBuffer: any[] = (bob as any).__msgs;
-    const activeCountBefore = bobBuffer.filter((m) => m.type === 'share-changed' && m.active === true && m.userId === bobId).length;
+    const activeCountBefore = bobBuffer.filter(
+      (m) => m.type === 'share-changed' && m.active === true && m.userId === bobId
+    ).length;
     send(bob, { type: 'share-start', audio: true });
     await new Promise((r) => setTimeout(r, 150));
-    const activeCountAfter = bobBuffer.filter((m) => m.type === 'share-changed' && m.active === true && m.userId === bobId).length;
+    const activeCountAfter = bobBuffer.filter(
+      (m) => m.type === 'share-changed' && m.active === true && m.userId === bobId
+    ).length;
     expect(activeCountAfter).toBe(activeCountBefore);
 
     send(bob, { type: 'share-stop' });

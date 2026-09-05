@@ -75,7 +75,7 @@ afterAll(async () => {
 async function api(
   method: string,
   path: string,
-  opts: { token?: string; body?: unknown } = {},
+  opts: { token?: string; body?: unknown } = {}
 ): Promise<{ status: number; data: any }> {
   const headers: Record<string, string> = {};
   if (opts.token) headers['Authorization'] = `Bearer ${opts.token}`;
@@ -87,7 +87,11 @@ async function api(
   });
   const text = await res.text();
   let data: any = null;
-  try { data = text ? JSON.parse(text) : null; } catch { /* 非 JSON */ }
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    /* 非 JSON */
+  }
   return { status: res.status, data };
 }
 
@@ -100,9 +104,16 @@ function connect(token?: string): Promise<WebSocket> {
     const ws = new WebSocket(url);
     (ws as any).__msgs = [];
     ws.on('message', (raw) => {
-      try { (ws as any).__msgs.push(JSON.parse(String(raw))); } catch { /* 忽略非 JSON */ }
+      try {
+        (ws as any).__msgs.push(JSON.parse(String(raw)));
+      } catch {
+        /* 忽略非 JSON */
+      }
     });
-    ws.on('open', () => { clients.push(ws); resolve(ws); });
+    ws.on('open', () => {
+      clients.push(ws);
+      resolve(ws);
+    });
     ws.on('error', reject);
   });
 }
@@ -111,7 +122,10 @@ function connect(token?: string): Promise<WebSocket> {
 function waitFor(ws: WebSocket, predicate: (msg: any) => boolean, timeoutMs = 3000): Promise<any> {
   const msgs: any[] = (ws as any).__msgs ?? [];
   return new Promise((resolve, reject) => {
-    const cleanup = () => { clearTimeout(timer); ws.off('message', check); };
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off('message', check);
+    };
     const check = () => {
       const idx = msgs.findIndex(predicate);
       if (idx >= 0) {
@@ -132,7 +146,9 @@ const send = (ws: WebSocket, msg: unknown) => ws.send(JSON.stringify(msg));
 
 /** 某房间的消息条数（DB 直查） */
 function countMessages(roomId: number): number {
-  const row = db.prepare('SELECT COUNT(*) AS c FROM voice_room_messages WHERE room_id = ?').get(roomId) as { c: number };
+  const row = db.prepare('SELECT COUNT(*) AS c FROM voice_room_messages WHERE room_id = ?').get(roomId) as {
+    c: number;
+  };
   return row.c;
 }
 
@@ -251,7 +267,9 @@ describe('WS 文字聊天协议', () => {
 
 describe('REST 聊天历史与清空权限', () => {
   it('访客可创建房间；列表 isCreator 按访问者计算且不泄露 creator_ip', async () => {
-    const created = await api('POST', '/api/voice/rooms', { body: { name: '访客房主房', description: '测试' } });
+    const created = await api('POST', '/api/voice/rooms', {
+      body: { name: '访客房主房', description: '测试' },
+    });
     expect(created.status).toBe(201);
     const roomId = created.data.room.id;
     expect(JSON.stringify(created)).not.toContain('creator_ip');
@@ -269,11 +287,13 @@ describe('REST 聊天历史与清空权限', () => {
 
     // 登录用户创建的房间：本人 true、访客 false
     const created2 = await api('POST', '/api/voice/rooms', { token: aliceToken, body: { name: '艾丽丝房' } });
-    const aliceView = (await api('GET', '/api/voice/rooms', { token: aliceToken }))
-      .data.rooms.find((r: any) => r.id === created2.data.room.id);
+    const aliceView = (await api('GET', '/api/voice/rooms', { token: aliceToken })).data.rooms.find(
+      (r: any) => r.id === created2.data.room.id
+    );
     expect(aliceView.isCreator).toBe(true);
-    const guestView = (await api('GET', '/api/voice/rooms'))
-      .data.rooms.find((r: any) => r.id === created2.data.room.id);
+    const guestView = (await api('GET', '/api/voice/rooms')).data.rooms.find(
+      (r: any) => r.id === created2.data.room.id
+    );
     expect(guestView.isCreator).toBe(false);
   });
 
@@ -282,7 +302,11 @@ describe('REST 聊天历史与清空权限', () => {
     // 直接入库 8 条（跳过 WS，集中测分页）
     for (let i = 0; i < 8; i++) {
       voiceChatRepo.insertVoiceChatMessage({
-        roomId: room.id, senderId: aliceId, username: 'alice', avatar: null, content: `消息${i + 1}`,
+        roomId: room.id,
+        senderId: aliceId,
+        username: 'alice',
+        avatar: null,
+        content: `消息${i + 1}`,
       });
     }
 
@@ -306,13 +330,26 @@ describe('REST 聊天历史与清空权限', () => {
     expect(older.data.has_more).toBe(true);
 
     // 翻到最早一页后 has_more=false
-    const oldest = await api('GET', `/api/voice/rooms/${room.id}/messages?before_id=${older.data.messages[0].id}&limit=3`);
+    const oldest = await api(
+      'GET',
+      `/api/voice/rooms/${room.id}/messages?before_id=${older.data.messages[0].id}&limit=3`
+    );
     expect(oldest.data.messages.map((m: any) => m.content)).toEqual(['消息1', '消息2']);
     expect(oldest.data.has_more).toBe(false);
 
     // after_id=消息2 → 之后的全部
-    const late = await api('GET', `/api/voice/rooms/${room.id}/messages?after_id=${oldest.data.messages[1].id}`);
-    expect(late.data.messages.map((m: any) => m.content)).toEqual(['消息3', '消息4', '消息5', '消息6', '消息7', '消息8']);
+    const late = await api(
+      'GET',
+      `/api/voice/rooms/${room.id}/messages?after_id=${oldest.data.messages[1].id}`
+    );
+    expect(late.data.messages.map((m: any) => m.content)).toEqual([
+      '消息3',
+      '消息4',
+      '消息5',
+      '消息6',
+      '消息7',
+      '消息8',
+    ]);
 
     // limit 非法 → 回落 50；超上限 → 收口 100
     const badLimit = await api('GET', `/api/voice/rooms/${room.id}/messages?limit=abc`);
@@ -333,7 +370,11 @@ describe('REST 聊天历史与清空权限', () => {
   it('清空聊天: 房主/管理员成功并广播 chat-cleared；非房主 403；无效 token 401', async () => {
     const room = voiceRepo.createRoom(aliceId, '清空房', '', { creatorName: 'alice' });
     voiceChatRepo.insertVoiceChatMessage({
-      roomId: room.id, senderId: aliceId, username: 'alice', avatar: null, content: '旧消息',
+      roomId: room.id,
+      senderId: aliceId,
+      username: 'alice',
+      avatar: null,
+      content: '旧消息',
     });
 
     // 普通用户（非房主）→ 403
@@ -357,7 +398,11 @@ describe('REST 聊天历史与清空权限', () => {
 
     // 管理员也可清
     voiceChatRepo.insertVoiceChatMessage({
-      roomId: room.id, senderId: aliceId, username: 'alice', avatar: null, content: '又一条',
+      roomId: room.id,
+      senderId: aliceId,
+      username: 'alice',
+      avatar: null,
+      content: '又一条',
     });
     const byAdmin = await api('DELETE', `/api/voice/rooms/${room.id}/messages`, { token: adminToken });
     expect(byAdmin.status).toBe(200);
@@ -371,7 +416,8 @@ describe('REST 聊天历史与清空权限', () => {
   it('访客房主按 IP 锚点可清空；其他归属的访客 403', async () => {
     // 模拟"别的 IP"创建的访客房（测试环境所有请求都来自 127.0.0.1）
     const foreign = voiceRepo.createRoom(-999, '他人访客房', '', {
-      creatorName: '未登录-999', creatorIp: '203.0.113.9',
+      creatorName: '未登录-999',
+      creatorIp: '203.0.113.9',
     });
     const denied = await api('DELETE', `/api/voice/rooms/${foreign.id}/messages`);
     expect(denied.status).toBe(403);
@@ -388,7 +434,11 @@ describe('REST 聊天历史与清空权限', () => {
   it('删除房间级联删除其聊天记录', async () => {
     const room = voiceRepo.createRoom(aliceId, '级联房', '', { creatorName: 'alice' });
     voiceChatRepo.insertVoiceChatMessage({
-      roomId: room.id, senderId: aliceId, username: 'alice', avatar: null, content: '随房销毁',
+      roomId: room.id,
+      senderId: aliceId,
+      username: 'alice',
+      avatar: null,
+      content: '随房销毁',
     });
     const del = await api('DELETE', `/api/voice/rooms/${room.id}`, { token: aliceToken });
     expect(del.status).toBe(200);

@@ -57,7 +57,10 @@ export function attachVoiceWs(server: Server): WebSocketServer {
   const interval = setInterval(() => {
     for (const client of wss.clients) {
       const ws = client as VoiceWs;
-      if (ws.isAlive === false) { ws.terminate(); continue; }
+      if (ws.isAlive === false) {
+        ws.terminate();
+        continue;
+      }
       ws.isAlive = false;
       ws.ping();
     }
@@ -67,7 +70,9 @@ export function attachVoiceWs(server: Server): WebSocketServer {
   wss.on('connection', (raw, req) => {
     const ws = raw as VoiceWs;
     ws.isAlive = true;
-    ws.on('pong', () => { ws.isAlive = true; });
+    ws.on('pong', () => {
+      ws.isAlive = true;
+    });
 
     // ---- 认证（token 走查询参数，同 /api/events）----
     // 未登录用户也允许进房：作为访客（负数 id + "未登录-N" 显示名）参与语音。
@@ -110,7 +115,11 @@ export function attachVoiceWs(server: Server): WebSocketServer {
     // ---- 消息处理 ----
     ws.on('message', (raw) => {
       let msg: any;
-      try { msg = JSON.parse(String(raw)); } catch { return; }
+      try {
+        msg = JSON.parse(String(raw));
+      } catch {
+        return;
+      }
       switch (msg?.type) {
         case 'join': {
           const roomId = Number(msg.roomId);
@@ -135,12 +144,14 @@ export function attachVoiceWs(server: Server): WebSocketServer {
           // 返回既有成员：由新加入者主动发起 offer（确定性规则，避免协商冲突）
           // self：回传本次连接的完整身份——访客（无 token）的负数 id 由服务端分配，
           // 客户端需用它校正占位身份（WebRTC 完美协商/信号路由都依赖该 id）
-          ws.send(JSON.stringify({
-            type: 'joined',
-            roomId,
-            participants: existing,
-            self: { userId: user.id, username: user.username, avatar: user.avatar },
-          }));
+          ws.send(
+            JSON.stringify({
+              type: 'joined',
+              roomId,
+              participants: existing,
+              self: { userId: user.id, username: user.username, avatar: user.avatar },
+            })
+          );
           break;
         }
         case 'leave':
@@ -204,8 +215,14 @@ export function attachVoiceWs(server: Server): WebSocketServer {
       const ip = (ws as VoiceWs).guestIp;
       if (ip) guestIds.release(ip);
     };
-    ws.on('close', () => { hub.removeBySocket(ws); releaseGuest(); });
-    ws.on('error', () => { hub.removeBySocket(ws); releaseGuest(); });
+    ws.on('close', () => {
+      hub.removeBySocket(ws);
+      releaseGuest();
+    });
+    ws.on('error', () => {
+      hub.removeBySocket(ws);
+      releaseGuest();
+    });
   });
 
   return wss;

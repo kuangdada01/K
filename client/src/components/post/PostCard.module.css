@@ -12,7 +12,7 @@
   max-width: 620px;
 }
 
-[data-theme="dark"] .card {
+[data-theme='dark'] .card {
   background: var(--bg-frosted);
   border-color: rgba(38, 43, 53, 0.95);
 }
@@ -68,7 +68,10 @@
   cursor: pointer;
   font-size: 13px;
   font-weight: 700;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .followBtn:hover {
@@ -81,7 +84,7 @@
   border-color: rgba(47, 93, 80, 0.22);
 }
 
-[data-theme="dark"] .followBtn {
+[data-theme='dark'] .followBtn {
   border-color: rgba(201, 169, 98, 0.38);
 }
 
@@ -250,7 +253,8 @@
 }
 
 /* 转发态修饰类（原实现无专属规则，仅作状态标识） */
-.reposted {}
+.reposted {
+}
 
 .actionCount {
   font-size: 14px;
@@ -283,8 +287,16 @@
 }
 
 @keyframes postCardFadeInOut {
-  0% { opacity: 0; }
-  20% { opacity: 1; }
-  80% { opacity: 1; }
-  100% { opacity: 0; }
+  0% {
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }

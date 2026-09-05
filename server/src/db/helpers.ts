@@ -10,7 +10,9 @@ import { getDb } from './connection';
 
 /** COUNT(*) 查询辅助：返回计数值（查询无结果时返回 0） */
 export function count(sql: string, ...params: unknown[]): number {
-  const row = getDb().prepare(sql).get(...params) as { count: number } | undefined;
+  const row = getDb()
+    .prepare(sql)
+    .get(...params) as { count: number } | undefined;
   return row?.count ?? 0;
 }
 

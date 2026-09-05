@@ -24,11 +24,16 @@ function tableExists(db: InstanceType<typeof Database>, table: string): boolean 
 /** 判断列是否存在（替代历史 try/catch SELECT 探测方式） */
 function hasColumn(db: InstanceType<typeof Database>, table: string, column: string): boolean {
   const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
-  return cols.some(c => c.name === column);
+  return cols.some((c) => c.name === column);
 }
 
 /** ALTER TABLE 添加列（仅当不存在时） */
-function addColumnIfMissing(db: InstanceType<typeof Database>, table: string, column: string, ddl: string): void {
+function addColumnIfMissing(
+  db: InstanceType<typeof Database>,
+  table: string,
+  column: string,
+  ddl: string
+): void {
   if (!tableExists(db, table) || hasColumn(db, table, column)) return;
   db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
 }
@@ -39,7 +44,12 @@ export const migrations: Migration[] = [
     id: 1,
     name: 'comments.parent_id',
     up: (db) => {
-      addColumnIfMissing(db, 'comments', 'parent_id', 'parent_id INTEGER DEFAULT NULL REFERENCES comments(id) ON DELETE CASCADE');
+      addColumnIfMissing(
+        db,
+        'comments',
+        'parent_id',
+        'parent_id INTEGER DEFAULT NULL REFERENCES comments(id) ON DELETE CASCADE'
+      );
     },
   },
   {
@@ -47,9 +57,13 @@ export const migrations: Migration[] = [
     name: 'posts.image_url_json',
     up: (db) => {
       if (!tableExists(db, 'posts')) return;
-      const sample = db.prepare('SELECT image_url FROM posts LIMIT 1').get() as { image_url: string } | undefined;
+      const sample = db.prepare('SELECT image_url FROM posts LIMIT 1').get() as
+        { image_url: string } | undefined;
       if (sample && !sample.image_url.startsWith('[')) {
-        const posts = db.prepare('SELECT id, image_url FROM posts').all() as { id: number; image_url: string }[];
+        const posts = db.prepare('SELECT id, image_url FROM posts').all() as {
+          id: number;
+          image_url: string;
+        }[];
         const update = db.prepare('UPDATE posts SET image_url = ? WHERE id = ?');
         for (const p of posts) {
           update.run(JSON.stringify([p.image_url]), p.id);
@@ -234,7 +248,10 @@ export const migrations: Migration[] = [
       `);
       // 回填：解析存量帖子 description 中的 #话题（幂等，UNIQUE 冲突时忽略）
       if (tableExists(db, 'posts')) {
-        const posts = db.prepare('SELECT id, description FROM posts').all() as { id: number; description: string | null }[];
+        const posts = db.prepare('SELECT id, description FROM posts').all() as {
+          id: number;
+          description: string | null;
+        }[];
         const insert = db.prepare('INSERT OR IGNORE INTO post_tags (post_id, tag) VALUES (?, ?)');
         const insertAll = db.transaction((rows: { id: number; tags: string[] }[]) => {
           for (const row of rows) {
@@ -242,8 +259,8 @@ export const migrations: Migration[] = [
           }
         });
         const rows = posts
-          .map(p => ({ id: p.id, tags: extractTags(p.description || '') }))
-          .filter(r => r.tags.length > 0);
+          .map((p) => ({ id: p.id, tags: extractTags(p.description || '') }))
+          .filter((r) => r.tags.length > 0);
         if (rows.length > 0) insertAll(rows);
       }
     },
@@ -263,14 +280,16 @@ export const migrations: Migration[] = [
         const to = path.join(PATHS.uploadsPrivate, name);
         try {
           if (fs.existsSync(from)) fs.renameSync(from, to);
-        } catch { /* 文件缺失/被占用时跳过移动，仅改写记录 */ }
+        } catch {
+          /* 文件缺失/被占用时跳过移动，仅改写记录 */
+        }
         return name;
       };
 
       if (tableExists(db, 'private_images')) {
-        const rows = db.prepare(
-          "SELECT id, image_url FROM private_images WHERE image_url LIKE '/uploads/%'"
-        ).all() as { id: number; image_url: string }[];
+        const rows = db
+          .prepare("SELECT id, image_url FROM private_images WHERE image_url LIKE '/uploads/%'")
+          .all() as { id: number; image_url: string }[];
         const upd = db.prepare('UPDATE private_images SET image_url = ? WHERE id = ?');
         for (const r of rows) {
           upd.run(moveToPrivate(r.image_url), r.id);
@@ -278,9 +297,9 @@ export const migrations: Migration[] = [
       }
 
       if (tableExists(db, 'messages')) {
-        const rows = db.prepare(
-          "SELECT id, image_url FROM messages WHERE image_url LIKE '/uploads/%'"
-        ).all() as { id: number; image_url: string }[];
+        const rows = db
+          .prepare("SELECT id, image_url FROM messages WHERE image_url LIKE '/uploads/%'")
+          .all() as { id: number; image_url: string }[];
         const upd = db.prepare('UPDATE messages SET image_url = ? WHERE id = ?');
         for (const r of rows) {
           upd.run(moveToPrivate(r.image_url), r.id);
@@ -436,7 +455,7 @@ export function ensureMigrationTable(db: InstanceType<typeof Database>): void {
 export function applyMigrations(db: InstanceType<typeof Database>): void {
   ensureMigrationTable(db);
   const applied = new Set(
-    (db.prepare('SELECT id FROM schema_migrations').all() as { id: number }[]).map(r => r.id)
+    (db.prepare('SELECT id FROM schema_migrations').all() as { id: number }[]).map((r) => r.id)
   );
   const record = db.prepare('INSERT INTO schema_migrations (id, name) VALUES (?, ?)');
   for (const m of migrations) {

@@ -59,8 +59,12 @@ export function usePullToRefresh(options: PullToRefreshOptions): void {
   const watchdogRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Keep refs in sync（渲染期写 ref 会被 react-hooks/refs 拦截，改在 effect 中同步）
-  useEffect(() => { onRefreshRef.current = onRefresh; }, [onRefresh]);
-  useEffect(() => { refreshingRef.current = refreshing; }, [refreshing]);
+  useEffect(() => {
+    onRefreshRef.current = onRefresh;
+  }, [onRefresh]);
+  useEffect(() => {
+    refreshingRef.current = refreshing;
+  }, [refreshing]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -99,7 +103,9 @@ export function usePullToRefresh(options: PullToRefreshOptions): void {
       }
     };
 
-    const bumpActivity = () => { lastActivityRef.current = performance.now(); };
+    const bumpActivity = () => {
+      lastActivityRef.current = performance.now();
+    };
 
     /** 滚动容器在顶部时从 (x,y) 开始武装本次下拉跟踪 */
     const armAt = (x: number, y: number) => {
@@ -112,8 +118,11 @@ export function usePullToRefresh(options: PullToRefreshOptions): void {
       // 武装后启动看门狗：事件流死亡（收不到 touchend）也能按松手收尾
       if (!watchdogRef.current) {
         watchdogRef.current = setInterval(() => {
-          if (touchStartY.current !== 0 && !refreshingRef.current &&
-              performance.now() - lastActivityRef.current > INACTIVITY_MS) {
+          if (
+            touchStartY.current !== 0 &&
+            !refreshingRef.current &&
+            performance.now() - lastActivityRef.current > INACTIVITY_MS
+          ) {
             finalizeGesture();
           }
         }, 100);

@@ -51,7 +51,16 @@ const VoicePage = lazy(() => import('./pages/VoicePage'));
  */
 function PageLoading() {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-secondary)', fontSize: 14 }}>
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        height: '100%',
+        color: 'var(--text-secondary)',
+        fontSize: 14,
+      }}
+    >
       加载中...
     </div>
   );
@@ -76,7 +85,7 @@ function useHideMobileNav(): boolean {
   const { pathname } = useLocation();
   const inRoom = useVoiceInRoom();
 
-  if (HIDE_MOBILE_NAV_PATHS.some(re => re.test(pathname))) return true;
+  if (HIDE_MOBILE_NAV_PATHS.some((re) => re.test(pathname))) return true;
   // 语音房间内：进房视图覆盖整个 /voice 页面，底部导航会让位给控制栏
   if (pathname.startsWith('/voice') && inRoom) return true;
   return false;
@@ -96,7 +105,9 @@ function MainLayout() {
         'app-layout',
         isMessages ? 'app-layout-messages' : '',
         hideMobileNav ? 'mobile-nav-hidden' : '',
-      ].filter(Boolean).join(' ')}
+      ]
+        .filter(Boolean)
+        .join(' ')}
     >
       <Sidebar />
       <main className="main-content">
@@ -123,7 +134,15 @@ function ProtectedRoute() {
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--text-secondary)' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100vh',
+          color: 'var(--text-secondary)',
+        }}
+      >
         加载中...
       </div>
     );
@@ -168,12 +187,20 @@ function AppRoutes() {
   const { showCreate, closeCreate, editPost, closeEdit } = useEvent();
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-
   // 安卓硬件返回键处理
   useEffect(() => {
     if (!Capacitor.isNativePlatform()) return;
 
-    const MAIN_TABS = ['/', '/explore', '/messages', '/announcements', '/profile', '/admin', '/books', '/voice'];
+    const MAIN_TABS = [
+      '/',
+      '/explore',
+      '/messages',
+      '/announcements',
+      '/profile',
+      '/admin',
+      '/books',
+      '/voice',
+    ];
 
     // 获取当前真实路径（不用 React state，避免闭包旧值）
     const getPath = () => window.location.hash.replace(/^#/, '') || '/';
@@ -186,9 +213,18 @@ function AppRoutes() {
 
     const handler = () => {
       // 1. 关闭模态框
-      if (showLoginPrompt) { closeLoginPrompt(); return; }
-      if (editPost) { closeEdit(); return; }
-      if (showCreate) { closeCreate(); return; }
+      if (showLoginPrompt) {
+        closeLoginPrompt();
+        return;
+      }
+      if (editPost) {
+        closeEdit();
+        return;
+      }
+      if (showCreate) {
+        closeCreate();
+        return;
+      }
 
       // 2. 触发最深层的返回图标功能（适用于所有页面）
       const backBtn = findDeepestBackBtn();
@@ -199,16 +235,28 @@ function AppRoutes() {
 
       // 3. 搜索/图书单次返回（首页右上角/图书入口，需 1 次回退而非双击退出）
       const currentPath = getPath();
-      if (currentPath === '/explore' || currentPath.startsWith('/explore?') || currentPath.startsWith('/explore#') || currentPath.startsWith('/explore/')) {
+      if (
+        currentPath === '/explore' ||
+        currentPath.startsWith('/explore?') ||
+        currentPath.startsWith('/explore#') ||
+        currentPath.startsWith('/explore/')
+      ) {
         if (window.history.length > 1) window.history.back();
-        else { window.location.hash = '#/'; }
+        else {
+          window.location.hash = '#/';
+        }
         return;
       }
       if (currentPath.startsWith('/books/')) {
         const backBtn = findDeepestBackBtn();
-        if (backBtn) { backBtn.click(); return; }
+        if (backBtn) {
+          backBtn.click();
+          return;
+        }
         if (window.history.length > 1) window.history.back();
-        else { window.location.hash = '#/books'; }
+        else {
+          window.location.hash = '#/books';
+        }
         return;
       }
       if (MAIN_TABS.includes(currentPath)) {
@@ -222,18 +270,30 @@ function AppRoutes() {
           CapApp.minimizeApp();
         } else {
           showToast('再按一次退出应用');
-          exitTimerRef.current = setTimeout(() => { exitTimerRef.current = null; }, 2000);
+          exitTimerRef.current = setTimeout(() => {
+            exitTimerRef.current = null;
+          }, 2000);
         }
       }
     };
 
     const listener = CapApp.addListener('backButton', handler);
-    return () => { listener.then(l => l.remove()); };
+    return () => {
+      listener.then((l) => l.remove());
+    };
   }, [showLoginPrompt, closeLoginPrompt, showCreate, closeCreate, editPost, closeEdit]);
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', color: 'var(--text-secondary)' }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100vh',
+          color: 'var(--text-secondary)',
+        }}
+      >
         加载中...
       </div>
     );

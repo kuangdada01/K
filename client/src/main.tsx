@@ -9,14 +9,14 @@
  * ============================================================
  */
 
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import { Capacitor } from '@capacitor/core'
-import App from './App'
-import './styles/global.css'
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import { Capacitor } from '@capacitor/core';
+import App from './App';
+import './styles/global.css';
 
 if (Capacitor.isNativePlatform()) {
-  document.documentElement.classList.add('native-app')
+  document.documentElement.classList.add('native-app');
 }
 
 // 注：原此处有 JS 注入 backdrop-filter 强制毛玻璃的代码，已移除。
@@ -28,5 +28,5 @@ if (Capacitor.isNativePlatform()) {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
-  </StrictMode>,
-)
+  </StrictMode>
+);

@@ -17,14 +17,14 @@ export function computeInitialCollapsedIds(
 ): Set<number> {
   const collapsedIds = new Set<number>(
     comments
-      .filter(c => !c.parent_id && comments.some(r => r.parent_id === c.id))
-      .map(c => Number(c.id))
+      .filter((c) => !c.parent_id && comments.some((r) => r.parent_id === c.id))
+      .map((c) => Number(c.id))
   );
 
   if (highlightCommentId) {
     const targetId = Number(highlightCommentId);
     const expandAncestors = (commentId: number): void => {
-      const comment = comments.find(c => Number(c.id) === commentId);
+      const comment = comments.find((c) => Number(c.id) === commentId);
       if (!comment || !comment.parent_id) return;
       collapsedIds.delete(Number(comment.parent_id));
       expandAncestors(Number(comment.parent_id));
@@ -39,9 +39,9 @@ export function computeInitialCollapsedIds(
 export function countReplies(comments: Comment[], parentId: number): number {
   let count = 0;
   const walk = (id: number): void => {
-    const replies = comments.filter(c => c.parent_id === id);
+    const replies = comments.filter((c) => c.parent_id === id);
     count += replies.length;
-    replies.forEach(r => walk(r.id));
+    replies.forEach((r) => walk(r.id));
   };
   walk(parentId);
   return count;
@@ -67,7 +67,7 @@ export function buildVisibleComments(
   collapsedReplies: Set<number>
 ): (VisibleComment | null)[] {
   const repliesMap = new Map<number, Comment[]>();
-  comments.forEach(c => {
+  comments.forEach((c) => {
     if (c.parent_id) {
       const list = repliesMap.get(c.parent_id) || [];
       list.push(c);
@@ -77,7 +77,7 @@ export function buildVisibleComments(
 
   const flatList: VisibleComment[] = [];
   const flattenReplies = (parentId: number, isParentCollapsed: boolean): void => {
-    (repliesMap.get(parentId) || []).forEach(r => {
+    (repliesMap.get(parentId) || []).forEach((r) => {
       flatList.push({
         comment: r,
         isReply: true,
@@ -90,22 +90,24 @@ export function buildVisibleComments(
     });
   };
 
-  comments.filter(c => !c.parent_id).forEach(c => {
-    const hasReplies = repliesMap.has(c.id);
-    const isCollapsed = collapsedReplies.has(c.id);
-    flatList.push({
-      comment: c,
-      isReply: false,
-      isCollapsed,
-      hasReplies,
-      replyCount: 0,
+  comments
+    .filter((c) => !c.parent_id)
+    .forEach((c) => {
+      const hasReplies = repliesMap.has(c.id);
+      const isCollapsed = collapsedReplies.has(c.id);
+      flatList.push({
+        comment: c,
+        isReply: false,
+        isCollapsed,
+        hasReplies,
+        replyCount: 0,
+      });
+      if (hasReplies) {
+        flattenReplies(c.id, isCollapsed);
+      }
     });
-    if (hasReplies) {
-      flattenReplies(c.id, isCollapsed);
-    }
-  });
 
-  return flatList.map(item => {
+  return flatList.map((item) => {
     if (item.parentCollapsed) return null;
     return {
       ...item,

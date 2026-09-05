@@ -102,7 +102,7 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
       // 启动60秒倒计时
       setCountdown(60);
       timerRef.current = setInterval(() => {
-        setCountdown(prev => {
+        setCountdown((prev) => {
           if (prev <= 1) {
             if (timerRef.current) clearInterval(timerRef.current);
             return 0;
@@ -188,7 +188,10 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
   return (
     <div
       className={`${styles.overlay}${closing ? ` ${styles.closing}` : ''}`}
-      onClick={(e) => { e.stopPropagation(); handleClose(); }}
+      onClick={(e) => {
+        e.stopPropagation();
+        handleClose();
+      }}
     >
       <div
         className={`${styles.modal}${closing ? ` ${styles.closing}` : ''}`}
@@ -200,7 +203,11 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
 
         <h1 className={styles.authLogo}>k</h1>
         <p className={styles.authSubtitle}>
-          {mode === 'login' ? '分享你的精彩瞬间' : mode === 'register' ? '注册后查看朋友的精彩内容' : '重置密码'}
+          {mode === 'login'
+            ? '分享你的精彩瞬间'
+            : mode === 'register'
+              ? '注册后查看朋友的精彩内容'
+              : '重置密码'}
         </p>
 
         {mode === 'login' ? (
@@ -212,7 +219,7 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
               type="email"
               placeholder="邮箱"
               value={email}
-              onChange={e => setEmail(e.target.value)}
+              onChange={(e) => setEmail(e.target.value)}
               required
             />
             <input
@@ -220,16 +227,20 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
               type="password"
               placeholder="密码"
               value={password}
-              onChange={e => setPassword(e.target.value)}
+              onChange={(e) => setPassword(e.target.value)}
               required
             />
             <button className={styles.button} type="submit" disabled={loading}>
               {loading ? '登录中...' : '登录'}
             </button>
             <div className={styles.actionsRow}>
-              <button type="button" className={styles.registerLink} onClick={() => switchMode('register')}>注册</button>
+              <button type="button" className={styles.registerLink} onClick={() => switchMode('register')}>
+                注册
+              </button>
               <div className={styles.forgotRow}>
-                <button type="button" className={styles.forgotLink} onClick={() => switchMode('forgot')}>忘记密码？</button>
+                <button type="button" className={styles.forgotLink} onClick={() => switchMode('forgot')}>
+                  忘记密码？
+                </button>
               </div>
             </div>
           </form>
@@ -241,7 +252,7 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
               type="text"
               placeholder="用户名"
               value={username}
-              onChange={e => setUsername(e.target.value)}
+              onChange={(e) => setUsername(e.target.value)}
               required
             />
             <div className={styles.emailRow}>
@@ -250,7 +261,7 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
                 type="email"
                 placeholder="邮箱"
                 value={email}
-                onChange={e => setEmail(e.target.value)}
+                onChange={(e) => setEmail(e.target.value)}
                 required
               />
               <button
@@ -260,7 +271,13 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
                 disabled={sending || countdown > 0}
                 title={countdown > 0 ? `${countdown}秒后可重发` : '发送验证码'}
               >
-                {sending ? <Loader2 size={14} className={styles.spin} /> : countdown > 0 ? <span className={styles.countdown}>{countdown}</span> : <Send size={14} />}
+                {sending ? (
+                  <Loader2 size={14} className={styles.spin} />
+                ) : countdown > 0 ? (
+                  <span className={styles.countdown}>{countdown}</span>
+                ) : (
+                  <Send size={14} />
+                )}
               </button>
             </div>
             <input
@@ -268,7 +285,7 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
               type="password"
               placeholder="密码"
               value={password}
-              onChange={e => setPassword(e.target.value)}
+              onChange={(e) => setPassword(e.target.value)}
               required
             />
             <input
@@ -276,7 +293,7 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
               type="password"
               placeholder="确认密码"
               value={confirmPassword}
-              onChange={e => setConfirmPassword(e.target.value)}
+              onChange={(e) => setConfirmPassword(e.target.value)}
               required
             />
             <input
@@ -284,7 +301,7 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
               type="text"
               placeholder="验证码"
               value={code}
-              onChange={e => setCode(e.target.value)}
+              onChange={(e) => setCode(e.target.value)}
               maxLength={6}
               required
             />
@@ -292,7 +309,10 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
               {loading ? '注册中...' : '注册'}
             </button>
             <div className={styles.link}>
-              已有账号？ <button type="button" className={styles.linkBtn} onClick={() => switchMode('login')}>返回登录</button>
+              已有账号？{' '}
+              <button type="button" className={styles.linkBtn} onClick={() => switchMode('login')}>
+                返回登录
+              </button>
             </div>
           </form>
         ) : (
@@ -304,7 +324,7 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
                 type="email"
                 placeholder="邮箱"
                 value={email}
-                onChange={e => setEmail(e.target.value)}
+                onChange={(e) => setEmail(e.target.value)}
                 required
               />
               <button
@@ -314,7 +334,13 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
                 disabled={sending || countdown > 0}
                 title={countdown > 0 ? `${countdown}秒后可重发` : '发送验证码'}
               >
-                {sending ? <Loader2 size={14} className={styles.spin} /> : countdown > 0 ? <span className={styles.countdown}>{countdown}</span> : <Send size={14} />}
+                {sending ? (
+                  <Loader2 size={14} className={styles.spin} />
+                ) : countdown > 0 ? (
+                  <span className={styles.countdown}>{countdown}</span>
+                ) : (
+                  <Send size={14} />
+                )}
               </button>
             </div>
             <input
@@ -322,7 +348,7 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
               type="text"
               placeholder="验证码"
               value={code}
-              onChange={e => setCode(e.target.value)}
+              onChange={(e) => setCode(e.target.value)}
               maxLength={6}
               required
             />
@@ -331,7 +357,7 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
               type="password"
               placeholder="新密码"
               value={password}
-              onChange={e => setPassword(e.target.value)}
+              onChange={(e) => setPassword(e.target.value)}
               required
             />
             <input
@@ -339,14 +365,17 @@ export default function LoginPrompt({ onClose }: LoginPromptProps) {
               type="password"
               placeholder="确认新密码"
               value={confirmPassword}
-              onChange={e => setConfirmPassword(e.target.value)}
+              onChange={(e) => setConfirmPassword(e.target.value)}
               required
             />
             <button className={styles.button} type="submit" disabled={loading}>
               {loading ? '重置中...' : '重置密码'}
             </button>
             <div className={styles.link}>
-              想起密码了？ <button type="button" className={styles.linkBtn} onClick={() => switchMode('login')}>返回登录</button>
+              想起密码了？{' '}
+              <button type="button" className={styles.linkBtn} onClick={() => switchMode('login')}>
+                返回登录
+              </button>
             </div>
           </form>
         )}

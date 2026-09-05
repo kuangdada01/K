@@ -35,7 +35,9 @@
   cursor: pointer;
   padding: 6px;
   border-radius: 6px;
-  transition: color 0.15s, background 0.15s;
+  transition:
+    color 0.15s,
+    background 0.15s;
   display: flex;
   align-items: center;
 }
@@ -106,7 +108,9 @@
   border-radius: 4px;
   display: flex;
   align-items: center;
-  transition: color 0.15s, background 0.15s;
+  transition:
+    color 0.15s,
+    background 0.15s;
   flex-shrink: 0;
 }
 
@@ -265,7 +269,9 @@
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  transition: color 0.15s, background 0.15s;
+  transition:
+    color 0.15s,
+    background 0.15s;
 }
 
 @media (hover: hover) {
@@ -276,8 +282,14 @@
 }
 
 @keyframes chatWindowSlideUp {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @media (max-width: 768px) {

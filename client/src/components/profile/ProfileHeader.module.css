@@ -18,7 +18,9 @@
   cursor: pointer;
   padding: 8px;
   border-radius: 8px;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
   z-index: 10;
 }
 
@@ -82,7 +84,6 @@
 .followBtn.following:hover {
   background: var(--bg-btn-secondary-hover);
 }
-
 
 .avatar {
   width: 150px;
@@ -185,7 +186,6 @@
   line-height: 1.5;
   text-align: left;
 }
-
 
 /* Edit profile form */
 .editForm {
@@ -296,7 +296,9 @@
     cursor: pointer;
     padding: 8px;
     border-radius: 8px;
-    transition: background 0.15s, color 0.15s;
+    transition:
+      background 0.15s,
+      color 0.15s;
     z-index: 10;
   }
 

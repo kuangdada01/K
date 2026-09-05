@@ -24,11 +24,7 @@ export default function IcpFooter() {
         href="http://www.beian.gov.cn/portal/registerSystemInfo?recordcode=43042602000239"
         title="湖南省公安厅网络安全保卫总队"
       >
-        <img
-          src="/icp-icon.png"
-          className={styles.policeIcon}
-          alt="公安备案"
-        />
+        <img src="/icp-icon.png" className={styles.policeIcon} alt="公安备案" />
         <span>湘公网安备43042602000239号</span>
       </a>
     </>

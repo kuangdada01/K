@@ -43,7 +43,6 @@
   font-size: 18px;
 }
 
-
 .modalActions {
   display: flex;
   justify-content: flex-end;
@@ -117,7 +116,9 @@
   cursor: pointer;
   color: var(--text-secondary);
   font-size: 12px;
-  transition: border-color 0.15s, color 0.15s;
+  transition:
+    border-color 0.15s,
+    color 0.15s;
 }
 
 .add:hover {

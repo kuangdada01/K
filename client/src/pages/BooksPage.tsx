@@ -19,8 +19,9 @@ export default function BooksPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get('/books')
-      .then(res => setBooks(res.data.books || []))
+    api
+      .get('/books')
+      .then((res) => setBooks(res.data.books || []))
       .catch(() => setBooks([]))
       .finally(() => setLoading(false));
   }, []);
@@ -42,7 +43,7 @@ export default function BooksPage() {
         </div>
       ) : (
         <div className={styles.grid}>
-          {books.map(book => (
+          {books.map((book) => (
             <Link to={`/books/${book.id}`} key={book.id} className={styles.card}>
               <div className={styles.cover}>
                 {book.cover ? (
@@ -54,7 +55,9 @@ export default function BooksPage() {
               <div className={styles.info}>
                 <div className={styles.title}>{book.title}</div>
                 {book.author && <div className={styles.author}>{book.author}</div>}
-                <div className={styles.meta}>{book.volumeCount} 卷 · {book.chapterCount} 章</div>
+                <div className={styles.meta}>
+                  {book.volumeCount} 卷 · {book.chapterCount} 章
+                </div>
                 {book.description && <div className={styles.desc}>{book.description}</div>}
               </div>
             </Link>

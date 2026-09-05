@@ -17,7 +17,10 @@ export function useBookmarkPost(postId: number) {
   const [bookmarked, setBookmarked] = useState(false);
 
   const toggle = useCallback(async () => {
-    if (!user) { openLoginPrompt(); return; }
+    if (!user) {
+      openLoginPrompt();
+      return;
+    }
     const wasBookmarked = bookmarked;
     setBookmarked(!wasBookmarked);
     setBookmarkedCache(postId, !wasBookmarked);

@@ -67,9 +67,9 @@ describe('countReplies', () => {
 describe('buildVisibleComments', () => {
   it('先父后回复按原顺序排列，含正确 replyCount', () => {
     const visible = buildVisibleComments(TREE, new Set());
-    const nonNull = visible.filter(v => v !== null);
-    expect(nonNull.map(v => v.comment.id)).toEqual([1, 11, 111, 2, 3, 31, 32]);
-    const byId = new Map(nonNull.map(v => [v.comment.id, v]));
+    const nonNull = visible.filter((v) => v !== null);
+    expect(nonNull.map((v) => v.comment.id)).toEqual([1, 11, 111, 2, 3, 31, 32]);
+    const byId = new Map(nonNull.map((v) => [v.comment.id, v]));
     expect(byId.get(1)!.replyCount).toBe(2);
     expect(byId.get(11)!.isReply).toBe(true);
     expect(byId.get(111)!.replyCount).toBe(0);

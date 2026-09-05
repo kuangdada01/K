@@ -32,7 +32,10 @@ export function useLikePost(postId: number, options?: UseLikePostOptions) {
   const onChange = options?.onChange;
 
   const toggle = useCallback(async () => {
-    if (!user) { openLoginPrompt(); return; }
+    if (!user) {
+      openLoginPrompt();
+      return;
+    }
     const wasLiked = liked;
     const prevCount = likeCount;
     const newLikeCount = wasLiked ? prevCount - 1 : prevCount + 1;

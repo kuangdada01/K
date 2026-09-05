@@ -39,7 +39,11 @@ function getTransporter(): nodemailer.Transporter {
  * @param purpose - 验证码用途: 'register'=注册 | 'reset'=重置密码
  * @returns 发送结果信息
  */
-export async function sendVerificationCode(toEmail: string, code: string, purpose: 'register' | 'reset' = 'register') {
+export async function sendVerificationCode(
+  toEmail: string,
+  code: string,
+  purpose: 'register' | 'reset' = 'register'
+) {
   const isRegister = purpose === 'register';
   const subject = isRegister ? 'K - 注册验证码' : 'K - 重置密码验证码';
   const hint = isRegister ? '欢迎注册，请使用以下验证码完成注册' : '你正在重置密码，请使用以下验证码完成验证';

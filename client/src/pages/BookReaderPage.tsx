@@ -39,7 +39,9 @@ export default function BookReaderPage() {
   // 扁平化章节列表，用于上/下一章导航
   const flatChapters = useMemo(() => {
     if (!book) return [];
-    return book.volumes.flatMap((v: BookVolume) => v.chapters.map((ch: BookChapter) => ({ ...ch, volume: v.name })));
+    return book.volumes.flatMap((v: BookVolume) =>
+      v.chapters.map((ch: BookChapter) => ({ ...ch, volume: v.name }))
+    );
   }, [book]);
 
   const currentIndex = useMemo(
@@ -49,16 +51,18 @@ export default function BookReaderPage() {
 
   useEffect(() => {
     if (!file) return;
-    api.get(`/books/${id}/content`, { params: { file }, responseType: 'text' })
-      .then(res => setContent(res.data as string))
+    api
+      .get(`/books/${id}/content`, { params: { file }, responseType: 'text' })
+      .then((res) => setContent(res.data as string))
       .catch(() => setContent(''))
       .finally(() => setLoading(false));
   }, [id, file]);
 
   useEffect(() => {
     if (!id) return;
-    api.get(`/books/${id}`)
-      .then(res => setBook(res.data))
+    api
+      .get(`/books/${id}`)
+      .then((res) => setBook(res.data))
       .catch(() => setBook(null));
   }, [id]);
 
@@ -82,12 +86,22 @@ export default function BookReaderPage() {
         <Link to={`/books/${id}`} className={styles.back} data-back>
           <ArrowLeft size={18} /> 目录
         </Link>
-        <div className={styles.title} title={title}>{title}</div>
+        <div className={styles.title} title={title}>
+          {title}
+        </div>
         <div className={styles.tools}>
-          <button className={styles.tool} onClick={() => setFontSize(f => Math.max(13, f - 1))} title="减小字号">
+          <button
+            className={styles.tool}
+            onClick={() => setFontSize((f) => Math.max(13, f - 1))}
+            title="减小字号"
+          >
             <AArrowDown size={18} />
           </button>
-          <button className={styles.tool} onClick={() => setFontSize(f => Math.min(28, f + 1))} title="增大字号">
+          <button
+            className={styles.tool}
+            onClick={() => setFontSize((f) => Math.min(28, f + 1))}
+            title="增大字号"
+          >
             <AArrowUp size={18} />
           </button>
           <Link to={`/books/${id}`} className={styles.tool} title="章节列表">
@@ -97,9 +111,16 @@ export default function BookReaderPage() {
       </div>
 
       <div className={styles.content} style={{ fontSize }}>
-        {content.replace(/\r\n/g, '\n').replace(/^=+\s*$/gm, '').trim().split(/\n{2,}/).map((para: string, i: number) => (
-          <p key={i} className={styles.para}>{para.replace(/\n/g, '').trim()}</p>
-        ))}
+        {content
+          .replace(/\r\n/g, '\n')
+          .replace(/^=+\s*$/gm, '')
+          .trim()
+          .split(/\n{2,}/)
+          .map((para: string, i: number) => (
+            <p key={i} className={styles.para}>
+              {para.replace(/\n/g, '').trim()}
+            </p>
+          ))}
       </div>
 
       <div className={styles.nav}>
@@ -116,7 +137,11 @@ export default function BookReaderPage() {
         <button
           className={styles.navBtn}
           disabled={currentIndex < 0 || currentIndex >= flatChapters.length - 1}
-          onClick={() => currentIndex >= 0 && currentIndex < flatChapters.length - 1 && goChapter(flatChapters[currentIndex + 1])}
+          onClick={() =>
+            currentIndex >= 0 &&
+            currentIndex < flatChapters.length - 1 &&
+            goChapter(flatChapters[currentIndex + 1])
+          }
         >
           下一章 <ChevronRight size={16} />
         </button>

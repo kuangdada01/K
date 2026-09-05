@@ -41,8 +41,13 @@ import {
 
 // 共享类型与预设收敛在 ./types；这里 re-export 保持既有 import 路径不变
 export type {
-  VoiceStatus, VoiceQualityLevel, ShareQuality, ShareStats,
-  ScreenShareStartResult, VoiceSelfInfo, VoiceSessionCallbacks,
+  VoiceStatus,
+  VoiceQualityLevel,
+  ShareQuality,
+  ShareStats,
+  ScreenShareStartResult,
+  VoiceSelfInfo,
+  VoiceSessionCallbacks,
 } from './types';
 export { SHARE_QUALITY_PRESETS } from './types';
 
@@ -65,7 +70,7 @@ interface PeerAudio {
 interface PeerEntry {
   participant: VoiceParticipant;
   pc: RTCPeerConnection;
-  audio: PeerAudio | null;       // ontrack 后创建
+  audio: PeerAudio | null; // ontrack 后创建
   pendingCandidates: RTCIceCandidateInit[]; // 远端描述就绪前缓存的候选
   remoteDescSet: boolean;
   speaking: boolean;
@@ -74,16 +79,16 @@ interface PeerEntry {
   lastPacketsReceived: number;
   /** 完美协商角色：userId 大者为 polite（offer 冲突时回滚让步，小者坚持己见） */
   polite: boolean;
-  makingOffer: boolean;          // 本端 createOffer/setLocalDescription 进行中（冲突检测用）
+  makingOffer: boolean; // 本端 createOffer/setLocalDescription 进行中（冲突检测用）
   /** 完美协商冲突时被本端"忽略"的远端 offer：本端协商落定（stable）后补处理。
    *  修复"进房间加载不出共享画面"：共享者的补挂重协商 offer 紧跟初始 answer 到达，
    *  非礼貌方若仍在消化 answer（signalingState 未回 stable）会按冲突丢弃它且对端不会重发，
    *  导致共享画面永久缺失——暂存后补处理即可收敛。 */
   pendingOffer: { sdp: string } | null;
-  negotiateSuppressed: boolean;  // 抑制初始 negotiationneeded（初始 offer 由新加入者确定性发起）
-  videoSender: RTCRtpSender | null;      // 我共享屏幕时发给该对端的视频 sender
+  negotiateSuppressed: boolean; // 抑制初始 negotiationneeded（初始 offer 由新加入者确定性发起）
+  videoSender: RTCRtpSender | null; // 我共享屏幕时发给该对端的视频 sender
   shareAudioSender: RTCRtpSender | null; // 我共享屏幕时的系统声音 sender
-  micStreamId: string | null;    // 该对端麦克风音频流 id（此后同对端新音频流 = 共享系统声音）
+  micStreamId: string | null; // 该对端麦克风音频流 id（此后同对端新音频流 = 共享系统声音）
   audioTransceiver: RTCRtpTransceiver | null; // 本端麦克风音频收发器（RED/Opus 编解码偏好挂载点）
   /** 上次统计的累计丢包隐藏样本/总接收样本（隐藏率按窗口增量计算，避免历史劣化永久拖累显示） */
   lastConcealedSamples: number;
@@ -143,7 +148,7 @@ export class VoiceSession {
   private resumeHandler: (() => void) | null = null;
   /** 语音质量评估（自报语义，实现见 ./qualityMonitor.ts） */
   private quality = new QualityMonitor({
-    getPeers: () => [...this.peers.values()].map(e => ({ userId: e.participant.userId, pc: e.pc })),
+    getPeers: () => [...this.peers.values()].map((e) => ({ userId: e.participant.userId, pc: e.pc })),
     report: (level) => {
       this.quality.emit(this.self.userId, level);
       this.send({ type: 'quality', level });
@@ -171,7 +176,9 @@ export class VoiceSession {
 
   /** 全房间录制（远端各路 + 开麦时的自己 → 混音 → PCM 直录/MediaRecorder → MP3 结算），
    *  实现见 ./recording/roomRecorder.ts */
-  private rec = new RoomRecorder((isRecording, startedAt) => this.cb.onRecordingChange(isRecording, startedAt));
+  private rec = new RoomRecorder((isRecording, startedAt) =>
+    this.cb.onRecordingChange(isRecording, startedAt)
+  );
 
   // ---- 屏幕共享 ----
   /** 本端捕获流（video + 可选系统声音；getDisplayMedia 的原始返回） */
@@ -192,7 +199,7 @@ export class VoiceSession {
   /** 发送端共享画面统计与自动降档（实现见 ./share/shareStatsMonitor.ts） */
   private shareStats = new ShareStatsMonitor({
     isSharing: () => this.sharingActive,
-    getVideoSenders: () => [...this.peers.values()].flatMap(e => e.videoSender ? [e.videoSender] : []),
+    getVideoSenders: () => [...this.peers.values()].flatMap((e) => (e.videoSender ? [e.videoSender] : [])),
     getPeerCount: () => this.peers.size,
     getCaptureStream: () => this.shareStream,
     getQuality: () => this.shareQuality,
@@ -206,7 +213,8 @@ export class VoiceSession {
     this.noiseReductionOn = loadFlag(NOISE_REDUCTION_KEY);
     this.musicModeOn = loadFlag(MUSIC_MODE_KEY);
     const savedQuality = localStorage.getItem(SHARE_QUALITY_KEY) as ShareQuality | null;
-    this.shareQuality = savedQuality && savedQuality in SHARE_QUALITY_PRESETS ? savedQuality : SHARE_QUALITY_KEY_DEFAULT;
+    this.shareQuality =
+      savedQuality && savedQuality in SHARE_QUALITY_PRESETS ? savedQuality : SHARE_QUALITY_KEY_DEFAULT;
     this.shareSharpText = loadFlag(SHARE_SHARP_KEY);
     this.self = {
       userId: self.userId,
@@ -223,7 +231,7 @@ export class VoiceSession {
 
   /** dev 联调：暴露全部对等连接（帧率探针读取 outbound/inbound 统计用） */
   getPeerConnections(): RTCPeerConnection[] {
-    return [...this.peers.values()].map(e => e.pc);
+    return [...this.peers.values()].map((e) => e.pc);
   }
 
   /** 加入房间（获取 ICE + 麦克风 → 建 WS → 发 join） */
@@ -238,11 +246,17 @@ export class VoiceSession {
     this.emitParticipants();
 
     // ICE 配置失败不阻断（用兜底 STUN）
-    try { this.iceServers = await getVoiceIceServers(); } catch { /* 用 FALLBACK_ICE_SERVERS */ }
+    try {
+      this.iceServers = await getVoiceIceServers();
+    } catch {
+      /* 用 FALLBACK_ICE_SERVERS */
+    }
 
     // RNNoise 固定 48 kHz（480 样本/10ms 帧）；优先显式指定采样率，
     // 个别浏览器不支持时退回默认采样率，由 prepareDenoiser 检查后降级
-    const ACtor = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const ACtor =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     try {
       this.audioCtx = new ACtor({ sampleRate: 48000 });
     } catch {
@@ -250,7 +264,9 @@ export class VoiceSession {
     }
     // AudioContext 需要用户手势后才能出声（点击"加入房间"即手势）；
     // 刷新自动回房等无手势场景由 ensureAudioResume 兜底
-    this.audioCtx.resume().catch(() => { /* 已 running 时忽略 */ });
+    this.audioCtx.resume().catch(() => {
+      /* 已 running 时忽略 */
+    });
     this.ensureAudioResume();
 
     // 播放总线（听者模式也需要）：各远端 gain 汇入 masterGain → 压限器 → 扬声器。
@@ -278,9 +294,12 @@ export class VoiceSession {
       this.buildLocalChain();
       // 用户偏好开但 RNNoise 不可用（加载失败/非 48k 采样率）：浏览器 NS 兜底（音乐模式除外）
       if (this.noiseReductionOn && !this.musicModeOn && !this.denoiser.getNode()) {
-        this.micStream.getAudioTracks()[0]
+        this.micStream
+          .getAudioTracks()[0]
           ?.applyConstraints({ noiseSuppression: true, autoGainControl: true })
-          .catch(() => { /* 不支持则忽略 */ });
+          .catch(() => {
+            /* 不支持则忽略 */
+          });
       }
     } catch {
       this.self.listener = true;
@@ -337,9 +356,17 @@ export class VoiceSession {
   private applyLocalRouting(): void {
     if (!this.micSource || !this.localGain || !this.localAnalyser) return;
     // 先全断开再重接，避免重复 connect 导致音频叠加/重复目标连接
-    try { this.micSource.disconnect(); } catch { /* 未连接 */ }
+    try {
+      this.micSource.disconnect();
+    } catch {
+      /* 未连接 */
+    }
     const denoiserNode = this.denoiser.getNode();
-    try { denoiserNode?.disconnect(); } catch { /* 未连接 */ }
+    try {
+      denoiserNode?.disconnect();
+    } catch {
+      /* 未连接 */
+    }
 
     if (denoiserNode && this.noiseReductionOn && !this.musicModeOn) {
       this.micSource.connect(denoiserNode);
@@ -380,7 +407,11 @@ export class VoiceSession {
 
     this.ws.onmessage = (e) => {
       let msg: any;
-      try { msg = JSON.parse(String(e.data)); } catch { return; }
+      try {
+        msg = JSON.parse(String(e.data));
+      } catch {
+        return;
+      }
       this.handleServerMessage(msg);
     };
 
@@ -395,7 +426,10 @@ export class VoiceSession {
         this.teardown('replaced');
         return;
       }
-      if (e.code === 4001) { this.teardown('auth'); return; }
+      if (e.code === 4001) {
+        this.teardown('auth');
+        return;
+      }
       // 其余（网络抖动等）自动重连：清空对等连接后重新加入房间
       this.cleanupPeers();
       this.emitStatus('reconnecting');
@@ -446,7 +480,7 @@ export class VoiceSession {
           this.initiateOffer(entry).catch(() => this.teardown('negotiation'));
         }
         // 加入时已有人在共享：先立状态与徽标（画面随后经该共享者的补挂重协商到达）
-        const sharer = (msg.participants as VoiceParticipant[]).find(p => p.sharing);
+        const sharer = (msg.participants as VoiceParticipant[]).find((p) => p.sharing);
         if (sharer) {
           this.shareSharer = { userId: sharer.userId, audio: false };
           this.cb.onShareChanged({ userId: sharer.userId, audio: false });
@@ -555,14 +589,19 @@ export class VoiceSession {
     if (this.sendTrack) {
       const sender = pc.addTrack(this.sendTrack, new MediaStream([this.sendTrack]));
       this.markSenderHighPriority(sender);
-      audioTransceiver = pc.getTransceivers().find(t => t.sender === sender) ?? null;
+      audioTransceiver = pc.getTransceivers().find((t) => t.sender === sender) ?? null;
     } else {
       audioTransceiver = pc.addTransceiver('audio', { direction: 'recvonly' });
     }
     this.applyAudioCodecPreference(audioTransceiver);
 
     pc.onicecandidate = (e) => {
-      if (e.candidate) this.send({ type: 'signal', to: participant.userId, data: { type: 'candidate', candidate: e.candidate.toJSON() } });
+      if (e.candidate)
+        this.send({
+          type: 'signal',
+          to: participant.userId,
+          data: { type: 'candidate', candidate: e.candidate.toJSON() },
+        });
     };
     pc.ontrack = (e) => {
       const entry = this.peers.get(participant.userId);
@@ -573,7 +612,9 @@ export class VoiceSession {
         // 丢包后关键帧跳变时表现为"画面一直回退"）
         try {
           (e.receiver as RTCRtpReceiver & { jitterBufferTarget?: number }).jitterBufferTarget = 200;
-        } catch { /* 浏览器不支持则忽略 */ }
+        } catch {
+          /* 浏览器不支持则忽略 */
+        }
         this.shareSharer = { userId: participant.userId, audio: this.shareSharer?.audio ?? false };
         this.cb.onShareVideo(e.streams[0]);
         return;
@@ -589,7 +630,9 @@ export class VoiceSession {
       // 增大且回落缓慢）；RED 冗余兜底丢包，不需要更深的缓冲
       try {
         (e.receiver as RTCRtpReceiver & { jitterBufferTarget?: number }).jitterBufferTarget = 80;
-      } catch { /* 浏览器不支持则忽略（沿用自适应） */ }
+      } catch {
+        /* 浏览器不支持则忽略（沿用自适应） */
+      }
       this.attachPeerAudio(entry, e.streams[0]);
     };
 
@@ -616,7 +659,9 @@ export class VoiceSession {
     this.peers.set(participant.userId, entry);
 
     // 共享 track 增删后的自动重协商（初始协商被抑制，见 negotiateSuppressed）
-    pc.onnegotiationneeded = () => { void this.handleNegotiationNeeded(entry); };
+    pc.onnegotiationneeded = () => {
+      void this.handleNegotiationNeeded(entry);
+    };
 
     // 协商落定（stable）时补处理被完美协商冲突忽略的远端 offer（见 flushPendingOffer）：
     // 该 offer 通常是共享者补挂屏幕共享 track 的重协商，错过即画面永久缺失。
@@ -635,11 +680,18 @@ export class VoiceSession {
   private markSenderHighPriority(sender: RTCRtpSender): void {
     try {
       // 部分浏览器/TS 类型库缺这两个字段，运行时 Chrome/Edge/Safari 均支持
-      const params = sender.getParameters() as RTCRtpSendParameters & { priority?: string; networkPriority?: string };
+      const params = sender.getParameters() as RTCRtpSendParameters & {
+        priority?: string;
+        networkPriority?: string;
+      };
       params.priority = 'high';
       params.networkPriority = 'high';
-      sender.setParameters(params).catch(() => { /* 浏览器不支持则忽略 */ });
-    } catch { /* 浏览器不支持则忽略 */ }
+      sender.setParameters(params).catch(() => {
+        /* 浏览器不支持则忽略 */
+      });
+    } catch {
+      /* 浏览器不支持则忽略 */
+    }
   }
 
   /**
@@ -659,16 +711,21 @@ export class VoiceSession {
       const codecs = caps?.codecs ?? [];
       if (codecs.length === 0) return;
       const mime = (m: string) => m.toLowerCase();
-      const red = codecs.filter(c => mime(c.mimeType) === 'audio/red');
-      const opus = codecs.filter(c => mime(c.mimeType) === 'audio/opus');
-      const rest = codecs.filter(c => mime(c.mimeType) !== 'audio/red' && mime(c.mimeType) !== 'audio/opus');
+      const red = codecs.filter((c) => mime(c.mimeType) === 'audio/red');
+      const opus = codecs.filter((c) => mime(c.mimeType) === 'audio/opus');
+      const rest = codecs.filter(
+        (c) => mime(c.mimeType) !== 'audio/red' && mime(c.mimeType) !== 'audio/opus'
+      );
       const ordered = this.musicModeOn ? [...opus, ...red, ...rest] : [...red, ...opus, ...rest];
       transceiver.setCodecPreferences(ordered);
-    } catch { /* 浏览器不支持编解码偏好则忽略 */ }
+    } catch {
+      /* 浏览器不支持编解码偏好则忽略 */
+    }
   }
 
   /** ICE 重启重试打洞（最多 2 次；超过则靠质量圆点提示网络不通） */
-  private async tryIceRestart(entry: PeerEntry): Promise<void> {    if (this.destroyed) return;
+  private async tryIceRestart(entry: PeerEntry): Promise<void> {
+    if (this.destroyed) return;
     const peerId = entry.participant.userId;
     const attempts = this.restartAttempts.get(peerId) ?? 0;
     if (attempts >= 2) return;
@@ -704,7 +761,9 @@ export class VoiceSession {
     if (this.destroyed || entry.negotiateSuppressed) return;
     try {
       await this.initiateOffer(entry);
-    } catch { /* PC 已关闭或冲突被回滚取代：忽略 */ }
+    } catch {
+      /* PC 已关闭或冲突被回滚取代：忽略 */
+    }
   }
 
   private async handleSignal(from: number, data: any): Promise<void> {
@@ -769,7 +828,11 @@ export class VoiceSession {
 
   private async flushCandidates(entry: PeerEntry): Promise<void> {
     for (const c of entry.pendingCandidates) {
-      try { await entry.pc.addIceCandidate(c); } catch { /* 候选过期忽略 */ }
+      try {
+        await entry.pc.addIceCandidate(c);
+      } catch {
+        /* 候选过期忽略 */
+      }
     }
     entry.pendingCandidates = [];
   }
@@ -798,7 +861,9 @@ export class VoiceSession {
     const hiddenEl = document.createElement('audio');
     hiddenEl.srcObject = stream;
     hiddenEl.volume = 0;
-    hiddenEl.play().catch(() => { /* 自动播放策略拦截，ensureAudioResume 恢复后会重试 */ });
+    hiddenEl.play().catch(() => {
+      /* 自动播放策略拦截，ensureAudioResume 恢复后会重试 */
+    });
 
     entry.audio = { source, analyser, gain, buffer: new Uint8Array(analyser.fftSize), hiddenEl };
   }
@@ -826,7 +891,11 @@ export class VoiceSession {
     entry.pc.onsignalingstatechange = null;
     entry.pc.onconnectionstatechange = null;
     entry.pendingOffer = null;
-    try { entry.pc.close(); } catch { /* 已关闭 */ }
+    try {
+      entry.pc.close();
+    } catch {
+      /* 已关闭 */
+    }
     entry.videoSender = null;
     entry.shareAudioSender = null;
     if (entry.audio) {
@@ -834,7 +903,9 @@ export class VoiceSession {
         entry.audio.source.disconnect();
         entry.audio.analyser.disconnect();
         entry.audio.gain.disconnect();
-      } catch { /* 已断开 */ }
+      } catch {
+        /* 已断开 */
+      }
       entry.audio.hiddenEl.srcObject = null;
       entry.audio.hiddenEl.remove();
       entry.audio = null;
@@ -855,7 +926,11 @@ export class VoiceSession {
   private startSpeakingLoop(): void {
     this.speakTimer = window.setInterval(() => {
       // 自己（静音/听者不显示说话）
-      const selfNow = !this.self.muted && !!this.localAnalyser && !!this.localBuffer && this.rms(this.localAnalyser, this.localBuffer) > SPEAKING_THRESHOLD;
+      const selfNow =
+        !this.self.muted &&
+        !!this.localAnalyser &&
+        !!this.localBuffer &&
+        this.rms(this.localAnalyser, this.localBuffer) > SPEAKING_THRESHOLD;
       if (selfNow !== this.selfSpeaking) {
         this.selfSpeaking = selfNow;
         this.cb.onSpeaking(this.self.userId, selfNow);
@@ -863,7 +938,10 @@ export class VoiceSession {
       // 远端
       for (const [userId, entry] of this.peers) {
         if (!entry.audio || entry.participant.muted) {
-          if (entry.speaking) { entry.speaking = false; this.cb.onSpeaking(userId, false); }
+          if (entry.speaking) {
+            entry.speaking = false;
+            this.cb.onSpeaking(userId, false);
+          }
           continue;
         }
         const now = this.rms(entry.audio.analyser, entry.audio.buffer) > SPEAKING_THRESHOLD;
@@ -891,10 +969,14 @@ export class VoiceSession {
     if (!ctx || ctx.state === 'running') return;
     const resume = () => {
       this.detachResumeHandler();
-      this.audioCtx?.resume().catch(() => { /* 忽略 */ });
+      this.audioCtx?.resume().catch(() => {
+        /* 忽略 */
+      });
       // 自动播放策略此前可能拦掉了兜底音频元素的播放，一并重试
       for (const entry of this.peers.values()) {
-        entry.audio?.hiddenEl.play().catch(() => { /* 仍被拦截则等下次交互 */ });
+        entry.audio?.hiddenEl.play().catch(() => {
+          /* 仍被拦截则等下次交互 */
+        });
       }
     };
     this.resumeHandler = resume;
@@ -975,7 +1057,9 @@ export class VoiceSession {
         noiseSuppression: on && !this.denoiser.getNode() && !this.musicModeOn,
         autoGainControl: !this.musicModeOn,
       })
-      .catch(() => { /* 浏览器不支持动态切换则忽略 */ });
+      .catch(() => {
+        /* 浏览器不支持动态切换则忽略 */
+      });
   }
 
   /** 音乐模式开关状态 */
@@ -998,11 +1082,15 @@ export class VoiceSession {
 
     // 采集处理链实时切换（applyConstraints 无需重协商）
     const track = this.micStream?.getAudioTracks()[0];
-    track?.applyConstraints({
-      echoCancellation: !on,
-      noiseSuppression: false,
-      autoGainControl: !on,
-    }).catch(() => { /* 浏览器不支持动态切换则忽略 */ });
+    track
+      ?.applyConstraints({
+        echoCancellation: !on,
+        noiseSuppression: false,
+        autoGainControl: !on,
+      })
+      .catch(() => {
+        /* 浏览器不支持动态切换则忽略 */
+      });
     // 关闭音乐模式时若降噪开关仍开：补建 RNNoise 节点（进房时音乐模式开着则未创建）
     if (!on && this.noiseReductionOn) this.denoiser.init(this.audioCtx, this.micStream);
     // 本地链路重接（音乐模式旁路 RNNoise；关闭时若降噪开关仍开则恢复降噪链）
@@ -1054,7 +1142,7 @@ export class VoiceSession {
       return 'cancelled'; // 用户在选择器取消：静默
     }
     if (this.destroyed) {
-      stream.getTracks().forEach(t => t.stop());
+      stream.getTracks().forEach((t) => t.stop());
       return 'cancelled';
     }
 
@@ -1066,7 +1154,9 @@ export class VoiceSession {
       // （帧间混合保帧率），动态画面出现明显拖影/回退感。清晰文字模式仍用 detail。
       if (this.shareSharpText) video.contentHint = 'detail';
       // 浏览器自带的"停止共享"条 → 与主动停止走同一清理路径
-      video.onended = () => { void this.stopScreenShare(); };
+      video.onended = () => {
+        void this.stopScreenShare();
+      };
     }
     // 记录捕获实际帧率与分辨率：窗口/标签共享被 Chromium 限制最高 30fps，
     // 只有整屏(monitor)共享能到 60 —— 后续 UI 据此提示"选 60 档但实际只有 30"
@@ -1100,17 +1190,25 @@ export class VoiceSession {
     if (this.shareSharer?.userId === this.self.userId) this.shareSharer = null;
     for (const entry of this.peers.values()) {
       if (entry.videoSender) {
-        try { entry.pc.removeTrack(entry.videoSender); } catch { /* PC 已关闭 */ }
+        try {
+          entry.pc.removeTrack(entry.videoSender);
+        } catch {
+          /* PC 已关闭 */
+        }
         entry.videoSender = null;
       }
       if (entry.shareAudioSender) {
-        try { entry.pc.removeTrack(entry.shareAudioSender); } catch { /* PC 已关闭 */ }
+        try {
+          entry.pc.removeTrack(entry.shareAudioSender);
+        } catch {
+          /* PC 已关闭 */
+        }
         entry.shareAudioSender = null;
       }
     }
     if (this.shareStream) {
       for (const t of this.shareStream.getTracks()) t.onended = null;
-      this.shareStream.getTracks().forEach(t => t.stop());
+      this.shareStream.getTracks().forEach((t) => t.stop());
     }
     this.shareStream = null;
     this.shareSendVideoStream = null;
@@ -1130,7 +1228,10 @@ export class VoiceSession {
     const video = this.shareSendVideoStream?.getVideoTracks()[0];
     if (video && this.shareSendVideoStream && !entry.videoSender) {
       // addTransceiver（而非 addTrack）：直接拿到收发器，便于设置编解码偏好
-      const transceiver = entry.pc.addTransceiver(video, { direction: 'sendonly', streams: [this.shareSendVideoStream] });
+      const transceiver = entry.pc.addTransceiver(video, {
+        direction: 'sendonly',
+        streams: [this.shareSendVideoStream],
+      });
       entry.videoSender = transceiver.sender;
       this.preferH264ForSender(transceiver);
       this.applyShareQualityToSender(entry.videoSender);
@@ -1152,11 +1253,13 @@ export class VoiceSession {
     try {
       const caps = RTCRtpSender.getCapabilities('video');
       const codecs = caps?.codecs ?? [];
-      const h264 = codecs.filter(c => c.mimeType.toLowerCase() === 'video/h264');
+      const h264 = codecs.filter((c) => c.mimeType.toLowerCase() === 'video/h264');
       if (h264.length === 0) return; // 无 H264 能力：保持默认（VP8/VP9）
-      const rest = codecs.filter(c => c.mimeType.toLowerCase() !== 'video/h264');
+      const rest = codecs.filter((c) => c.mimeType.toLowerCase() !== 'video/h264');
       transceiver.setCodecPreferences([...h264, ...rest]);
-    } catch { /* 浏览器不支持编解码偏好则忽略 */ }
+    } catch {
+      /* 浏览器不支持编解码偏好则忽略 */
+    }
   }
 
   getShareQuality(): ShareQuality {
@@ -1193,7 +1296,10 @@ export class VoiceSession {
     this.shareMuted = muted;
     if (this.shareAudioEl) {
       this.shareAudioEl.muted = muted;
-      if (!muted) this.shareAudioEl.play().catch(() => { /* 仍被拦截则等下次交互 */ });
+      if (!muted)
+        this.shareAudioEl.play().catch(() => {
+          /* 仍被拦截则等下次交互 */
+        });
     }
   }
 
@@ -1219,10 +1325,16 @@ export class VoiceSession {
       // 高动态自动爬升），minBitrate 既不生效也无必要，设了反而可能浪费 mesh 上行
       enc.scaleResolutionDownBy = preset.scale;
       // 60fps 档优先保帧率；清晰文字模式优先保分辨率（文字不糊比流畅重要）
-      (params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference =
-        this.shareSharpText ? 'maintain-resolution' : preset.degradation;
-      sender.setParameters(params).catch(() => { /* 浏览器不支持则忽略 */ });
-    } catch { /* 参数不支持：按浏览器默认编码 */ }
+      (params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = this
+        .shareSharpText
+        ? 'maintain-resolution'
+        : preset.degradation;
+      sender.setParameters(params).catch(() => {
+        /* 浏览器不支持则忽略 */
+      });
+    } catch {
+      /* 参数不支持：按浏览器默认编码 */
+    }
   }
 
   /** 远端共享系统声音：独立 audio 元素直连播放（默认静音；不进 WebAudio 音量链与房间录制） */
@@ -1233,7 +1345,9 @@ export class VoiceSession {
       this.shareAudioEl = el;
     }
     this.shareAudioEl.srcObject = stream;
-    this.shareAudioEl.play().catch(() => { /* 自动播放拦截：舞台上点声音开关时会重试 */ });
+    this.shareAudioEl.play().catch(() => {
+      /* 自动播放拦截：舞台上点声音开关时会重试 */
+    });
     if (this.shareSharer) this.cb.onShareChanged({ userId: this.shareSharer.userId, audio: true });
   }
 
@@ -1253,7 +1367,7 @@ export class VoiceSession {
     return this.rec.start({
       roomName: roomName ?? '',
       audioCtx: this.audioCtx,
-      peerGains: [...this.peers.values()].flatMap(e => e.audio ? [e.audio.gain] : []),
+      peerGains: [...this.peers.values()].flatMap((e) => (e.audio ? [e.audio.gain] : [])),
       localGain: this.localGain,
       selfMuted: this.self.muted,
     });
@@ -1286,7 +1400,7 @@ export class VoiceSession {
   }
 
   private emitParticipants(): void {
-    this.cb.onParticipants([this.self, ...[...this.peers.values()].map(e => ({ ...e.participant }))]);
+    this.cb.onParticipants([this.self, ...[...this.peers.values()].map((e) => ({ ...e.participant }))]);
   }
 
   private teardown(reason: string, detail?: string): void {
@@ -1294,8 +1408,14 @@ export class VoiceSession {
     this.destroyed = true;
     this.intentionalClose = true;
     this.detachResumeHandler();
-    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
-    if (this.speakTimer) { clearInterval(this.speakTimer); this.speakTimer = null; }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.speakTimer) {
+      clearInterval(this.speakTimer);
+      this.speakTimer = null;
+    }
     this.quality.stop();
     this.stopRecording(); // 退出时结算录制文件（转码下载在后台完成）
     this.cleanupPeers();
@@ -1306,35 +1426,53 @@ export class VoiceSession {
     this.shareStats.stop();
     if (this.shareStream) {
       for (const t of this.shareStream.getTracks()) t.onended = null;
-      this.shareStream.getTracks().forEach(t => t.stop());
+      this.shareStream.getTracks().forEach((t) => t.stop());
     }
     this.shareStream = null;
     this.shareSendVideoStream = null;
     this.shareSendAudioStream = null;
     this.disposeShareAudio();
 
-    this.micStream?.getTracks().forEach(t => t.stop());
+    this.micStream?.getTracks().forEach((t) => t.stop());
     this.micStream = null;
     this.sendTrack = null;
     this.localGain = null;
     this.localAnalyser = null;
     if (this.micSource) {
-      try { this.micSource.disconnect(); } catch { /* 未连接 */ }
+      try {
+        this.micSource.disconnect();
+      } catch {
+        /* 未连接 */
+      }
       this.micSource = null;
     }
     if (this.masterLimiter) {
-      try { this.masterLimiter.disconnect(); } catch { /* 已断开 */ }
+      try {
+        this.masterLimiter.disconnect();
+      } catch {
+        /* 已断开 */
+      }
       this.masterLimiter = null;
     }
     if (this.masterGain) {
-      try { this.masterGain.disconnect(); } catch { /* 已断开 */ }
+      try {
+        this.masterGain.disconnect();
+      } catch {
+        /* 已断开 */
+      }
       this.masterGain = null;
     }
-    this.audioCtx?.close().catch(() => { /* 已关闭 */ });
+    this.audioCtx?.close().catch(() => {
+      /* 已关闭 */
+    });
     this.audioCtx = null;
 
     if (this.ws) {
-      try { this.ws.close(1000); } catch { /* 已关闭 */ }
+      try {
+        this.ws.close(1000);
+      } catch {
+        /* 已关闭 */
+      }
       this.ws = null;
     }
 

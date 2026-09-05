@@ -3,14 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
+    />
     <meta name="theme-color" content="#eef2ee" />
     <title>K</title>
     <script>
       // 防止暗色模式闪烁：在 React 挂载前同步设置 data-theme
-      (function() {
+      (function () {
         var mode = localStorage.getItem('theme') || 'system';
-        var dark = mode === 'dark' || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        var dark =
+          mode === 'dark' || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
         if (dark) document.documentElement.setAttribute('data-theme', 'dark');
       })();
     </script>

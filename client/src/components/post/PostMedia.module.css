@@ -84,7 +84,9 @@
   justify-content: center;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.2s, background 0.2s;
+  transition:
+    opacity 0.2s,
+    background 0.2s;
   z-index: 3;
   padding: 0;
 }
@@ -120,7 +122,9 @@
   justify-content: center;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.2s, background 0.2s;
+  transition:
+    opacity 0.2s,
+    background 0.2s;
   z-index: 3;
   padding: 0;
 }

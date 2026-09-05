@@ -32,9 +32,9 @@ export interface PublicProfile {
 
 /** 公开资料查询（含帖子/粉丝/关注统计） */
 export function getPublicProfile(userId: number): PublicProfile | undefined {
-  const user = getDb().prepare(
-    'SELECT id, username, avatar, bio, created_at FROM users WHERE id = ?'
-  ).get(userId) as Omit<PublicProfile, 'post_count' | 'followers_count' | 'following_count'> | undefined;
+  const user = getDb()
+    .prepare('SELECT id, username, avatar, bio, created_at FROM users WHERE id = ?')
+    .get(userId) as Omit<PublicProfile, 'post_count' | 'followers_count' | 'following_count'> | undefined;
   if (!user) return undefined;
 
   const postCount = count('SELECT COUNT(*) as count FROM posts WHERE user_id = ?', userId);
@@ -51,17 +51,15 @@ export function getPublicProfile(userId: number): PublicProfile | undefined {
 
 /** 用户名唯一性检查（排除自身） */
 export function usernameTaken(username: string, excludeUserId: number): boolean {
-  return !!getDb().prepare('SELECT id FROM users WHERE username = ? AND id != ?').get(username, excludeUserId);
+  return !!getDb()
+    .prepare('SELECT id FROM users WHERE username = ? AND id != ?')
+    .get(username, excludeUserId);
 }
 
 /** 更新资料（保留未提供的字段），返回更新后的安全行 */
-export function updateProfile(
-  userId: number,
-  input: { username?: string; bio?: string }
-): SafeUserRow {
+export function updateProfile(userId: number, input: { username?: string; bio?: string }): SafeUserRow {
   const current = getDb().prepare('SELECT username, bio FROM users WHERE id = ?').get(userId) as
-    | { username: string; bio: string }
-    | undefined;
+    { username: string; bio: string } | undefined;
   if (!current) throw new Error('用户不存在');
 
   const newUsername = input.username !== undefined ? input.username : current.username;
@@ -72,13 +70,15 @@ export function updateProfile(
 
 /** 安全行查询（不含密码） */
 export function getSafeUser(userId: number): SafeUserRow | undefined {
-  return getDb().prepare('SELECT id, username, email, avatar, bio, role, created_at FROM users WHERE id = ?')
+  return getDb()
+    .prepare('SELECT id, username, email, avatar, bio, role, created_at FROM users WHERE id = ?')
     .get(userId) as SafeUserRow | undefined;
 }
 
 /** 获取当前头像路径 */
 export function getAvatar(userId: number): string | null {
-  const row = getDb().prepare('SELECT avatar FROM users WHERE id = ?').get(userId) as { avatar: string | null } | undefined;
+  const row = getDb().prepare('SELECT avatar FROM users WHERE id = ?').get(userId) as
+    { avatar: string | null } | undefined;
   return row?.avatar ?? null;
 }
 
@@ -100,7 +100,8 @@ export interface PrivateImageRow {
 }
 
 export function listPrivateImages(userId: number): PrivateImageRow[] {
-  return getDb().prepare('SELECT * FROM private_images WHERE user_id = ? ORDER BY created_at DESC')
+  return getDb()
+    .prepare('SELECT * FROM private_images WHERE user_id = ? ORDER BY created_at DESC')
     .all(userId) as PrivateImageRow[];
 }
 
@@ -109,12 +110,17 @@ export function countPrivateImages(userId: number): number {
 }
 
 export function createPrivateImage(userId: number, imageUrl: string): PrivateImageRow {
-  const result = getDb().prepare('INSERT INTO private_images (user_id, image_url) VALUES (?, ?)').run(userId, imageUrl);
-  return getDb().prepare('SELECT * FROM private_images WHERE id = ?').get(result.lastInsertRowid) as PrivateImageRow;
+  const result = getDb()
+    .prepare('INSERT INTO private_images (user_id, image_url) VALUES (?, ?)')
+    .run(userId, imageUrl);
+  return getDb()
+    .prepare('SELECT * FROM private_images WHERE id = ?')
+    .get(result.lastInsertRowid) as PrivateImageRow;
 }
 
 export function findOwnPrivateImage(imageId: number, userId: number): PrivateImageRow | undefined {
-  return getDb().prepare('SELECT * FROM private_images WHERE id = ? AND user_id = ?').get(imageId, userId) as PrivateImageRow | undefined;
+  return getDb().prepare('SELECT * FROM private_images WHERE id = ? AND user_id = ?').get(imageId, userId) as
+    PrivateImageRow | undefined;
 }
 
 export function deletePrivateImage(imageId: number): void {

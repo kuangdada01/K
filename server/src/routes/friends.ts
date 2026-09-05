@@ -35,18 +35,22 @@ const router = Router();
  *
  * 返回最多20个匹配用户，包含关注状态
  */
-router.get('/search', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const keyword = req.query.q as string;
-  const userId = req.user!.id;
+router.get(
+  '/search',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const keyword = req.query.q as string;
+    const userId = req.user!.id;
 
-  if (!keyword || !keyword.trim()) {
-    res.json({ users: [] });
-    return;
-  }
+    if (!keyword || !keyword.trim()) {
+      res.json({ users: [] });
+      return;
+    }
 
-  const users = friendRepo.searchUsers(keyword, userId);
-  res.json({ users });
-}));
+    const users = friendRepo.searchUsers(keyword, userId);
+    res.json({ users });
+  })
+);
 
 // ============================================================
 // 关注状态端点
@@ -59,13 +63,17 @@ router.get('/search', authMiddleware, asyncHandler(async (req: Request, res: Res
  *
  * 返回当前用户是否关注了指定用户
  */
-router.get('/status/:id', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const targetId = parseInt(req.params.id as string);
-  const userId = req.user!.id;
+router.get(
+  '/status/:id',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const targetId = parseInt(req.params.id as string);
+    const userId = req.user!.id;
 
-  const following = friendRepo.isFollowing(userId, targetId);
-  res.json({ is_following: following });
-}));
+    const following = friendRepo.isFollowing(userId, targetId);
+    res.json({ is_following: following });
+  })
+);
 
 // ============================================================
 // 关注/取消关注端点
@@ -83,21 +91,25 @@ router.get('/status/:id', authMiddleware, asyncHandler(async (req: Request, res:
  *
  * 返回关注状态和目标用户的粉丝数
  */
-router.post('/:id', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const targetId = parseInt(req.params.id as string);
-  const userId = req.user!.id;
+router.post(
+  '/:id',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const targetId = parseInt(req.params.id as string);
+    const userId = req.user!.id;
 
-  if (targetId === userId) {
-    throw new AppError(400, '不能关注自己');
-  }
+    if (targetId === userId) {
+      throw new AppError(400, '不能关注自己');
+    }
 
-  if (!friendRepo.userExists(targetId)) {
-    throw new AppError(404, '用户不存在');
-  }
+    if (!friendRepo.userExists(targetId)) {
+      throw new AppError(404, '用户不存在');
+    }
 
-  const followersCount = friendRepo.follow(userId, targetId);
-  res.json({ is_following: true, followers_count: followersCount });
-}));
+    const followersCount = friendRepo.follow(userId, targetId);
+    res.json({ is_following: true, followers_count: followersCount });
+  })
+);
 
 /**
  * DELETE /api/friends/:id - 取消关注
@@ -106,13 +118,17 @@ router.post('/:id', authMiddleware, asyncHandler(async (req: Request, res: Respo
  *
  * 返回关注状态和目标用户的粉丝数
  */
-router.delete('/:id', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const targetId = parseInt(req.params.id as string);
-  const userId = req.user!.id;
+router.delete(
+  '/:id',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const targetId = parseInt(req.params.id as string);
+    const userId = req.user!.id;
 
-  const followersCount = friendRepo.unfollow(userId, targetId);
-  res.json({ is_following: false, followers_count: followersCount });
-}));
+    const followersCount = friendRepo.unfollow(userId, targetId);
+    res.json({ is_following: false, followers_count: followersCount });
+  })
+);
 
 // ============================================================
 // 推荐端点
@@ -125,13 +141,17 @@ router.delete('/:id', authMiddleware, asyncHandler(async (req: Request, res: Res
  *
  * 返回指定用户的粉丝列表（谁关注了该用户）
  */
-router.get('/followers/:id', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const targetId = parseInt(req.params.id as string);
-  const userId = req.user!.id;
+router.get(
+  '/followers/:id',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const targetId = parseInt(req.params.id as string);
+    const userId = req.user!.id;
 
-  const followers = friendRepo.listFollowers(targetId, userId);
-  res.json({ users: followers });
-}));
+    const followers = friendRepo.listFollowers(targetId, userId);
+    res.json({ users: followers });
+  })
+);
 
 /**
  * GET /api/friends/following/:id - 获取关注列表
@@ -140,13 +160,17 @@ router.get('/followers/:id', authMiddleware, asyncHandler(async (req: Request, r
  *
  * 返回指定用户关注的人列表（该用户关注了谁）
  */
-router.get('/following/:id', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const targetId = parseInt(req.params.id as string);
-  const userId = req.user!.id;
+router.get(
+  '/following/:id',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const targetId = parseInt(req.params.id as string);
+    const userId = req.user!.id;
 
-  const following = friendRepo.listFollowing(targetId, userId);
-  res.json({ users: following });
-}));
+    const following = friendRepo.listFollowing(targetId, userId);
+    res.json({ users: following });
+  })
+);
 
 /**
  * GET /api/friends/recommend - 随机推荐用户
@@ -156,11 +180,15 @@ router.get('/following/:id', authMiddleware, asyncHandler(async (req: Request, r
  * 返回5个随机用户
  * 用于首页右侧推荐关注卡片
  */
-router.get('/recommend', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user?.id;
-  const users = friendRepo.listRecommended(userId);
-  res.json({ users });
-}));
+router.get(
+  '/recommend',
+  optionalAuth,
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.user?.id;
+    const users = friendRepo.listRecommended(userId);
+    res.json({ users });
+  })
+);
 
 // ============================================================
 // 关注列表端点
@@ -173,10 +201,14 @@ router.get('/recommend', optionalAuth, asyncHandler(async (req: Request, res: Re
  *
  * 返回当前用户关注的所有用户，按用户名排序
  */
-router.get('/', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user!.id;
-  const friends = friendRepo.listMyFollowing(userId);
-  res.json({ friends });
-}));
+router.get(
+  '/',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.user!.id;
+    const friends = friendRepo.listMyFollowing(userId);
+    res.json({ friends });
+  })
+);
 
 export default router;

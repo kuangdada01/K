@@ -25,9 +25,10 @@ export function useScrollRestore(ready: boolean): void {
 
     const tryRestore = () => {
       const target = getScrollTarget();
-      const maxScroll = target === window
-        ? document.documentElement.scrollHeight - window.innerHeight
-        : (target as HTMLElement).scrollHeight - (target as HTMLElement).clientHeight;
+      const maxScroll =
+        target === window
+          ? document.documentElement.scrollHeight - window.innerHeight
+          : (target as HTMLElement).scrollHeight - (target as HTMLElement).clientHeight;
 
       if (maxScroll > 0) {
         writeScrollY(restoredY);
@@ -49,6 +50,8 @@ export function useScrollRestore(ready: boolean): void {
     };
 
     rafId = requestAnimationFrame(tryRestore);
-    return () => { if (rafId) cancelAnimationFrame(rafId); };
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+    };
   }, [ready]);
 }

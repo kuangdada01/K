@@ -43,8 +43,16 @@ const byName = (a: string, b: string) => a.localeCompare(b, 'zh-CN', { numeric: 
 
 /** 中文数字映射（用于卷名排序） */
 const CN_NUM: Record<string, number> = {
-  '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
-  '六': 6, '七': 7, '八': 8, '九': 9, '十': 10,
+  一: 1,
+  二: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+  十: 10,
 };
 
 /** 从卷名提取数字序号（支持阿拉伯数字与中文数字），无则返回 null */
@@ -70,7 +78,9 @@ const byVolumeName = (a: string, b: string) => {
 /** 扫描书籍目录，返回章节文件列表（按卷分组） */
 function scanBook(bookId: string): { volumes: { name: string; chapters: string[] }[] } {
   const bookDir = path.join(BOOKS_DIR, bookId);
-  const entries = fs.readdirSync(bookDir, { withFileTypes: true }).sort((a, b) => byVolumeName(a.name, b.name));
+  const entries = fs
+    .readdirSync(bookDir, { withFileTypes: true })
+    .sort((a, b) => byVolumeName(a.name, b.name));
   const txtExt = ['.txt', '.md', '.pdf'];
 
   const volumes: { name: string; chapters: string[] }[] = [];
@@ -79,8 +89,9 @@ function scanBook(bookId: string): { volumes: { name: string; chapters: string[]
   for (const entry of entries) {
     const full = path.join(bookDir, entry.name);
     if (entry.isDirectory()) {
-      const files = fs.readdirSync(full)
-        .filter(f => txtExt.includes(path.extname(f).toLowerCase()))
+      const files = fs
+        .readdirSync(full)
+        .filter((f) => txtExt.includes(path.extname(f).toLowerCase()))
         .sort(byName);
       if (files.length > 0) volumes.push({ name: entry.name, chapters: files });
     } else if (entry.isFile() && txtExt.includes(path.extname(entry.name).toLowerCase())) {
@@ -124,9 +135,10 @@ router.get('/', (_req: Request, res: Response) => {
       res.json({ books: [] });
       return;
     }
-    const books = fs.readdirSync(BOOKS_DIR, { withFileTypes: true })
-      .filter(e => e.isDirectory())
-      .map(e => {
+    const books = fs
+      .readdirSync(BOOKS_DIR, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => {
         const meta = readMeta(e.name);
         const { volumes } = scanBook(e.name);
         const chapterCount = volumes.reduce((sum, v) => sum + v.chapters.length, 0);
@@ -177,7 +189,11 @@ router.get('/:bookId/cover', (req: Request, res: Response) => {
 router.get('/:bookId', (req: Request, res: Response) => {
   const bookId = req.params.bookId as string;
   const bookDir = path.resolve(BOOKS_DIR, bookId);
-  if (!bookDir.startsWith(path.resolve(BOOKS_DIR) + path.sep) || !fs.existsSync(bookDir) || !fs.statSync(bookDir).isDirectory()) {
+  if (
+    !bookDir.startsWith(path.resolve(BOOKS_DIR) + path.sep) ||
+    !fs.existsSync(bookDir) ||
+    !fs.statSync(bookDir).isDirectory()
+  ) {
     res.status(404).json({ error: '图书不存在' });
     return;
   }
@@ -190,9 +206,9 @@ router.get('/:bookId', (req: Request, res: Response) => {
       author: meta.author || '',
       description: meta.description || '',
       cover: coverUrl(bookId, meta),
-      volumes: volumes.map(v => ({
+      volumes: volumes.map((v) => ({
         name: v.name,
-        chapters: v.chapters.map(f => ({
+        chapters: v.chapters.map((f) => ({
           file: v.name ? path.join(v.name, f) : f,
           type: path.extname(f).toLowerCase() === '.pdf' ? 'pdf' : 'text',
           title: path.basename(f, path.extname(f)).replace(/^\d+[-_.\s]*/, ''),

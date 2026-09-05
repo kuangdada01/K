@@ -39,7 +39,7 @@ function rowToMessage(row: VoiceChatMessageRow): VoiceChatMessage {
 export function listRoomMessages(
   roomId: number,
   opts: { beforeId?: number; afterId?: number; limit: number },
-  db: Database = getDb(),
+  db: Database = getDb()
 ): { messages: VoiceChatMessage[]; has_more: boolean } {
   const { beforeId, afterId, limit } = opts;
 
@@ -62,7 +62,7 @@ export function listRoomMessages(
       `SELECT ${MESSAGE_COLUMNS} FROM voice_room_messages
        WHERE ${condition}
        ORDER BY id ${afterId !== undefined ? 'ASC' : 'DESC'}
-       LIMIT ?`,
+       LIMIT ?`
     )
     .all(...params, limit) as VoiceChatMessageRow[];
 
@@ -91,21 +91,14 @@ export function insertVoiceChatMessage(
     avatar: string | null;
     content: string;
   },
-  db: Database = getDb(),
+  db: Database = getDb()
 ): VoiceChatMessage {
   const result = db
     .prepare(
       `INSERT INTO voice_room_messages (room_id, sender_id, username, avatar, content, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?)`
     )
-    .run(
-      input.roomId,
-      input.senderId,
-      input.username,
-      input.avatar,
-      input.content,
-      new Date().toISOString(),
-    );
+    .run(input.roomId, input.senderId, input.username, input.avatar, input.content, new Date().toISOString());
   const row = db
     .prepare(`SELECT ${MESSAGE_COLUMNS} FROM voice_room_messages WHERE id = ?`)
     .get(result.lastInsertRowid) as VoiceChatMessageRow | undefined;

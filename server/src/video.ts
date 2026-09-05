@@ -37,13 +37,21 @@ const FFPROBE = env.FFPROBE_PATH || 'ffprobe';
  */
 export async function probeVideoCodec(filePath: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync(FFPROBE, [
-      '-v', 'error',
-      '-select_streams', 'v:0',
-      '-show_entries', 'stream=codec_name',
-      '-of', 'json',
-      filePath,
-    ], { timeout: 30000 });
+    const { stdout } = await execFileAsync(
+      FFPROBE,
+      [
+        '-v',
+        'error',
+        '-select_streams',
+        'v:0',
+        '-show_entries',
+        'stream=codec_name',
+        '-of',
+        'json',
+        filePath,
+      ],
+      { timeout: 30000 }
+    );
     const data = JSON.parse(stdout);
     return data?.streams?.[0]?.codec_name ?? null;
   } catch {
@@ -78,17 +86,28 @@ export async function ensurePlayableVideo(filePath: string, originalName: string
   // 引号内的逗号由 ffmpeg filtergraph 解析器处理（execFile 不经过 shell）
   const ffmpegArgs = [
     '-y',
-    '-i', filePath,
-    '-vf', "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease",
-    '-c:v', 'libx264',
-    '-preset', 'veryfast',
-    '-crf', '23',
-    '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac',
-    '-b:a', '128k',
-    '-movflags', '+faststart',
-    '-max_muxing_queue_size', '1024',
-    '-threads', '2',
+    '-i',
+    filePath,
+    '-vf',
+    "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease",
+    '-c:v',
+    'libx264',
+    '-preset',
+    'veryfast',
+    '-crf',
+    '23',
+    '-pix_fmt',
+    'yuv420p',
+    '-c:a',
+    'aac',
+    '-b:a',
+    '128k',
+    '-movflags',
+    '+faststart',
+    '-max_muxing_queue_size',
+    '1024',
+    '-threads',
+    '2',
     actualOut,
   ];
   // Linux 上经 nice 以低优先级运行（Windows/无 nice 环境直接运行）
@@ -107,7 +126,11 @@ export async function ensurePlayableVideo(filePath: string, originalName: string
     return finalName;
   } catch (err) {
     logger.error({ err }, `视频转码失败，保留原文件: ${originalName}`);
-    try { if (fs.existsSync(actualOut)) fs.unlinkSync(actualOut); } catch { /* 忽略 */ }
+    try {
+      if (fs.existsSync(actualOut)) fs.unlinkSync(actualOut);
+    } catch {
+      /* 忽略 */
+    }
     return originalName;
   }
 }
@@ -156,19 +179,27 @@ export async function generateVideoCover(filePath: string, outPath: string): Pro
     try {
       const ffmpegArgs = [
         '-y',
-        '-ss', seek,
-        '-i', filePath,
-        '-vframes', '1',
-        '-vf', "scale=w='min(1080,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease",
-        '-q:v', '3',
-        '-threads', '2',
+        '-ss',
+        seek,
+        '-i',
+        filePath,
+        '-vframes',
+        '1',
+        '-vf',
+        "scale=w='min(1080,iw)':h='min(1920,ih)':force_original_aspect_ratio=decrease",
+        '-q:v',
+        '3',
+        '-threads',
+        '2',
         outPath,
       ];
       const cmd = process.platform === 'linux' ? 'nice' : FFMPEG;
       const args = process.platform === 'linux' ? ['-n', '19', FFMPEG, ...ffmpegArgs] : ffmpegArgs;
       await execFileAsync(cmd, args, { timeout: 5000 });
       if (fs.existsSync(outPath)) return outPath;
-    } catch { /* 该时间点无帧则尝试下一档 */ }
+    } catch {
+      /* 该时间点无帧则尝试下一档 */
+    }
   }
   return null;
 }

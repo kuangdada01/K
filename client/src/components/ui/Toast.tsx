@@ -32,21 +32,25 @@ export default function Toast() {
 
   const addToast = useCallback((message: string) => {
     const id = ++toastId;
-    setToasts(prev => [...prev, { id, message }]);
+    setToasts((prev) => [...prev, { id, message }]);
     setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id));
+      setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 2500);
   }, []);
 
   useEffect(() => {
     addToastFn = addToast;
-    return () => { addToastFn = null; };
+    return () => {
+      addToastFn = null;
+    };
   }, [addToast]);
 
   return (
     <div className="toast-container">
-      {toasts.map(t => (
-        <div key={t.id} className="toast-item">{t.message}</div>
+      {toasts.map((t) => (
+        <div key={t.id} className="toast-item">
+          {t.message}
+        </div>
       ))}
     </div>
   );

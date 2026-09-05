@@ -77,9 +77,7 @@ export async function fileToPreviewUrl(file: File): Promise<string> {
     ctx.putImageData(imageData, 0, 0);
 
     // 转成 JPEG blob 预览（浏览器可解码）
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, 'image/jpeg', 0.92)
-    );
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
     if (!blob) throw new Error('JPEG 编码失败');
     return URL.createObjectURL(blob);
   } catch (err) {
@@ -131,7 +129,9 @@ export function formatRelativeTime(dateStr: string): string {
  */
 export function formatAbsoluteTime(dateStr: string): string {
   const date = parseDbTime(dateStr);
-  return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return (
+    date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  );
 }
 
 /**

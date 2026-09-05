@@ -23,7 +23,11 @@ export type CreateVoiceRoomBody = z.infer<typeof createVoiceRoomSchema>;
 
 /** 语音房间聊天消息校验（信令 WS 发送时复用；控制字符剔除在服务端消息处理层） */
 export const voiceChatSchema = z.object({
-  content: z.string().trim().min(1, '消息不能为空').max(VOICE_CHAT_MAX_LEN, `消息最多${VOICE_CHAT_MAX_LEN}个字符`),
+  content: z
+    .string()
+    .trim()
+    .min(1, '消息不能为空')
+    .max(VOICE_CHAT_MAX_LEN, `消息最多${VOICE_CHAT_MAX_LEN}个字符`),
 });
 
 /** 语音房间聊天消息请求体类型 */

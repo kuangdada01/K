@@ -41,7 +41,7 @@
   box-sizing: border-box;
 }
 
-[data-theme="dark"] .music-player-inline {
+[data-theme='dark'] .music-player-inline {
   background: var(--bg-frosted);
   border-color: rgba(38, 43, 53, 0.95);
 }
@@ -110,7 +110,9 @@
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
   -webkit-tap-highlight-color: transparent;
 }
 

@@ -62,7 +62,12 @@ export function errorHandler(err: any, _req: Request, res: Response, _next: Next
   }
 
   // 上传文件类型过滤错误
-  if (err?.message && (err.message.includes('Only image files') || err.message.includes('仅支持视频格式文件') || err.message.includes('封面图片'))) {
+  if (
+    err?.message &&
+    (err.message.includes('Only image files') ||
+      err.message.includes('仅支持视频格式文件') ||
+      err.message.includes('封面图片'))
+  ) {
     res.status(400).json({ error: err.message });
     return;
   }

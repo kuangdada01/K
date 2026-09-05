@@ -59,11 +59,12 @@ export default function ExplorePage() {
       const res = await api.get(endpoint);
       const newPosts: Post[] = res.data.posts || [];
 
-      setPosts(prev => append ? [...prev, ...newPosts] : newPosts);
+      setPosts((prev) => (append ? [...prev, ...newPosts] : newPosts));
       setHasMore(pageNum < res.data.totalPages);
       setTotalResults(res.data.total || 0);
       setPage(pageNum);
-    } catch {} finally {
+    } catch {
+    } finally {
       setLoading(false);
       loadingRef.current = false;
     }
@@ -128,22 +129,38 @@ export default function ExplorePage() {
   };
 
   const handlePostChange = (postId: number, liked: boolean, likeCount: number) => {
-    setPosts(prev => prev.map(p => p.id === postId ? { ...p, liked: liked ? 1 : 0, like_count: likeCount } : p));
+    setPosts((prev) =>
+      prev.map((p) => (p.id === postId ? { ...p, liked: liked ? 1 : 0, like_count: likeCount } : p))
+    );
   };
 
   const handleCommentChange = (postId: number, commentCount: number) => {
-    setPosts(prev => prev.map(p => p.id === postId ? { ...p, comment_count: commentCount } : p));
+    setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, comment_count: commentCount } : p)));
   };
 
   // 全部实时：任意页面点赞/转发/评论/删除/新增 后，网格立即同步
   useEffect(() => {
     const onLike = ({ postId, liked, likeCount }: { postId: number; liked: boolean; likeCount: number }) =>
-      setPosts(prev => prev.map(p => p.id === postId ? { ...p, liked: liked ? 1 : 0, like_count: likeCount } : p));
-    const onRepost = ({ postId, reposted, repostCount }: { postId: number; reposted: boolean; repostCount: number }) =>
-      setPosts(prev => prev.map(p => p.id === postId ? { ...p, reposted: reposted ? 1 : 0, repost_count: repostCount } : p));
+      setPosts((prev) =>
+        prev.map((p) => (p.id === postId ? { ...p, liked: liked ? 1 : 0, like_count: likeCount } : p))
+      );
+    const onRepost = ({
+      postId,
+      reposted,
+      repostCount,
+    }: {
+      postId: number;
+      reposted: boolean;
+      repostCount: number;
+    }) =>
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId ? { ...p, reposted: reposted ? 1 : 0, repost_count: repostCount } : p
+        )
+      );
     const onComment = ({ postId, commentCount }: { postId: number; commentCount: number }) =>
-      setPosts(prev => prev.map(p => p.id === postId ? { ...p, comment_count: commentCount } : p));
-    const onDeleted = (deletedId: number) => setPosts(prev => prev.filter(p => p.id !== deletedId));
+      setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, comment_count: commentCount } : p)));
+    const onDeleted = (deletedId: number) => setPosts((prev) => prev.filter((p) => p.id !== deletedId));
     const onCreated = () => loadPosts(1, keyword, false);
     const onUpdated = () => loadPosts(1, keyword, false);
     events.on('post:like', onLike);
@@ -198,7 +215,7 @@ export default function ExplorePage() {
             className={styles.input}
             placeholder="搜索"
             value={keyword}
-            onChange={e => setKeyword(e.target.value)}
+            onChange={(e) => setKeyword(e.target.value)}
           />
           {keyword && (
             <button className={styles.clearBtn} onClick={handleClear}>
@@ -209,25 +226,17 @@ export default function ExplorePage() {
       </div>
 
       {/* 搜索结果信息 */}
-      {searched && (
-        <div className={styles.resultInfo}>
-          找到 {totalResults} 个相关帖子
-        </div>
-      )}
+      {searched && <div className={styles.resultInfo}>找到 {totalResults} 个相关帖子</div>}
 
       {/* 帖子网格 */}
       {posts.length > 0 ? (
         <>
           <div className={styles.grid}>
-            {posts.map(post => {
+            {posts.map((post) => {
               const thumbnail = getThumbnail(post);
               const multiCount = getMultiImageCount(post);
               return (
-                <div
-                  key={post.id}
-                  className={styles.gridItem}
-                  onClick={() => setOverlayPostId(post.id)}
-                >
+                <div key={post.id} className={styles.gridItem} onClick={() => setOverlayPostId(post.id)}>
                   <img src={thumbnail} alt={post.title || post.description || ''} loading="lazy" />
 
                   {/* 视频标识 */}
@@ -273,12 +282,8 @@ export default function ExplorePage() {
       ) : (
         <div className={styles.empty}>
           <Search size={48} className={styles.emptyIcon} />
-          <div className={styles.emptyText}>
-            {searched ? '未找到相关帖子' : '暂无帖子'}
-          </div>
-          {searched && (
-            <div className={styles.emptyHint}>试试其他关键词</div>
-          )}
+          <div className={styles.emptyText}>{searched ? '未找到相关帖子' : '暂无帖子'}</div>
+          {searched && <div className={styles.emptyHint}>试试其他关键词</div>}
         </div>
       )}
 

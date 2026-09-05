@@ -15,7 +15,16 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { MonitorUp, Maximize, Minimize, Volume2, VolumeX, Square, Type, PictureInPicture2 } from 'lucide-react';
+import {
+  MonitorUp,
+  Maximize,
+  Minimize,
+  Volume2,
+  VolumeX,
+  Square,
+  Type,
+  PictureInPicture2,
+} from 'lucide-react';
 import { useVoice, useVoiceRealtime } from '../context/VoiceContext';
 import type { ShareQuality } from '../voice/VoiceSession';
 import styles from './VoiceShareStage.module.css';
@@ -25,7 +34,6 @@ const QUALITY_LABELS: Record<ShareQuality, string> = {
   '1080p30': '流畅 1080p30',
   '720p30': '省流 720p30',
 };
-
 
 export default function VoiceShareStage() {
   const voice = useVoice();
@@ -42,7 +50,7 @@ export default function VoiceShareStage() {
   // 共享源类型与捕获帧率：getSettings() 是同步快照，渲染期直接读取
   // （每次渲染读一次 ≈ 原先"每个共享流读一次"的 effect 语义，且省去重置逻辑）
   const trackSettings = share?.stream
-    ? share.stream.getVideoTracks()[0]?.getSettings() as MediaTrackSettings & { displaySurface?: string }
+    ? (share.stream.getVideoTracks()[0]?.getSettings() as MediaTrackSettings & { displaySurface?: string })
     : undefined;
   /** 共享源类型（monitor/window/browser；合成流等无此字段为 undefined） */
   const surface = trackSettings?.displaySurface;
@@ -77,11 +85,15 @@ export default function VoiceShareStage() {
   }, []);
 
   // 原生沉浸模式（隐藏/恢复状态栏+导航栏）；仅原生端存在 AndroidBridge
-  const applyImmersive = useCallback((on: boolean) => {
-    const bridge = (window as unknown as { AndroidBridge?: { setImmersiveMode?: (v: boolean) => void } }).AndroidBridge;
-    bridge?.setImmersiveMode?.(on);
-    if (on) refreshThemeColor();
-  }, [refreshThemeColor]);
+  const applyImmersive = useCallback(
+    (on: boolean) => {
+      const bridge = (window as unknown as { AndroidBridge?: { setImmersiveMode?: (v: boolean) => void } })
+        .AndroidBridge;
+      bridge?.setImmersiveMode?.(on);
+      if (on) refreshThemeColor();
+    },
+    [refreshThemeColor]
+  );
 
   // 全屏状态兜底：进入由 requestFullscreen().then 主动驱动；此监听负责——
   // 正常路径 fullscreenchange（幂等更新 UI）、以及退出恢复（按钮/返回手势/系统退出）。
@@ -131,7 +143,9 @@ export default function VoiceShareStage() {
     const el = videoRef.current;
     if (el && share?.stream && el.srcObject !== share.stream) {
       el.srcObject = share.stream;
-      el.play().catch(() => { /* 手势兜底：任意点击舞台时浏览器会重试 */ });
+      el.play().catch(() => {
+        /* 手势兜底：任意点击舞台时浏览器会重试 */
+      });
     }
     // 依赖含 previewLive：全屏自动隐藏/恢复时占位卡覆盖在画布上方，video 保持解码即可
   }, [share?.stream, previewLive]);
@@ -139,7 +153,14 @@ export default function VoiceShareStage() {
   // canvas 生命周期（命令式）：创建 → 挂进舞台槽位；共享结束移除并关闭小窗
   useEffect(() => {
     if (!share?.stream) {
-      if (pipWinRef.current) { try { pipWinRef.current.close(); } catch { /* 已关闭 */ } pipWinRef.current = null; }
+      if (pipWinRef.current) {
+        try {
+          pipWinRef.current.close();
+        } catch {
+          /* 已关闭 */
+        }
+        pipWinRef.current = null;
+      }
       // 异步复位小窗状态（避免在 effect 内同步 setState 触发级联渲染）
       queueMicrotask(() => setPipActive(false));
       canvasRef.current?.remove();
@@ -152,7 +173,8 @@ export default function VoiceShareStage() {
       // background 纯黑 #000：全屏 letterbox（16:9 画面上下留白）用纯黑，与
       // .stage:fullscreen / .canvasSlot 全屏背景一致；非全屏画框 16:9 无 letterbox，
       // 此背景不可见不影响。opacity:0.999 仍保留防硬件 overlay 发绿。
-      canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;opacity:0.999';
+      canvas.style.cssText =
+        'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000;opacity:0.999';
       canvasRef.current = canvas;
     }
     const slot = canvasSlotRef.current;
@@ -185,7 +207,8 @@ export default function VoiceShareStage() {
           canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height);
         }
       }
-      if (document.hidden) timer = window.setTimeout(draw, 40); // 后台标签：rAF 节流，改用定时器
+      if (document.hidden)
+        timer = window.setTimeout(draw, 40); // 后台标签：rAF 节流，改用定时器
       else raf = requestAnimationFrame(draw);
     };
     raf = requestAnimationFrame(draw);
@@ -198,14 +221,16 @@ export default function VoiceShareStage() {
 
   // 视频原生 PiP 退出同步（用户在原生窗口关闭 PiP 时）——必须在 early return 之前声明（Hooks 规则）
   useEffect(() => {
-    const onLeave = () => { if (!document.pictureInPictureElement) setPipActive(false); };
+    const onLeave = () => {
+      if (!document.pictureInPictureElement) setPipActive(false);
+    };
     document.addEventListener('leavepictureinpicture', onLeave);
     return () => document.removeEventListener('leavepictureinpicture', onLeave);
   }, []);
 
   if (!share) return null;
 
-  const sharerName = voice.participants.find(p => p.userId === share.userId)?.username ?? '成员';
+  const sharerName = voice.participants.find((p) => p.userId === share.userId)?.username ?? '成员';
   const supportsPip = typeof document !== 'undefined' && !!document.pictureInPictureEnabled;
 
   const toggleFullscreen = () => {
@@ -214,7 +239,9 @@ export default function VoiceShareStage() {
     // 退出：主动意图清空 + 恢复系统栏（不依赖 fullscreenchange 时序）
     if (document.fullscreenElement || fullscreenIntentRef.current) {
       fullscreenIntentRef.current = false;
-      document.exitFullscreen().catch(() => { /* 已退出 */ });
+      document.exitFullscreen().catch(() => {
+        /* 已退出 */
+      });
       setIsFullscreen(false);
       applyImmersive(false);
       return;
@@ -223,9 +250,10 @@ export default function VoiceShareStage() {
     // navigationUI: "hide" 让浏览器完全隐藏导航 UI（地址栏 + 状态栏），实现真正的
     // 沉浸式全屏——否则默认 "auto" 下 Android Chrome 会残留状态栏位置（"状态栏图标
     // 隐藏了但位置变黑"的根因）；app 端对应 MainActivity 的 hide(systemBars())。
-    const doFs = () => (el.requestFullscreen
-      ? el.requestFullscreen({ navigationUI: 'hide' } as FullscreenOptions)
-      : webkitEl.webkitRequestFullscreen?.());
+    const doFs = () =>
+      el.requestFullscreen
+        ? el.requestFullscreen({ navigationUI: 'hide' } as FullscreenOptions)
+        : webkitEl.webkitRequestFullscreen?.();
     const p = doFs();
     // 进入全屏成功后主动隐藏系统栏（Android WebView 的 fullscreenElement 判断不可靠，
     // 必须用成功回调驱动原生沉浸模式）
@@ -236,7 +264,9 @@ export default function VoiceShareStage() {
           setIsFullscreen(true);
           applyImmersive(true);
         })
-        .catch(() => { /* 拒绝则忽略 */ });
+        .catch(() => {
+          /* 拒绝则忽略 */
+        });
     } else {
       // 老 WebView 的 webkitRequestFullscreen 无 Promise：标记意图，靠 fullscreenchange 兜底
       fullscreenIntentRef.current = true;
@@ -251,7 +281,9 @@ export default function VoiceShareStage() {
     try {
       await v.requestPictureInPicture();
       setPipActive(true);
-    } catch { /* 用户取消或不支持 */ }
+    } catch {
+      /* 用户取消或不支持 */
+    }
   };
 
   return (
@@ -266,7 +298,12 @@ export default function VoiceShareStage() {
               隐藏预览/小窗模式 = 上方盖一层不透明占位卡（元素不卸载，恢复显示零延迟） */}
           <video ref={videoRef} className={styles.sourceVideo} autoPlay playsInline muted />
           <div ref={canvasSlotRef} className={styles.canvasSlot}>
-            {pipActive && <div className={styles.pipPlayingNote}><MonitorUp size={26} />画面正在小窗中播放</div>}
+            {pipActive && (
+              <div className={styles.pipPlayingNote}>
+                <MonitorUp size={26} />
+                画面正在小窗中播放
+              </div>
+            )}
           </div>
           {!previewLive && !pipActive && (
             <div className={styles.previewHidden}>
@@ -296,7 +333,9 @@ export default function VoiceShareStage() {
 
       <div className={styles.badge}>
         <MonitorUp size={13} />
-        <span>{sharerName} 正在共享{isPresenter ? '（我）' : ''}</span>
+        <span>
+          {sharerName} 正在共享{isPresenter ? '（我）' : ''}
+        </span>
       </div>
 
       {/* 发送端实时编码统计：实际帧率/码率/发送分辨率——"选了 60 档但画面糊"时
@@ -306,17 +345,23 @@ export default function VoiceShareStage() {
         <div className={styles.statsBar}>
           <span>
             {realtime.shareStats.fps > 0 ? `${realtime.shareStats.fps}fps` : '--fps'}
-            {realtime.shareStats.fps > 0
-              && realtime.shareStats.captureFps > 0
-              && realtime.shareStats.captureFps !== realtime.shareStats.fps
-              && ` / 捕获${realtime.shareStats.captureFps}`}
+            {realtime.shareStats.fps > 0 &&
+              realtime.shareStats.captureFps > 0 &&
+              realtime.shareStats.captureFps !== realtime.shareStats.fps &&
+              ` / 捕获${realtime.shareStats.captureFps}`}
           </span>
           <span>·</span>
-          <span>{realtime.shareStats.bitrate > 0 ? `${(realtime.shareStats.bitrate / 1_000_000).toFixed(1)}Mbps` : '--Mbps'}</span>
+          <span>
+            {realtime.shareStats.bitrate > 0
+              ? `${(realtime.shareStats.bitrate / 1_000_000).toFixed(1)}Mbps`
+              : '--Mbps'}
+          </span>
           {realtime.shareStats.width > 0 && (
             <>
               <span>·</span>
-              <span>{realtime.shareStats.width}×{realtime.shareStats.height}</span>
+              <span>
+                {realtime.shareStats.width}×{realtime.shareStats.height}
+              </span>
             </>
           )}
           {realtime.shareStats.resolutionDownscaled && <span className={styles.statsWarn}>已降分辨率</span>}
@@ -324,27 +369,37 @@ export default function VoiceShareStage() {
       )}
 
       {/* 发送端降级提示条（自动纠偏 + 带宽不足 + 帧率达不到；观众端不显示） */}
-      {isPresenter && (() => {
-        const s = realtime.shareStats;
-        if (s?.autoDowngraded) {
-          return <div className={styles.hintBar}>CPU 编码受限，已自动切换为流畅 1080p30（可手动切回）</div>;
-        }
-        if (s?.resolutionDownscaled) {
-          return <div className={styles.hintBar}>带宽不足，画质已降级 —— 建议降低档位或检查网络</div>;
-        }
-        if (voice.shareQuality === '1080p60' && s && s.fps > 0 && s.fps < 45) {
-          const cap = s.captureFps > 0 ? `（捕获已满 ${s.captureFps}fps，编码器吞吐不足）` : '（硬件/捕获上限）';
-          return <div className={styles.hintBar}>当前编码 {s.fps}fps，未达 60{cap}—— 流畅观感建议 1080p30</div>;
-        }
-        // 仅窗口/标签共享提示帧率上限（Chromium 限制 30fps，请求 60 也没用）；
-        // 整屏共享的捕获帧率由显示器/编码器决定，交给上面"未达 60"提示兜底
-        if ((surface === 'window' || surface === 'browser') && captureFps > 0 && captureFps < 55) {
-          return <div className={styles.hintBar}>当前捕获 {captureFps}fps（窗口/标签共享上限 30；共享整屏可达 60）</div>;
-        }
-        return null;
-      })()}
+      {isPresenter &&
+        (() => {
+          const s = realtime.shareStats;
+          if (s?.autoDowngraded) {
+            return <div className={styles.hintBar}>CPU 编码受限，已自动切换为流畅 1080p30（可手动切回）</div>;
+          }
+          if (s?.resolutionDownscaled) {
+            return <div className={styles.hintBar}>带宽不足，画质已降级 —— 建议降低档位或检查网络</div>;
+          }
+          if (voice.shareQuality === '1080p60' && s && s.fps > 0 && s.fps < 45) {
+            const cap =
+              s.captureFps > 0 ? `（捕获已满 ${s.captureFps}fps，编码器吞吐不足）` : '（硬件/捕获上限）';
+            return (
+              <div className={styles.hintBar}>
+                当前编码 {s.fps}fps，未达 60{cap}—— 流畅观感建议 1080p30
+              </div>
+            );
+          }
+          // 仅窗口/标签共享提示帧率上限（Chromium 限制 30fps，请求 60 也没用）；
+          // 整屏共享的捕获帧率由显示器/编码器决定，交给上面"未达 60"提示兜底
+          if ((surface === 'window' || surface === 'browser') && captureFps > 0 && captureFps < 55) {
+            return (
+              <div className={styles.hintBar}>
+                当前捕获 {captureFps}fps（窗口/标签共享上限 30；共享整屏可达 60）
+              </div>
+            );
+          }
+          return null;
+        })()}
 
-      <div className={styles.controls} onClick={e => e.stopPropagation()}>
+      <div className={styles.controls} onClick={(e) => e.stopPropagation()}>
         {share.audio && (
           <button
             className={`${styles.ctlBtn} ${!voice.shareMuted ? styles.ctlOn : ''}`}
@@ -360,22 +415,32 @@ export default function VoiceShareStage() {
             <select
               className={styles.qualitySelect}
               value={voice.shareQuality}
-              onChange={e => voice.setShareQuality(e.target.value as ShareQuality)}
+              onChange={(e) => voice.setShareQuality(e.target.value as ShareQuality)}
               title="观看人数多时建议降档，减轻共享端上行压力"
             >
-              {(Object.keys(QUALITY_LABELS) as ShareQuality[]).map(q => (
-                <option key={q} value={q}>{QUALITY_LABELS[q]}</option>
+              {(Object.keys(QUALITY_LABELS) as ShareQuality[]).map((q) => (
+                <option key={q} value={q}>
+                  {QUALITY_LABELS[q]}
+                </option>
               ))}
             </select>
             <button
               className={`${styles.ctlBtn} ${voice.shareSharpText ? styles.ctlOn : ''}`}
               onClick={voice.toggleShareSharpText}
-              title={voice.shareSharpText ? '切换回流畅模式（适合视频/游戏）' : '清晰文字模式：优先保分辨率（适合文档/代码）'}
+              title={
+                voice.shareSharpText
+                  ? '切换回流畅模式（适合视频/游戏）'
+                  : '清晰文字模式：优先保分辨率（适合文档/代码）'
+              }
             >
               <Type size={16} />
               <span>清晰文字</span>
             </button>
-            <button className={`${styles.ctlBtn} ${styles.stopBtn}`} onClick={voice.toggleScreenShare} title="停止共享">
+            <button
+              className={`${styles.ctlBtn} ${styles.stopBtn}`}
+              onClick={voice.toggleScreenShare}
+              title="停止共享"
+            >
               <Square size={13} fill="currentColor" strokeWidth={0} />
               <span>停止共享</span>
             </button>
@@ -385,7 +450,9 @@ export default function VoiceShareStage() {
         {supportsPip && !pipActive && (
           <button
             className={styles.ctlBtn}
-            onClick={() => { void enterPip(); }}
+            onClick={() => {
+              void enterPip();
+            }}
             title="小窗模式（浮于桌面，可边看共享边做其他事）"
           >
             <PictureInPicture2 size={16} />

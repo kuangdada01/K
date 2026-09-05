@@ -31,7 +31,9 @@
   cursor: pointer;
   border-radius: 8px;
   text-decoration: none;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .back:hover,
@@ -91,7 +93,9 @@
   color: var(--text-primary);
   cursor: pointer;
   text-decoration: none;
-  transition: background 0.15s, opacity 0.15s;
+  transition:
+    background 0.15s,
+    opacity 0.15s;
 }
 
 .navBtn:hover:not(:disabled) {

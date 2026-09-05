@@ -54,13 +54,15 @@ describe('迁移 timestamps_iso_utc (id 13)', () => {
     expect(u.created_at).toBe('2026-08-13T14:29:12.000Z');
     expect(p.created_at).toBe('2025-01-02T03:04:05.000Z');
     // 字符串排序语义正确：ISO 时间可直接比较
-    const cmp = db.prepare("SELECT (? > ?) as v").get(p.created_at, u.created_at) as { v: number };
+    const cmp = db.prepare('SELECT (? > ?) as v').get(p.created_at, u.created_at) as { v: number };
     expect(cmp.v).toBe(0);
   });
 
   it('幂等：已转换的数据不受影响，重复执行不报错', () => {
     const db = createLegacyDb();
-    db.exec(`INSERT INTO users (username, email, password_hash, created_at) VALUES ('a', 'a@t.com', 'x', '2026-08-13 14:29:12');`);
+    db.exec(
+      `INSERT INTO users (username, email, password_hash, created_at) VALUES ('a', 'a@t.com', 'x', '2026-08-13 14:29:12');`
+    );
     ensureMigrationTable(db);
     applyMigrations(db);
     applyMigrations(db); // 第二次执行：全部已应用，直接跳过

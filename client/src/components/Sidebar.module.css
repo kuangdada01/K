@@ -37,7 +37,7 @@
   flex-shrink: 0;
 }
 
-[data-theme="dark"] .brandMark {
+[data-theme='dark'] .brandMark {
   background: linear-gradient(135deg, var(--accent), #7a6335);
 }
 
@@ -61,7 +61,9 @@
   gap: 12px;
   padding: 11px 12px;
   border-radius: 12px;
-  transition: background 0.16s ease, color 0.16s ease;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease;
   color: var(--text-secondary);
   text-decoration: none;
   cursor: pointer;
@@ -76,7 +78,7 @@
   color: var(--text-primary);
 }
 
-[data-theme="dark"] .item:hover {
+[data-theme='dark'] .item:hover {
   background: rgba(30, 35, 45, 0.85);
   color: var(--text-primary);
 }
@@ -91,7 +93,7 @@
 /* 深色侧边栏选中项：--bg-primary(#161a22) 在页面底色 #0d0f14 上是突兀的深灰块，
    改为淡金色底 + 去阴影，与浅色"白色卡片高亮"的选中语义保持一致。
    此规则写在 hover 规则之后，(0,3,0) 高于 .item.active (0,2,0)，hover 选中时也保持淡金。 */
-[data-theme="dark"] .item.active {
+[data-theme='dark'] .item.active {
   background: var(--accent-soft);
   box-shadow: none;
 }
@@ -129,8 +131,13 @@
 }
 
 @keyframes voiceDotPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
 .badge {
@@ -172,7 +179,7 @@
   border-radius: 14px !important;
 }
 
-[data-theme="dark"] .userChipTrigger {
+[data-theme='dark'] .userChipTrigger {
   border-color: rgba(38, 43, 53, 0.9) !important;
   background: rgba(22, 26, 34, 0.8) !important;
 }
@@ -202,13 +209,17 @@
     background: var(--bg-frosted) !important;
     -webkit-backdrop-filter: blur(18px) saturate(180%);
     backdrop-filter: blur(18px) saturate(180%);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.10), 0 4px 12px rgba(0, 0, 0, 0.06) !important;
+    box-shadow:
+      0 10px 30px rgba(0, 0, 0, 0.1),
+      0 4px 12px rgba(0, 0, 0, 0.06) !important;
   }
 
-  [data-theme="dark"] .sidebar {
+  [data-theme='dark'] .sidebar {
     background: var(--bg-frosted) !important;
     border-color: rgba(255, 255, 255, 0.06) !important;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.22) !important;
+    box-shadow:
+      0 10px 30px rgba(0, 0, 0, 0.32),
+      0 4px 12px rgba(0, 0, 0, 0.22) !important;
   }
 
   .brand,
@@ -241,7 +252,10 @@
     box-shadow: none !important;
     border-radius: 999px !important;
     min-width: 0 !important;
-    transition: background 0.18s ease, color 0.18s ease, transform 0.12s ease !important;
+    transition:
+      background 0.18s ease,
+      color 0.18s ease,
+      transform 0.12s ease !important;
   }
 
   .item:active {
@@ -255,7 +269,7 @@
       background: rgba(0, 0, 0, 0.04) !important;
     }
 
-    [data-theme="dark"] .item:hover {
+    [data-theme='dark'] .item:hover {
       background: rgba(255, 255, 255, 0.06) !important;
     }
   }
@@ -265,7 +279,7 @@
      会把选中项染成灰底 —— 因此 active 连同 active:hover 一起覆盖，且写在 hover 规则之后 */
   .item.active,
   .item.active:hover,
-  [data-theme="dark"] .item.active:hover {
+  [data-theme='dark'] .item.active:hover {
     background: transparent !important;
     color: var(--accent) !important;
     box-shadow: none !important;

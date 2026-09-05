@@ -55,16 +55,21 @@ describe('useLikePost', () => {
   it('未登录：弹登录提示，不发请求', async () => {
     mocks.user = null;
     const { result } = setup({ liked: false, likeCount: 0 });
-    await act(async () => { await result.current.toggle(); });
+    await act(async () => {
+      await result.current.toggle();
+    });
     expect(mocks.openLoginPrompt).toHaveBeenCalledTimes(1);
     expect(mocks.likePost).not.toHaveBeenCalled();
   });
 
   it('点赞：乐观更新立即生效，成功后广播事件并回调 onChange/onToggle', async () => {
-    const { qc, result } = setup({ liked: false, likeCount: 10 }, {
-      onToggle: vi.fn(),
-      onChange: vi.fn(),
-    });
+    const { qc, result } = setup(
+      { liked: false, likeCount: 10 },
+      {
+        onToggle: vi.fn(),
+        onChange: vi.fn(),
+      }
+    );
     const likeHandler = vi.fn();
     events.on('post:like', likeHandler);
 
@@ -77,7 +82,9 @@ describe('useLikePost', () => {
     expect(result.current.likeCount).toBe(11);
     expect(qc.getQueryData(['cache', 'like', 1])).toEqual({ liked: true, likeCount: 11 });
 
-    await act(async () => { await promise; });
+    await act(async () => {
+      await promise;
+    });
     expect(mocks.likePost).toHaveBeenCalledWith(1);
     expect(likeHandler).toHaveBeenCalledWith({ postId: 1, liked: true, likeCount: 11 });
   });
@@ -86,7 +93,9 @@ describe('useLikePost', () => {
     const onToggle = vi.fn();
     const onChange = vi.fn();
     const { result } = setup({ liked: false, likeCount: 0 }, { onToggle, onChange });
-    await act(async () => { await result.current.toggle(); });
+    await act(async () => {
+      await result.current.toggle();
+    });
     expect(onToggle).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenCalledWith(1, true, 1);
   });
@@ -101,7 +110,9 @@ describe('useLikePost', () => {
     expect(result.current.liked).toBe(true);
     expect(qc.getQueryData(['cache', 'like', 1])).toBeUndefined();
 
-    await act(async () => { await promise; });
+    await act(async () => {
+      await promise;
+    });
     expect(mocks.unlikePost).toHaveBeenCalledWith(1);
     expect(result.current.liked).toBe(false);
     expect(result.current.likeCount).toBe(10);
@@ -117,7 +128,9 @@ describe('useLikePost', () => {
     });
     expect(result.current.liked).toBe(true); // 乐观置位
 
-    await act(async () => { await promise; });
+    await act(async () => {
+      await promise;
+    });
     expect(result.current.liked).toBe(false);
     expect(result.current.likeCount).toBe(10); // 回到原值
     expect(qc.getQueryData(['cache', 'like', 1])).toEqual({ liked: false, likeCount: 10 });
@@ -126,7 +139,9 @@ describe('useLikePost', () => {
   it('取消点赞失败：状态不变（本就无乐观更新）', async () => {
     mocks.unlikePost.mockRejectedValueOnce(new Error('network'));
     const { result } = setup({ liked: true, likeCount: 11 });
-    await act(async () => { await result.current.toggle(); });
+    await act(async () => {
+      await result.current.toggle();
+    });
     expect(result.current.liked).toBe(true);
     expect(result.current.likeCount).toBe(11);
   });

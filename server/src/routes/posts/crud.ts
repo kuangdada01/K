@@ -44,27 +44,31 @@ const imageUpload = createUploader({
  *
  * 认证: 可选（登录用户可看到自己的点赞状态）
  */
-router.get('/search', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
-  const keyword = (req.query.q as string || '').trim();
-  const tag = (req.query.tag as string || '').trim().replace(/^#/, '');
-  const page = pageQuerySchema.parse(req.query.page);
-  const limit = limitQuerySchema.parse(req.query.limit);
-  const userId = req.user?.id;
+router.get(
+  '/search',
+  optionalAuth,
+  asyncHandler(async (req: Request, res: Response) => {
+    const keyword = ((req.query.q as string) || '').trim();
+    const tag = ((req.query.tag as string) || '').trim().replace(/^#/, '');
+    const page = pageQuerySchema.parse(req.query.page);
+    const limit = limitQuerySchema.parse(req.query.limit);
+    const userId = req.user?.id;
 
-  if (!keyword && !tag) {
-    res.json({ posts: [], total: 0, page, totalPages: 0 });
-    return;
-  }
+    if (!keyword && !tag) {
+      res.json({ posts: [], total: 0, page, totalPages: 0 });
+      return;
+    }
 
-  const { posts, total } = postRepo.searchPosts(keyword, page, limit, userId, tag || undefined);
+    const { posts, total } = postRepo.searchPosts(keyword, page, limit, userId, tag || undefined);
 
-  res.json({
-    posts: posts.map((p) => withImages(p)),
-    total,
-    page,
-    totalPages: Math.ceil(total / limit)
-  });
-}));
+    res.json({
+      posts: posts.map((p) => withImages(p)),
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    });
+  })
+);
 
 // ============================================================
 // 帖子 CRUD 端点
@@ -79,20 +83,24 @@ router.get('/search', optionalAuth, asyncHandler(async (req: Request, res: Respo
  *
  * 认证: 可选（登录用户可看到自己的点赞状态）
  */
-router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
-  const page = pageQuerySchema.parse(req.query.page);
-  const limit = limitQuerySchema.parse(req.query.limit);
-  const userId = req.user?.id;
+router.get(
+  '/',
+  optionalAuth,
+  asyncHandler(async (req: Request, res: Response) => {
+    const page = pageQuerySchema.parse(req.query.page);
+    const limit = limitQuerySchema.parse(req.query.limit);
+    const userId = req.user?.id;
 
-  const { posts, total } = postRepo.listPosts(page, limit, userId);
+    const { posts, total } = postRepo.listPosts(page, limit, userId);
 
-  res.json({
-    posts: posts.map((p) => withImages(p)),
-    total,
-    page,
-    totalPages: Math.ceil(total / limit)
-  });
-}));
+    res.json({
+      posts: posts.map((p) => withImages(p)),
+      total,
+      page,
+      totalPages: Math.ceil(total / limit),
+    });
+  })
+);
 
 /**
  * GET /api/posts/bookmarks/me - 获取当前用户收藏的帖子列表
@@ -100,11 +108,15 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
  * 认证: 必须
  * 返回用户收藏的所有帖子（按收藏时间倒序）
  */
-router.get('/bookmarks/me', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user!.id;
-  const posts = postRepo.listBookmarkedPosts(userId);
-  res.json({ posts: posts.map(withImages) });
-}));
+router.get(
+  '/bookmarks/me',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.user!.id;
+    const posts = postRepo.listBookmarkedPosts(userId);
+    res.json({ posts: posts.map(withImages) });
+  })
+);
 
 /**
  * GET /api/posts/reposts/me - 获取当前用户转发的帖子列表
@@ -112,11 +124,15 @@ router.get('/bookmarks/me', authMiddleware, asyncHandler(async (req: Request, re
  * 认证: 必须
  * 返回用户转发的所有帖子（按转发时间倒序）
  */
-router.get('/reposts/me', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user!.id;
-  const posts = postRepo.listRepostedPosts(userId);
-  res.json({ posts: posts.map(withImages) });
-}));
+router.get(
+  '/reposts/me',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.user!.id;
+    const posts = postRepo.listRepostedPosts(userId);
+    res.json({ posts: posts.map(withImages) });
+  })
+);
 
 /**
  * GET /api/posts/:id - 获取单个帖子详情
@@ -127,21 +143,25 @@ router.get('/reposts/me', authMiddleware, asyncHandler(async (req: Request, res:
  * - post: 帖子详情（含图片数组、点赞数、评论数）
  * - comments: 评论列表（含嵌套回复信息）
  */
-router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
-  const postId = parseInt(req.params.id as string);
-  const userId = req.user?.id;
+router.get(
+  '/:id',
+  optionalAuth,
+  asyncHandler(async (req: Request, res: Response) => {
+    const postId = parseInt(req.params.id as string);
+    const userId = req.user?.id;
 
-  const post = postRepo.getPostById(postId, userId);
+    const post = postRepo.getPostById(postId, userId);
 
-  if (!post) {
-    throw new AppError(404, '帖子不存在');
-  }
+    if (!post) {
+      throw new AppError(404, '帖子不存在');
+    }
 
-  // 获取评论列表（含父评论信息，用于显示回复关系）
-  const comments = commentRepo.listCommentsForPost(postId);
+    // 获取评论列表（含父评论信息，用于显示回复关系）
+    const comments = commentRepo.listCommentsForPost(postId);
 
-  res.json({ post: withImages(post), comments });
-}));
+    res.json({ post: withImages(post), comments });
+  })
+);
 
 /**
  * POST /api/posts - 创建图文帖子
@@ -157,37 +177,42 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response
  *
  * 成功响应 (201): 创建的帖子对象
  */
-router.post('/', authMiddleware, imageUpload.array('images', 9), asyncHandler(async (req: Request, res: Response) => {
-  const files = req.files as Express.Multer.File[];
-  if (!files || files.length === 0) {
-    throw new AppError(400, '请选择图片');
-  }
+router.post(
+  '/',
+  authMiddleware,
+  imageUpload.array('images', 9),
+  asyncHandler(async (req: Request, res: Response) => {
+    const files = req.files as Express.Multer.File[];
+    if (!files || files.length === 0) {
+      throw new AppError(400, '请选择图片');
+    }
 
-  // 上传后压缩（并行处理，减少响应等待；heic 会转成 jpg，以返回路径为准）
-  const processedFiles = await Promise.all(files.map(f =>
-    compressImage(path.join(PATHS.uploads, f.filename), { maxWidth: POST_IMAGE_MAX })
-  ));
+    // 上传后压缩（并行处理，减少响应等待；heic 会转成 jpg，以返回路径为准）
+    const processedFiles = await Promise.all(
+      files.map((f) => compressImage(path.join(PATHS.uploads, f.filename), { maxWidth: POST_IMAGE_MAX }))
+    );
 
-  // 将所有图片路径转为 JSON 数组存储
-  const imageUrls = processedFiles.map(p => `/uploads/${path.basename(p)}`);
-  const imageUrl = JSON.stringify(imageUrls);
-  const title = req.body.title || '';
-  const description = req.body.description || '';
-  const closeComments = req.body.close_comments === '1' ? 1 : 0;
-  const pinned = req.body.pinned === '1' ? 1 : 0;
+    // 将所有图片路径转为 JSON 数组存储
+    const imageUrls = processedFiles.map((p) => `/uploads/${path.basename(p)}`);
+    const imageUrl = JSON.stringify(imageUrls);
+    const title = req.body.title || '';
+    const description = req.body.description || '';
+    const closeComments = req.body.close_comments === '1' ? 1 : 0;
+    const pinned = req.body.pinned === '1' ? 1 : 0;
 
-  const post = postRepo.createPost({
-    userId: req.user!.id,
-    imageUrl,
-    title,
-    description,
-    closeComments,
-    pinned,
-  });
-  postRepo.syncPostTags(post.id, extractTags(description));
+    const post = postRepo.createPost({
+      userId: req.user!.id,
+      imageUrl,
+      title,
+      description,
+      closeComments,
+      pinned,
+    });
+    postRepo.syncPostTags(post.id, extractTags(description));
 
-  res.status(201).json(withImages(post));
-}));
+    res.status(201).json(withImages(post));
+  })
+);
 
 /**
  * PUT /api/posts/:id - 编辑自己的帖子
@@ -203,63 +228,70 @@ router.post('/', authMiddleware, imageUpload.array('images', 9), asyncHandler(as
  *
  * 成功响应 (200): 更新后的帖子对象
  */
-router.put('/:id', authMiddleware, imageUpload.array('images', 9), asyncHandler(async (req: Request, res: Response) => {
-  const postId = parseInt(req.params.id as string);
-  const post = postRepo.findOwnPost(postId, req.user!.id);
+router.put(
+  '/:id',
+  authMiddleware,
+  imageUpload.array('images', 9),
+  asyncHandler(async (req: Request, res: Response) => {
+    const postId = parseInt(req.params.id as string);
+    const post = postRepo.findOwnPost(postId, req.user!.id);
 
-  if (!post) {
-    throw new AppError(404, '帖子不存在或无权编辑');
-  }
-
-  const description = req.body.description;
-  const keepImages: string[] = req.body.keepImages ? JSON.parse(req.body.keepImages) : [];
-
-  // 删除不再保留的图片文件
-  const oldImages = parseImageUrlArray(post.image_url);
-  for (const url of oldImages) {
-    if (!keepImages.includes(url)) {
-      safeDeleteFile(url);
+    if (!post) {
+      throw new AppError(404, '帖子不存在或无权编辑');
     }
-  }
 
-  // 合并保留的图片和新上传的图片（新图先压缩，heic 转 jpg 后以返回路径为准）
-  const processedNew = await Promise.all((req.files as Express.Multer.File[] || []).map(f =>
-    compressImage(path.join(PATHS.uploads, f.filename), { maxWidth: POST_IMAGE_MAX })
-  ));
-  const newFiles = processedNew.map(p => `/uploads/${path.basename(p)}`);
-  const allImages = [...keepImages, ...newFiles];
+    const description = req.body.description;
+    const keepImages: string[] = req.body.keepImages ? JSON.parse(req.body.keepImages) : [];
 
-  // 视频帖子允许空图片（image_url 为 '[]'），仅图文帖子要求至少一张
-  const isVideoPost = !!post.video_url;
-  if (allImages.length === 0 && !isVideoPost) {
-    // 清理本次新上传的文件，避免孤儿文件
-    for (const url of newFiles) {
-      safeDeleteFile(url);
+    // 删除不再保留的图片文件
+    const oldImages = parseImageUrlArray(post.image_url);
+    for (const url of oldImages) {
+      if (!keepImages.includes(url)) {
+        safeDeleteFile(url);
+      }
     }
-    throw new AppError(400, '至少需要一张图片');
-  }
-  // 视频帖子保持 image_url 为 '[]'，避免存成 '["[]"]' 这种脏数据
-  const finalImageUrl = isVideoPost && allImages.length === 0 ? '[]' : JSON.stringify(allImages);
 
-  const closeComments = req.body.close_comments === '1' ? 1 : 0;
-  const pinned = req.body.pinned === '1' ? 1 : 0;
+    // 合并保留的图片和新上传的图片（新图先压缩，heic 转 jpg 后以返回路径为准）
+    const processedNew = await Promise.all(
+      ((req.files as Express.Multer.File[]) || []).map((f) =>
+        compressImage(path.join(PATHS.uploads, f.filename), { maxWidth: POST_IMAGE_MAX })
+      )
+    );
+    const newFiles = processedNew.map((p) => `/uploads/${path.basename(p)}`);
+    const allImages = [...keepImages, ...newFiles];
 
-  const updated = postRepo.updatePost({
-    postId,
-    userId: req.user!.id,
-    imageUrl: finalImageUrl,
-    description: description || '',
-    closeComments,
-    pinned,
-  });
+    // 视频帖子允许空图片（image_url 为 '[]'），仅图文帖子要求至少一张
+    const isVideoPost = !!post.video_url;
+    if (allImages.length === 0 && !isVideoPost) {
+      // 清理本次新上传的文件，避免孤儿文件
+      for (const url of newFiles) {
+        safeDeleteFile(url);
+      }
+      throw new AppError(400, '至少需要一张图片');
+    }
+    // 视频帖子保持 image_url 为 '[]'，避免存成 '["[]"]' 这种脏数据
+    const finalImageUrl = isVideoPost && allImages.length === 0 ? '[]' : JSON.stringify(allImages);
 
-  if (!updated) {
-    throw new AppError(404, '帖子不存在或无权编辑');
-  }
-  postRepo.syncPostTags(postId, extractTags(updated.description));
+    const closeComments = req.body.close_comments === '1' ? 1 : 0;
+    const pinned = req.body.pinned === '1' ? 1 : 0;
 
-  res.json(withImages(updated));
-}));
+    const updated = postRepo.updatePost({
+      postId,
+      userId: req.user!.id,
+      imageUrl: finalImageUrl,
+      description: description || '',
+      closeComments,
+      pinned,
+    });
+
+    if (!updated) {
+      throw new AppError(404, '帖子不存在或无权编辑');
+    }
+    postRepo.syncPostTags(postId, extractTags(updated.description));
+
+    res.json(withImages(updated));
+  })
+);
 
 /**
  * DELETE /api/posts/:id - 删除自己的帖子
@@ -272,18 +304,22 @@ router.put('/:id', authMiddleware, imageUpload.array('images', 9), asyncHandler(
  * 3. 删除相关通知
  * 4. 删除帖子记录（数据库外键会自动删除评论、点赞等）
  */
-router.delete('/:id', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const postId = parseInt(req.params.id as string);
-  const post = postRepo.findOwnPost(postId, req.user!.id);
+router.delete(
+  '/:id',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const postId = parseInt(req.params.id as string);
+    const post = postRepo.findOwnPost(postId, req.user!.id);
 
-  if (!post) {
-    throw new AppError(404, '帖子不存在或无权删除');
-  }
+    if (!post) {
+      throw new AppError(404, '帖子不存在或无权删除');
+    }
 
-  // 删除媒体文件（图片/视频/封面），再删记录（外键级联会自动删除评论、点赞、通知等）
-  deletePostMediaFiles(post);
-  postRepo.deletePost(postId);
-  res.json({ message: 'Post deleted' });
-}));
+    // 删除媒体文件（图片/视频/封面），再删记录（外键级联会自动删除评论、点赞、通知等）
+    deletePostMediaFiles(post);
+    postRepo.deletePost(postId);
+    res.json({ message: 'Post deleted' });
+  })
+);
 
 export default router;

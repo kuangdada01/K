@@ -136,8 +136,12 @@
 }
 
 @keyframes chatHighlightFlash {
-  0% { background: var(--accent-soft); }
-  100% { background: transparent; }
+  0% {
+    background: var(--accent-soft);
+  }
+  100% {
+    background: transparent;
+  }
 }
 
 @media (max-width: 768px) {

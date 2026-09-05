@@ -15,10 +15,7 @@ interface EmptyStateProps {
 
 export default function EmptyState({ title, children, className }: EmptyStateProps) {
   return (
-    <div
-      className={className}
-      style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}
-    >
+    <div className={className} style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>
       {title}
       {children}
     </div>

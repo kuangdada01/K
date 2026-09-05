@@ -17,7 +17,9 @@ class MockEventSource {
     this.url = url;
     MockEventSource.instances.push(this);
   }
-  close() { this.closed = true; }
+  close() {
+    this.closed = true;
+  }
 }
 
 beforeEach(() => {
@@ -50,7 +52,9 @@ describe('useSse', () => {
     const es = MockEventSource.instances[0];
     expect(es.url).toBe('/api/events?token=jwt-token');
 
-    act(() => { es.onmessage?.({ data: JSON.stringify({ type: 'notification', id: 3 }) }); });
+    act(() => {
+      es.onmessage?.({ data: JSON.stringify({ type: 'notification', id: 3 }) });
+    });
     expect(handler).toHaveBeenCalledWith('notification', { type: 'notification', id: 3 });
   });
 
@@ -71,7 +75,9 @@ describe('useSse', () => {
     const { rerender } = renderHook(({ cb }) => useSse(1, cb), { initialProps: { cb: first } });
     rerender({ cb: second });
     const es = MockEventSource.instances[0];
-    act(() => { es.onmessage?.({ data: JSON.stringify({ type: 'message' }) }); });
+    act(() => {
+      es.onmessage?.({ data: JSON.stringify({ type: 'message' }) });
+    });
     expect(second).toHaveBeenCalled();
     expect(first).not.toHaveBeenCalled();
   });
@@ -89,11 +95,15 @@ describe('useSse', () => {
     expect(MockEventSource.instances).toHaveLength(1);
     const es = MockEventSource.instances[0];
 
-    act(() => { es.onerror?.(); });
+    act(() => {
+      es.onerror?.();
+    });
     expect(es.closed).toBe(true);
     expect(MockEventSource.instances).toHaveLength(1); // 立即不重连
 
-    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
     expect(MockEventSource.instances).toHaveLength(2); // 重连成功
     expect(MockEventSource.instances[1].url).toBe('/api/events?token=jwt-token');
   });

@@ -19,7 +19,7 @@ export interface VoiceMember {
   userId: number;
   username: string;
   avatar: string | null;
-  muted: boolean;    // 用户主动关闭麦克风
+  muted: boolean; // 用户主动关闭麦克风
   listener: boolean; // 无麦克风权限、仅收听
   ws: WebSocket;
   /** 成员自报的网络质量（客户端约 4s 一报；undefined = 尚未上报） */
@@ -39,7 +39,14 @@ function rawSend(ws: WebSocket, message: unknown): void {
 
 /** 裁剪为下发客户端的参与者信息（去掉 ws 引用） */
 export function toParticipant(m: VoiceMember): VoiceParticipant {
-  return { userId: m.userId, username: m.username, avatar: m.avatar, muted: m.muted, listener: m.listener, sharing: !!m.sharing };
+  return {
+    userId: m.userId,
+    username: m.username,
+    avatar: m.avatar,
+    muted: m.muted,
+    listener: m.listener,
+    sharing: !!m.sharing,
+  };
 }
 
 /** 房间内广播（可排除某个成员） */

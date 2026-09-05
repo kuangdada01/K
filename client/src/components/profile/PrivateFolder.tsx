@@ -22,7 +22,8 @@ export interface PrivateNewFileItem {
   preview: string;
 }
 
-export type PrivateZoomItem = { type: 'existing'; url: string; id: number } | { type: 'new'; url: string; index: number };
+export type PrivateZoomItem =
+  { type: 'existing'; url: string; id: number } | { type: 'new'; url: string; index: number };
 
 /** 鉴权图片（/api/ URL 需带 token 拉 blob；新上传的 blob: 预览直接展示） */
 function AuthImg({ url, ...rest }: { url: string } & React.ImgHTMLAttributes<HTMLImageElement>) {
@@ -48,50 +49,71 @@ interface PrivateFolderProps {
 }
 
 export default function PrivateFolder({
-  privateImages, privateNewFiles, privateDeletedIds, allImages,
-  privateZoomIndex, setPrivateZoomIndex, privateFileInputRef,
-  onAddImages, onToggleDelete, onRemoveNew, onCancel, onSave, onZoomClose,
+  privateImages,
+  privateNewFiles,
+  privateDeletedIds,
+  allImages,
+  privateZoomIndex,
+  setPrivateZoomIndex,
+  privateFileInputRef,
+  onAddImages,
+  onToggleDelete,
+  onRemoveNew,
+  onCancel,
+  onSave,
+  onZoomClose,
 }: PrivateFolderProps) {
-  const visibleCount = privateImages.filter(img => !privateDeletedIds.has(img.id)).length + privateNewFiles.length;
+  const visibleCount =
+    privateImages.filter((img) => !privateDeletedIds.has(img.id)).length + privateNewFiles.length;
 
   const handleZoomPrev = () => {
-    setPrivateZoomIndex(prev => prev !== null ? (prev - 1 + allImages.length) % allImages.length : null);
+    setPrivateZoomIndex((prev) => (prev !== null ? (prev - 1 + allImages.length) % allImages.length : null));
   };
   const handleZoomNext = () => {
-    setPrivateZoomIndex(prev => prev !== null ? (prev + 1) % allImages.length : null);
+    setPrivateZoomIndex((prev) => (prev !== null ? (prev + 1) % allImages.length : null));
   };
 
   return (
     <>
       <div className={styles.overlay} onClick={onCancel}>
-        <div className={`${styles.modal} ${styles.modalLg}`} onClick={e => e.stopPropagation()}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div className={`${styles.modal} ${styles.modalLg}`} onClick={(e) => e.stopPropagation()}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: 16,
+            }}
+          >
             <h3 style={{ margin: 0 }}>私密文件夹</h3>
-            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>
-              {visibleCount}/10
-            </span>
+            <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{visibleCount}/10</span>
           </div>
           <div className={styles.images}>
-            {privateImages.filter(img => !privateDeletedIds.has(img.id)).map(img => (
-              <div key={img.id} className={styles.previewItem}>
-                <AuthImg
-                  url={img.image_url}
-                  alt=""
-                  className={styles.zoomImg}
-                  onClick={() => {
-                    const idx = allImages.findIndex(a => a.type === 'existing' && a.id === img.id);
-                    if (idx >= 0) setPrivateZoomIndex(idx);
-                  }}
-                />
-                <button
-                  className={styles.deleteX}
-                  onClick={(e) => { e.stopPropagation(); onToggleDelete(img.id); }}
-                  aria-label="删除图片"
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            ))}
+            {privateImages
+              .filter((img) => !privateDeletedIds.has(img.id))
+              .map((img) => (
+                <div key={img.id} className={styles.previewItem}>
+                  <AuthImg
+                    url={img.image_url}
+                    alt=""
+                    className={styles.zoomImg}
+                    onClick={() => {
+                      const idx = allImages.findIndex((a) => a.type === 'existing' && a.id === img.id);
+                      if (idx >= 0) setPrivateZoomIndex(idx);
+                    }}
+                  />
+                  <button
+                    className={styles.deleteX}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleDelete(img.id);
+                    }}
+                    aria-label="删除图片"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
             {privateNewFiles.map((item, i) => (
               <div key={`new-${i}`} className={`${styles.previewItem} ${styles.newFile}`}>
                 <img
@@ -99,13 +121,16 @@ export default function PrivateFolder({
                   alt=""
                   className={styles.zoomImg}
                   onClick={() => {
-                    const idx = allImages.findIndex(a => a.type === 'new' && a.index === i);
+                    const idx = allImages.findIndex((a) => a.type === 'new' && a.index === i);
                     if (idx >= 0) setPrivateZoomIndex(idx);
                   }}
                 />
                 <button
                   className={styles.deleteX}
-                  onClick={(e) => { e.stopPropagation(); onRemoveNew(i); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRemoveNew(i);
+                  }}
                   aria-label="移除图片"
                 >
                   <X size={12} />
@@ -128,52 +153,77 @@ export default function PrivateFolder({
             onChange={onAddImages}
           />
           <div className={styles.modalActions}>
-            <button className="profile-cancel-btn" onClick={onCancel}>取消</button>
-            <button className="profile-save-btn" onClick={onSave}>保存</button>
+            <button className="profile-cancel-btn" onClick={onCancel}>
+              取消
+            </button>
+            <button className="profile-save-btn" onClick={onSave}>
+              保存
+            </button>
           </div>
         </div>
       </div>
 
-      {privateZoomIndex !== null && (() => {
-        const current = allImages[privateZoomIndex];
-        if (!current) return null;
-        return (
-          <div className={media.zoomOverlay} onClick={onZoomClose}>
-            <button className={media.close} onClick={onZoomClose} aria-label="关闭预览">
-              <X size={28} />
-            </button>
-            <div className={media.zoomContent}>
-              {allImages.length > 1 && (
-                <button className={`${media.zoomNav} ${media.zoomPrev}`} onClick={e => { e.stopPropagation(); handleZoomPrev(); }} aria-label="上一张">
-                  <ChevronLeft size={32} />
-                </button>
-              )}
-              <AuthImg
-                url={current.url}
-                alt=""
-                className={media.zoomImage}
-                onClick={e => { e.stopPropagation(); onZoomClose(); }}
-              />
-              {allImages.length > 1 && (
-                <button className={`${media.zoomNav} ${media.zoomNext}`} onClick={e => { e.stopPropagation(); handleZoomNext(); }} aria-label="下一张">
-                  <ChevronRight size={32} />
-                </button>
-              )}
-              {allImages.length > 1 && (
-                <div className={media.zoomDots}>
-                  {allImages.map((_, i) => (
-                    <span
-                      key={i}
-                      className={`${media.imageDot} ${i === privateZoomIndex ? media.active : ''}`}
-                      onClick={e => { e.stopPropagation(); setPrivateZoomIndex(i); }}
-                    />
-                  ))}
-                </div>
-              )}
+      {privateZoomIndex !== null &&
+        (() => {
+          const current = allImages[privateZoomIndex];
+          if (!current) return null;
+          return (
+            <div className={media.zoomOverlay} onClick={onZoomClose}>
+              <button className={media.close} onClick={onZoomClose} aria-label="关闭预览">
+                <X size={28} />
+              </button>
+              <div className={media.zoomContent}>
+                {allImages.length > 1 && (
+                  <button
+                    className={`${media.zoomNav} ${media.zoomPrev}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleZoomPrev();
+                    }}
+                    aria-label="上一张"
+                  >
+                    <ChevronLeft size={32} />
+                  </button>
+                )}
+                <AuthImg
+                  url={current.url}
+                  alt=""
+                  className={media.zoomImage}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onZoomClose();
+                  }}
+                />
+                {allImages.length > 1 && (
+                  <button
+                    className={`${media.zoomNav} ${media.zoomNext}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleZoomNext();
+                    }}
+                    aria-label="下一张"
+                  >
+                    <ChevronRight size={32} />
+                  </button>
+                )}
+                {allImages.length > 1 && (
+                  <div className={media.zoomDots}>
+                    {allImages.map((_, i) => (
+                      <span
+                        key={i}
+                        className={`${media.imageDot} ${i === privateZoomIndex ? media.active : ''}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setPrivateZoomIndex(i);
+                        }}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        );
-      })()}
+          );
+        })()}
     </>
   );
 }

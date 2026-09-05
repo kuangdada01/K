@@ -1,7 +1,10 @@
 {
   "name": "@k/shared",
-  "version": "0.1.0",
+  "version": "0.2.25",
   "private": true,
+  "engines": {
+    "node": ">=20"
+  },
   "description": "k 前后端共享类型与校验 schema（唯一事实来源）",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

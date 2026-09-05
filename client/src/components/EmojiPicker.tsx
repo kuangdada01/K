@@ -17,15 +17,77 @@ import { createPortal } from 'react-dom';
 import { Smile } from 'lucide-react';
 
 const EMOJI_LIST = [
-  '😀', '😃', '😄', '😁', '😆', '😅', '🤣', '😂',
-  '🙂', '😊', '😇', '🥰', '😍', '🤩', '😘', '😗',
-  '😋', '😛', '😜', '🤪', '😝', '🤑', '🤗', '🤭',
-  '🤫', '🤔', '🤐', '🤨', '😐', '😑', '😶', '😏',
-  '😒', '🙄', '😬', '😮', '🤥', '😌', '😔', '😪',
-  '🤤', '😴', '😷', '🤒', '🤕', '🤢', '🤮', '🥵',
-  '🥶', '🥴', '😵', '🤯', '🤠', '🥳', '😎',
-  '👍', '👎', '👏', '🙌', '🤝', '❤️', '🔥', '⭐',
-  '💯', '🎉', '🎊', '💐', '🌹', '✨', '💫', '🎵',
+  '😀',
+  '😃',
+  '😄',
+  '😁',
+  '😆',
+  '😅',
+  '🤣',
+  '😂',
+  '🙂',
+  '😊',
+  '😇',
+  '🥰',
+  '😍',
+  '🤩',
+  '😘',
+  '😗',
+  '😋',
+  '😛',
+  '😜',
+  '🤪',
+  '😝',
+  '🤑',
+  '🤗',
+  '🤭',
+  '🤫',
+  '🤔',
+  '🤐',
+  '🤨',
+  '😐',
+  '😑',
+  '😶',
+  '😏',
+  '😒',
+  '🙄',
+  '😬',
+  '😮',
+  '🤥',
+  '😌',
+  '😔',
+  '😪',
+  '🤤',
+  '😴',
+  '😷',
+  '🤒',
+  '🤕',
+  '🤢',
+  '🤮',
+  '🥵',
+  '🥶',
+  '🥴',
+  '😵',
+  '🤯',
+  '🤠',
+  '🥳',
+  '😎',
+  '👍',
+  '👎',
+  '👏',
+  '🙌',
+  '🤝',
+  '❤️',
+  '🔥',
+  '⭐',
+  '💯',
+  '🎉',
+  '🎊',
+  '💐',
+  '🌹',
+  '✨',
+  '💫',
+  '🎵',
 ];
 
 interface EmojiPickerProps {
@@ -134,8 +196,8 @@ export default function EmojiPicker({ onSelect, onSelected, onOpen, onClose }: E
             alignItems: 'center',
             justifyContent: 'center',
           }}
-          onMouseOver={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-          onMouseOut={e => (e.currentTarget.style.background = 'none')}
+          onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
+          onMouseOut={(e) => (e.currentTarget.style.background = 'none')}
         >
           {emoji}
         </button>
@@ -181,8 +243,8 @@ export default function EmojiPicker({ onSelect, onSelected, onOpen, onClose }: E
             transition: 'background 0.1s',
             lineHeight: 1,
           }}
-          onMouseOver={e => (e.currentTarget.style.background = 'var(--bg-hover)')}
-          onMouseOut={e => (e.currentTarget.style.background = 'none')}
+          onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
+          onMouseOut={(e) => (e.currentTarget.style.background = 'none')}
         >
           {emoji}
         </button>
@@ -211,19 +273,20 @@ export default function EmojiPicker({ onSelect, onSelected, onOpen, onClose }: E
         <Smile size={22} />
       </button>
 
-      {open && createPortal(
-        <>
-          <div
-            style={{
-              position: 'fixed',
-              inset: 0,
-              zIndex: 349,
-            }}
-          />
-          {isMobile ? mobilePanel : desktopPanel}
-        </>,
-        document.body
-      )}
+      {open &&
+        createPortal(
+          <>
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 349,
+              }}
+            />
+            {isMobile ? mobilePanel : desktopPanel}
+          </>,
+          document.body
+        )}
     </div>
   );
 }

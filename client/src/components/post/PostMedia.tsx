@@ -27,9 +27,13 @@ interface PostMediaProps {
 }
 
 export default function PostMedia({
-  post, images, detailVideoRef,
-  currentImageIndex, setCurrentImageIndex,
-  zoomed, setZoomed,
+  post,
+  images,
+  detailVideoRef,
+  currentImageIndex,
+  setCurrentImageIndex,
+  zoomed,
+  setZoomed,
 }: PostMediaProps) {
   // viewport（宽度来源 + touch-action）与 transform 轨道
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -48,7 +52,7 @@ export default function PostMedia({
   const transTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   const clearTransTimers = () => {
-    transTimersRef.current.forEach(t => clearTimeout(t));
+    transTimersRef.current.forEach((t) => clearTimeout(t));
     transTimersRef.current = [];
   };
 
@@ -73,11 +77,12 @@ export default function PostMedia({
     track: HTMLDivElement | null,
     setOffset: (x: number) => void,
     index: number,
-    width: number,
+    width: number
   ) => {
     if (!track) return;
     const target = width * index;
-    if (Math.abs(setOffset === setMainOffset ? mainOffsetRef.current : zoomOffsetRef.current - target) < 1) return;
+    if (Math.abs(setOffset === setMainOffset ? mainOffsetRef.current : zoomOffsetRef.current - target) < 1)
+      return;
     track.style.transition = 'transform 400ms cubic-bezier(0.22, 1, 0.36, 1)';
     setOffset(target);
     const t = setTimeout(() => {
@@ -102,7 +107,7 @@ export default function PostMedia({
     setSettled: (v: number) => void,
     onMove: (index: number) => void,
     setOffset: (x: number) => void,
-    getOffset: () => number,
+    getOffset: () => number
   ) => {
     if (!viewport || !track) return () => {};
     let startX = 0;
@@ -192,10 +197,12 @@ export default function PostMedia({
       scrollRef.current,
       mainTrackRef.current,
       () => mainSettledRef.current,
-      (v) => { mainSettledRef.current = v; },
+      (v) => {
+        mainSettledRef.current = v;
+      },
       (index) => setCurrentImageIndex(index),
       setMainOffset,
-      () => mainOffsetRef.current,
+      () => mainOffsetRef.current
     );
     return detach;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -208,10 +215,17 @@ export default function PostMedia({
       zoomScrollRef.current,
       zoomTrackRef.current,
       () => zoomSettledRef.current,
-      (v) => { zoomSettledRef.current = v; lastZoomIndexRef.current = v; },
-      (index) => { setCurrentImageIndex(index); lastZoomIndexRef.current = index; syncMainCarousel(index); },
+      (v) => {
+        zoomSettledRef.current = v;
+        lastZoomIndexRef.current = v;
+      },
+      (index) => {
+        setCurrentImageIndex(index);
+        lastZoomIndexRef.current = index;
+        syncMainCarousel(index);
+      },
       setZoomOffset,
-      () => zoomOffsetRef.current,
+      () => zoomOffsetRef.current
     );
     return detach;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -289,7 +303,16 @@ export default function PostMedia({
     <>
       <div className={styles.imageSection}>
         {post.video_url ? (
-          <video ref={detailVideoRef} src={resolveMediaUrl(post.video_url) || undefined} controls className={styles.video} poster={resolveMediaUrl(post.video_cover) || undefined} onLoadedMetadata={(e) => { e.currentTarget.volume = 0.8; }} />
+          <video
+            ref={detailVideoRef}
+            src={resolveMediaUrl(post.video_url) || undefined}
+            controls
+            className={styles.video}
+            poster={resolveMediaUrl(post.video_cover) || undefined}
+            onLoadedMetadata={(e) => {
+              e.currentTarget.volume = 0.8;
+            }}
+          />
         ) : (
           <>
             <div className={styles.imageCarousel} ref={scrollRef}>
@@ -309,15 +332,30 @@ export default function PostMedia({
                 ))}
               </div>
             </div>
-            <button className={styles.zoomBtn} onClick={(e) => { e.stopPropagation(); setZoomed(true); }} aria-label="放大查看">
+            <button
+              className={styles.zoomBtn}
+              onClick={(e) => {
+                e.stopPropagation();
+                setZoomed(true);
+              }}
+              aria-label="放大查看"
+            >
               <ZoomIn size={20} />
             </button>
             {images.length > 1 && (
               <>
-                <button className={`${styles.carouselBtn} ${styles.carouselPrev}`} onClick={goToPrev} aria-label="上一张">
+                <button
+                  className={`${styles.carouselBtn} ${styles.carouselPrev}`}
+                  onClick={goToPrev}
+                  aria-label="上一张"
+                >
                   <ChevronLeft size={28} />
                 </button>
-                <button className={`${styles.carouselBtn} ${styles.carouselNext}`} onClick={goToNext} aria-label="下一张">
+                <button
+                  className={`${styles.carouselBtn} ${styles.carouselNext}`}
+                  onClick={goToNext}
+                  aria-label="下一张"
+                >
                   <ChevronRight size={28} />
                 </button>
                 <div className={styles.imageDots}>
@@ -325,7 +363,10 @@ export default function PostMedia({
                     <span
                       key={i}
                       className={`${styles.imageDot} ${i === currentImageIndex ? styles.active : ''}`}
-                      onClick={(e) => { e.stopPropagation(); scrollToIndex(i); }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        scrollToIndex(i);
+                      }}
                     />
                   ))}
                 </div>
@@ -336,20 +377,37 @@ export default function PostMedia({
       </div>
 
       {zoomed && (
-        <div className={styles.zoomOverlay} onClick={(e) => { e.stopPropagation(); setZoomed(false); }}>
-          <button className={styles.close} onClick={(e) => { e.stopPropagation(); setZoomed(false); }} aria-label="关闭缩放">
+        <div
+          className={styles.zoomOverlay}
+          onClick={(e) => {
+            e.stopPropagation();
+            setZoomed(false);
+          }}
+        >
+          <button
+            className={styles.close}
+            onClick={(e) => {
+              e.stopPropagation();
+              setZoomed(false);
+            }}
+            aria-label="关闭缩放"
+          >
             <X size={28} />
           </button>
           <div className={styles.zoomContent}>
             {images.length > 1 && (
-              <button className={`${styles.zoomNav} ${styles.zoomPrev}`} onClick={(e) => { e.stopPropagation(); goToPrev(e); }} aria-label="上一张">
+              <button
+                className={`${styles.zoomNav} ${styles.zoomPrev}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  goToPrev(e);
+                }}
+                aria-label="上一张"
+              >
                 <ChevronLeft size={32} />
               </button>
             )}
-            <div
-              className={styles.zoomCarousel}
-              ref={zoomScrollRef}
-            >
+            <div className={styles.zoomCarousel} ref={zoomScrollRef}>
               <div className={styles.zoomTrack} ref={zoomTrackRef}>
                 {images.map((url, i) => (
                   <img
@@ -357,13 +415,23 @@ export default function PostMedia({
                     src={resolveMediaUrl(url) || url}
                     alt=""
                     className={styles.zoomImage}
-                    onClick={(e) => { e.stopPropagation(); setZoomed(false); }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setZoomed(false);
+                    }}
                   />
                 ))}
               </div>
             </div>
             {images.length > 1 && (
-              <button className={`${styles.zoomNav} ${styles.zoomNext}`} onClick={(e) => { e.stopPropagation(); goToNext(e); }} aria-label="下一张">
+              <button
+                className={`${styles.zoomNav} ${styles.zoomNext}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  goToNext(e);
+                }}
+                aria-label="下一张"
+              >
                 <ChevronRight size={32} />
               </button>
             )}
@@ -373,7 +441,10 @@ export default function PostMedia({
                   <span
                     key={i}
                     className={`${styles.imageDot} ${i === currentImageIndex ? styles.active : ''}`}
-                    onClick={(e) => { e.stopPropagation(); scrollToIndex(i); }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      scrollToIndex(i);
+                    }}
                   />
                 ))}
               </div>

@@ -288,7 +288,7 @@ export default function PostDetail({
       await api.delete(`/posts/${post.id}`);
       showToast('帖子已删除');
       // 同步移除信息流缓存，删除后立即生效（staleTime: Infinity 不会自动重取）
-      updatePostsFeed(queryClient, prev => prev.filter((p) => p.id !== post.id));
+      updatePostsFeed(queryClient, (prev) => prev.filter((p) => p.id !== post.id));
       queryClient.invalidateQueries({ queryKey: postsFeedKey });
       events.emit('post:deleted', post.id);
       handleClose();
@@ -481,7 +481,10 @@ export default function PostDetail({
                 onClick={() => {
                   handleClose();
                   setTimeout(() => {
-                    const cleanImages = post.video_url ? [] : (post.images?.filter(u => u !== '[]' && u !== '["[]"]') || [post.image_url].filter(u => u !== '[]' && u !== '["[]"]'));
+                    const cleanImages = post.video_url
+                      ? []
+                      : post.images?.filter((u) => u !== '[]' && u !== '["[]"]') ||
+                        [post.image_url].filter((u) => u !== '[]' && u !== '["[]"]');
                     openEdit({
                       id: post.id,
                       description: post.description || '',

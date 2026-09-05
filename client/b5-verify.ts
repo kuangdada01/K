@@ -15,13 +15,20 @@ function simulateB5(): void {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
   // 模拟登录 A 后产生的各类缓存
-  qc.setQueryData(['posts', 'feed'], { pages: [{ posts: [{ id: 1 }], page: 1, totalPages: 1 }], pageParams: [1] }); // 信息流（staleTime: Infinity 常驻）
-  qc.setQueryData(['cache', 'follow', 42], true);      // 已关注
-  qc.setQueryData(['cache', 'like', 7], { liked: true, likeCount: 1 });  // 已赞
-  qc.setQueryData(['cache', 'repost', 7], true);       // 已转发
-  qc.setQueryData(['cache', 'bookmark', 7], true);     // 已收藏
+  qc.setQueryData(['posts', 'feed'], {
+    pages: [{ posts: [{ id: 1 }], page: 1, totalPages: 1 }],
+    pageParams: [1],
+  }); // 信息流（staleTime: Infinity 常驻）
+  qc.setQueryData(['cache', 'follow', 42], true); // 已关注
+  qc.setQueryData(['cache', 'like', 7], { liked: true, likeCount: 1 }); // 已赞
+  qc.setQueryData(['cache', 'repost', 7], true); // 已转发
+  qc.setQueryData(['cache', 'bookmark', 7], true); // 已收藏
 
-  const cacheKeysBefore = qc.getQueryCache().getAll().map(q => JSON.stringify(q.queryKey)).sort();
+  const cacheKeysBefore = qc
+    .getQueryCache()
+    .getAll()
+    .map((q) => JSON.stringify(q.queryKey))
+    .sort();
   console.log('清空前缓存 keys:', cacheKeysBefore);
 
   // ====== 模拟 AuthContext.logout() / auth:expired 处理 ======
@@ -30,7 +37,10 @@ function simulateB5(): void {
   // 2) clearInteractionCaches() —— 清掉 ['cache', ...] 内存交互缓存
   qc.removeQueries({ queryKey: ['cache'] });
 
-  const cacheKeysAfter = qc.getQueryCache().getAll().map(q => JSON.stringify(q.queryKey));
+  const cacheKeysAfter = qc
+    .getQueryCache()
+    .getAll()
+    .map((q) => JSON.stringify(q.queryKey));
   console.log('清空后缓存 keys:', cacheKeysAfter);
 
   if (cacheKeysAfter.length !== 0) {
@@ -42,7 +52,10 @@ function simulateB5(): void {
   qc.setQueryData(['cache', 'follow', 42], true);
   qc.setQueryData(['cache', 'follow', 43], true);
   qc.removeQueries({ queryKey: ['cache'] });
-  const remaining = qc.getQueryCache().getAll().map(q => JSON.stringify(q.queryKey));
+  const remaining = qc
+    .getQueryCache()
+    .getAll()
+    .map((q) => JSON.stringify(q.queryKey));
   if (remaining.length !== 0) {
     throw new Error(`B5 验证失败：clearInteractionCaches 未能清空 follow 缓存: ${remaining.join(', ')}`);
   }

@@ -46,7 +46,9 @@ export function writeScrollY(y: number) {
 
 /** 持久化保存当前滚动位置 */
 export function persistScrollY(y: number) {
-  try { sessionStorage.setItem(SCROLL_CACHE_KEY, String(y)); } catch {}
+  try {
+    sessionStorage.setItem(SCROLL_CACHE_KEY, String(y));
+  } catch {}
 }
 
 /** 读取持久化的滚动位置 */
@@ -54,7 +56,9 @@ export function loadPersistedScrollY(): number {
   try {
     const v = sessionStorage.getItem(SCROLL_CACHE_KEY);
     return v ? parseInt(v, 10) : 0;
-  } catch { return 0; }
+  } catch {
+    return 0;
+  }
 }
 
 /**

@@ -41,10 +41,29 @@ interface ProfileHeaderProps {
 }
 
 export default function ProfileHeader({
-  user, isOwnProfile, isEmbedded, postsCount, followersCount, followingCount,
-  isFollowing, editing, username, bio, setUsername, setBio,
-  onBack, fileInputRef, onAvatarUpload, onToggleEdit, onOpenPrivateFolder,
-  onFollow, onMessage, onSaveProfile, onCancelEdit, onShowFollowers, onShowFollowing,
+  user,
+  isOwnProfile,
+  isEmbedded,
+  postsCount,
+  followersCount,
+  followingCount,
+  isFollowing,
+  editing,
+  username,
+  bio,
+  setUsername,
+  setBio,
+  onBack,
+  fileInputRef,
+  onAvatarUpload,
+  onToggleEdit,
+  onOpenPrivateFolder,
+  onFollow,
+  onMessage,
+  onSaveProfile,
+  onCancelEdit,
+  onShowFollowers,
+  onShowFollowing,
 }: ProfileHeaderProps) {
   return (
     <>
@@ -95,11 +114,7 @@ export default function ProfileHeader({
             </span>
           </div>
 
-          {user.bio && (
-            <div className={styles.bio}>
-              {user.bio}
-            </div>
-          )}
+          {user.bio && <div className={styles.bio}>{user.bio}</div>}
         </div>
       </div>
 
@@ -114,11 +129,16 @@ export default function ProfileHeader({
         </div>
       ) : (
         <div className={styles.actionBtns}>
-          <button
-            className={`${styles.followBtn} ${isFollowing ? styles.following : ''}`}
-            onClick={onFollow}
-          >
-            {isFollowing ? <><UserCheck size={16} /> 已关注</> : <><UserPlus size={16} /> 关注</>}
+          <button className={`${styles.followBtn} ${isFollowing ? styles.following : ''}`} onClick={onFollow}>
+            {isFollowing ? (
+              <>
+                <UserCheck size={16} /> 已关注
+              </>
+            ) : (
+              <>
+                <UserPlus size={16} /> 关注
+              </>
+            )}
           </button>
           <button className={styles.editBtn} onClick={onMessage}>
             <MessageCircle size={16} /> 发信息
@@ -134,20 +154,20 @@ export default function ProfileHeader({
             <input
               className={styles.formInput}
               value={username}
-              onChange={e => setUsername(e.target.value)}
+              onChange={(e) => setUsername(e.target.value)}
             />
           </div>
           <div className={styles.formGroup}>
             <label className={styles.formLabel}>简介</label>
-            <textarea
-              className={styles.formTextarea}
-              value={bio}
-              onChange={e => setBio(e.target.value)}
-            />
+            <textarea className={styles.formTextarea} value={bio} onChange={(e) => setBio(e.target.value)} />
           </div>
           <div className={styles.formActions}>
-            <button className={styles.saveBtn} onClick={onSaveProfile}>保存</button>
-            <button className={styles.cancelBtn} onClick={onCancelEdit}>取消</button>
+            <button className={styles.saveBtn} onClick={onSaveProfile}>
+              保存
+            </button>
+            <button className={styles.cancelBtn} onClick={onCancelEdit}>
+              取消
+            </button>
           </div>
         </div>
       )}

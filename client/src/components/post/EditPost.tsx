@@ -70,8 +70,8 @@ export default function EditPost() {
     // 视频帖子：image_url 为 '[]' 时 withImages 会产出 ['[]'] 脏数据，需过滤；直接置空
     const cleanImages = editPost.videoUrl
       ? []
-      : editPost.images.filter(url => url !== '[]' && url !== '["[]"]');
-    setImages(cleanImages.map(url => ({ url, isNew: false })));
+      : editPost.images.filter((url) => url !== '[]' && url !== '["[]"]');
+    setImages(cleanImages.map((url) => ({ url, isNew: false })));
     setCurrentImageIndex(0);
     // Video posts skip grid step, go directly to edit
     setStep(editPost.videoUrl ? 'edit' : 'grid');
@@ -98,7 +98,7 @@ export default function EditPost() {
 
     // 检查文件大小 (10MB)
     const maxSize = 10 * 1024 * 1024;
-    const validFiles = toAdd.filter(file => {
+    const validFiles = toAdd.filter((file) => {
       if (file.size > maxSize) {
         showToast(`"${file.name}" 超过10MB限制`);
         return false;
@@ -109,14 +109,14 @@ export default function EditPost() {
     if (validFiles.length === 0) return;
     // HEIC/HEIF 经 WASM 实时转 JPEG 预览，其余格式直接 blob URL
     const newItems: ImageItem[] = await Promise.all(
-      validFiles.map(async file => ({ url: await fileToPreviewUrl(file), isNew: true, file }))
+      validFiles.map(async (file) => ({ url: await fileToPreviewUrl(file), isNew: true, file }))
     );
-    setImages(prev => [...prev, ...newItems]);
+    setImages((prev) => [...prev, ...newItems]);
     e.target.value = '';
   };
 
   const handleRemoveImage = (index: number) => {
-    setImages(prev => {
+    setImages((prev) => {
       const item = prev[index];
       if (item.isNew) {
         URL.revokeObjectURL(item.url);
@@ -142,10 +142,13 @@ export default function EditPost() {
   };
 
   const isVideoEdit = !!editPost?.videoUrl;
-  const hasChanges = description !== (editPost?.description || '') ||
+  const hasChanges =
+    description !== (editPost?.description || '') ||
     closeComments !== editPost?.closeComments ||
     pinned !== editPost?.pinned ||
-    (!isVideoEdit && (images.some(img => img.isNew) || images.length !== (editPost?.images.filter(u => u !== '[]' && u !== '["[]"]').length || 0)));
+    (!isVideoEdit &&
+      (images.some((img) => img.isNew) ||
+        images.length !== (editPost?.images.filter((u) => u !== '[]' && u !== '["[]"]').length || 0)));
 
   const handleSubmit = async () => {
     if (submitting || !editPost) return;
@@ -159,8 +162,11 @@ export default function EditPost() {
       if (editPost.videoUrl) {
         formData.append('keepImages', JSON.stringify([]));
       } else {
-        formData.append('keepImages', JSON.stringify(images.filter(img => !img.isNew).map(img => img.url)));
-        images.filter(img => img.isNew && img.file).forEach(img => formData.append('images', img.file!));
+        formData.append(
+          'keepImages',
+          JSON.stringify(images.filter((img) => !img.isNew).map((img) => img.url))
+        );
+        images.filter((img) => img.isNew && img.file).forEach((img) => formData.append('images', img.file!));
       }
       // updatePost 使用 timeout: 0（新增图片最多9×10MB，慢速网络可能超过全局15s超时，
       // 超时会导致"保存失败"误报，但服务端实际已保存）
@@ -191,15 +197,20 @@ export default function EditPost() {
       >
         <div className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}>
           <div className={composer.overlayHeader}>
-            <button className={`${composer.overlayBtn} ${composer.danger}`} onClick={handleClose}>取消</button>
+            <button className={`${composer.overlayBtn} ${composer.danger}`} onClick={handleClose}>
+              取消
+            </button>
             <span className={composer.overlayTitle}>编辑图片</span>
-            <button className={`${composer.overlayBtn} ${composer.primary}`} onClick={() => {
-              if (images.length === 0) {
-                showToast('请至少保留一张图片');
-                return;
-              }
-              setStep('edit');
-            }}>
+            <button
+              className={`${composer.overlayBtn} ${composer.primary}`}
+              onClick={() => {
+                if (images.length === 0) {
+                  showToast('请至少保留一张图片');
+                  return;
+                }
+                setStep('edit');
+              }}
+            >
               下一步
             </button>
           </div>
@@ -211,20 +222,32 @@ export default function EditPost() {
                   return (
                     <div
                       key={`${img.url}-${i}`}
-                      ref={el => { gridRefs.current[i] = el; }}
-                      className={[
-                        composer.gridItem,
-                        i === dragIndex ? (composer.dragging || '') : '',
-                      ].filter(Boolean).join(' ')}
+                      ref={(el) => {
+                        gridRefs.current[i] = el;
+                      }}
+                      className={[composer.gridItem, i === dragIndex ? composer.dragging || '' : '']
+                        .filter(Boolean)
+                        .join(' ')}
                       onPointerDown={(e) => dragHandlers.onPointerDown(e, i)}
                     >
-                      <img src={resolveMediaUrl(img.url) || img.url} alt={`图片 ${i + 1}`} draggable={false} onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = IMAGE_PREVIEW_FALLBACK; }} />
+                      <img
+                        src={resolveMediaUrl(img.url) || img.url}
+                        alt={`图片 ${i + 1}`}
+                        draggable={false}
+                        onError={(e) => {
+                          e.currentTarget.onerror = null;
+                          e.currentTarget.src = IMAGE_PREVIEW_FALLBACK;
+                        }}
+                      />
                       <span className={composer.gridIndex}>{i + 1}</span>
                       {img.isNew && <span className={composer.gridNewBadge}>新</span>}
                       <button
                         className={composer.gridDeleteBtn}
                         onPointerDown={(e) => e.stopPropagation()}
-                        onClick={(e) => { e.stopPropagation(); handleRemoveImage(i); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleRemoveImage(i);
+                        }}
                       >
                         <X size={14} />
                       </button>
@@ -238,7 +261,14 @@ export default function EditPost() {
                 )}
               </div>
             </div>
-            <input ref={fileInputRef} type="file" accept="image/jpeg,image/jpg,image/png,image/gif,image/webp,image/avif,image/heic,image/heif" multiple style={{ display: 'none' }} onChange={handleAddImages} />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/jpg,image/png,image/gif,image/webp,image/avif,image/heic,image/heif"
+              multiple
+              style={{ display: 'none' }}
+              onChange={handleAddImages}
+            />
           </div>
         </div>
 
@@ -258,9 +288,18 @@ export default function EditPost() {
     <div className={`${composer.overlay}${closing ? ` ${composer.closing}` : ''}`}>
       <div className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}>
         <div className={composer.overlayHeader}>
-          <button className={`${composer.overlayBtn} ${composer.danger}`} onClick={() => editPost?.videoUrl ? handleClose() : setStep('grid')}>后退</button>
+          <button
+            className={`${composer.overlayBtn} ${composer.danger}`}
+            onClick={() => (editPost?.videoUrl ? handleClose() : setStep('grid'))}
+          >
+            后退
+          </button>
           <span className={composer.overlayTitle}>编辑帖子</span>
-          <button className={`${composer.overlayBtn} ${composer.primary}`} onClick={handleSubmit} disabled={submitting}>
+          <button
+            className={`${composer.overlayBtn} ${composer.primary}`}
+            onClick={handleSubmit}
+            disabled={submitting}
+          >
             {submitting ? '保存中...' : '完成'}
           </button>
         </div>
@@ -268,16 +307,26 @@ export default function EditPost() {
           <div className={composer.editLeft}>
             <div className={composer.editImageWrapper}>
               {editPost?.videoUrl ? (
-                <video src={resolveMediaUrl(editPost.videoUrl) || editPost.videoUrl} controls className={composer.editVideo} preload="metadata" playsInline />
+                <video
+                  src={resolveMediaUrl(editPost.videoUrl) || editPost.videoUrl}
+                  controls
+                  className={composer.editVideo}
+                  preload="metadata"
+                  playsInline
+                />
               ) : (
-                <img src={resolveMediaUrl(images[currentImageIndex]?.url) || images[currentImageIndex]?.url} alt="" className={composer.editImage} />
+                <img
+                  src={resolveMediaUrl(images[currentImageIndex]?.url) || images[currentImageIndex]?.url}
+                  alt=""
+                  className={composer.editImage}
+                />
               )}
               {!editPost?.videoUrl && images.length > 1 && (
                 <>
                   {currentImageIndex > 0 && (
                     <button
                       className={`${composer.editNav} ${composer.editPrev}`}
-                      onClick={() => setCurrentImageIndex(prev => prev - 1)}
+                      onClick={() => setCurrentImageIndex((prev) => prev - 1)}
                     >
                       ‹
                     </button>
@@ -285,7 +334,7 @@ export default function EditPost() {
                   {currentImageIndex < images.length - 1 && (
                     <button
                       className={`${composer.editNav} ${composer.editNext}`}
-                      onClick={() => setCurrentImageIndex(prev => prev + 1)}
+                      onClick={() => setCurrentImageIndex((prev) => prev + 1)}
                     >
                       ›
                     </button>
@@ -317,20 +366,22 @@ export default function EditPost() {
                 ref={textareaRef}
                 className={panel.textarea}
                 value={description}
-                onChange={e => setDescription(e.target.value)}
+                onChange={(e) => setDescription(e.target.value)}
                 maxLength={2000}
                 autoFocus
               />
               {descriptionTags.length > 0 && (
                 <div className={panel.tagPreview}>
-                  {descriptionTags.map(tag => (
-                    <span key={tag} className={panel.tagChip}>#{tag}</span>
+                  {descriptionTags.map((tag) => (
+                    <span key={tag} className={panel.tagChip}>
+                      #{tag}
+                    </span>
                   ))}
                 </div>
               )}
               <div className={panel.descFooter}>
                 <EmojiPicker
-                  onSelect={(emoji) => setDescription(prev => prev + emoji)}
+                  onSelect={(emoji) => setDescription((prev) => prev + emoji)}
                   onSelected={() => {
                     if (textareaRef.current) {
                       textareaRef.current.focus();
@@ -345,7 +396,7 @@ export default function EditPost() {
               </div>
             </div>
             <div className={panel.advanced}>
-              <button className={panel.advancedToggle} onClick={() => setShowAdvanced(v => !v)}>
+              <button className={panel.advancedToggle} onClick={() => setShowAdvanced((v) => !v)}>
                 <span>高级设置</span>
                 {showAdvanced ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
               </button>
@@ -353,13 +404,19 @@ export default function EditPost() {
                 <div className={panel.advancedOptions}>
                   <label className={panel.toggleLabel}>
                     <span>关闭评论</span>
-                    <div className={`${panel.toggle} ${closeComments ? panel.on : ''}`} onClick={() => setCloseComments(v => !v)}>
+                    <div
+                      className={`${panel.toggle} ${closeComments ? panel.on : ''}`}
+                      onClick={() => setCloseComments((v) => !v)}
+                    >
                       <div className={panel.toggleKnob} />
                     </div>
                   </label>
                   <label className={panel.toggleLabel}>
                     <span>置顶</span>
-                    <div className={`${panel.toggle} ${pinned ? panel.on : ''}`} onClick={() => setPinned(v => !v)}>
+                    <div
+                      className={`${panel.toggle} ${pinned ? panel.on : ''}`}
+                      onClick={() => setPinned((v) => !v)}
+                    >
                       <div className={panel.toggleKnob} />
                     </div>
                   </label>

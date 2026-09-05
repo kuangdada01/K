@@ -32,7 +32,9 @@ export interface MessageRow {
 
 /** 会话列表（按最后消息时间倒序） */
 export function listConversations(userId: number): ConversationRow[] {
-  return getDb().prepare(`
+  return getDb()
+    .prepare(
+      `
     SELECT
       partner_id,
       u.username,
@@ -58,7 +60,9 @@ export function listConversations(userId: number): ConversationRow[] {
     ) sub
     JOIN users u ON u.id = partner_id
     ORDER BY last_message_at DESC
-  `).all(userId, userId, userId, userId, userId, userId, userId, userId) as ConversationRow[];
+  `
+    )
+    .all(userId, userId, userId, userId, userId, userId, userId, userId) as ConversationRow[];
 }
 
 /** 标记当前用户收到的所有未读消息为已读 */
@@ -78,12 +82,16 @@ export function listMessageHistory(
   beforeId?: number
 ): { messages: MessageRow[]; has_more: boolean } {
   // 自动标记对方发来的消息为已读
-  getDb().prepare('UPDATE messages SET read = 1 WHERE sender_id = ? AND receiver_id = ?').run(otherUserId, currentUserId);
+  getDb()
+    .prepare('UPDATE messages SET read = 1 WHERE sender_id = ? AND receiver_id = ?')
+    .run(otherUserId, currentUserId);
 
   // 获取双向消息记录（含被引用消息信息），按 ID 倒序取一页再翻转成正序
   let page: MessageRow[];
   if (beforeId) {
-    page = getDb().prepare(`
+    page = getDb()
+      .prepare(
+        `
       SELECT m.*, u.username as sender_username,
              qm.content as quoted_content,
              qm.image_url as quoted_image_url,
@@ -97,9 +105,13 @@ export function listMessageHistory(
         AND m.id < ?
       ORDER BY m.id DESC
       LIMIT ?
-    `).all(currentUserId, otherUserId, otherUserId, currentUserId, beforeId, limit) as MessageRow[];
+    `
+      )
+      .all(currentUserId, otherUserId, otherUserId, currentUserId, beforeId, limit) as MessageRow[];
   } else {
-    page = getDb().prepare(`
+    page = getDb()
+      .prepare(
+        `
       SELECT m.*, u.username as sender_username,
              qm.content as quoted_content,
              qm.image_url as quoted_image_url,
@@ -112,7 +124,9 @@ export function listMessageHistory(
          OR (m.sender_id = ? AND m.receiver_id = ?)
       ORDER BY m.id DESC
       LIMIT ?
-    `).all(currentUserId, otherUserId, otherUserId, currentUserId, limit) as MessageRow[];
+    `
+      )
+      .all(currentUserId, otherUserId, otherUserId, currentUserId, limit) as MessageRow[];
   }
 
   // 翻转成正序（新→旧 变 旧→新）
@@ -122,28 +136,32 @@ export function listMessageHistory(
   let hasMore = false;
   if (messages.length > 0) {
     const oldestId = messages[0].id;
-    hasMore = !!getDb().prepare(`
+    hasMore = !!getDb()
+      .prepare(
+        `
       SELECT 1 FROM messages
       WHERE ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
         AND id < ?
       LIMIT 1
-    `).get(currentUserId, otherUserId, otherUserId, currentUserId, oldestId);
+    `
+      )
+      .get(currentUserId, otherUserId, otherUserId, currentUserId, oldestId);
   }
 
   return { messages, has_more: hasMore };
 }
 
 /** 验证引用消息存在且属于当前对话 */
-export function isValidQuotedMessage(
-  quotedMessageId: number,
-  senderId: number,
-  receiverId: number
-): boolean {
-  const quoted = getDb().prepare(`
+export function isValidQuotedMessage(quotedMessageId: number, senderId: number, receiverId: number): boolean {
+  const quoted = getDb()
+    .prepare(
+      `
     SELECT id FROM messages WHERE id = ? AND (
       (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)
     )
-  `).get(quotedMessageId, senderId, receiverId, receiverId, senderId) as { id: number } | undefined;
+  `
+    )
+    .get(quotedMessageId, senderId, receiverId, receiverId, senderId) as { id: number } | undefined;
   return !!quoted;
 }
 
@@ -155,11 +173,15 @@ export function insertMessage(input: {
   imageUrl: string | null;
   quotedMessageId: number | null;
 }): MessageRow {
-  const result = getDb().prepare(
-    'INSERT INTO messages (sender_id, receiver_id, content, image_url, quoted_message_id) VALUES (?, ?, ?, ?, ?)'
-  ).run(input.senderId, input.receiverId, input.content, input.imageUrl, input.quotedMessageId);
+  const result = getDb()
+    .prepare(
+      'INSERT INTO messages (sender_id, receiver_id, content, image_url, quoted_message_id) VALUES (?, ?, ?, ?, ?)'
+    )
+    .run(input.senderId, input.receiverId, input.content, input.imageUrl, input.quotedMessageId);
 
-  return getDb().prepare(`
+  return getDb()
+    .prepare(
+      `
     SELECT m.*, u.username as sender_username,
            qm.content as quoted_content,
            qm.image_url as quoted_image_url,
@@ -169,17 +191,19 @@ export function insertMessage(input: {
     LEFT JOIN messages qm ON m.quoted_message_id = qm.id
     LEFT JOIN users qu ON qm.sender_id = qu.id
     WHERE m.id = ?
-  `).get(result.lastInsertRowid) as MessageRow;
+  `
+    )
+    .get(result.lastInsertRowid) as MessageRow;
 }
 
 /** 查询单条消息的图片与收发双方（媒体下发归属校验 + 撤回清理用） */
-export function getMessageMedia(messageId: number):
-  | { id: number; sender_id: number; receiver_id: number; image_url: string | null }
-  | undefined {
-  return getDb().prepare('SELECT id, sender_id, receiver_id, image_url FROM messages WHERE id = ?')
+export function getMessageMedia(
+  messageId: number
+): { id: number; sender_id: number; receiver_id: number; image_url: string | null } | undefined {
+  return getDb()
+    .prepare('SELECT id, sender_id, receiver_id, image_url FROM messages WHERE id = ?')
     .get(messageId) as
-    | { id: number; sender_id: number; receiver_id: number; image_url: string | null }
-    | undefined;
+    { id: number; sender_id: number; receiver_id: number; image_url: string | null } | undefined;
 }
 
 /** 撤回（删除）单条消息 */
@@ -189,9 +213,13 @@ export function deleteMessage(messageId: number): void {
 
 /** 清除两人之间的所有消息（不删除磁盘上的图片文件） */
 export function clearConversation(currentUserId: number, otherUserId: number): void {
-  getDb().prepare(`
+  getDb()
+    .prepare(
+      `
     DELETE FROM messages
     WHERE (sender_id = ? AND receiver_id = ?)
        OR (sender_id = ? AND receiver_id = ?)
-  `).run(currentUserId, otherUserId, otherUserId, currentUserId);
+  `
+    )
+    .run(currentUserId, otherUserId, otherUserId, currentUserId);
 }

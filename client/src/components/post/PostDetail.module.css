@@ -13,23 +13,43 @@
 }
 
 @keyframes pdFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes pdFadeOut {
-  from { opacity: 1; }
-  to { opacity: 0; }
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }
 
 @keyframes pdScaleIn {
-  from { opacity: 0; transform: scale(0.95); }
-  to { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 @keyframes pdScaleOut {
-  from { opacity: 1; transform: scale(1); }
-  to { opacity: 0; transform: scale(0.95); }
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.95);
+  }
 }
 
 .overlay.closing {
@@ -148,7 +168,9 @@
   color: var(--on-accent);
   cursor: pointer;
   flex-shrink: 0;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .followBtn:hover {
@@ -164,7 +186,7 @@
   background: var(--accent-soft);
 }
 
-[data-theme="dark"] .followBtn {
+[data-theme='dark'] .followBtn {
   border-color: rgba(201, 169, 98, 0.38);
 }
 
@@ -244,7 +266,8 @@
 }
 
 /* 转发态修饰类（原实现无专属规则，仅作状态标识） */
-.reposted {}
+.reposted {
+}
 
 .actionCount {
   font-size: 14px;
@@ -289,10 +312,18 @@
 }
 
 @keyframes pdFadeInOut {
-  0% { opacity: 0; }
-  20% { opacity: 1; }
-  80% { opacity: 1; }
-  100% { opacity: 0; }
+  0% {
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 
 .inputWrapper {

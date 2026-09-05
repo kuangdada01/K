@@ -39,10 +39,26 @@ interface ChatWindowProps {
 }
 
 export default function ChatWindow({
-  user, selectedPartner, messages, chatMessagesRef, scrollSentinelRef,
-  sending, quoteMsg, setQuoteMsg,
-  imageInputRef, chatInputRef, onBack, onClear, onSend, onSendImage,
-  onContextMenu, onTouchStart, onTouchEnd, onTouchMove, onZoomImage, onScrollToMessage,
+  user,
+  selectedPartner,
+  messages,
+  chatMessagesRef,
+  scrollSentinelRef,
+  sending,
+  quoteMsg,
+  setQuoteMsg,
+  imageInputRef,
+  chatInputRef,
+  onBack,
+  onClear,
+  onSend,
+  onSendImage,
+  onContextMenu,
+  onTouchStart,
+  onTouchEnd,
+  onTouchMove,
+  onZoomImage,
+  onScrollToMessage,
 }: ChatWindowProps) {
   return (
     <>
@@ -50,7 +66,12 @@ export default function ChatWindow({
         <button className={styles.backBtn} data-back onClick={onBack} aria-label="返回">
           <ChevronLeft size={24} />
         </button>
-        <Avatar src={selectedPartner.avatar} username={selectedPartner.username} size={40} className={styles.headerAvatar} />
+        <Avatar
+          src={selectedPartner.avatar}
+          username={selectedPartner.username}
+          size={40}
+          className={styles.headerAvatar}
+        />
         <span className={styles.headerUsername}>{selectedPartner.username}</span>
         <button className={styles.clearBtn} onClick={onClear} title="清除全部消息" aria-label="清除全部消息">
           <Trash2 size={18} />
@@ -68,8 +89,9 @@ export default function ChatWindow({
           // reversed: index 0=最新, 比较下一个（更旧的）消息
           const TIME_GAP_MS = 5 * 60 * 1000;
           const nextMsg = index < reversedMsgs.length - 1 ? reversedMsgs[index + 1] : null;
-          const showSeparator = !nextMsg ||
-            (parseDbTime(msg.created_at).getTime() - parseDbTime(nextMsg.created_at).getTime() > TIME_GAP_MS);
+          const showSeparator =
+            !nextMsg ||
+            parseDbTime(msg.created_at).getTime() - parseDbTime(nextMsg.created_at).getTime() > TIME_GAP_MS;
 
           return (
             <MessageBubble

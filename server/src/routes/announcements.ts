@@ -32,15 +32,19 @@ const router = Router();
  * - announcements: 公告数组（含发送者信息、已读状态）
  * - unread_count: 未读公告数量
  */
-router.get('/', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user!.id;
+router.get(
+  '/',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.user!.id;
 
-  const announcements = notifRepo.listAnnouncements(userId);
+    const announcements = notifRepo.listAnnouncements(userId);
 
-  // 计算未读数量
-  const unread_count = announcements.filter((a) => !a.is_read).length;
-  res.json({ announcements, unread_count });
-}));
+    // 计算未读数量
+    const unread_count = announcements.filter((a) => !a.is_read).length;
+    res.json({ announcements, unread_count });
+  })
+);
 
 /**
  * PUT /api/announcements/:id/read - 标记公告已读
@@ -50,11 +54,15 @@ router.get('/', authMiddleware, asyncHandler(async (req: Request, res: Response)
  * 使用 INSERT OR IGNORE 防止重复标记
  * 已读记录存储在 announcement_reads 表中
  */
-router.put('/:id/read', authMiddleware, asyncHandler(async (req: Request, res: Response) => {
-  const userId = req.user!.id;
-  const announcementId = parseInt(req.params.id as string);
-  notifRepo.markAnnouncementRead(announcementId, userId);
-  res.json({ success: true });
-}));
+router.put(
+  '/:id/read',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = req.user!.id;
+    const announcementId = parseInt(req.params.id as string);
+    notifRepo.markAnnouncementRead(announcementId, userId);
+    res.json({ success: true });
+  })
+);
 
 export default router;

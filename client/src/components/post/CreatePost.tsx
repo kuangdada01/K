@@ -89,7 +89,7 @@ export default function CreatePost() {
 
     // 检查文件大小 (10MB)
     const maxSize = 10 * 1024 * 1024;
-    const validFiles = toAdd.filter(file => {
+    const validFiles = toAdd.filter((file) => {
       if (file.size > maxSize) {
         showToast(`"${file.name}" 超过10MB限制`);
         return false;
@@ -105,8 +105,8 @@ export default function CreatePost() {
     }
 
     // 本地预览：HEIC/HEIF 经 WASM 实时转 JPEG，其余格式直接 blob URL（保持选择顺序）
-    Promise.all(validFiles.map(f => fileToPreviewUrl(f))).then(urls => {
-      setImages(prev => [...prev, ...urls.map((url, i) => ({ url, file: validFiles[i] }))]);
+    Promise.all(validFiles.map((f) => fileToPreviewUrl(f))).then((urls) => {
+      setImages((prev) => [...prev, ...urls.map((url, i) => ({ url, file: validFiles[i] }))]);
     });
     e.target.value = '';
   };
@@ -114,9 +114,11 @@ export default function CreatePost() {
   const handleRemoveImage = (index: number) => {
     const removed = images[index];
     if (removed && removed.url.startsWith('blob:')) {
-      try { URL.revokeObjectURL(removed.url); } catch {}
+      try {
+        URL.revokeObjectURL(removed.url);
+      } catch {}
     }
-    setImages(prev => prev.filter((_, i) => i !== index));
+    setImages((prev) => prev.filter((_, i) => i !== index));
   };
 
   const handleVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -135,22 +137,32 @@ export default function CreatePost() {
     // Android WebView 提示：大文件仅影响自动截帧，预览仍尝试（metadata 模式不占大内存）
     const isNative = Capacitor.isNativePlatform();
     if (isNative && file.size > 150 * 1024 * 1024) {
-      showToast(`视频较大(${(file.size/1024/1024).toFixed(0)}MB)，将使用分片上传，预览可能较慢`);
+      showToast(`视频较大(${(file.size / 1024 / 1024).toFixed(0)}MB)，将使用分片上传，预览可能较慢`);
     }
 
     // 选择视频时清除照片状态
     if (images.length > 0) {
-      images.forEach(u => { if (u.url.startsWith('blob:')) { try { URL.revokeObjectURL(u.url); } catch {} } });
+      images.forEach((u) => {
+        if (u.url.startsWith('blob:')) {
+          try {
+            URL.revokeObjectURL(u.url);
+          } catch {}
+        }
+      });
       setImages([]);
     }
 
     try {
       // 清理旧 URL 防止泄漏
       if (videoPreview) {
-        try { URL.revokeObjectURL(videoPreview); } catch {}
+        try {
+          URL.revokeObjectURL(videoPreview);
+        } catch {}
       }
       if (videoCoverPreview) {
-        try { URL.revokeObjectURL(videoCoverPreview); } catch {}
+        try {
+          URL.revokeObjectURL(videoCoverPreview);
+        } catch {}
       }
       setVideoFile(file);
       const url = URL.createObjectURL(file);
@@ -174,8 +186,12 @@ export default function CreatePost() {
   };
 
   const handleRemoveVideo = () => {
-    try { if (videoPreview) URL.revokeObjectURL(videoPreview); } catch {}
-    try { if (videoCoverPreview) URL.revokeObjectURL(videoCoverPreview); } catch {}
+    try {
+      if (videoPreview) URL.revokeObjectURL(videoPreview);
+    } catch {}
+    try {
+      if (videoCoverPreview) URL.revokeObjectURL(videoCoverPreview);
+    } catch {}
     setVideoFile(null);
     setVideoPreview(null);
     setVideoCoverFile(null);
@@ -186,12 +202,20 @@ export default function CreatePost() {
 
   // 组件卸载 / 预览变更时自动回收 Blob URL，防止大文件常驻内存导致 OOM
   useEffect(() => {
-    imagePreviewsRef.current = images.map(img => img.url);
+    imagePreviewsRef.current = images.map((img) => img.url);
     return () => {
-      try { if (videoPreview) URL.revokeObjectURL(videoPreview); } catch {}
-      try { if (videoCoverPreview) URL.revokeObjectURL(videoCoverPreview); } catch {}
-      imagePreviewsRef.current.forEach(u => {
-        if (u.startsWith('blob:')) { try { URL.revokeObjectURL(u); } catch {} }
+      try {
+        if (videoPreview) URL.revokeObjectURL(videoPreview);
+      } catch {}
+      try {
+        if (videoCoverPreview) URL.revokeObjectURL(videoCoverPreview);
+      } catch {}
+      imagePreviewsRef.current.forEach((u) => {
+        if (u.startsWith('blob:')) {
+          try {
+            URL.revokeObjectURL(u);
+          } catch {}
+        }
       });
     };
   }, [videoPreview, videoCoverPreview, images]);
@@ -221,20 +245,26 @@ export default function CreatePost() {
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
         ctx.drawImage(video, 0, 0, cw, ch);
-        canvas.toBlob((blob) => {
-          if (!blob) return;
-          try {
-            const file = new File([blob], 'cover.jpg', { type: 'image/jpeg' });
-            if (videoCoverPreview) {
-              try { URL.revokeObjectURL(videoCoverPreview); } catch {}
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) return;
+            try {
+              const file = new File([blob], 'cover.jpg', { type: 'image/jpeg' });
+              if (videoCoverPreview) {
+                try {
+                  URL.revokeObjectURL(videoCoverPreview);
+                } catch {}
+              }
+              setVideoCoverFile(file);
+              setVideoCoverPreview(URL.createObjectURL(file));
+            } catch (e) {
+              console.error('封面 blob 创建失败', e);
+              showToast('封面截取失败，可手动上传封面或直接发布（服务端会兜底生成）');
             }
-            setVideoCoverFile(file);
-            setVideoCoverPreview(URL.createObjectURL(file));
-          } catch (e) {
-            console.error('封面 blob 创建失败', e);
-            showToast('封面截取失败，可手动上传封面或直接发布（服务端会兜底生成）');
-          }
-        }, 'image/jpeg', 0.75);
+          },
+          'image/jpeg',
+          0.75
+        );
       } catch (e) {
         console.error('extractFrame 失败', e);
         showToast('封面截取失败，可手动上传封面');
@@ -278,7 +308,9 @@ export default function CreatePost() {
     if (!file) return;
     try {
       if (videoCoverPreview) {
-        try { URL.revokeObjectURL(videoCoverPreview); } catch {}
+        try {
+          URL.revokeObjectURL(videoCoverPreview);
+        } catch {}
       }
       setVideoCoverFile(file);
       setVideoCoverPreview(URL.createObjectURL(file));
@@ -342,14 +374,26 @@ export default function CreatePost() {
   }, [closeCreate]);
 
   const handleDiscard = useCallback(() => {
-    if (hasContent) { setShowDiscardConfirm(true); }
-    else handleClose();
+    if (hasContent) {
+      setShowDiscardConfirm(true);
+    } else handleClose();
   }, [hasContent, handleClose]);
 
   const confirmDiscard = () => {
-    images.forEach(u => { if (u.url.startsWith('blob:')) { try { URL.revokeObjectURL(u.url); } catch {} } });
-    setImages([]); handleRemoveVideo(); setDescription(''); setCurrentImageIndex(0); setStep(1);
-    setShowDiscardConfirm(false); handleClose();
+    images.forEach((u) => {
+      if (u.url.startsWith('blob:')) {
+        try {
+          URL.revokeObjectURL(u.url);
+        } catch {}
+      }
+    });
+    setImages([]);
+    handleRemoveVideo();
+    setDescription('');
+    setCurrentImageIndex(0);
+    setStep(1);
+    setShowDiscardConfirm(false);
+    handleClose();
   };
 
   // 打开时推入历史记录，让返回键可以触发放弃操作
@@ -388,11 +432,16 @@ export default function CreatePost() {
   }, [showDiscardConfirm, hasContent, handleDiscard]);
 
   const handleContinue = () => {
-    if (videoFile) setStep(2); // 视频跳转封面编辑
-    else if (images.length > 0) { setCurrentImageIndex(0); setStep(3); } // 图片跳转描述编辑
+    if (videoFile)
+      setStep(2); // 视频跳转封面编辑
+    else if (images.length > 0) {
+      setCurrentImageIndex(0);
+      setStep(3);
+    } // 图片跳转描述编辑
   };
   const handleBack = () => {
-    if (step === 2) setStep(1); // 从封面返回媒体选择
+    if (step === 2)
+      setStep(1); // 从封面返回媒体选择
     else if (step === 3) setStep(videoFile ? 2 : 1); // 从描述返回
   };
 
@@ -433,7 +482,7 @@ export default function CreatePost() {
       } else {
         const formData = new FormData();
         // 按拖拽后的顺序上传（B2 修复：所见即所得）
-        images.forEach(img => formData.append('images', img.file));
+        images.forEach((img) => formData.append('images', img.file));
         formData.append('description', description);
         if (closeComments) formData.append('close_comments', '1');
         if (pinned) formData.append('pinned', '1');
@@ -442,7 +491,7 @@ export default function CreatePost() {
       showToast('分享成功！');
       // 立即写入信息流缓存，首页无需等待 refetch 即可实时出现
       if (newPost) {
-        updatePostsFeed(queryClient, prev => [newPost!, ...prev.filter(p => p.id !== newPost!.id)]);
+        updatePostsFeed(queryClient, (prev) => [newPost!, ...prev.filter((p) => p.id !== newPost!.id)]);
         events.emit('post:created', newPost);
       } else {
         events.emit('post:created');
@@ -458,7 +507,10 @@ export default function CreatePost() {
       } else {
         showToast(msg);
       }
-    } finally { setSubmitting(false); setUploadProgress(0); }
+    } finally {
+      setSubmitting(false);
+      setUploadProgress(0);
+    }
   };
 
   const renderGrid = () => {
@@ -468,19 +520,31 @@ export default function CreatePost() {
           {images.map((img, i) => (
             <div
               key={`${img.url}-${i}`}
-              ref={el => { gridRefs.current[i] = el; }}
-              className={[
-                composer.gridItem,
-                i === dragIndex ? (composer.dragging || '') : '',
-              ].filter(Boolean).join(' ')}
+              ref={(el) => {
+                gridRefs.current[i] = el;
+              }}
+              className={[composer.gridItem, i === dragIndex ? composer.dragging || '' : '']
+                .filter(Boolean)
+                .join(' ')}
               onPointerDown={(e) => dragHandlers.onPointerDown(e, i)}
             >
-              <img src={img.url} alt={`图片 ${i + 1}`} draggable={false} onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = IMAGE_PREVIEW_FALLBACK; }} />
+              <img
+                src={img.url}
+                alt={`图片 ${i + 1}`}
+                draggable={false}
+                onError={(e) => {
+                  e.currentTarget.onerror = null;
+                  e.currentTarget.src = IMAGE_PREVIEW_FALLBACK;
+                }}
+              />
               <span className={composer.gridIndex}>{i + 1}</span>
               <button
                 className={composer.gridDeleteBtn}
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => { e.stopPropagation(); handleRemoveImage(i); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRemoveImage(i);
+                }}
               >
                 <X size={14} />
               </button>
@@ -507,9 +571,17 @@ export default function CreatePost() {
       >
         <div className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}>
           <div className={composer.overlayHeader}>
-            <button className={`${composer.overlayBtn} ${composer.danger}`} data-back onClick={handleDiscard}>放弃</button>
+            <button className={`${composer.overlayBtn} ${composer.danger}`} data-back onClick={handleDiscard}>
+              放弃
+            </button>
             <span className={composer.overlayTitle}>选择照片/视频</span>
-            <button className={`${composer.overlayBtn} ${composer.primary}`} onClick={handleContinue} disabled={!hasContent}>继续</button>
+            <button
+              className={`${composer.overlayBtn} ${composer.primary}`}
+              onClick={handleContinue}
+              disabled={!hasContent}
+            >
+              继续
+            </button>
           </div>
           <div className={composer.overlayBody}>
             {images.length > 0 ? (
@@ -529,8 +601,21 @@ export default function CreatePost() {
                 <div className={styles.uploadHint}>照片最多9张，支持 HEIC/HEIF，视频支持 mp4、mov</div>
               </div>
             )}
-            <input ref={fileInputRef} type="file" accept="image/jpeg,image/jpg,image/png,image/gif,image/webp,image/avif,image/heic,image/heif" multiple style={{ display: 'none' }} onChange={handleFileSelect} />
-            <input ref={videoInputRef} type="file" accept="video/mp4,video/quicktime" style={{ display: 'none' }} onChange={handleVideoSelect} />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/jpg,image/png,image/gif,image/webp,image/avif,image/heic,image/heif"
+              multiple
+              style={{ display: 'none' }}
+              onChange={handleFileSelect}
+            />
+            <input
+              ref={videoInputRef}
+              type="file"
+              accept="video/mp4,video/quicktime"
+              style={{ display: 'none' }}
+              onChange={handleVideoSelect}
+            />
           </div>
         </div>
 
@@ -566,7 +651,9 @@ export default function CreatePost() {
         onRetryPreview={() => {
           // 重试：先 revoke 再重建 blob，强制 WebView 重载
           if (videoFile) {
-            try { if (videoPreview) URL.revokeObjectURL(videoPreview); } catch {}
+            try {
+              if (videoPreview) URL.revokeObjectURL(videoPreview);
+            } catch {}
             const url = URL.createObjectURL(videoFile);
             setVideoPreview(url);
             setVideoError(false);
@@ -586,92 +673,130 @@ export default function CreatePost() {
     <div className={`${composer.overlay}${closing ? ` ${composer.closing}` : ''}`}>
       <div className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}>
         <div className={composer.overlayHeader}>
-          <button className={composer.overlayBtn} data-back onClick={handleBack}>后退</button>
+          <button className={composer.overlayBtn} data-back onClick={handleBack}>
+            后退
+          </button>
           <span className={composer.overlayTitle}>编辑</span>
-          <button className={`${composer.overlayBtn} ${composer.primary}`} onClick={handleSubmit} disabled={submitting}>
-          {submitting ? (uploadProgress > 0 ? `上传中 ${uploadProgress}%` : '发布中...') : '分享'}
-        </button>
-      </div>
-      <div className={composer.editLayout}>
-        <div className={composer.editLeft}>
-          <div className={composer.editImageWrapper}>
-            {videoPreview && !videoError ? (
-              <video
-                key={videoPreview}
-                src={videoPreview}
-                controls
-                className={composer.editVideo}
-                preload="metadata"
-                playsInline
-                muted
-                onLoadedMetadata={() => setVideoError(false)}
-                onError={handleVideoError}
-                poster={videoCoverPreview || undefined}
-                style={{ background: '#000' }}
-              />
-            ) : videoFile ? (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#1a1a1a', color: '#ccc', height: 200, fontSize: 13, padding: 12, textAlign: 'center', gap: 8 }}>
-                <Video size={28} style={{ opacity: 0.6 }} />
-                <div>{videoFile.name} ({(videoFile.size/1024/1024).toFixed(1)}MB)</div>
-                {videoError ? (
-                  <div style={{ fontSize: 12, color: '#ffb74d' }}>视频预览暂不可用（HEVC/编码限制），不影响发布</div>
-                ) : (
-                  <div style={{ fontSize: 12, opacity: 0.8 }}>预览已简化，封面可正常显示</div>
-                )}
-                {videoCoverPreview && <img src={videoCoverPreview} alt="封面" style={{ maxWidth: '100%', maxHeight: 100, borderRadius: 6, marginTop: 8 }} />}
-              </div>
-            ) : (
-              <>
-                <img src={images[currentImageIndex]?.url ?? images[0]?.url} alt="" className={composer.editImage} onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = IMAGE_PREVIEW_FALLBACK; }} />
-                {images.length > 1 && (
-                  <>
-                    {currentImageIndex > 0 && (
-                      <button
-                        className={`${composer.editNav} ${composer.editPrev}`}
-                        onClick={() => setCurrentImageIndex(prev => prev - 1)}
-                        aria-label="上一张"
-                      >
-                        ‹
-                      </button>
-                    )}
-                    {currentImageIndex < images.length - 1 && (
-                      <button
-                        className={`${composer.editNav} ${composer.editNext}`}
-                        onClick={() => setCurrentImageIndex(prev => prev + 1)}
-                        aria-label="下一张"
-                      >
-                        ›
-                      </button>
-                    )}
-                    <div className={composer.editDots}>
-                      {images.map((_, i) => (
-                        <span
-                          key={i}
-                          className={`${composer.editDot} ${i === currentImageIndex ? composer.active : ''}`}
-                          onClick={() => setCurrentImageIndex(i)}
-                        />
-                      ))}
-                    </div>
-                  </>
-                )}
-              </>
-            )}
-          </div>
+          <button
+            className={`${composer.overlayBtn} ${composer.primary}`}
+            onClick={handleSubmit}
+            disabled={submitting}
+          >
+            {submitting ? (uploadProgress > 0 ? `上传中 ${uploadProgress}%` : '发布中...') : '分享'}
+          </button>
         </div>
-        <PostDescriptionPanel
-          user={user}
-          description={description}
-          onChange={setDescription}
-          onEmoji={(emoji) => setDescription(prev => prev + emoji)}
-          textareaRef={textareaRef}
-          showAdvanced={showAdvanced}
-          onToggleAdvanced={() => setShowAdvanced(v => !v)}
-          closeComments={closeComments}
-          onCloseCommentsChange={setCloseComments}
-          pinned={pinned}
-          onPinnedChange={setPinned}
-        />
-      </div>
+        <div className={composer.editLayout}>
+          <div className={composer.editLeft}>
+            <div className={composer.editImageWrapper}>
+              {videoPreview && !videoError ? (
+                <video
+                  key={videoPreview}
+                  src={videoPreview}
+                  controls
+                  className={composer.editVideo}
+                  preload="metadata"
+                  playsInline
+                  muted
+                  onLoadedMetadata={() => setVideoError(false)}
+                  onError={handleVideoError}
+                  poster={videoCoverPreview || undefined}
+                  style={{ background: '#000' }}
+                />
+              ) : videoFile ? (
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: '#1a1a1a',
+                    color: '#ccc',
+                    height: 200,
+                    fontSize: 13,
+                    padding: 12,
+                    textAlign: 'center',
+                    gap: 8,
+                  }}
+                >
+                  <Video size={28} style={{ opacity: 0.6 }} />
+                  <div>
+                    {videoFile.name} ({(videoFile.size / 1024 / 1024).toFixed(1)}MB)
+                  </div>
+                  {videoError ? (
+                    <div style={{ fontSize: 12, color: '#ffb74d' }}>
+                      视频预览暂不可用（HEVC/编码限制），不影响发布
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, opacity: 0.8 }}>预览已简化，封面可正常显示</div>
+                  )}
+                  {videoCoverPreview && (
+                    <img
+                      src={videoCoverPreview}
+                      alt="封面"
+                      style={{ maxWidth: '100%', maxHeight: 100, borderRadius: 6, marginTop: 8 }}
+                    />
+                  )}
+                </div>
+              ) : (
+                <>
+                  <img
+                    src={images[currentImageIndex]?.url ?? images[0]?.url}
+                    alt=""
+                    className={composer.editImage}
+                    onError={(e) => {
+                      e.currentTarget.onerror = null;
+                      e.currentTarget.src = IMAGE_PREVIEW_FALLBACK;
+                    }}
+                  />
+                  {images.length > 1 && (
+                    <>
+                      {currentImageIndex > 0 && (
+                        <button
+                          className={`${composer.editNav} ${composer.editPrev}`}
+                          onClick={() => setCurrentImageIndex((prev) => prev - 1)}
+                          aria-label="上一张"
+                        >
+                          ‹
+                        </button>
+                      )}
+                      {currentImageIndex < images.length - 1 && (
+                        <button
+                          className={`${composer.editNav} ${composer.editNext}`}
+                          onClick={() => setCurrentImageIndex((prev) => prev + 1)}
+                          aria-label="下一张"
+                        >
+                          ›
+                        </button>
+                      )}
+                      <div className={composer.editDots}>
+                        {images.map((_, i) => (
+                          <span
+                            key={i}
+                            className={`${composer.editDot} ${i === currentImageIndex ? composer.active : ''}`}
+                            onClick={() => setCurrentImageIndex(i)}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+          <PostDescriptionPanel
+            user={user}
+            description={description}
+            onChange={setDescription}
+            onEmoji={(emoji) => setDescription((prev) => prev + emoji)}
+            textareaRef={textareaRef}
+            showAdvanced={showAdvanced}
+            onToggleAdvanced={() => setShowAdvanced((v) => !v)}
+            closeComments={closeComments}
+            onCloseCommentsChange={setCloseComments}
+            pinned={pinned}
+            onPinnedChange={setPinned}
+          />
+        </div>
       </div>
     </div>
   );

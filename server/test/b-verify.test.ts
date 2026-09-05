@@ -15,14 +15,15 @@ import { AppError } from '../src/middleware/error';
 let db: ReturnType<typeof createMemoryDb>;
 
 function insertUser(username: string): number {
-  const r = db.prepare(
-    "INSERT INTO users (username, email, password_hash, email_verified) VALUES (?, ?, 'x', 1)"
-  ).run(username, `${username}@test.com`);
+  const r = db
+    .prepare("INSERT INTO users (username, email, password_hash, email_verified) VALUES (?, ?, 'x', 1)")
+    .run(username, `${username}@test.com`);
   return Number(r.lastInsertRowid);
 }
 
 function insertPost(userId: number, title = '', description = ''): number {
-  const r = db.prepare('INSERT INTO posts (user_id, image_url, title, description) VALUES (?, ?, ?, ?)')
+  const r = db
+    .prepare('INSERT INTO posts (user_id, image_url, title, description) VALUES (?, ?, ?, ?)')
     .run(userId, '[]', title, description);
   return Number(r.lastInsertRowid);
 }
@@ -37,7 +38,9 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  db.exec('DELETE FROM posts; DELETE FROM users; DELETE FROM notifications; DELETE FROM comments; DELETE FROM likes; DELETE FROM shares; DELETE FROM bookmarks; DELETE FROM reposts;');
+  db.exec(
+    'DELETE FROM posts; DELETE FROM users; DELETE FROM notifications; DELETE FROM comments; DELETE FROM likes; DELETE FROM shares; DELETE FROM bookmarks; DELETE FROM reposts;'
+  );
 });
 
 describe('B3 搜索含 %/_ 关键词', () => {
@@ -84,7 +87,7 @@ describe('B3 搜索含 %/_ 关键词', () => {
     expect(r1[0].username).toBe('bob_100%');
     // 搜索 bob_ → 命中两个（字面下划线），而不是把所有下划线当通配
     const r2 = friendRepo.searchUsers('bob_', u);
-    expect(r2.map(x => x.username).sort()).toEqual(['bob_100%', 'bob_200']);
+    expect(r2.map((x) => x.username).sort()).toEqual(['bob_100%', 'bob_200']);
   });
 
   it('admin.repo 用户搜索含 %/_ 的用户名（转义 + ESCAPE）', () => {
@@ -102,29 +105,57 @@ describe('B4 不存在资源返回 404 而非 500', () => {
   it('点赞不存在的帖子抛 404', () => {
     const u = insertUser('alice');
     expect(() => postRepo.likePost(u, 999999)).toThrowError(AppError);
-    try { postRepo.likePost(u, 999999); } catch (e) { expect((e as AppError).status).toBe(404); }
+    try {
+      postRepo.likePost(u, 999999);
+    } catch (e) {
+      expect((e as AppError).status).toBe(404);
+    }
   });
 
   it('取消点赞不存在的帖子抛 404', () => {
     const u = insertUser('alice');
-    try { postRepo.unlikePost(u, 999999); } catch (e) { expect((e as AppError).status).toBe(404); }
+    try {
+      postRepo.unlikePost(u, 999999);
+    } catch (e) {
+      expect((e as AppError).status).toBe(404);
+    }
   });
 
   it('分享不存在的帖子抛 404', () => {
     const u = insertUser('alice');
-    try { postRepo.sharePost(u, 999999); } catch (e) { expect((e as AppError).status).toBe(404); }
+    try {
+      postRepo.sharePost(u, 999999);
+    } catch (e) {
+      expect((e as AppError).status).toBe(404);
+    }
   });
 
   it('收藏/取消收藏不存在的帖子抛 404', () => {
     const u = insertUser('alice');
-    try { postRepo.bookmarkPost(u, 999999); } catch (e) { expect((e as AppError).status).toBe(404); }
-    try { postRepo.unbookmarkPost(u, 999999); } catch (e) { expect((e as AppError).status).toBe(404); }
+    try {
+      postRepo.bookmarkPost(u, 999999);
+    } catch (e) {
+      expect((e as AppError).status).toBe(404);
+    }
+    try {
+      postRepo.unbookmarkPost(u, 999999);
+    } catch (e) {
+      expect((e as AppError).status).toBe(404);
+    }
   });
 
   it('转发/取消转发不存在的帖子抛 404', () => {
     const u = insertUser('alice');
-    try { postRepo.repostPost(u, 999999); } catch (e) { expect((e as AppError).status).toBe(404); }
-    try { postRepo.unrepostPost(u, 999999); } catch (e) { expect((e as AppError).status).toBe(404); }
+    try {
+      postRepo.repostPost(u, 999999);
+    } catch (e) {
+      expect((e as AppError).status).toBe(404);
+    }
+    try {
+      postRepo.unrepostPost(u, 999999);
+    } catch (e) {
+      expect((e as AppError).status).toBe(404);
+    }
   });
 
   it('存在的帖子操作正常（不误伤）', () => {

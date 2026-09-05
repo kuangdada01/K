@@ -31,7 +31,7 @@ export default function MusicPlayer({ inline = false }: MusicPlayerProps) {
     };
   }, [isPlaying, currentSong?.src, getAudioElement]);
 
-  const progress = duration > 0 ? (currentTime / duration) : 0;
+  const progress = duration > 0 ? currentTime / duration : 0;
 
   if (!currentSong) return null;
 
@@ -45,14 +45,24 @@ export default function MusicPlayer({ inline = false }: MusicPlayerProps) {
         <button className="music-player-btn" onClick={prev} title="上一首">
           <SkipBack size={16} />
         </button>
-        <button className="music-player-btn music-player-play-btn" onClick={togglePlay} title={isPlaying ? '暂停' : '播放'}>
+        <button
+          className="music-player-btn music-player-play-btn"
+          onClick={togglePlay}
+          title={isPlaying ? '暂停' : '播放'}
+        >
           {isPlaying && (
             <svg className="music-player-progress-ring" viewBox="0 0 34 34">
-              <circle cx="17" cy="17" r={R} fill="none" strokeWidth="2"
+              <circle
+                cx="17"
+                cy="17"
+                r={R}
+                fill="none"
+                strokeWidth="2"
                 strokeLinecap="round"
                 strokeDasharray={C}
                 strokeDashoffset={C * (1 - progress)}
-                transform="rotate(-90 17 17)" />
+                transform="rotate(-90 17 17)"
+              />
             </svg>
           )}
           {isPlaying ? <Pause size={18} /> : <Play size={18} />}

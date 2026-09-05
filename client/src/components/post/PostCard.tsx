@@ -53,7 +53,13 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   const { getLikeInfo } = useLike();
   const { getReposted } = useRepost();
   // 点赞/转发：交互逻辑统一由 hooks 提供（与 PostDetail 共用同一实现）
-  const { liked, setLiked, likeCount, setLikeCount, toggle: toggleLike } = useLikePost(post.id, {
+  const {
+    liked,
+    setLiked,
+    likeCount,
+    setLikeCount,
+    toggle: toggleLike,
+  } = useLikePost(post.id, {
     onToggle: onLikeToggle,
     onChange: onLikeChange,
   });
@@ -115,7 +121,7 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   useEffect(() => {
     if (images.length <= 1 || isPaused || userInteracted || !isPartiallyVisible) return;
     const timer = setInterval(() => {
-      setCurrentImageIndex(prev => (prev + 1) % images.length);
+      setCurrentImageIndex((prev) => (prev + 1) % images.length);
     }, 3000);
     return () => clearInterval(timer);
   }, [images.length, isPaused, userInteracted, isPartiallyVisible]);
@@ -175,17 +181,27 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
     if (cached !== undefined && isFollowing !== cached) setIsFollowing(cached);
   }
   useEffect(() => {
-    const h = (uid: number) => { if (uid === post.user_id) { const c = getFollowStatus(uid); if (c !== undefined) setIsFollowing(c); } };
+    const h = (uid: number) => {
+      if (uid === post.user_id) {
+        const c = getFollowStatus(uid);
+        if (c !== undefined) setIsFollowing(c);
+      }
+    };
     events.on('follow:changed', h);
-    return () => { events.off('follow:changed', h); };
+    return () => {
+      events.off('follow:changed', h);
+    };
   }, [post.user_id, getFollowStatus]);
   useEffect(() => {
     if (!user || post.user_id === user.id) return;
     if (getFollowStatus(post.user_id) !== undefined) return; // 渲染期已同步
-    api.get(`/friends/status/${post.user_id}`).then(res => {
-      setIsFollowing(res.data.is_following);
-      setFollowStatus(post.user_id, res.data.is_following);
-    }).catch(() => {});
+    api
+      .get(`/friends/status/${post.user_id}`)
+      .then((res) => {
+        setIsFollowing(res.data.is_following);
+        setFollowStatus(post.user_id, res.data.is_following);
+      })
+      .catch(() => {});
   }, [post.user_id, user, getFollowStatus, setFollowStatus]);
 
   useEffect(() => {
@@ -218,7 +234,8 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
     const path = svg.querySelector('path');
     if (!path) return;
     // SVG presentation attribute 不支持 var()，需读取 CSS 变量实际值
-    const dangerColor = getComputedStyle(document.documentElement).getPropertyValue('--danger').trim() || '#ed4956';
+    const dangerColor =
+      getComputedStyle(document.documentElement).getPropertyValue('--danger').trim() || '#ed4956';
     const c = liked ? dangerColor : 'none';
     const s = liked ? dangerColor : 'currentColor';
     path.setAttribute('fill', c);
@@ -371,7 +388,10 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   };
 
   const handleShare = async () => {
-    if (!user) { openLoginPrompt(); return; }
+    if (!user) {
+      openLoginPrompt();
+      return;
+    }
     const url = `${window.location.origin}/post/${post.id}`;
     try {
       await navigator.clipboard.writeText(url);
@@ -391,11 +411,22 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   return (
     <div className={styles.card} ref={cardRef}>
       <div className={styles.header}>
-        <div onClick={() => onProfileClick ? onProfileClick(post.user_id) : navigate(`/profile/${post.user_id}`)} style={{ cursor: 'pointer' }}>
+        <div
+          onClick={() =>
+            onProfileClick ? onProfileClick(post.user_id) : navigate(`/profile/${post.user_id}`)
+          }
+          style={{ cursor: 'pointer' }}
+        >
           <Avatar src={post.avatar} username={post.username} size={40} className={styles.avatar} />
         </div>
         <div className={styles.headerInfo}>
-          <strong className={styles.username} onClick={() => onProfileClick ? onProfileClick(post.user_id) : navigate(`/profile/${post.user_id}`)} style={{ cursor: 'pointer' }}>
+          <strong
+            className={styles.username}
+            onClick={() =>
+              onProfileClick ? onProfileClick(post.user_id) : navigate(`/profile/${post.user_id}`)
+            }
+            style={{ cursor: 'pointer' }}
+          >
             {post.username}
           </strong>
           <small className={styles.time}>{formatRelativeTime(post.created_at)}</small>
@@ -412,7 +443,11 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
 
       <div
         className={styles.imageWrapper}
-        onClick={() => onPostClick ? onPostClick(post.id, currentImageIndex) : navigate(`/post/${post.id}`, { state: { from: 'home' } })}
+        onClick={() =>
+          onPostClick
+            ? onPostClick(post.id, currentImageIndex)
+            : navigate(`/post/${post.id}`, { state: { from: 'home' } })
+        }
         onMouseEnter={() => setIsPaused(true)}
         onMouseLeave={() => setIsPaused(false)}
       >
@@ -421,16 +456,28 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
             <div className={styles.videoWrapper}>
               {/* 封面撑起布局（宽高比稳定）；视频作为覆盖层淡入，全程零布局跳变 */}
               {post.video_cover ? (
-                <img src={resolveMediaUrl(post.video_cover) || undefined} alt={post.title} className={styles.videoPoster} />
+                <img
+                  src={resolveMediaUrl(post.video_cover) || undefined}
+                  alt={post.title}
+                  className={styles.videoPoster}
+                />
               ) : (
                 /* 无封面（历史帖子）：用 video 元素自身撑起尺寸 */
-                <video src={resolveMediaUrl(post.video_url) || undefined} muted playsInline preload="metadata" className={styles.videoPoster} />
+                <video
+                  src={resolveMediaUrl(post.video_url) || undefined}
+                  muted
+                  playsInline
+                  preload="metadata"
+                  className={styles.videoPoster}
+                />
               )}
               {videoShouldBeReady && (
                 <video
                   ref={videoRef}
                   src={resolveMediaUrl(post.video_url) || undefined}
-                  muted playsInline preload="auto"
+                  muted
+                  playsInline
+                  preload="auto"
                   className={`${styles.videoOverlay} ${videoReady ? styles.videoOn : ''}`}
                 />
               )}
@@ -440,9 +487,19 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
             // （无 src 的 video 会回落到 300x150 默认比例，把容器压扁）
             <div className={styles.videoWrapper}>
               {post.video_cover ? (
-                <img src={resolveMediaUrl(post.video_cover) || undefined} alt={post.title} className={styles.video} />
+                <img
+                  src={resolveMediaUrl(post.video_cover) || undefined}
+                  alt={post.title}
+                  className={styles.video}
+                />
               ) : (
-                <video src={resolveMediaUrl(post.video_url) || undefined} muted playsInline preload="metadata" className={styles.video} />
+                <video
+                  src={resolveMediaUrl(post.video_url) || undefined}
+                  muted
+                  playsInline
+                  preload="metadata"
+                  className={styles.video}
+                />
               )}
             </div>
           )
@@ -466,7 +523,10 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
             {images.length > 1 && (
               <div className={styles.imageDots}>
                 {images.map((_, i) => (
-                  <span key={i} className={`${styles.imageDot} ${i === currentImageIndex ? styles.active : ''}`} />
+                  <span
+                    key={i}
+                    className={`${styles.imageDot} ${i === currentImageIndex ? styles.active : ''}`}
+                  />
                 ))}
               </div>
             )}
@@ -475,26 +535,62 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
       </div>
 
       <div className={styles.actions}>
-        <button className={`${styles.actionBtn} ${liked ? styles.liked : ''}`} onClick={toggleLike} aria-label={liked ? '取消点赞' : '点赞'}>
-          <svg ref={heartRef} xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" fill="none" stroke="currentColor" /></svg>
+        <button
+          className={`${styles.actionBtn} ${liked ? styles.liked : ''}`}
+          onClick={toggleLike}
+          aria-label={liked ? '取消点赞' : '点赞'}
+        >
+          <svg
+            ref={heartRef}
+            xmlns="http://www.w3.org/2000/svg"
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path
+              d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"
+              fill="none"
+              stroke="currentColor"
+            />
+          </svg>
           {likeCount > 0 && <span className={styles.actionCount}>{likeCount}</span>}
         </button>
-        <button className={styles.actionBtn} onClick={() => {
-          if (!user) { openLoginPrompt(); return; }
-          if (onPostClick) {
-            onPostClick(post.id, currentImageIndex);
-          } else {
-            navigate(`/post/${post.id}`);
-          }
-        }} aria-label="评论">
+        <button
+          className={styles.actionBtn}
+          onClick={() => {
+            if (!user) {
+              openLoginPrompt();
+              return;
+            }
+            if (onPostClick) {
+              onPostClick(post.id, currentImageIndex);
+            } else {
+              navigate(`/post/${post.id}`);
+            }
+          }}
+          aria-label="评论"
+        >
           <MessageCircle size={24} />
           {post.comment_count > 0 && <span className={styles.actionCount}>{post.comment_count}</span>}
         </button>
-        <button className={`${styles.actionBtn} ${reposted ? styles.reposted : ''}`} onClick={toggleRepost} aria-label={reposted ? '取消转发' : '转发'}>
+        <button
+          className={`${styles.actionBtn} ${reposted ? styles.reposted : ''}`}
+          onClick={toggleRepost}
+          aria-label={reposted ? '取消转发' : '转发'}
+        >
           {reposted ? <RepostCheck size={25} strokeWidth={1.8} /> : <Repeat2 size={25} strokeWidth={1.8} />}
           {repostCount > 0 && <span className={styles.actionCount}>{repostCount}</span>}
         </button>
-        <button className={`${styles.actionBtn} ${styles.shareTooltip}`} onClick={handleShare} aria-label="分享">
+        <button
+          className={`${styles.actionBtn} ${styles.shareTooltip}`}
+          onClick={handleShare}
+          aria-label="分享"
+        >
           <Share2 size={24} />
           {showTooltip && <span className={styles.shareTooltipText}>已复制链接</span>}
         </button>

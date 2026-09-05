@@ -21,7 +21,12 @@ export default function ChatZoomOverlay({ zoomImage, zoomClosing, onClose }: Cha
       <button className={styles.close} onClick={onClose} aria-label="关闭预览">
         <X size={28} />
       </button>
-      <img src={resolveMediaUrl(zoomImage) || ''} alt="" className={`${styles.image}${zoomClosing ? ` ${styles.closing}` : ''}`} onClick={onClose} />
+      <img
+        src={resolveMediaUrl(zoomImage) || ''}
+        alt=""
+        className={`${styles.image}${zoomClosing ? ` ${styles.closing}` : ''}`}
+        onClick={onClose}
+      />
     </div>
   );
 }

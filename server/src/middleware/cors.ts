@@ -17,13 +17,17 @@ import { env } from '../config';
 
 /** CORS 白名单：来自 ALLOWED_ORIGINS 环境变量（逗号分隔），默认仅允许开发服务器 */
 const allowedOrigins = (env.ALLOWED_ORIGINS || 'http://localhost:5173')
-  .split(',').map(s => s.trim()).filter(Boolean);
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 export function corsMiddleware(req: Request, res: Response, next: NextFunction): void {
   const origin = req.headers.origin;
   if (origin) {
     let originHost = '';
-    try { originHost = new URL(origin).host; } catch {}
+    try {
+      originHost = new URL(origin).host;
+    } catch {}
     const reqHost = req.get('host') || '';
     const sameOrigin = !!originHost && originHost === reqHost;
     if (sameOrigin || allowedOrigins.includes(origin)) {

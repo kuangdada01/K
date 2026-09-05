@@ -132,7 +132,10 @@
   border-radius: 10px;
   overflow: hidden;
   cursor: grab;
-  transition: transform 0.2s ease, opacity 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    opacity 0.2s ease,
+    box-shadow 0.2s ease;
   background: var(--bg-secondary);
   touch-action: none;
   user-select: none;
@@ -191,7 +194,9 @@
   z-index: 5;
   /* 桌面端 hover 显示；移动端（无 hover）由 @media 内常显 */
   opacity: 0;
-  transition: opacity 0.15s, background 0.15s;
+  transition:
+    opacity 0.15s,
+    background 0.15s;
 }
 
 .gridItem:hover .gridDeleteBtn {
@@ -232,7 +237,9 @@
   cursor: pointer;
   color: var(--text-secondary);
   font-size: 12px;
-  transition: border-color 0.15s, color 0.15s;
+  transition:
+    border-color 0.15s,
+    color 0.15s;
   background: transparent;
 }
 
@@ -444,10 +451,39 @@
   }
 }
 
-  
-
-
-@keyframes pcFadeIn { from { opacity: 0; } to { opacity: 1; } }
-@keyframes pcFadeOut { from { opacity: 1; } to { opacity: 0; } }
-@keyframes pcScaleIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-@keyframes pcScaleOut { from { opacity: 1; transform: scale(1); } to { opacity: 0; transform: scale(0.95); } }
+@keyframes pcFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes pcFadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes pcScaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+@keyframes pcScaleOut {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}

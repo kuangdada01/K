@@ -93,7 +93,9 @@
   cursor: pointer;
   color: var(--text-secondary);
   opacity: 0;
-  transition: opacity 0.15s, color 0.15s;
+  transition:
+    opacity 0.15s,
+    color 0.15s;
 }
 
 .comment:hover .deleteBtn {
@@ -123,10 +125,18 @@
 }
 
 @keyframes ciCommentHighlight {
-  0% { background: transparent; }
-  15% { background: var(--accent-soft); }
-  40% { background: var(--accent-soft); }
-  100% { background: transparent; }
+  0% {
+    background: transparent;
+  }
+  15% {
+    background: var(--accent-soft);
+  }
+  40% {
+    background: var(--accent-soft);
+  }
+  100% {
+    background: transparent;
+  }
 }
 
 .replyBtn {

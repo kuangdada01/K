@@ -112,7 +112,10 @@ export default function AppUpdatePrompt() {
 
   return (
     <div className={`${styles.overlay} ${closing ? styles.closing : ''}`} onClick={handleClose}>
-      <div className={`${styles.modal} ${closing ? styles.closing : ''}`} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={`${styles.modal} ${closing ? styles.closing : ''}`}
+        onClick={(e) => e.stopPropagation()}
+      >
         <button className={styles.close} onClick={handleClose} aria-label="关闭">
           <X size={18} />
         </button>

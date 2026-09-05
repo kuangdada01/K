@@ -36,8 +36,8 @@ export function applyOpusPreferences(sdp: string, musicMode: boolean): string {
       const kept = lines[fmtpIdx]
         .slice(prefix.length)
         .split(';')
-        .map(p => p.trim())
-        .filter(p => p && !/^(useinbandfec|usedtx|maxaveragebitrate|stereo)=/i.test(p));
+        .map((p) => p.trim())
+        .filter((p) => p && !/^(useinbandfec|usedtx|maxaveragebitrate|stereo)=/i.test(p));
       lines[fmtpIdx] = `${prefix}${[...kept, extra].join(';')}`;
     } else {
       lines.splice(i + 1, 0, `a=fmtp:${payload} ${extra}`);

@@ -12,15 +12,16 @@ let db: ReturnType<typeof createMemoryDb>;
 
 /** 插入测试用户，返回 id */
 function insertUser(username: string): number {
-  const r = db.prepare(
-    "INSERT INTO users (username, email, password_hash, email_verified) VALUES (?, ?, 'x', 1)"
-  ).run(username, `${username}@test.com`);
+  const r = db
+    .prepare("INSERT INTO users (username, email, password_hash, email_verified) VALUES (?, ?, 'x', 1)")
+    .run(username, `${username}@test.com`);
   return Number(r.lastInsertRowid);
 }
 
 /** 插入测试帖子，返回 id */
 function insertPost(userId: number, description = '', imageUrl = '[]'): number {
-  const r = db.prepare('INSERT INTO posts (user_id, image_url, description) VALUES (?, ?, ?)')
+  const r = db
+    .prepare('INSERT INTO posts (user_id, image_url, description) VALUES (?, ?, ?)')
     .run(userId, imageUrl, description);
   return Number(r.lastInsertRowid);
 }
@@ -146,14 +147,26 @@ describe('帖子 CRUD', () => {
     const v = insertUser('bob');
     const p = insertPost(u);
     const updated = postRepo.updatePost({
-      postId: p, userId: u, imageUrl: '[]', description: 'new', closeComments: 0, pinned: 1,
+      postId: p,
+      userId: u,
+      imageUrl: '[]',
+      description: 'new',
+      closeComments: 0,
+      pinned: 1,
     });
     expect(updated!.description).toBe('new');
     expect(updated!.pinned).toBe(1);
     // 非作者更新失败
-    expect(postRepo.updatePost({
-      postId: p, userId: v, imageUrl: '[]', description: 'x', closeComments: 0, pinned: 0,
-    })).toBeUndefined();
+    expect(
+      postRepo.updatePost({
+        postId: p,
+        userId: v,
+        imageUrl: '[]',
+        description: 'x',
+        closeComments: 0,
+        pinned: 0,
+      })
+    ).toBeUndefined();
     postRepo.deletePost(p);
     expect(postRepo.getPostById(p)).toBeUndefined();
   });

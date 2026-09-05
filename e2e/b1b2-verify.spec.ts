@@ -86,26 +86,52 @@ async function mockLogin(page: Page) {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        id: 1, username: 'tester', email: 't@t.com', avatar: null, bio: '',
-        role: 'user', created_at: '2026-01-01T00:00:00.000Z',
+        id: 1,
+        username: 'tester',
+        email: 't@t.com',
+        avatar: null,
+        bio: '',
+        role: 'user',
+        created_at: '2026-01-01T00:00:00.000Z',
       }),
     })
   );
   // 其余后台轮询请求必须 mock 掉：真实服务器会对假 token 返回 401，
   // axios 拦截器会触发 auth:expired 把用户登出（登录态会被立刻清掉）
   await page.route('**/api/notifications**', (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ notifications: [], unread_count: 0 }) }));
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ notifications: [], unread_count: 0 }),
+    })
+  );
   await page.route('**/api/messages/conversations**', (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ conversations: [] }) }));
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ conversations: [] }),
+    })
+  );
   await page.route('**/api/announcements**', (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ announcements: [], unread_count: 0 }) }));
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ announcements: [], unread_count: 0 }),
+    })
+  );
   await page.route('**/api/friends/recommend**', (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ users: [] }) }));
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ users: [] }) })
+  );
   // P8：登录后预取关注列表（GET /api/friends）—— 也必须 mock，否则真实服务器 401 → auth:expired 登出。
   // 注意：Playwright 后注册的路由优先匹配，本路由会先于上面的 recommend 命中；
   // 同时返回 users 字段，避免 recommend 拿不到 {users} 导致渲染崩溃。
   await page.route('**/api/friends**', (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ friends: [], users: [] }) }));
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ friends: [], users: [] }),
+    })
+  );
 }
 
 test('B2 拖拽排序后按新顺序上传', async ({ page }) => {
@@ -133,11 +159,20 @@ test('B2 拖拽排序后按新顺序上传', async ({ page }) => {
       return;
     }
     // 首页信息流也需要：返回空（避免 404 干扰）
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ posts: [], total: 0, page: 1, totalPages: 1 }) });
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ posts: [], total: 0, page: 1, totalPages: 1 }),
+    });
   });
   // 带 query 的信息流请求也拦掉
   await page.route('**/api/posts?*', (route: Route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ posts: [], total: 0, page: 1, totalPages: 1 }) }));
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ posts: [], total: 0, page: 1, totalPages: 1 }),
+    })
+  );
 
   await page.goto('/');
   // 打开"分享"（侧边栏，仅登录后可见）

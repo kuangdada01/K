@@ -37,9 +37,7 @@ beforeAll(async () => {
   createSchema(db);
   setDbForTests(db);
 
-  const insertUser = db.prepare(
-    "INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')"
-  );
+  const insertUser = db.prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')");
   aliceId = Number(insertUser.run('alice', 'alice@test.com').lastInsertRowid);
   bobId = Number(insertUser.run('bob', 'bob@test.com').lastInsertRowid);
   carolId = Number(insertUser.run('carol', 'carol@test.com').lastInsertRowid);
@@ -66,9 +64,16 @@ function connect(token: string): Promise<WebSocket> {
     const ws = new WebSocket(`ws://127.0.0.1:${port}/api/voice/ws?token=${token}`);
     (ws as any).__msgs = [];
     ws.on('message', (raw) => {
-      try { (ws as any).__msgs.push(JSON.parse(String(raw))); } catch { /* 忽略非 JSON */ }
+      try {
+        (ws as any).__msgs.push(JSON.parse(String(raw)));
+      } catch {
+        /* 忽略非 JSON */
+      }
     });
-    ws.on('open', () => { clients.push(ws); resolve(ws); });
+    ws.on('open', () => {
+      clients.push(ws);
+      resolve(ws);
+    });
     ws.on('error', reject);
   });
 }
@@ -77,7 +82,10 @@ function connect(token: string): Promise<WebSocket> {
 function waitFor(ws: WebSocket, predicate: (msg: any) => boolean, timeoutMs = 3000): Promise<any> {
   const msgs: any[] = (ws as any).__msgs ?? [];
   return new Promise((resolve, reject) => {
-    const cleanup = () => { clearTimeout(timer); ws.off('message', check); };
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off('message', check);
+    };
     const check = () => {
       const idx = msgs.findIndex(predicate);
       if (idx >= 0) {
@@ -204,9 +212,9 @@ describe('WS 信令全链路', () => {
     const fill = VOICE_MAX_ROOM_SIZE - tokens.length;
     // 补足人数的临时用户
     for (let i = 0; i < fill; i++) {
-      const info = db.prepare(
-        "INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')"
-      ).run(`filler${i}`, `filler${i}@test.com`);
+      const info = db
+        .prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')")
+        .run(`filler${i}`, `filler${i}@test.com`);
       tokens.push(generateToken({ id: Number(info.lastInsertRowid), username: `filler${i}` }));
     }
 
@@ -218,9 +226,9 @@ describe('WS 信令全链路', () => {
     expect(hub.getRoomCount(room.id)).toBe(VOICE_MAX_ROOM_SIZE);
 
     // 第 11 人（新用户）被拒绝
-    const info = db.prepare(
-      "INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')"
-    ).run('dave', 'dave@test.com');
+    const info = db
+      .prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')")
+      .run('dave', 'dave@test.com');
     const dave = await connect(generateToken({ id: Number(info.lastInsertRowid), username: 'dave' }));
     send(dave, { type: 'join', roomId: room.id });
     const err = await waitFor(dave, (m) => m.type === 'error');
