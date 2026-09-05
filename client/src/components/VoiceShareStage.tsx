@@ -14,7 +14,7 @@
  * 用命令式创建/挂载，不交给 React 管理（避免跨文档移动引发卸载异常）。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { MonitorUp, Maximize, Minimize, Volume2, VolumeX, Square, Type, PictureInPicture2 } from 'lucide-react';
 import { useVoice, useVoiceRealtime } from '../context/VoiceContext';
 import type { ShareQuality } from '../voice/VoiceSession';
@@ -36,20 +36,23 @@ export default function VoiceShareStage() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null); // 命令式创建（小窗模式会跨文档移动）
   const canvasSlotRef = useRef<HTMLDivElement>(null);
   const pipWinRef = useRef<Window | null>(null);
-  const voiceRef = useRef(voice);
-  voiceRef.current = voice;
   const [isFullscreen, setIsFullscreen] = useState(false);
-  /** 共享者隐藏自己的实时预览（唯一能彻底消除递归镜的方式；观众端不受影响）。
-      仅由"全屏 + 共享整屏"自动置位，窗口化舞台始终显示实时画面 */
-  const [previewHidden, setPreviewHidden] = useState(false);
   const [pipActive, setPipActive] = useState(false);
   const isPresenter = share?.userId === voice.participants[0]?.userId;
+  // 共享源类型与捕获帧率：getSettings() 是同步快照，渲染期直接读取
+  // （每次渲染读一次 ≈ 原先"每个共享流读一次"的 effect 语义，且省去重置逻辑）
+  const trackSettings = share?.stream
+    ? share.stream.getVideoTracks()[0]?.getSettings() as MediaTrackSettings & { displaySurface?: string }
+    : undefined;
+  /** 共享源类型（monitor/window/browser；合成流等无此字段为 undefined） */
+  const surface = trackSettings?.displaySurface;
+  /** 捕获源实际帧率（窗口/标签共享被浏览器限制为 30） */
+  const captureFps = trackSettings?.frameRate ?? 0;
+  /** 共享者隐藏自己的实时预览（唯一能彻底消除递归镜的方式；观众端不受影响）。
+      仅由"全屏 + 共享整屏"自动置位，窗口化舞台始终显示实时画面 */
+  const previewHidden = isPresenter && isFullscreen && surface === 'monitor';
   /** 共享者隐藏预览时舞台不渲染直播画面（观众端不受影响） */
   const previewLive = !(isPresenter && previewHidden);
-  /** 共享源类型（monitor/window/browser；合成流等无此字段为 undefined） */
-  const surfaceRef = useRef<string | undefined>(undefined);
-  /** 捕获源实际帧率（getSettings().frameRate；窗口/标签共享被浏览器限制为 30） */
-  const [captureFps, setCaptureFps] = useState(0);
   /** 全屏意图：requestFullscreen 成功回调即置位。Android WebView 的 div 全屏可能
       走 custom view 路径导致 document.fullscreenElement 为 null，不能据此判断进入，
       原生沉浸模式（隐藏状态栏）必须由主动调用驱动，而非 fullscreenElement 对比。 */
@@ -62,7 +65,7 @@ export default function VoiceShareStage() {
   // 全屏时刷新 theme-color：部分移动浏览器（微信 X5/QQ 内核等）进入全屏后系统
   // 状态栏变黑（忽略初始 theme-color），强制替换 meta 元素触发浏览器重新读取，
   // 让状态栏恢复页面主题色（浅色 #eef2ee 或深色 #0d0f14）
-  const refreshThemeColor = () => {
+  const refreshThemeColor = useCallback(() => {
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta && meta.parentNode) {
       const color = meta.getAttribute('content') || '#eef2ee';
@@ -71,14 +74,14 @@ export default function VoiceShareStage() {
       fresh.content = color;
       meta.parentNode.replaceChild(fresh, meta);
     }
-  };
+  }, []);
 
   // 原生沉浸模式（隐藏/恢复状态栏+导航栏）；仅原生端存在 AndroidBridge
-  const applyImmersive = (on: boolean) => {
+  const applyImmersive = useCallback((on: boolean) => {
     const bridge = (window as unknown as { AndroidBridge?: { setImmersiveMode?: (v: boolean) => void } }).AndroidBridge;
     bridge?.setImmersiveMode?.(on);
     if (on) refreshThemeColor();
-  };
+  }, [refreshThemeColor]);
 
   // 全屏状态兜底：进入由 requestFullscreen().then 主动驱动；此监听负责——
   // 正常路径 fullscreenchange（幂等更新 UI）、以及退出恢复（按钮/返回手势/系统退出）。
@@ -121,23 +124,7 @@ export default function VoiceShareStage() {
         applyImmersive(false);
       }
     };
-  }, []);
-
-  // 共享源类型记录；新一轮共享恢复显示预览
-  useEffect(() => {
-    if (!share?.stream) return;
-    const settings = share.stream.getVideoTracks()[0]?.getSettings() as MediaTrackSettings & { displaySurface?: string };
-    surfaceRef.current = settings?.displaySurface;
-    setCaptureFps(settings?.frameRate ?? 0);
-    setPreviewHidden(false);
-  }, [share?.stream, share?.userId]);
-
-  // 全屏自动隐藏预览：仅"共享者 + 共享整屏"组合（舞台必然出现在被捕获画面里，递归必然）。
-  // 窗口化舞台在用户机器上验证过不触发色彩放大，始终保持实时画面。
-  useEffect(() => {
-    if (!isPresenter) return;
-    setPreviewHidden(isFullscreen && surfaceRef.current === 'monitor');
-  }, [isFullscreen, isPresenter]);
+  }, [applyImmersive]);
 
   // 画面流就绪后立即起播（autoplay + muted 满足自动播放策略；声音走独立 audio 元素）
   useEffect(() => {
@@ -153,7 +140,8 @@ export default function VoiceShareStage() {
   useEffect(() => {
     if (!share?.stream) {
       if (pipWinRef.current) { try { pipWinRef.current.close(); } catch { /* 已关闭 */ } pipWinRef.current = null; }
-      setPipActive(false);
+      // 异步复位小窗状态（避免在 effect 内同步 setState 触发级联渲染）
+      queueMicrotask(() => setPipActive(false));
       canvasRef.current?.remove();
       canvasRef.current = null;
       return;
@@ -170,13 +158,6 @@ export default function VoiceShareStage() {
     const slot = canvasSlotRef.current;
     if (slot && canvas.parentElement !== slot) slot.appendChild(canvas);
   }, [share?.stream]);
-
-  // 共享结束/离开房间：关闭小窗
-  useEffect(() => {
-    if (share) return;
-    if (pipWinRef.current) { try { pipWinRef.current.close(); } catch { /* 已关闭 */ } pipWinRef.current = null; }
-    setPipActive(false);
-  }, [share]);
 
   // 用 canvas 绘制视频帧（而非直接显示 <video>）：
   // 部分 GPU/驱动（如新版本 NVIDIA）在视频走硬件 overlay 合成路径时全屏发绿，
@@ -357,7 +338,6 @@ export default function VoiceShareStage() {
         }
         // 仅窗口/标签共享提示帧率上限（Chromium 限制 30fps，请求 60 也没用）；
         // 整屏共享的捕获帧率由显示器/编码器决定，交给上面"未达 60"提示兜底
-        const surface = surfaceRef.current;
         if ((surface === 'window' || surface === 'browser') && captureFps > 0 && captureFps < 55) {
           return <div className={styles.hintBar}>当前捕获 {captureFps}fps（窗口/标签共享上限 30；共享整屏可达 60）</div>;
         }
