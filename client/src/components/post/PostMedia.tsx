@@ -61,22 +61,44 @@ export default function PostMedia({
   ) => {
     if (!el) return () => {};
     let startX = 0;
+    let startY = 0;
     let startLeft = 0;
     let startIndex = 0;
     let active = false;
+    let horizontal = false; // 是否已判定为横向手势（横向主导才接管滚动）
     let moveHandler: ((e: TouchEvent) => void) | null = null;
 
     const down = (e: PointerEvent) => {
       if (e.pointerType === 'mouse' && e.button !== 0) return;
       active = true;
+      horizontal = false;
       startX = e.clientX;
+      startY = e.clientY;
       startLeft = el.scrollLeft;
       startIndex = getSettled();
       moveHandler = (te: TouchEvent) => {
         if (!active || te.touches.length !== 1) return;
+        const touch = te.touches[0];
+        const dx = touch.clientX - startX;
+        const dy = touch.clientY - startY;
+        if (!horizontal) {
+          // 首次位移判定方向：横向主导才接管，纵向主导（浏览页面）立即放手
+          if (Math.abs(dx) > Math.abs(dy) + 4) {
+            horizontal = true;
+          } else if (Math.abs(dy) > Math.abs(dx) + 4) {
+            active = false; // 交给浏览器纵向滚动页面
+            if (moveHandler) {
+              el.removeEventListener('touchmove', moveHandler);
+              moveHandler = null;
+            }
+            return;
+          } else {
+            return; // 位移太小，继续观察
+          }
+        }
         te.preventDefault();
-        const dx = te.touches[0].clientX - startX;
-        el.scrollLeft = startLeft - dx;
+        const dxMove = touch.clientX - startX;
+        el.scrollLeft = startLeft - dxMove;
       };
       // passive:false 才能 preventDefault 禁掉原生惯性滚动
       el.addEventListener('touchmove', moveHandler, { passive: false });
