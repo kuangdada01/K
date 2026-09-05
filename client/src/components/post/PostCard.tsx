@@ -264,7 +264,9 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
 
   useEffect(() => {
     const track = trackRef.current;
-    if (!track || images.length <= 1) return;
+    const viewport = scrollRef.current;
+    // 事件绑定在 viewport 上（覆盖含黑色填充的整个区域；横版图片黑边处也能滑动翻页）
+    if (!track || !viewport || images.length <= 1) return;
     let startX = 0;
     let startY = 0;
     let startOffset = 0;
@@ -300,7 +302,7 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
           } else if (Math.abs(dy) > Math.abs(dx) + 2) {
             active = false; // 交给浏览器纵向滚动页面
             if (moveHandler) {
-              track.removeEventListener('touchmove', moveHandler);
+              viewport.removeEventListener('touchmove', moveHandler);
               moveHandler = null;
             }
             return;
@@ -312,14 +314,14 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
         setTrackOffset(startOffset - dx);
       };
       // passive:false 才能 preventDefault 禁掉原生惯性滚动
-      track.addEventListener('touchmove', moveHandler, { passive: false });
+      viewport.addEventListener('touchmove', moveHandler, { passive: false });
     };
 
     const up = () => {
       if (!active) return;
       active = false;
       if (moveHandler) {
-        track.removeEventListener('touchmove', moveHandler);
+        viewport.removeEventListener('touchmove', moveHandler);
         moveHandler = null;
       }
       const dx = offsetRef.current - startOffset; // 正向 = 手指左滑（offset 增大）= 下一张
@@ -338,14 +340,14 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
       animateTrackTo(target);
     };
 
-    track.addEventListener('pointerdown', down);
-    track.addEventListener('pointerup', up);
-    track.addEventListener('pointercancel', up);
+    viewport.addEventListener('pointerdown', down);
+    viewport.addEventListener('pointerup', up);
+    viewport.addEventListener('pointercancel', up);
     return () => {
-      track.removeEventListener('pointerdown', down);
-      track.removeEventListener('pointerup', up);
-      track.removeEventListener('pointercancel', up);
-      if (moveHandler) track.removeEventListener('touchmove', moveHandler);
+      viewport.removeEventListener('pointerdown', down);
+      viewport.removeEventListener('pointerup', up);
+      viewport.removeEventListener('pointercancel', up);
+      if (moveHandler) viewport.removeEventListener('touchmove', moveHandler);
     };
   }, [images]);
 
