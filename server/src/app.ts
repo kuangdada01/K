@@ -48,9 +48,8 @@ export function createApp(): express.Express {
   app.use(corsMiddleware);
 
   /** 安全响应头（helmet）
-   * 注意: 站点当前通过 HTTP 提供服务（无 TLS），必须移除默认 CSP 中的
-   * upgrade-insecure-requests，否则浏览器会把所有资源请求升级为 HTTPS
-   * 导致资源加载失败、页面白屏。
+   * HSTS 由 helmet 默认下发（max-age=1年 + includeSubDomains）；
+   * TLS 由 nginx 终止（kuangdada.top 已全站 HTTPS，Let's Encrypt 自动续期）。
    */
   app.use(helmet({
     // Capacitor 原生 App 的页面运行在 http://localhost，跨源引用 /uploads 的
@@ -60,7 +59,6 @@ export function createApp(): express.Express {
     contentSecurityPolicy: {
       directives: {
         ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-        'upgrade-insecure-requests': null,
         'script-src': ["'self'", "'sha256-v5bVaFQO+UhGE6aDcmlclP7lRfBTMRh+5BgGwwfhAuo='", "'wasm-unsafe-eval'"],
         // wasm-unsafe-eval: 语音降噪 RNNoise 的 AudioWorklet 在运行期内嵌 WASM 模块
         // 需要该指令（Chrome 对 script-src 无 'unsafe-eval'/'wasm-unsafe-eval' 时会
