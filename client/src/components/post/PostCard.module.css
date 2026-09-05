@@ -131,6 +131,7 @@
   display: flex;
   align-items: center; /* 横图/高度不足的图垂直居中，不留顶部空隙 */
   will-change: transform;
+  transform: translateZ(0); /* 强制合成层，防 WebView 平移残影 */
 }
 
 .image {
@@ -140,6 +141,9 @@
   object-fit: contain;
   display: block;
   background: #000;
+  /* 防 WebView 合成残影：每张图独立合成层，平移后上一张不残留 */
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
 }
 
 .videoWrapper {
