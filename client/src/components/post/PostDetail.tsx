@@ -11,15 +11,17 @@
  * - 评论点赞/删除
  * - 帖子点赞/关注/分享
  * - 关闭动画效果
+ *
+ * 子模块:
+ * - PostDetailActions  底部操作栏（纯展示）
+ * - CommentComposer    评论输入区（纯展示）
+ * - usePostDetailClose 关闭/返回/滚轮生命周期
  * ============================================================
  */
 
-import { useState, useEffect, useRef, useCallback, Suspense, lazy } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useRef, Suspense, lazy } from 'react';
 
-import { X, MessageCircle, Share2, Send, Trash2, ChevronLeft, Pencil, Bookmark, Repeat2 } from 'lucide-react';
-import RepostCheck from '../icons/RepostCheck';
-import EmojiPicker from '../EmojiPicker';
+import { X, Trash2, ChevronLeft, Pencil } from 'lucide-react';
 import CommentItem from '../CommentItem';
 import PostMedia from './PostMedia';
 import TaggedText from '../TaggedText';
@@ -41,12 +43,9 @@ import { useEvent } from '../../context/CreateContext';
 import { events } from '../../state/events';
 import { showToast } from '../ui/Toast';
 import { resolveMediaUrl } from '../../utils';
-import {
-  setActiveNestedOverlay,
-  getActiveNestedOverlay,
-  consumeBackDispatch,
-  beginBackDispatch,
-} from '../../state/nestedOverlay';
+import PostDetailActions from './PostDetailActions';
+import CommentComposer from './CommentComposer';
+import { usePostDetailClose } from './usePostDetailClose';
 import styles from './PostDetail.module.css';
 
 interface PostDetailProps {
@@ -78,7 +77,6 @@ export default function PostDetail({
   // P6 修复：PostDetail 不再整包消费 MusicContext。开视频时发 music:pause 事件，
   // 关闭时发 music:resume（MusicProvider 内部处理"是否真的在播/是否要恢复"）。
   const [musicWasPlaying, setMusicWasPlaying] = useState(false);
-  const navigate = useNavigate();
   const [post, setPost] = useState<Post | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState('');
@@ -101,7 +99,6 @@ export default function PostDetail({
   // 首页卡片点开时带图片索引进来，详情页/全屏首屏定位到同一张
   const [currentImageIndex, setCurrentImageIndex] = useState(initialImageIndex);
   const [zoomed, setZoomed] = useState(false);
-  const [closing, setClosing] = useState(false);
   const [collapsedReplies, setCollapsedReplies] = useState<Set<number>>(new Set());
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
   const [profileUserId, setProfileUserId] = useState<number | null>(null);
@@ -127,26 +124,18 @@ export default function PostDetail({
     setCurrentImageIndex(initialImageIndex);
   }
 
-  // 检测是否为嵌套 PostDetail（在另一个 PostDetail 的 ProfileOverlay 内部）
-  const isNestedRef = useRef(false);
-  // 注册/注销嵌套 PostDetail 实例，供外层 PostDetail 的返回键处理使用
-  useEffect(() => {
-    // 挂载后检测：当前 overlay 是否在另一个 PostDetail overlay 内部
-    requestAnimationFrame(() => {
-      if (overlayRef.current) {
-        const parentOverlay = overlayRef.current.parentElement?.closest(`.${styles.overlay}`);
-        if (parentOverlay) {
-          isNestedRef.current = true;
-          setActiveNestedOverlay(overlayRef.current);
-        }
+  const { closing, handleClose } = usePostDetailClose({
+    onClose,
+    zoomed,
+    setZoomed,
+    overlayRef,
+    onClosing: () => {
+      if (musicWasPlaying) {
+        events.emit('music:resume');
+        setMusicWasPlaying(false);
       }
-    });
-    return () => {
-      if (isNestedRef.current) {
-        setActiveNestedOverlay(null);
-      }
-    };
-  }, []);
+    },
+  });
 
   // 加载评论，全部折叠，若有高亮评论ID则展开其祖先
   // （loadError/highlight 重置已在渲染期完成）
@@ -399,27 +388,6 @@ export default function PostDetail({
     }
   };
 
-  const handleClose = useCallback(() => {
-    setClosing(true);
-    // 恢复音乐播放（仅当确实暂停过音乐）
-    if (musicWasPlaying) {
-      events.emit('music:resume');
-      setMusicWasPlaying(false);
-    }
-    setTimeout(() => {
-      if (onClose) {
-        onClose();
-      } else {
-        // 判断是否可以从历史记录返回（非刷新场景）
-        if (window.history.length > 1) {
-          navigate(-1);
-        } else {
-          navigate('/', { replace: true });
-        }
-      }
-    }, 200);
-  }, [onClose, navigate, musicWasPlaying]);
-
   const handleNavigate = (path: string) => {
     // 提取 /profile/:id 中的 userId
     const match = path.match(/\/profile\/(\d+)/);
@@ -427,115 +395,6 @@ export default function PostDetail({
       setProfileUserId(parseInt(match[1]));
     }
   };
-
-  // 安卓硬件返回键：优先关闭上层覆盖，再关闭帖子详情
-  useEffect(() => {
-    const handler = () => {
-      // 嵌套 PostDetail（在 ProfileOverlay 内部）：跳过处理，由外层 PostDetail 管理
-      if (isNestedRef.current) return;
-
-      // 防重入：如果正在处理嵌套 PostDetail 的关闭，消费一次性标志后跳过
-      if (!consumeBackDispatch()) return;
-
-      // 如果有嵌套的 PostDetail（如从个人主页打开的帖子），先关闭其所在的 ProfileOverlay
-      const nested = getActiveNestedOverlay();
-      if (nested) {
-        beginBackDispatch();
-        const profileOverlay = nested.closest('.profile-overlay');
-        if (profileOverlay) {
-          const backBtn = profileOverlay.querySelector('[data-back]') as HTMLElement;
-          if (backBtn) {
-            backBtn.click();
-            return;
-          }
-        }
-      }
-
-      // 如果当前 PostDetail 内部有自己的 ProfileOverlay 打开，先关闭它
-      if (overlayRef.current) {
-        const profileOverlay = overlayRef.current.querySelector('.profile-overlay');
-        if (profileOverlay) {
-          const backBtn = profileOverlay.querySelector('[data-back]') as HTMLElement;
-          if (backBtn) {
-            backBtn.click();
-            return;
-          }
-        }
-      }
-      handleClose();
-    };
-    window.addEventListener('backbutton', handler);
-    return () => window.removeEventListener('backbutton', handler);
-  }, [onClose, handleClose]);
-
-  // 锁定 body 滚动 + 阻止滚轮穿透到背景页面（仅允许评论区内部滚动）
-  const wheelHandlerRef = useRef<((e: WheelEvent) => void) | null>(null);
-
-  useEffect(() => {
-    // 不锁定 body 滚动（保持滚动条始终可见）；仅拦截滚轮防止穿透滚动背景
-
-    // 用 document 级别的 capture 阶段监听 wheel 事件
-    // 在浏览器处理滚动默认动作之前拦截，确保 e.preventDefault() 有效
-    const handleWheel = (e: WheelEvent) => {
-      const target = e.target as HTMLElement;
-      // Allow scrolling inside the emoji panel
-      if (target.closest('[data-emoji-panel]')) return;
-
-      // 移动端：详情容器本身是内容流滚动区，放行其内部滚动
-      if (window.matchMedia('(max-width: 768px)').matches && overlayRef.current?.contains(target)) {
-        return;
-      }
-
-      // 桌面端：仅放行评论区内部滚动（滚到边界仍拦截，防止穿透到背景页面）
-      const commentsEl = overlayRef.current?.querySelector(`.${styles.comments}`);
-      if (commentsEl && commentsEl.contains(target)) {
-        const el = commentsEl as HTMLElement;
-        const atTop = el.scrollTop <= 0 && e.deltaY < 0;
-        const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1 && e.deltaY > 0;
-        if (!atTop && !atBottom) return; // let comments scroll normally
-      }
-      // Prevent all other wheel events from scrolling the background page
-      e.preventDefault();
-    };
-
-    wheelHandlerRef.current = handleWheel;
-    document.addEventListener('wheel', handleWheel, { passive: false, capture: true });
-
-    return () => {
-      if (wheelHandlerRef.current) {
-        document.removeEventListener('wheel', wheelHandlerRef.current, { capture: true });
-        wheelHandlerRef.current = null;
-      }
-    };
-  }, []);
-
-  // ESC 键关闭（缩放时先退出缩放）
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (zoomed) {
-          setZoomed(false);
-        } else {
-          handleClose();
-        }
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [zoomed, closing, handleClose]);
-
-  // Android 返回键：监听 popstate 关闭 overlay
-  useEffect(() => {
-    const handlePopState = () => {
-      // 如果有嵌套的 PostDetail（如从个人主页打开的帖子），让嵌套层处理
-      if (getActiveNestedOverlay()) return;
-      if (!closing) {
-        handleClose();
-      }
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, [closing, onClose, handleClose]);
 
   const toggleReplies = (commentId: number) => {
     setCollapsedReplies((prev) => {
@@ -737,126 +596,44 @@ export default function PostDetail({
 
           {/* 底部操作栏 + 评论输入：移动端作为整体吸底 dock，桌面端仅作分组容器 */}
           <div className={styles.bottomDock}>
-            <div className={styles.actions}>
-              <button
-                className={`${styles.actionBtn} ${liked ? styles.liked : ''}`}
-                onClick={toggleLike}
-                aria-label={liked ? '取消点赞' : '点赞'}
-              >
-                <svg
-                  ref={heartRef}
-                  xmlns="http://www.w3.org/2000/svg"
-                  width="24"
-                  height="24"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path
-                    d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"
-                    fill="none"
-                    stroke="currentColor"
-                  />
-                </svg>
-                <span className={styles.actionCount}>{likeCount}</span>
-              </button>
-              <button
-                className={styles.actionBtn}
-                onClick={() => {
-                  if (!user) {
-                    openLoginPrompt();
-                    return;
-                  }
-                  commentInputRef.current?.focus();
-                }}
-                aria-label="评论"
-              >
-                <MessageCircle size={24} />
-                <span className={styles.actionCount}>{comments.length}</span>
-              </button>
-              <button
-                className={`${styles.actionBtn} ${reposted ? styles.reposted : ''}`}
-                onClick={toggleRepost}
-                aria-label={reposted ? '取消转发' : '转发'}
-              >
-                {reposted ? <RepostCheck size={28} /> : <Repeat2 size={28} />}
-                {repostCount > 0 && <span className={styles.actionCount}>{repostCount}</span>}
-              </button>
-              <button
-                className={`${styles.actionBtn} ${styles.shareTooltip}`}
-                onClick={handleShare}
-                aria-label="分享"
-              >
-                <Share2 size={24} />
-                {shareCount > 0 && <span className={styles.actionCount}>{shareCount}</span>}
-                {showTooltip && <span className={styles.shareTooltipText}>已复制链接</span>}
-              </button>
-              <button
-                className={`${styles.actionBtn} ${styles.bookmarkBtn} ${bookmarked ? styles.bookmarked : ''}`}
-                onClick={toggleBookmark}
-                aria-label={bookmarked ? '取消收藏' : '收藏'}
-              >
-                <Bookmark size={24} fill={bookmarked ? 'currentColor' : 'none'} />
-              </button>
-            </div>
+            <PostDetailActions
+              liked={liked}
+              likeCount={likeCount}
+              commentsCount={comments.length}
+              reposted={reposted}
+              repostCount={repostCount}
+              shareCount={shareCount}
+              bookmarked={bookmarked}
+              showTooltip={showTooltip}
+              heartRef={heartRef}
+              onLike={toggleLike}
+              onComment={() => {
+                if (!user) {
+                  openLoginPrompt();
+                  return;
+                }
+                commentInputRef.current?.focus();
+              }}
+              onRepost={toggleRepost}
+              onShare={handleShare}
+              onBookmark={toggleBookmark}
+            />
 
             {post.close_comments ? (
               <div className={styles.commentsDisabled}>此帖子已关闭评论</div>
             ) : (
-              <>
-                {replyingTo && (
-                  <div className={styles.replyingToBar}>
-                    回复 @{replyingTo.username}
-                    <button onClick={() => setReplyingTo(null)}>取消</button>
-                  </div>
-                )}
-                <div
-                  className={styles.inputWrapper}
-                  onClick={() => {
-                    if (!user) openLoginPrompt();
-                  }}
-                >
-                  <EmojiPicker
-                    onSelect={(emoji) => setNewComment((prev) => prev + emoji)}
-                    onOpen={() => {
-                      if (!user) {
-                        openLoginPrompt();
-                        return;
-                      }
-                    }}
-                    onClose={() => {}}
-                  />
-                  <input
-                    ref={commentInputRef}
-                    className={`${styles.input}${!user ? ` ${styles.inputLocked}` : ''}`}
-                    placeholder={
-                      user
-                        ? replyingTo
-                          ? `回复 @${replyingTo.username}...`
-                          : '添加评论...'
-                        : '登录后即可评论'
-                    }
-                    value={newComment}
-                    onChange={(e) => setNewComment(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleComment()}
-                    onFocus={() => {
-                      if (!user) openLoginPrompt();
-                    }}
-                    readOnly={!user}
-                  />
-                  <button
-                    className={styles.submit}
-                    onClick={handleComment}
-                    disabled={!user || !newComment.trim() || submitting}
-                    aria-label="发送评论"
-                  >
-                    <Send size={20} />
-                  </button>
-                </div>
-              </>
+              <CommentComposer
+                isLoggedIn={!!user}
+                replyingTo={replyingTo}
+                submitting={submitting}
+                value={newComment}
+                inputRef={commentInputRef}
+                onChange={setNewComment}
+                onEmoji={(emoji) => setNewComment((prev) => prev + emoji)}
+                onSubmit={handleComment}
+                onCancelReply={() => setReplyingTo(null)}
+                onRequireLogin={openLoginPrompt}
+              />
             )}
           </div>
         </div>

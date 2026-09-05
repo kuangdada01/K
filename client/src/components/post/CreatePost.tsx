@@ -17,13 +17,13 @@
  * ============================================================
  */
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { ImagePlus, Video, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { ImagePlus, Video, X } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { useQueryClient } from '@tanstack/react-query';
-import { extractTags } from '@k/shared';
-import EmojiPicker from '../EmojiPicker';
 import ConfirmDialog from '../ui/ConfirmDialog';
+import VideoCoverEditor from './VideoCoverEditor';
+import PostDescriptionPanel from './PostDescriptionPanel';
 import { useAuth } from '../../context/AuthContext';
 import { useVoiceInRoom } from '../../context/VoiceContext';
 import { useEvent } from '../../context/CreateContext';
@@ -32,10 +32,9 @@ import { updatePostsFeed } from '../../hooks/usePostsFeed';
 import { showToast } from '../ui/Toast';
 import { useImageGridDrag } from '../../hooks/useImageGridDrag';
 import { createImagePost, createVideoPost, createVideoPostChunked } from '../../api/posts';
-import { resolveMediaUrl, IMAGE_PREVIEW_FALLBACK, fileToPreviewUrl } from '../../utils';
+import { IMAGE_PREVIEW_FALLBACK, fileToPreviewUrl } from '../../utils';
 import styles from './CreatePost.module.css';
 import composer from './PostComposer.module.css';
-import panel from './PostDescriptionPanel.module.css';
 
 export default function CreatePost() {
   const { user } = useAuth();
@@ -70,7 +69,6 @@ export default function CreatePost() {
   const [coverTime, setCoverTime] = useState(0);
   const [videoError, setVideoError] = useState(false);
   const [description, setDescription] = useState('');
-  const descriptionTags = useMemo(() => extractTags(description), [description]);
   const [submitting, setSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -547,134 +545,39 @@ export default function CreatePost() {
     );
   }
 
-  // 步骤 2: 视频封面编辑
+  // 步骤 2: 视频封面编辑（视图见 VideoCoverEditor；截帧/解码状态留在本组件）
   if (step === 2 && videoFile) {
     return (
-      <div className={`${composer.overlay}${closing ? ` ${composer.closing}` : ''}`}>
-        <div className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}>
-          <div className={composer.overlayHeader}>
-            <button className={composer.overlayBtn} data-back onClick={handleBack}>后退</button>
-            <span className={composer.overlayTitle}>选择封面</span>
-            <button className={`${composer.overlayBtn} ${composer.primary}`} onClick={() => setStep(3)}>下一步</button>
-          </div>
-          <div className={styles.coverLayout}>
-            <div className={styles.coverLeft}>
-              <div className={styles.coverPreview}>
-                {videoPreview && !videoError ? (
-                  <video
-                    key={videoPreview}
-                    ref={videoRef}
-                    src={videoPreview}
-                    onLoadedMetadata={() => {
-                      // 强制触发一次 seek 到 0.2s 避免首帧纯黑
-                      try {
-                        const v = videoRef.current;
-                        if (v && v.currentTime < 0.1) v.currentTime = 0.2;
-                      } catch {}
-                      handleVideoLoaded();
-                    }}
-                    onCanPlay={() => {
-                      try { videoRef.current?.pause(); } catch {}
-                    }}
-                    onError={handleVideoError}
-                    className={styles.coverVideo}
-                    controls
-                    preload="auto"
-                    playsInline
-                    muted
-                    autoPlay={false}
-                    style={{ background: '#000', display: 'block', width: '100%' }}
-                  />
-                ) : (
-                  <div
-                    className={styles.coverVideo}
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      background: '#1a1a1a',
-                      color: '#ccc',
-                      fontSize: 13,
-                      padding: 16,
-                      textAlign: 'center',
-                      gap: 8,
-                      border: videoError ? '1px dashed #666' : 'none',
-                    }}
-                  >
-                    {videoFile ? (
-                      <>
-                        <Video size={32} style={{ opacity: 0.6 }} />
-                        <div style={{ fontWeight: 600 }}>{videoFile.name} ({(videoFile.size/1024/1024).toFixed(1)}MB)</div>
-                        {videoError ? (
-                          <div style={{ fontSize: 12, color: '#ffb74d' }}>该视频无法预览（常见于 iPhone HEVC/MOV 或 WebView 解码限制）<br />可直接点“下一步”或手动上传封面，发布后服务端自动转码</div>
-                        ) : (
-                          <div style={{ fontSize: 12, opacity: 0.8 }}>预览加载中…（若持续黑屏请点“下一步”手动上传封面）</div>
-                        )}
-                        <button
-                          onClick={() => {
-                            // 重试：先 revoke 再重建 blob，强制 WebView 重载
-                            if (videoFile) {
-                              try { if (videoPreview) URL.revokeObjectURL(videoPreview); } catch {}
-                              const url = URL.createObjectURL(videoFile);
-                              setVideoPreview(url);
-                              setVideoError(false);
-                            }
-                          }}
-                          style={{ marginTop: 8, padding: '6px 12px', background: 'var(--accent)', color: 'var(--on-accent)', border: 'none', borderRadius: 6, fontSize: 12 }}
-                        >
-                          重试预览
-                        </button>
-                      </>
-                    ) : '无预览'}
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className={styles.coverRight}>
-              <div className={styles.coverSection}>
-                <div className={styles.coverSectionTitle}>上传封面图片</div>
-                <button
-                  className={styles.uploadBtn}
-                  onClick={() => coverInputRef.current?.click()}
-                  style={{ width: '100%' }}
-                >
-                  <ImagePlus size={18} />
-                  从电脑选择
-                </button>
-                {videoCoverPreview && (
-                  <img src={videoCoverPreview} alt="封面预览" className={styles.coverImage} />
-                )}
-                <input ref={coverInputRef} type="file" accept="image/jpeg,image/jpg,image/png,image/gif,image/webp,image/avif,image/heic,image/heif" style={{ display: 'none' }} onChange={handleCoverFileSelect} />
-              </div>
-              <div className={styles.coverSection}>
-                <div className={styles.coverSectionTitle}>或从视频截取</div>
-                <canvas ref={canvasRef} style={{ display: 'none' }} />
-                <div className={styles.coverSliderRow}>
-                  <input
-                    type="range"
-                    min="0"
-                    max={videoDuration || 1}
-                    step="0.1"
-                    value={coverTime}
-                    onChange={handleCoverTimeChange}
-                    className={styles.coverSlider}
-                  />
-                  <span className={styles.coverTime}>{coverTime.toFixed(1)}s</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {showDiscardConfirm && (
-          <ConfirmDialog
-            message="确定要放弃此次分享吗？"
-            onConfirm={confirmDiscard}
-            onCancel={() => setShowDiscardConfirm(false)}
-          />
-        )}
-      </div>
+      <VideoCoverEditor
+        closing={closing}
+        videoFile={videoFile}
+        videoPreview={videoPreview}
+        videoError={videoError}
+        videoCoverPreview={videoCoverPreview}
+        videoDuration={videoDuration}
+        coverTime={coverTime}
+        videoRef={videoRef}
+        canvasRef={canvasRef}
+        coverInputRef={coverInputRef}
+        onVideoLoaded={handleVideoLoaded}
+        onVideoError={handleVideoError}
+        onCoverTimeChange={handleCoverTimeChange}
+        onCoverFileSelect={handleCoverFileSelect}
+        onRetryPreview={() => {
+          // 重试：先 revoke 再重建 blob，强制 WebView 重载
+          if (videoFile) {
+            try { if (videoPreview) URL.revokeObjectURL(videoPreview); } catch {}
+            const url = URL.createObjectURL(videoFile);
+            setVideoPreview(url);
+            setVideoError(false);
+          }
+        }}
+        onBack={handleBack}
+        onNext={() => setStep(3)}
+        showDiscardConfirm={showDiscardConfirm}
+        onDiscardConfirm={confirmDiscard}
+        onDiscardCancel={() => setShowDiscardConfirm(false)}
+      />
     );
   }
 
@@ -755,70 +658,19 @@ export default function CreatePost() {
             )}
           </div>
         </div>
-        <div className={panel.editRight}>
-          <div className={panel.user}>
-            {user?.avatar ? (
-              <img src={resolveMediaUrl(user.avatar) || user.avatar} alt="" className={panel.avatar} />
-            ) : (
-              <div className={panel.avatarPlaceholder}>{user?.username?.charAt(0).toUpperCase()}</div>
-            )}
-            <span className={panel.username}>{user?.username}</span>
-          </div>
-          <div className={panel.descWrapper}>
-            <textarea
-              ref={textareaRef}
-              className={panel.textarea}
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              maxLength={2000}
-              autoFocus
-            />
-            {descriptionTags.length > 0 && (
-              <div className={panel.tagPreview}>
-                {descriptionTags.map(tag => (
-                  <span key={tag} className={panel.tagChip}>#{tag}</span>
-                ))}
-              </div>
-            )}
-            <div className={panel.descFooter}>
-              <EmojiPicker
-                onSelect={(emoji) => setDescription(prev => prev + emoji)}
-                onSelected={() => {
-                  if (textareaRef.current) {
-                    textareaRef.current.focus();
-                    const len = textareaRef.current.value.length;
-                    textareaRef.current.setSelectionRange(len, len);
-                  }
-                }}
-                onOpen={() => textareaRef.current?.blur()}
-                onClose={() => textareaRef.current?.focus()}
-              />
-              <span className={panel.charCount}>{description.length}/2000</span>
-            </div>
-          </div>
-          <div className={panel.advanced}>
-            <button className={panel.advancedToggle} onClick={() => setShowAdvanced(v => !v)}>
-              <span>高级设置</span>
-              {showAdvanced ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-            </button>
-            {showAdvanced && (
-              <div className={panel.advancedOptions}>
-                <label className={panel.toggleLabel}>
-                  <span>关闭评论</span>
-                  <div className={`${panel.toggle} ${closeComments ? panel.on : ''}`} onClick={() => setCloseComments(v => !v)}>
-                    <div className={panel.toggleKnob} />
-                  </div>
-                </label>
-                <label className={panel.toggleLabel}>
-                  <span>置顶</span>
-                  <div className={`${panel.toggle} ${pinned ? panel.on : ''}`} onClick={() => setPinned(v => !v)}>
-                    <div className={panel.toggleKnob} />
-                  </div>
-                </label>
-              </div>
-            )}
-          </div>
-        </div>
+        <PostDescriptionPanel
+          user={user}
+          description={description}
+          onChange={setDescription}
+          onEmoji={(emoji) => setDescription(prev => prev + emoji)}
+          textareaRef={textareaRef}
+          showAdvanced={showAdvanced}
+          onToggleAdvanced={() => setShowAdvanced(v => !v)}
+          closeComments={closeComments}
+          onCloseCommentsChange={setCloseComments}
+          pinned={pinned}
+          onPinnedChange={setPinned}
+        />
       </div>
       </div>
     </div>
