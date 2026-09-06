@@ -18,7 +18,7 @@
 - **Axios** — HTTP 请求（拦截器统一错误处理）
 - **CSS Modules + 设计令牌** — 组件级样式隔离，亮/暗双主题
 - **Lucide React** — 图标库
-- **Capacitor 8** — Android 原生打包
+- **Capacitor 8** — Android 原生打包（Gradle 9.1 + AGP 8.13，支持 Java 25 构建）
 - **Vitest + Testing Library** — 单元测试（`8 文件 50 用例`：hooks 乐观更新/回滚、SSE 票据连接/退避重连/单例分发、评论树、事件总线等）
 
 ### 后端（server）
@@ -34,7 +34,7 @@
 - **pino** — 结构化日志
 - **nodemailer** — 邮箱验证码
 - **优雅停机** — SIGTERM 后断开 WS/SSE、等存量请求收尾（10 秒兜底），PM2 reload 无断崖
-- **Vitest** — 单元测试（`server/test`，16 文件 100 用例；全部注入 `:memory:` 库，真实 k.db 零接触）
+- **Vitest** — 单元测试（`server/test`，17 文件 101 用例；全部注入 `:memory:` 库，真实 k.db 零接触）
 
 ### 共享（shared）
 
@@ -44,8 +44,8 @@
 
 - 三包结构（shared / server / client），根目录统一脚本
 - **ESLint + Prettier + EditorConfig** — 代码规范（Prettier 已纳入 CI 门禁；`npm run format` 修格式、`format:check` 检查）
-- **GitHub Actions CI** — push 自动执行 `install → prettier → build → lint → vitest（双端）→ Playwright e2e`，另有并行 Docker job 验证镜像构建 + 容器健康检查冒烟；e2e 失败自动上传报告产物
-- **Dockerfile** — 一键容器化（非 root 运行 + 健康检查 + 数据目录预建，数据库文件走挂载或 DB_PATH）
+- **GitHub Actions CI** — push 自动执行 `install → prettier → build → lint → vitest（双端）→ Playwright e2e`，另有并行 Docker job 验证镜像构建 + 容器健康检查冒烟；e2e 失败自动上传报告产物；同分支新推送自动取消在跑的旧 CI（省排队与额度）
+- **Dockerfile** — 一键容器化（非 root 运行 + 健康检查 + 数据目录预建，数据库文件走挂载或 DB_PATH；运行阶段为 shared 单独装生产依赖，规避 file: 依赖不携带子包 node_modules 导致的 MODULE_NOT_FOUND）
 - **Playwright** — E2E 测试（`e2e/`：smoke 只读公开流程 + b1b2 回归 + write-path 真实写路径——注册→登录→发帖→点赞→评论，跑在 DB_PATH 指向的独立测试库上）
 
 ---
@@ -71,7 +71,7 @@ k/
 │   │   ├── lib/                 # 纯函数（scroll/comments）
 │   │   ├── pages/               # 页面级组件（Home/Explore/Profile/Admin/Books...）
 │   │   ├── state/               # queryClient、mitt 事件总线、交互缓存
-│   │   ├── voice/               # VoiceSession 及子系统（sdp/denoiser/qualityMonitor/recording...）
+│   │   ├── voice/               # VoiceSession 及子系统（types/sdp/denoiser/qualityMonitor + recorder/recording/rnnoise/share）
 │   │   └── styles/              # global.css + tokens（其余已模块化）
 │   ├── android/                 # Capacitor Android 工程
 │   ├── scripts/                 # 一次性验证脚本（b5-verify）
@@ -179,6 +179,20 @@ npm run build       # shared → server → client 依次构建
 cd server && npm start
 ```
 
+### 6. 构建 Android APK
+
+```bash
+npm run build                          # 构建 Web 产物（APK 内嵌的就是这份 dist）
+cd client && npx cap sync android      # 同步 Web 资源与插件到 Android 工程
+cd android && ./gradlew.bat assembleRelease   # Windows；macOS/Linux 用 ./gradlew
+```
+
+- 产物：`client/android/app/build/outputs/apk/release/app-release.apk`
+- 环境：Android SDK（`client/android/local.properties` 的 `sdk.dir`，不入库）+ JDK。Gradle 9.1 起支持 Java 25，Android Studio 自带 JBR 25 可直接构建（旧 JDK 21 亦可）
+- 签名：`client/android/keystore.properties`（storePassword/keyPassword，不入库）+ `app/k-release.keystore`
+- 版本：改 `client/android/app/build.gradle` 的 `versionCode`/`versionName`，并同步 `.env` 的 `APP_VERSION`/`APP_APK_URL`/`APP_UPDATE_NOTES`（App 内更新提示以 `/api/app/version` 返回为准，服务器版本须高于已安装版本才会弹窗）
+- 发布：`deploy.ps1` 检测到新 APK 会自动上传到远端 `client/dist/apk/`（大小核验），并保留最近 5 个版本、清理更旧
+
 ---
 
 ## 部署
@@ -210,7 +224,7 @@ docker run -p 3000:3000 \
 - 首次部署新服务器：`deploy-sftp.py` 默认校验本机 `~/.ssh/known_hosts` 中的主机指纹（防中间人截获密码），未知主机会被拒绝；确认网络可信后可加 `--trust-host` 豁免一次，或先 `ssh-keyscan -p <端口> <IP> >> ~/.ssh/known_hosts`。
 - **必须用 PowerShell 7（`pwsh`）**：`deploy.ps1` 等脚本含 UTF-8 无 BOM 中文内容，Windows 自带的 PowerShell 5.1（`powershell`）按 GBK 解码会报语法错误（如意外的标记 `)`）。
 - 目标目录 `/var/www/k`；PM2 进程 `k-server`；nginx 站点 `sites-enabled/k`（默认站反向代理到 `127.0.0.1:3000`）；共享包链接 `server/node_modules/@k/shared`。
-- 流程：`npm run build` → 打包 dist/books/.env（**不含 uploads**，防覆盖生产用户数据）→ SFTP 上传 → 远端解压、重建 `@k/shared` 链接、`npm install --omit=dev`、`pm2 delete`+`start`+`save` → 部署后自动校验（首页/health 200、dist 时间戳、node_modules 无外链、nginx root 仅指向 `/var/www/k`）。
+- 流程：`npm run build` → 打包 dist/books/.env（**不含 uploads**，防覆盖生产用户数据）→ SFTP 上传 → 远端解压、重建 `@k/shared` 链接、`npm install --omit=dev`、`pm2 delete`+`start`+`save` → 新版 APK 单独上传（大小核验，保留最近 5 个、清理更旧）→ 部署后自动校验（首页/health 200、dist 时间戳、node_modules 无外链、nginx root 仅指向 `/var/www/k`）。
 - PM2 重启时服务端执行优雅停机（SIGTERM → 断开语音 WS 与 SSE、等存量请求收尾，10 秒兜底强退），重启窗口比瞬时 kill 稍长属正常现象。
 
 #### 轻量部署（仅前端变更时，推荐）
