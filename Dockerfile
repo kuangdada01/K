@@ -8,7 +8,8 @@
 # 1. 运行阶段以非 root 用户（app）运行；
 # 2. 依赖安装先于源码 COPY（只拷 package*.json 装依赖），
 #    源码变更不再使依赖层缓存全部失效；
-# 3. 运行阶段只拷 shared 的 dist + package.json（不再携带 dev 依赖）。
+# 3. 运行阶段只拷 shared 的 dist + 清单（不含 dev 依赖），并为 shared
+#    单独 npm ci 装生产依赖（E5：file: 软链不会带出 shared 自身的依赖）。
 # ============================================================
 
 # ---------- 构建阶段 ----------
@@ -41,15 +42,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certi
 WORKDIR /app
 ENV NODE_ENV=production
 
-# 只拷 shared 的产物与清单（运行时 npm ci 会按 file: 依赖装 @k/shared，
-# 不需要 shared 下的 dev 依赖/源码）
+# 只拷产物与清单（不需要 dev 依赖/源码）
 COPY --from=build /app/shared/dist ./shared/dist
 COPY --from=build /app/shared/package.json ./shared/package.json
+COPY --from=build /app/shared/package-lock.json ./shared/package-lock.json
 COPY --from=build /app/server/package.json ./server/package.json
 COPY --from=build /app/server/package-lock.json ./server/package-lock.json
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
 
+# E5 修复：shared 的 dist 运行时要 require('zod') 等生产依赖，而 server 的
+# npm ci（file:../shared 只建软链，不装 shared 自身依赖）不会生成
+# /app/shared/node_modules，容器内启动会 MODULE_NOT_FOUND——须为 shared 单独装生产依赖。
+RUN cd shared && npm ci --omit=dev --no-audit --no-fund
 RUN cd server && npm ci --omit=dev --no-audit --no-fund
 
 # E4：非 root 运行
