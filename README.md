@@ -45,7 +45,7 @@
 - 三包结构（shared / server / client），根目录统一脚本
 - **ESLint + Prettier + EditorConfig** — 代码规范（Prettier 已纳入 CI 门禁；`npm run format` 修格式、`format:check` 检查）
 - **GitHub Actions CI** — push 自动执行 `install → prettier → build → lint → vitest（双端）→ Playwright e2e`，另有并行 Docker job 验证镜像构建 + 容器健康检查冒烟；e2e 失败自动上传报告产物
-- **Dockerfile** — 一键容器化（非 root 运行 + 健康检查 + k.db 预建）
+- **Dockerfile** — 一键容器化（非 root 运行 + 健康检查 + 数据目录预建，数据库文件走挂载或 DB_PATH）
 - **Playwright** — E2E 测试（`e2e/`：smoke 只读公开流程 + b1b2 回归 + write-path 真实写路径——注册→登录→发帖→点赞→评论，跑在 DB_PATH 指向的独立测试库上）
 
 ---
@@ -187,12 +187,19 @@ cd server && npm start
 
 ```bash
 docker build -t k .
-# 生产建议显式挂载 uploads 与数据库（k.db/books 已声明 VOLUME，不挂载则为匿名卷，容器删除即失）
+# 不挂载直接跑：uploads 等数据目录为匿名卷（容器删除即失），k.db 落在容器可写层（删容器才丢）
+docker run -p 3000:3000 k
+
+# 生产建议显式挂载（数据目录 + 数据库二选一）：
 docker run -p 3000:3000 \
   -v $(pwd)/server/uploads:/app/server/uploads \
-  -v $(pwd)/server/k.db:/app/server/k.db \
   -v $(pwd)/server/books:/app/server/books \
+  -e DB_PATH=/data/k.db -v $(pwd)/server:/data \
   k
+# 或用文件挂载：-v $(pwd)/server/k.db:/app/server/k.db
+# 注意：数据库文件不能声明为 VOLUME——新版 Docker/containerd 拒绝把卷挂到已存在的文件上
+# （"cannot mount volume over existing file"，docker run 退出码 125），
+# 因此 Dockerfile 只对 uploads/uploads_private/books 三个目录声明 VOLUME
 ```
 
 ### 传统部署（当前生产方式）
