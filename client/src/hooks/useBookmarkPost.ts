@@ -9,6 +9,7 @@ import { useCallback, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBookmark } from '../state/cache';
 import { events } from '../state/events';
+import { showToast } from '../components/ui/Toast';
 import * as postsApi from '../api/posts';
 
 export function useBookmarkPost(postId: number) {
@@ -34,6 +35,7 @@ export function useBookmarkPost(postId: number) {
     } catch {
       setBookmarked(wasBookmarked);
       setBookmarkedCache(postId, wasBookmarked);
+      showToast('收藏失败，请重试');
     }
   }, [bookmarked, user, postId, openLoginPrompt, setBookmarkedCache]);
 

@@ -11,6 +11,7 @@ import fs from 'fs';
 import sharp from 'sharp';
 import { logger } from './logger';
 import { convertHeicInWorker } from './heicPool';
+import { parseImageUrlArray } from './file';
 
 /**
  * 解析帖子图片URL（JSON字符串 → 数组）
@@ -20,13 +21,7 @@ import { convertHeicInWorker } from './heicPool';
  * @returns 图片URL数组
  */
 export function parseImageUrls(imageUrl: string): string[] {
-  try {
-    const parsed = JSON.parse(imageUrl);
-    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    return [imageUrl];
-  } catch {
-    return [imageUrl];
-  }
+  return parseImageUrlArray(imageUrl);
 }
 
 /**

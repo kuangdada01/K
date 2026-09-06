@@ -959,7 +959,7 @@ export class VoiceSession {
     analyser.getByteTimeDomainData(buffer);
     let sum = 0;
     for (let i = 0; i < buffer.length; i++) {
-      const d = (buffer[i] - 128) / 128;
+      const d = (buffer[i]! - 128) / 128;
       sum += d * d;
     }
     return Math.sqrt(sum / buffer.length);
@@ -1321,7 +1321,7 @@ export class VoiceSession {
     try {
       const params = sender.getParameters();
       if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-      const enc = params.encodings[0];
+      const enc = params.encodings[0]!;
       enc.maxBitrate = preset.maxBitrate;
       // 不设 minBitrate：实测 BWE 对屏幕共享采用内容自适应（静态内容自动压低、
       // 高动态自动爬升），minBitrate 既不生效也无必要，设了反而可能浪费 mesh 上行

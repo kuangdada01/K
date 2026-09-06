@@ -59,7 +59,7 @@ function voiceAuth(req: Request, res: Response, next: () => void): void {
   const authHeader = req.headers.authorization;
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    const live = verifyLiveToken(authHeader.split(' ')[1]);
+    const live = verifyLiveToken(authHeader.slice('Bearer '.length));
     if (!live) {
       res.status(401).json({ error: 'Invalid token' });
       return;
@@ -143,18 +143,29 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const { name, description } = req.body;
     const user = req.user!;
+    // 每个创建者（登录用户或访客 IP）同时持有的房间数上限：访客创建不设限的话，
+    // 脚本可刷出海量空房间撑爆列表（房间无 TTL 自动清理，靠该上限封顶）
+    const MAX_ROOMS_PER_CREATOR = 5;
     let row: VoiceRoomRow;
     if (user.id > 0) {
+      if (voiceRepo.countRoomsByCreatorId(user.id) >= MAX_ROOMS_PER_CREATOR) {
+        throw new AppError(429, '你创建的房间太多了，请先删除不需要的房间');
+      }
       const safe = getSafeUser(user.id);
       row = voiceRepo.createRoom(user.id, name, description ?? '', {
         creatorName: safe?.username ?? user.username,
         creatorAvatar: safe?.avatar ?? null,
       });
     } else {
+      const guestIp = (req as VoiceAuthRequest).voiceGuestIp;
+      if (!guestIp) throw new AppError(401, '认证失败');
+      if (voiceRepo.countRoomsByCreatorIp(guestIp) >= MAX_ROOMS_PER_CREATOR) {
+        throw new AppError(429, '你创建的房间太多了，请先删除不需要的房间');
+      }
       row = voiceRepo.createRoom(user.id, name, description ?? '', {
         creatorName: user.username,
         creatorAvatar: null,
-        creatorIp: (req as VoiceAuthRequest).voiceGuestIp,
+        creatorIp: guestIp,
       });
     }
     res.status(201).json({ room: { ...voiceRepo.toVoiceRoom(row), participantCount: 0 } });
@@ -203,8 +214,8 @@ router.get(
     const afterId = parseCursor(req.query.after_id, 'after_id');
 
     const { messages, has_more } = voiceChatRepo.listRoomMessages(roomId, {
-      beforeId,
-      afterId,
+      ...(beforeId !== undefined ? { beforeId } : {}),
+      ...(afterId !== undefined ? { afterId } : {}),
       limit,
     });
     res.json({ messages, has_more });

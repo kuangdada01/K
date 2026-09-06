@@ -22,19 +22,18 @@ export function applyOpusPreferences(sdp: string, musicMode: boolean): string {
   const opusPayloads: string[] = [];
   for (const line of lines) {
     const m = line.match(/^a=rtpmap:(\d+)\s+opus\/48000/i);
-    if (m && !opusPayloads.includes(m[1])) opusPayloads.push(m[1]);
+    if (m && !opusPayloads.includes(m[1]!)) opusPayloads.push(m[1]!);
   }
   if (opusPayloads.length === 0) return sdp;
   // 对每条 opus 的 fmtp 追加参数；无 fmtp 行的插到其 rtpmap 之后
   for (let i = 0; i < lines.length; i++) {
-    const rtp = lines[i].match(/^a=rtpmap:(\d+)\s+opus\/48000/i);
-    if (!rtp || !opusPayloads.includes(rtp[1])) continue;
-    const payload = rtp[1];
+    const rtp = lines[i]!.match(/^a=rtpmap:(\d+)\s+opus\/48000/i);
+    if (!rtp || !opusPayloads.includes(rtp[1]!)) continue;
+    const payload = rtp[1]!;
     const fmtpIdx = lines.findIndex((l, j) => j > i && l.startsWith(`a=fmtp:${payload} `));
     if (fmtpIdx >= 0) {
       const prefix = `a=fmtp:${payload} `;
-      const kept = lines[fmtpIdx]
-        .slice(prefix.length)
+      const kept = lines[fmtpIdx]!.slice(prefix.length)
         .split(';')
         .map((p) => p.trim())
         .filter((p) => p && !/^(useinbandfec|usedtx|maxaveragebitrate|stereo)=/i.test(p));

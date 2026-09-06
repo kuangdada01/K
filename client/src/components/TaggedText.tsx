@@ -30,8 +30,9 @@ export default function TaggedText({ text, className }: TaggedTextProps) {
       if (index > lastIndex) {
         result.push({ content: text.slice(lastIndex, index) });
       }
-      const clickable = match[1].length <= MAX_TAG_LENGTH;
-      result.push(clickable ? { content: match[0], tag: match[1] } : { content: match[0] });
+      const tag = match[1] ?? '';
+      const clickable = tag.length <= MAX_TAG_LENGTH;
+      result.push(clickable ? { content: match[0], tag } : { content: match[0] });
       lastIndex = index + match[0].length;
     }
     if (lastIndex < text.length) {

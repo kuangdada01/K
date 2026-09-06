@@ -40,14 +40,29 @@ export function toVoiceRoom(row: VoiceRoomRow): VoiceRoom {
   return { ...rest, creator_username: creator_name, participantCount: 0 };
 }
 
-/** 全部房间（列表按在线人数/创建时间排序由路由层处理） */
+/** 全部房间（列表按在线人数/创建时间排序由路由层处理；LIMIT 封顶防无界增长） */
 export function listRooms(db: Database = getDb()): VoiceRoomRow[] {
   return db
     .prepare(
       `SELECT ${ROOM_COLUMNS} FROM voice_rooms
-       ORDER BY created_at DESC`
+       ORDER BY created_at DESC LIMIT 200`
     )
     .all() as VoiceRoomRow[];
+}
+
+/** 创建者（登录用户）名下已有房间数——创建频控用 */
+export function countRoomsByCreatorId(creatorId: number, db: Database = getDb()): number {
+  return (
+    db.prepare('SELECT COUNT(*) AS c FROM voice_rooms WHERE creator_id = ?').get(creatorId) as {
+      c: number;
+    }
+  ).c;
+}
+
+/** 创建者（访客按 IP 锚点）名下已有房间数——创建频控用 */
+export function countRoomsByCreatorIp(ip: string, db: Database = getDb()): number {
+  return (db.prepare('SELECT COUNT(*) AS c FROM voice_rooms WHERE creator_ip = ?').get(ip) as { c: number })
+    .c;
 }
 
 export function getRoomById(roomId: number, db: Database = getDb()): VoiceRoomRow | undefined {

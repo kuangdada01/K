@@ -119,7 +119,7 @@ export default function EditPost() {
   const handleRemoveImage = (index: number) => {
     setImages((prev) => {
       const item = prev[index];
-      if (item.isNew) {
+      if (item?.isNew) {
         URL.revokeObjectURL(item.url);
       }
       return prev.filter((_, i) => i !== index);
@@ -219,6 +219,7 @@ export default function EditPost() {
               <div className={composer.grid}>
                 {displayOrder.map((i) => {
                   const img = images[i];
+                  if (!img) return null;
                   return (
                     <div
                       key={`${img.url}-${i}`}

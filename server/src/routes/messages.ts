@@ -289,8 +289,8 @@ router.delete(
  *
  * 认证: 必须
  *
- * 删除双方之间的所有消息记录
- * 注意: 不删除磁盘上的图片文件
+ * 删除双方之间的所有消息记录，并同步删除这些消息引用的磁盘私密图片
+ * （引用消息共享同一物理文件；文件删除失败最多留下孤儿文件，不影响业务）
  */
 router.delete(
   '/:userId',
@@ -299,7 +299,12 @@ router.delete(
     const currentUserId = req.user!.id;
     const otherUserId = parseInt(req.params.userId as string);
 
-    messageRepo.clearConversation(currentUserId, otherUserId);
+    // 事务提交（DB 行已删）后清理磁盘私密图片：引用消息共享同一物理文件，
+    // 行全删后这些文件必成孤儿，不清会永久累积（safeDeleteFile 限定 uploads_private 内）
+    const imageNames = messageRepo.clearConversation(currentUserId, otherUserId);
+    for (const name of imageNames) {
+      safeDeleteFile(`/uploads_private/${path.basename(name)}`, 'uploads_private');
+    }
 
     res.json({ message: '消息已清除' });
   })

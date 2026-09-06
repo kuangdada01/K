@@ -108,7 +108,7 @@ export default function HomePage() {
     if (!el) return;
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
+        if (entries[0]?.isIntersecting && hasNextPage && !isFetchingNextPage) {
           fetchNextPage();
         }
       },
@@ -287,7 +287,7 @@ export default function HomePage() {
     setProfileUserId(userId);
   }, []);
 
-  /** 推荐卡片关注（静默失败，与原实现一致） */
+  /** 推荐卡片关注 */
   const handleRecommendFollow = async (u: RecommendUser) => {
     if (!user) {
       openLoginPrompt();
@@ -306,7 +306,9 @@ export default function HomePage() {
         });
       }, 400);
       showToast('ヾ(≧▽≦*)o关注成功！');
-    } catch {}
+    } catch {
+      showToast('关注失败，请重试');
+    }
   };
 
   return (

@@ -33,9 +33,20 @@ router.get(
     const postId = parseInt(req.params.id as string);
     const userId = req.user?.id;
 
-    const comments = commentRepo.listComments(postId, userId);
-
-    res.json({ comments });
+    // 分页续拉：after_id = 上一页最后一条顶级评论 id（升序游标）
+    const afterIdRaw = parseInt(req.query.after_id as string);
+    const limitRaw = parseInt(req.query.limit as string);
+    if (!Number.isInteger(afterIdRaw) && !Number.isInteger(limitRaw)) {
+      // 无参保持旧契约：全量返回
+      const comments = commentRepo.listComments(postId, userId);
+      res.json({ comments });
+      return;
+    }
+    const paged = commentRepo.listCommentsPaged(postId, userId, {
+      ...(Number.isInteger(afterIdRaw) ? { topLevelAfterId: afterIdRaw } : {}),
+      topLevelLimit: Number.isInteger(limitRaw) ? limitRaw : 10,
+    });
+    res.json(paged);
   })
 );
 

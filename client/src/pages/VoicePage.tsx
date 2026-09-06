@@ -28,7 +28,7 @@ import {
   Eraser, // 清空聊天记录
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { useVoice, useVoiceRealtime } from '../context/VoiceContext';
+import { useVoice, useVoiceChat, useVoiceRealtime } from '../context/VoiceContext';
 import { listVoiceRooms, createVoiceRoom, deleteVoiceRoom, clearVoiceRoomMessages } from '../api/voice';
 import { showToast } from '../components/ui/Toast';
 import { getApiErrorMessage } from '../api/http';
@@ -60,6 +60,7 @@ function detectSpeakLang(text: string): 'zh' | 'en' {
 export default function VoicePage() {
   const { user } = useAuth();
   const voice = useVoice();
+  const chat = useVoiceChat();
   const realtime = useVoiceRealtime();
 
   const [rooms, setRooms] = useState<VoiceRoom[]>([]);
@@ -159,13 +160,13 @@ export default function VoicePage() {
       localStorage.setItem(CHAT_TTS_KEY, next ? '1' : '0');
       if (next) {
         // 打开瞬间：把开关前最后一条实时消息标记为已读，避免补读旧消息
-        lastReadMsgIdRef.current = voice.liveMessage?.id ?? null;
+        lastReadMsgIdRef.current = chat.liveMessage?.id ?? null;
       } else {
         stopTTS();
       }
       return next;
     });
-  }, [voice.liveMessage, stopTTS]);
+  }, [chat.liveMessage, stopTTS]);
 
   // 语音包列表异步加载（Chrome 首次 getVoices 可能为空，监听 voiceschanged）
   useEffect(() => {
@@ -184,8 +185,8 @@ export default function VoicePage() {
 
   // 自动朗读：开关开启 + 有新实时消息 + 非自己发的 → 播报「用户名说内容」
   useEffect(() => {
-    if (!ttsEnabled || !voice.liveMessage) return;
-    const m = voice.liveMessage;
+    if (!ttsEnabled || !chat.liveMessage) return;
+    const m = chat.liveMessage;
     if (m.id === lastReadMsgIdRef.current) return;
     lastReadMsgIdRef.current = m.id;
     // 自己的消息不自动朗读（避免与麦克风回声串扰；手动点击仍可朗读）
@@ -193,7 +194,7 @@ export default function VoicePage() {
     if (self && m.sender_id === self.userId) return;
     // 异步派发朗读（speakMessage 内部会 setState 高亮，避免在 effect 内同步触发级联渲染）
     queueMicrotask(() => speakMessage(m.id, `${m.username}说${m.content}`, detectSpeakLang(m.content)));
-  }, [ttsEnabled, voice.liveMessage, voice.participants, speakMessage]);
+  }, [ttsEnabled, chat.liveMessage, voice.participants, speakMessage]);
 
   // 退出房间 / 组件卸载：立即停止朗读
   useEffect(() => {
@@ -299,7 +300,7 @@ export default function VoicePage() {
   const handleSendChat = () => {
     const content = chatDraft;
     if (!content.trim()) return;
-    if (voice.sendChat(content)) {
+    if (chat.sendChat(content)) {
       setChatDraft('');
       // 自己发完立即回到底部等待新消息
       autoScrollRef.current = true;
@@ -320,7 +321,7 @@ export default function VoicePage() {
   };
 
   // 新消息到达时自动滚到底部（用户手动上翻查看历史时不打扰）
-  const chatMessages = voice.messages;
+  const chatMessages = chat.messages;
   useEffect(() => {
     const el = chatListRef.current;
     if (el && autoScrollRef.current) el.scrollTop = el.scrollHeight;
@@ -414,13 +415,13 @@ export default function VoicePage() {
               <div className={styles.chatEmpty}>还没有消息，说点什么吧～</div>
             ) : (
               <>
-                {voice.chatHasMore && (
+                {chat.chatHasMore && (
                   <button
                     className={styles.chatLoadMore}
-                    onClick={voice.loadMoreChat}
-                    disabled={voice.chatLoadingMore}
+                    onClick={chat.loadMoreChat}
+                    disabled={chat.chatLoadingMore}
                   >
-                    {voice.chatLoadingMore ? '加载中…' : '加载更早的消息'}
+                    {chat.chatLoadingMore ? '加载中…' : '加载更早的消息'}
                   </button>
                 )}
                 {chatMessages.map((m) => {

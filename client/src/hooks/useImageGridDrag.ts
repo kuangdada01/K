@@ -64,7 +64,7 @@ export function useImageGridDrag<T>(setItems: React.Dispatch<React.SetStateActio
       setItems((prev) => {
         if (from >= prev.length) return prev;
         const next = [...prev];
-        const [item] = next.splice(from, 1);
+        const item = next.splice(from, 1)[0]!;
         next.splice(target, 0, item);
         return next;
       });

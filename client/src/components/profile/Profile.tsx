@@ -155,12 +155,15 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
 
   useEffect(() => {
     if (!userId) return;
+    // 取消标志：快速切换 userId 时丢弃慢到的旧响应，避免旧用户资料覆盖新页面
+    let cancelled = false;
     const loadProfile = async () => {
       try {
         const [userRes, postsRes] = await Promise.all([
           api.get(`/users/${userId}`),
           api.get(`/users/${userId}/posts`),
         ]);
+        if (cancelled) return;
         setProfileUser(userRes.data);
         setPosts(postsRes.data.posts);
         setUsername(userRes.data.username);
@@ -175,15 +178,19 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
             setIsFollowing(cached);
           } else {
             const statusRes = await api.get(`/friends/status/${userId}`);
+            if (cancelled) return;
             setIsFollowing(statusRes.data.is_following);
             setFollowStatus(userId, statusRes.data.is_following);
           }
         }
       } catch {
-        showToast('加载失败');
+        if (!cancelled) showToast('加载失败');
       }
     };
     loadProfile();
+    return () => {
+      cancelled = true;
+    };
   }, [userId, currentUser, getFollowStatus, setFollowStatus]);
 
   // 切到收藏/转发标签时进入加载态（渲染期 prev 值模式，替代 effect 内同步 setState）
@@ -249,7 +256,9 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
         setFollowersCount(res.followers_count);
         showToast('ヾ(≧▽≦*)o关注成功！');
       }
-    } catch {}
+    } catch {
+      showToast('操作失败，请重试');
+    }
   };
 
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -273,7 +282,9 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
       });
       setProfileUser((prev) => (prev ? { ...prev, avatar: res.data.avatar } : prev));
       updateUser(res.data);
-    } catch {}
+    } catch {
+      showToast('头像上传失败，请重试');
+    }
   };
 
   const handleDeletePost = (postId: number, e: React.MouseEvent) => {
@@ -292,7 +303,9 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
       queryClient.invalidateQueries({ queryKey: postsFeedKey });
       events.emit('post:deleted', pid);
       showToast('删除成功！');
-    } catch {}
+    } catch {
+      showToast('删除失败，请重试');
+    }
     setDeletePostId(null);
   };
 
@@ -329,7 +342,9 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
     try {
       const res = await api.get('/users/me/private-images');
       setPrivateImages(res.data.images);
-    } catch {}
+    } catch {
+      showToast('私密图片加载失败');
+    }
   };
 
   const handleAddPrivateImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -349,7 +364,8 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
 
   const handleRemovePrivateNewFile = (index: number) => {
     setPrivateNewFiles((prev) => {
-      URL.revokeObjectURL(prev[index].preview);
+      const f = prev[index];
+      if (f) URL.revokeObjectURL(f.preview);
       return prev.filter((_, i) => i !== index);
     });
   };

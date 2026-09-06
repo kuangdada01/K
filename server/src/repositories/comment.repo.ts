@@ -56,6 +56,71 @@ export function listComments(postId: number, userId?: number): CommentRow[] {
   ).all(uid(userId), postId) as CommentRow[];
 }
 
+/**
+ * 分页评论列表：以「顶级评论」为一页单位（每条顶级评论连同其全部回复一起返回），
+ * 避免热帖全量拉取导致的响应膨胀。
+ * - topLevelAfterId: 升序游标，返回 id 大于该值的顶级评论（缺省从第一条开始）
+ * - topLevelLimit:   顶级评论条数上限（1-50，内部收敛）
+ * 无参的全量契约请走 listComments（旧客户端兼容）。
+ */
+export function listCommentsPaged(
+  postId: number,
+  userId: number | undefined,
+  opts: { topLevelAfterId?: number; topLevelLimit: number }
+): { comments: CommentRow[]; has_more: boolean; total: number } {
+  const limit = Math.min(Math.max(Math.trunc(opts.topLevelLimit), 1), 50);
+  const afterId = opts.topLevelAfterId;
+  const tops = (
+    afterId === undefined
+      ? stmt(
+          `
+      SELECT c.*, u.username, u.avatar,
+        (SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id) as like_count,
+        EXISTS(SELECT 1 FROM comment_likes WHERE comment_id = c.id AND user_id = ?) as liked
+      FROM comments c
+      JOIN users u ON c.user_id = u.id
+      WHERE c.post_id = ? AND c.parent_id IS NULL
+      ORDER BY c.id ASC LIMIT ?
+    `
+        ).all(uid(userId), postId, limit + 1)
+      : stmt(
+          `
+      SELECT c.*, u.username, u.avatar,
+        (SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id) as like_count,
+        EXISTS(SELECT 1 FROM comment_likes WHERE comment_id = c.id AND user_id = ?) as liked
+      FROM comments c
+      JOIN users u ON c.user_id = u.id
+      WHERE c.post_id = ? AND c.parent_id IS NULL AND c.id > ?
+      ORDER BY c.id ASC LIMIT ?
+    `
+        ).all(uid(userId), postId, afterId, limit + 1)
+  ) as CommentRow[];
+
+  const has_more = tops.length > limit;
+  const page = has_more ? tops.slice(0, limit) : tops;
+
+  // 本页顶级评论的回复一并返回（客户端 buildVisibleComments 按 parent_id 组树）
+  const replies =
+    page.length === 0
+      ? []
+      : (stmt(
+          `
+      SELECT c.*, u.username, u.avatar,
+        (SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id) as like_count,
+        EXISTS(SELECT 1 FROM comment_likes WHERE comment_id = c.id AND user_id = ?) as liked,
+        (SELECT content FROM comments WHERE id = c.parent_id) as parent_content,
+        (SELECT u2.username FROM comments pc JOIN users u2 ON u2.id = pc.user_id WHERE pc.id = c.parent_id) as parent_username
+      FROM comments c
+      JOIN users u ON c.user_id = u.id
+      WHERE c.post_id = ? AND c.parent_id IN (${page.map(() => '?').join(',')})
+      ORDER BY c.parent_id ASC, c.created_at ASC
+    `
+        ).all(uid(userId), postId, ...page.map((t) => t.id)) as CommentRow[]);
+
+  const total = count('SELECT COUNT(*) as count FROM comments WHERE post_id = ?', postId);
+  return { comments: [...page, ...replies], has_more, total };
+}
+
 /** 创建评论，返回完整评论行 */
 export function createComment(
   userId: number,

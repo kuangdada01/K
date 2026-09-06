@@ -33,7 +33,7 @@ import { useAuth } from '../context/AuthContext';
 import { showToast } from '../components/ui/Toast';
 import PostDetail from '../components/post/PostDetail';
 import ConfirmDialog from '../components/ui/ConfirmDialog';
-import api from '../api/http';
+import api, { getApiErrorMessage } from '../api/http';
 import { resolveMediaUrl, parseDbTime } from '../utils';
 import styles from './AdminPage.module.css';
 
@@ -129,7 +129,7 @@ export default function AdminPage() {
       api
         .get('/admin/users')
         .then((res) => setUsers(res.data.users))
-        .catch(() => {});
+        .catch((err) => showToast(getApiErrorMessage(err, '用户列表加载失败')));
     } else if (tab === 'posts') {
       api
         .get(`/admin/posts?page=${postPage}&limit=20`)
@@ -137,12 +137,12 @@ export default function AdminPage() {
           setPosts(res.data.posts);
           setPostTotal(res.data.totalPages);
         })
-        .catch(() => {});
+        .catch((err) => showToast(getApiErrorMessage(err, '帖子列表加载失败')));
     } else if (tab === 'announcements') {
       api
         .get('/admin/announcements')
         .then((res) => setAnnouncements(res.data.announcements))
-        .catch(() => {});
+        .catch((err) => showToast(getApiErrorMessage(err, '公告列表加载失败')));
     }
   }, [tab, postPage]);
 
@@ -150,7 +150,9 @@ export default function AdminPage() {
     try {
       const res = await api.get('/admin/announcements');
       setAnnouncements(res.data.announcements);
-    } catch {}
+    } catch (err) {
+      showToast(getApiErrorMessage(err, '公告列表加载失败'));
+    }
   }, []);
 
   const handleDeleteUser = (u: AdminUser) => {
@@ -477,7 +479,7 @@ export default function AdminPage() {
                       <td>{parseDbTime(p.created_at).toLocaleString()}</td>
                       <td>
                         <button
-                          className="${styles.actionBtn} ${styles.del}"
+                          className={`${styles.actionBtn} ${styles.del}`}
                           onClick={() => handleDeletePost(p)}
                           title="删除帖子"
                         >
@@ -600,7 +602,7 @@ export default function AdminPage() {
                       <td>{parseDbTime(a.created_at).toLocaleString()}</td>
                       <td>
                         <button
-                          className="${styles.actionBtn} ${styles.del}"
+                          className={`${styles.actionBtn} ${styles.del}`}
                           onClick={() => handleDeleteAnn(a)}
                           title="删除公告"
                         >

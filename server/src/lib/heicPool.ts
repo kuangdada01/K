@@ -63,11 +63,34 @@ function ensureTerminate(): void {
 }
 process.on('exit', ensureTerminate);
 
+/**
+ * 单次解码超时：正常解码秒级完成，超时说明 worker 卡死在同步 WASM 解码里
+ * （损坏/恶意构造的文件），无法自行恢复，只能 reject 并销毁 worker；
+ * 下一个任务经 getWorker() 重建，避免单个坏文件永久卡死整条 HEIC 链路。
+ * 销毁时 'exit' 事件会把同 worker 上其余排队任务一并 reject。
+ */
+const HEIC_DECODE_TIMEOUT_MS = 30_000;
+
 /** 在 worker 线程中把 HEIC 解码为照片 buffer，返回 JPEG Buffer */
 export function convertHeicInWorker(heicPath: string): Promise<Buffer> {
   const id = ++seq;
   return new Promise<Buffer>((resolve, reject) => {
-    pending.set(id, { resolve, reject });
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      worker?.terminate();
+      worker = null;
+      reject(new Error('HEIC 解码超时'));
+    }, HEIC_DECODE_TIMEOUT_MS);
+    pending.set(id, {
+      resolve: (b) => {
+        clearTimeout(timer);
+        resolve(b);
+      },
+      reject: (e) => {
+        clearTimeout(timer);
+        reject(e);
+      },
+    });
     getWorker().postMessage({ id, heicPath });
   });
 }

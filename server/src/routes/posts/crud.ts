@@ -10,8 +10,8 @@ import { PATHS } from '../../config';
 import { authMiddleware, optionalAuth } from '../../middleware/auth';
 import { asyncHandler, AppError } from '../../middleware/error';
 import { withImages, imageFileFilter, compressImage } from '../../lib/image';
-import { safeDeleteFile, parseImageUrlArray, deletePostMediaFiles } from '../../lib/file';
-import { pageQuerySchema, limitQuerySchema, extractTags } from '@k/shared';
+import { safeDeleteFile, safeDeleteUpload, parseImageUrlArray, deletePostMediaFiles } from '../../lib/file';
+import { pageQuerySchema, limitQuerySchema, extractTags, postTextSchema } from '@k/shared';
 import { createUploader, timestampFilename } from '../../lib/upload';
 import * as postRepo from '../../repositories/post.repo';
 import * as commentRepo from '../../repositories/comment.repo';
@@ -156,10 +156,24 @@ router.get(
       throw new AppError(404, '帖子不存在');
     }
 
-    // 获取评论列表（含父评论信息，用于显示回复关系）
-    const comments = commentRepo.listCommentsForPost(postId);
-
-    res.json({ post: withImages(post), comments });
+    // 评论加载策略：
+    // - 不带 comment_limit → 全量返回（旧客户端契约不变）
+    // - 带 comment_limit（0-50）→ 按顶级评论分页返回第一页 + 总数/是否有更多，
+    //   客户端用 /posts/:id/comments?after_id= 续拉
+    const commentLimitRaw = parseInt(req.query.comment_limit as string);
+    if (!Number.isInteger(commentLimitRaw)) {
+      const comments = commentRepo.listCommentsForPost(postId);
+      res.json({ post: withImages(post), comments });
+      return;
+    }
+    const commentLimit = Math.min(Math.max(commentLimitRaw, 0), 50) || 10;
+    const paged = commentRepo.listCommentsPaged(postId, userId, { topLevelLimit: commentLimit });
+    res.json({
+      post: withImages(post),
+      comments: paged.comments,
+      comments_has_more: paged.has_more,
+      comments_total: paged.total,
+    });
   })
 );
 
@@ -187,6 +201,17 @@ router.post(
       throw new AppError(400, '请选择图片');
     }
 
+    // multipart 文本字段校验（标题/正文长度上限）：放在压缩等磁盘副作用之前，
+    // 失败时清理 multer 已落盘的文件再返回 400，避免孤儿文件
+    const parsedText = postTextSchema.safeParse({
+      title: req.body.title || '',
+      description: req.body.description || '',
+    });
+    if (!parsedText.success) {
+      for (const f of files) safeDeleteUpload(f.path);
+      throw new AppError(400, parsedText.error.issues[0]?.message || '参数错误');
+    }
+
     // 上传后压缩（并行处理，减少响应等待；heic 会转成 jpg，以返回路径为准）
     const processedFiles = await Promise.all(
       files.map((f) => compressImage(path.join(PATHS.uploads, f.filename), { maxWidth: POST_IMAGE_MAX }))
@@ -195,8 +220,8 @@ router.post(
     // 将所有图片路径转为 JSON 数组存储
     const imageUrls = processedFiles.map((p) => `/uploads/${path.basename(p)}`);
     const imageUrl = JSON.stringify(imageUrls);
-    const title = req.body.title || '';
-    const description = req.body.description || '';
+    const title = parsedText.data.title;
+    const description = parsedText.data.description;
     const closeComments = req.body.close_comments === '1' ? 1 : 0;
     const pinned = req.body.pinned === '1' ? 1 : 0;
 
@@ -241,14 +266,30 @@ router.put(
     }
 
     const description = req.body.description;
-    const keepImages: string[] = req.body.keepImages ? JSON.parse(req.body.keepImages) : [];
-
-    // 删除不再保留的图片文件
-    const oldImages = parseImageUrlArray(post.image_url);
-    for (const url of oldImages) {
-      if (!keepImages.includes(url)) {
-        safeDeleteFile(url);
+    let keepImages: string[] = [];
+    if (req.body.keepImages) {
+      try {
+        // multipart 客户端传 JSON 字符串；JSON 客户端可能直接传数组。
+        // 不能 JSON.parse(array)——数组会被 String() 成裸串再解析失败，
+        // 或历史行为下拆成单字符数组写脏 image_url
+        const raw =
+          typeof req.body.keepImages === 'string' ? JSON.parse(req.body.keepImages) : req.body.keepImages;
+        if (!Array.isArray(raw) || raw.some((u) => typeof u !== 'string')) {
+          throw new Error('keepImages 必须是字符串数组');
+        }
+        keepImages = raw as string[];
+      } catch {
+        throw new AppError(400, 'keepImages 格式错误');
       }
+    }
+
+    // 正文长度校验（编辑不涉及标题），失败清理 multer 已落盘文件后返回 400
+    const parsedText = postTextSchema.pick({ description: true }).safeParse({
+      description: description ?? '',
+    });
+    if (!parsedText.success) {
+      for (const f of (req.files as Express.Multer.File[]) || []) safeDeleteUpload(f.path);
+      throw new AppError(400, parsedText.error.issues[0]?.message || '参数错误');
     }
 
     // 合并保留的图片和新上传的图片（新图先压缩，heic 转 jpg 后以返回路径为准）
@@ -269,6 +310,11 @@ router.put(
       }
       throw new AppError(400, '至少需要一张图片');
     }
+
+    // 待删除的旧图列表：推迟到 DB 更新成功后再物理删除。
+    // 否则后续校验/更新失败时，DB 仍指向已删除的文件，帖子图片将永久丢失。
+    const removedOldImages = parseImageUrlArray(post.image_url).filter((url) => !keepImages.includes(url));
+
     // 视频帖子保持 image_url 为 '[]'，避免存成 '["[]"]' 这种脏数据
     const finalImageUrl = isVideoPost && allImages.length === 0 ? '[]' : JSON.stringify(allImages);
 
@@ -285,7 +331,14 @@ router.put(
     });
 
     if (!updated) {
+      for (const url of newFiles) {
+        safeDeleteFile(url);
+      }
       throw new AppError(404, '帖子不存在或无权编辑');
+    }
+
+    for (const url of removedOldImages) {
+      safeDeleteFile(url);
     }
     postRepo.syncPostTags(postId, extractTags(updated.description));
 

@@ -47,6 +47,7 @@ export function useRepostPost(postId: number) {
       setReposted(wasReposted);
       setRepostCount(prevCount);
       setRepostedCache(postId, wasReposted);
+      showToast('操作失败，请重试');
     }
   }, [reposted, repostCount, user, postId, openLoginPrompt, setRepostedCache]);
 

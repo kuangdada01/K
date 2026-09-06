@@ -294,7 +294,7 @@ export class RoomRecorder {
       const ch1 = concatFloat32(this.pcmCh1Slices);
       const n = Math.min(ch0.length, ch1.length);
       const mono = new Float32Array(n);
-      for (let i = 0; i < n; i++) mono[i] = (ch0[i] + ch1[i]) / 2;
+      for (let i = 0; i < n; i++) mono[i] = (ch0[i]! + ch1[i]!) / 2;
       return mono;
     }
     return ch0;

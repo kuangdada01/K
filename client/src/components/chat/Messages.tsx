@@ -172,11 +172,23 @@ export default function Messages() {
     );
   }
 
+  // 切换会话必须清空上一会话的消息（渲染期 prev 值模式，替代 effect 内同步 setState）：
+  // pollMessages 用 mergeMessagePages 按 id 合并 prev，不清空会把旧会话消息混入新会话
+  const partnerIdNum = userId ? parseInt(userId) : null;
+  const [prevPartnerId, setPrevPartnerId] = useState<number | null>(null);
+  if (partnerIdNum !== prevPartnerId) {
+    setPrevPartnerId(partnerIdNum);
+    setMessages([]);
+  }
+
   // Load messages when partner selected + poll for new messages
   useEffect(() => {
     if (!userId) return;
     const partnerId = parseInt(userId);
     initialScrollRef.current = true;
+    // 分页游标同步重置（ref 写入允许在 effect 内）
+    messagesRef.current = [];
+    hasMoreRef.current = false;
 
     // 骨架 partner（本体已在渲染期同步）：用户名/头像异步填充
     const conv = conversations.find((c) => c.partner_id === partnerId);
@@ -481,8 +493,8 @@ export default function Messages() {
     const el = chatMessagesRef.current?.querySelector(`[data-msg-id="${msgId}"]`);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.classList.add(bubbleStyles.highlight);
-      setTimeout(() => el.classList.remove(bubbleStyles.highlight), 1500);
+      el.classList.add(bubbleStyles.highlight!);
+      setTimeout(() => el.classList.remove(bubbleStyles.highlight!), 1500);
     }
   }, []);
 

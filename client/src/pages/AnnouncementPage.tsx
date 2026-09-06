@@ -13,10 +13,11 @@
 
 import { useState, useEffect } from 'react';
 import { Megaphone, Bell } from 'lucide-react';
-import api from '../api/http';
+import api, { getApiErrorMessage } from '../api/http';
 import { Announcement } from '../types';
 import { events } from '../state/events';
 import { parseDbTime } from '../utils';
+import { showToast } from '../components/ui/Toast';
 import styles from './AnnouncementPage.module.css';
 
 export default function AnnouncementPage() {
@@ -27,7 +28,7 @@ export default function AnnouncementPage() {
     api
       .get('/announcements')
       .then((res) => setAnnouncements(res.data.announcements))
-      .catch(() => {})
+      .catch((err) => showToast(getApiErrorMessage(err, '公告加载失败')))
       .finally(() => setLoading(false));
   }, []);
 
@@ -36,7 +37,9 @@ export default function AnnouncementPage() {
       await api.put(`/announcements/${id}/read`);
       setAnnouncements((prev) => prev.map((a) => (a.id === id ? { ...a, is_read: 1 } : a)));
       events.emit('badge:changed', { source: 'ann' });
-    } catch {}
+    } catch {
+      showToast('标记已读失败');
+    }
   };
 
   if (loading) {

@@ -12,7 +12,7 @@ import { authMiddleware } from '../../middleware/auth';
 import { asyncHandler, AppError } from '../../middleware/error';
 import { compressImage, withImages, IMAGE_EXT_RE, IMAGE_MIME_RE } from '../../lib/image';
 import { safeDeleteFile } from '../../lib/file';
-import { extractTags } from '@k/shared';
+import { extractTags, postTextSchema } from '@k/shared';
 import { enqueueVideoTranscode, generateVideoCover } from '../../video';
 import multer from 'multer';
 import { createUploader, timestampFilename } from '../../lib/upload';
@@ -257,6 +257,9 @@ router.post(
     // 转码前 HEVC 等格式在部分浏览器可能暂时无法播放。
     const name = normalizeVideoToMp4(PATHS.uploadsTemp, videoFile.filename);
     enqueueVideoTranscode(path.join(PATHS.uploadsTemp, name), name);
+    // 登记属主：与分片上传同一注册表。否则 DELETE /video-temp 与 POST /video
+    // 只校验文件名格式，任何登录用户可删除/冒用他人的临时草稿视频
+    chunkUploadOwners.set(name, { userId: req.user!.id, createdAt: Date.now() });
 
     res.status(201).json({ url: `/uploads/temp/${name}` });
   })
@@ -275,6 +278,12 @@ router.delete(
     const name = path.basename(url);
     if (!TEMP_VIDEO_NAME_RE.test(name)) {
       throw new AppError(400, '无效的视频引用');
+    }
+    // 属主校验：有属主且非本人 → 拒绝。无属主（服务重启丢失登记的旧文件）放行，
+    // 由 24h TTL 清理兜底，避免把用户自己放弃发布的清理路径堵死
+    const owner = chunkUploadOwners.get(name);
+    if (owner && owner.userId !== req.user!.id) {
+      throw new AppError(403, '无权删除该临时视频');
     }
     safeDeleteFile(`/uploads/temp/${name}`, 'uploads');
     // 放弃上传：同步释放分片上传会话（文件删除后惰性回收也会兜底）
@@ -312,6 +321,16 @@ router.post(
     const coverFile = files?.cover?.[0];
     const videoUrlField = typeof req.body.video_url === 'string' ? req.body.video_url.trim() : '';
 
+    // 正文长度校验：放在文件移动/转码等副作用之前，失败清理已落盘文件再返回 400
+    const parsedText = postTextSchema.pick({ description: true }).safeParse({
+      description: typeof req.body.description === 'string' ? req.body.description : '',
+    });
+    if (!parsedText.success) {
+      if (uploadedVideo) safeDeleteFile(`/uploads/${uploadedVideo.filename}`, 'uploads');
+      if (coverFile) safeDeleteFile(`/uploads/${coverFile.filename}`, 'uploads');
+      throw new AppError(400, parsedText.error.issues[0]?.message || '参数错误');
+    }
+
     let videoUrl: string;
 
     if (videoUrlField) {
@@ -319,6 +338,11 @@ router.post(
       const name = path.basename(videoUrlField);
       if (!TEMP_VIDEO_NAME_RE.test(name)) {
         throw new AppError(400, '无效的视频引用');
+      }
+      // 属主校验：有属主且非本人 → 拒绝（防冒用他人草稿；无属主为重启前的旧文件，放行）
+      const owner = chunkUploadOwners.get(name);
+      if (owner && owner.userId !== req.user!.id) {
+        throw new AppError(403, '无权使用该临时视频');
       }
       const tempPath = path.join(PATHS.uploadsTemp, name);
       const finalPath = path.join(PATHS.uploads, name);
@@ -373,7 +397,7 @@ router.post(
       if (generated) videoCover = `/uploads/${path.basename(generated)}`;
     }
 
-    const description = req.body.description || '';
+    const description = parsedText.data.description;
     const closeComments = req.body.close_comments === '1' ? 1 : 0;
     const pinned = req.body.pinned === '1' ? 1 : 0;
 

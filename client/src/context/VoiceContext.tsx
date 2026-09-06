@@ -67,18 +67,9 @@ export interface VoiceContextValue {
   /** 接收端共享声音开关（默认静音，符合自动播放策略） */
   shareMuted: boolean;
   toggleShareMuted: () => void;
-  /** 文字聊天：消息按时间正序（末尾最新），持久化在服务端，房间删除时级联清理 */
-  messages: VoiceChatMessage[];
-  /** 是否还有更早的历史可向上翻页 */
-  chatHasMore: boolean;
-  /** 正在向上加载更早的聊天记录 */
-  chatLoadingMore: boolean;
-  /** 发送文字消息（走信令通道，与 WebRTC 语音媒体分离，语音差时文字仍可用）；返回是否成功发出 */
-  sendChat: (content: string) => boolean;
-  /** 向上翻页加载更早的聊天记录（自动按首条消息 id 定位） */
-  loadMoreChat: () => void;
-  /** 最近一条实时到达的聊天消息（仅 WS 实时广播触发，历史补拉不触发；用于"新消息朗读"等实时消费，null=暂无） */
-  liveMessage: VoiceChatMessage | null;
+  // 文字聊天字段（messages/chatHasMore/chatLoadingMore/sendChat/loadMoreChat/liveMessage）
+  // 已移到 VoiceChatContext，通过 useVoiceChat() 获取——每条聊天消息到达都会更新它们，
+  // 若留在主 value 会连带全站订阅者重渲染。
 }
 
 // P5 拆包：高频状态（speaking / peerQuality / shareStats，每秒数次更新）单独放
@@ -91,6 +82,24 @@ const VoiceRealtimeContext = createContext<{
   peerQuality: Record<number, VoiceQualityLevel>;
   shareStats: ShareStats | null;
 } | null>(null);
+
+/** 文字聊天 context：每条消息到达都会更新的高频字段单独放，
+ *  只有语音页的聊天面板订阅它，其余 useVoice() 消费者不受刷屏影响 */
+export interface VoiceChatContextValue {
+  /** 消息按时间正序（末尾最新），持久化在服务端，房间删除时级联清理 */
+  messages: VoiceChatMessage[];
+  /** 是否还有更早的历史可向上翻页 */
+  chatHasMore: boolean;
+  /** 正在向上加载更早的聊天记录 */
+  chatLoadingMore: boolean;
+  /** 发送文字消息（走信令通道，与 WebRTC 语音媒体分离，语音差时文字仍可用）；返回是否成功发出 */
+  sendChat: (content: string) => boolean;
+  /** 向上翻页加载更早的聊天记录（自动按首条消息 id 定位） */
+  loadMoreChat: () => void;
+  /** 最近一条实时到达的聊天消息（仅 WS 实时广播触发，历史补拉不触发；null=暂无） */
+  liveMessage: VoiceChatMessage | null;
+}
+const VoiceChatContext = createContext<VoiceChatContextValue | null>(null);
 
 export function VoiceProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
@@ -447,12 +456,6 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       toggleShareSharpText,
       shareMuted,
       toggleShareMuted,
-      messages,
-      chatHasMore,
-      chatLoadingMore,
-      sendChat,
-      loadMoreChat,
-      liveMessage,
     }),
     [
       status,
@@ -482,12 +485,6 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       toggleShareSharpText,
       shareMuted,
       toggleShareMuted,
-      messages,
-      chatHasMore,
-      chatLoadingMore,
-      sendChat,
-      loadMoreChat,
-      liveMessage,
     ]
   );
 
@@ -496,9 +493,23 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     [speaking, peerQuality, shareStats]
   );
 
+  const chatValue = useMemo<VoiceChatContextValue>(
+    () => ({
+      messages,
+      chatHasMore,
+      chatLoadingMore,
+      sendChat,
+      loadMoreChat,
+      liveMessage,
+    }),
+    [messages, chatHasMore, chatLoadingMore, sendChat, loadMoreChat, liveMessage]
+  );
+
   return (
     <VoiceContext.Provider value={voiceValue}>
-      <VoiceRealtimeContext.Provider value={realtimeValue}>{children}</VoiceRealtimeContext.Provider>
+      <VoiceChatContext.Provider value={chatValue}>
+        <VoiceRealtimeContext.Provider value={realtimeValue}>{children}</VoiceRealtimeContext.Provider>
+      </VoiceChatContext.Provider>
     </VoiceContext.Provider>
   );
 }
@@ -518,6 +529,13 @@ export function useVoiceRealtime(): {
   const realtime = useContext(VoiceRealtimeContext);
   if (!realtime) throw new Error('useVoiceRealtime 必须在 VoiceProvider 内使用');
   return realtime;
+}
+
+/** 订阅文字聊天高频字段（messages/liveMessage 等）。只在语音页聊天面板使用。 */
+export function useVoiceChat(): VoiceChatContextValue {
+  const ctx = useContext(VoiceChatContext);
+  if (!ctx) throw new Error('useVoiceChat 必须在 VoiceProvider 内使用');
+  return ctx;
 }
 
 /** P5：仅读取 inRoom 的精确选择器，不随说话/网络质量等高频状态重渲染。 */

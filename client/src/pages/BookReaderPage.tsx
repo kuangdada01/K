@@ -51,11 +51,22 @@ export default function BookReaderPage() {
 
   useEffect(() => {
     if (!file) return;
+    // 取消标志：连续切换章节时丢弃慢到的旧章节内容
+    let cancelled = false;
     api
       .get(`/books/${id}/content`, { params: { file }, responseType: 'text' })
-      .then((res) => setContent(res.data as string))
-      .catch(() => setContent(''))
-      .finally(() => setLoading(false));
+      .then((res) => {
+        if (!cancelled) setContent(res.data as string);
+      })
+      .catch(() => {
+        if (!cancelled) setContent('');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [id, file]);
 
   useEffect(() => {
@@ -127,7 +138,7 @@ export default function BookReaderPage() {
         <button
           className={styles.navBtn}
           disabled={currentIndex <= 0}
-          onClick={() => currentIndex > 0 && goChapter(flatChapters[currentIndex - 1])}
+          onClick={() => currentIndex > 0 && goChapter(flatChapters[currentIndex - 1]!)}
         >
           <ChevronLeft size={16} /> 上一章
         </button>
@@ -140,7 +151,7 @@ export default function BookReaderPage() {
           onClick={() =>
             currentIndex >= 0 &&
             currentIndex < flatChapters.length - 1 &&
-            goChapter(flatChapters[currentIndex + 1])
+            goChapter(flatChapters[currentIndex + 1]!)
           }
         >
           下一章 <ChevronRight size={16} />

@@ -272,8 +272,7 @@ router.post(
  * - message: "密码重置成功"
  *
  * 错误响应:
- * - 400: 参数缺失/格式错误/验证码错误或已过期
- * - 404: 该邮箱未注册
+ * - 400: 参数缺失/格式错误/验证码错误或已过期（含邮箱未注册的情况）
  * - 500: 服务器错误
  */
 router.post(
@@ -283,15 +282,12 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const { email, code, password } = req.body;
 
-    // 检查邮箱是否已注册
-    const user = authRepo.findUserByEmail(email);
-    if (!user) {
-      throw new AppError(404, '该邮箱未注册');
-    }
-
-    // 校验验证码
+    // 防邮箱枚举：与 forgot-password 的设计一致，未注册邮箱与验证码错误返回同一响应。
+    // forgot-password 对未注册邮箱也会落一条不发信的验证码记录，因此必须同时校验
+    // 用户存在性，否则猜中 6 位码仍可走重置逻辑。
     const record = authRepo.findValidCode(email, code);
-    if (!record) {
+    const user = authRepo.findUserByEmail(email);
+    if (!record || !user) {
       throw new AppError(400, '验证码错误或已过期');
     }
 

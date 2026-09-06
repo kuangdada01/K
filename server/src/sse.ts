@@ -21,6 +21,13 @@ const subscribers = new Map<number, Set<Response>>();
 const HEARTBEAT_MS = 25000;
 
 /**
+ * 单用户最大并发 SSE 连接数：每条连接一个心跳定时器，无上限的话
+ * 单个账号可无限叠加连接耗尽内存/定时器。超出时关闭最早建立的连接
+ * （新标签页照常可用，Set 按插入序，values().next() 即最旧）。
+ */
+const MAX_SSE_PER_USER = 5;
+
+/**
  * 注册用户的 SSE 连接
  * 客户端断开时自动清理
  */
@@ -37,6 +44,16 @@ export function subscribe(userId: number, res: Response): void {
   if (!list) {
     list = new Set();
     subscribers.set(userId, list);
+  }
+  while (list.size >= MAX_SSE_PER_USER) {
+    const oldest = list.values().next().value;
+    if (!oldest) break;
+    list.delete(oldest);
+    try {
+      oldest.end();
+    } catch {
+      /* 连接已断开 */
+    }
   }
   list.add(res);
 

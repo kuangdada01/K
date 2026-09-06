@@ -44,7 +44,7 @@ export function listRoomMessages(
   const { beforeId, afterId, limit } = opts;
 
   let condition: string;
-  let params: (number | number)[];
+  let params: number[];
 
   if (beforeId !== undefined) {
     condition = 'room_id = ? AND id < ?';
@@ -73,7 +73,7 @@ export function listRoomMessages(
   // 判断是否还有更早的消息（before 翻页/首屏才有意义；after 追新已是最新）
   let hasMore = false;
   if (messages.length > 0 && afterId === undefined) {
-    const oldestId = messages[0].id;
+    const oldestId = messages[0]!.id;
     hasMore = !!db
       .prepare('SELECT 1 FROM voice_room_messages WHERE room_id = ? AND id < ? LIMIT 1')
       .get(roomId, oldestId);

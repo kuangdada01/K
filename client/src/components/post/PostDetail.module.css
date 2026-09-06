@@ -342,6 +342,23 @@
   background: var(--bg-hover);
 }
 
+.commentsLoadMore {
+  display: block;
+  margin: 4px auto 12px;
+  padding: 6px 18px;
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.commentsLoadMore:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .input {
   flex: 1;
   border: none;

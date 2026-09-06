@@ -4,7 +4,7 @@
  * ============================================================
  */
 
-import { stmt } from '../db/connection';
+import { getDb, stmt } from '../db/connection';
 
 export interface ConversationRow {
   partner_id: number;
@@ -130,7 +130,7 @@ export function listMessageHistory(
   // 判断是否还有更早的消息
   let hasMore = false;
   if (messages.length > 0) {
-    const oldestId = messages[0].id;
+    const oldestId = messages[0]!.id;
     hasMore = !!stmt(
       `
       SELECT 1 FROM messages
@@ -196,13 +196,32 @@ export function deleteMessage(messageId: number): void {
   stmt('DELETE FROM messages WHERE id = ?').run(messageId);
 }
 
-/** 清除两人之间的所有消息（不删除磁盘上的图片文件） */
-export function clearConversation(currentUserId: number, otherUserId: number): void {
-  stmt(
+/**
+ * 清除两人之间的所有消息（双向），返回被删消息引用的私密图片文件名（去重）。
+ * 引用消息共享被引用行的物理文件，二者都随会话删除，因此删除全部行后
+ * 这些文件必然成为孤儿——由路由层在事务提交后统一删磁盘文件。
+ */
+export function clearConversation(currentUserId: number, otherUserId: number): string[] {
+  const names: string[] = [];
+  getDb().transaction(() => {
+    names.push(
+      ...(
+        stmt(
+          `
+      SELECT DISTINCT image_url FROM messages
+      WHERE image_url IS NOT NULL
+        AND ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
     `
-    DELETE FROM messages
-    WHERE (sender_id = ? AND receiver_id = ?)
-       OR (sender_id = ? AND receiver_id = ?)
-  `
-  ).run(currentUserId, otherUserId, otherUserId, currentUserId);
+        ).all(currentUserId, otherUserId, otherUserId, currentUserId) as { image_url: string }[]
+      ).map((r) => r.image_url)
+    );
+    stmt(
+      `
+      DELETE FROM messages
+      WHERE (sender_id = ? AND receiver_id = ?)
+         OR (sender_id = ? AND receiver_id = ?)
+    `
+    ).run(currentUserId, otherUserId, otherUserId, currentUserId);
+  })();
+  return names;
 }

@@ -13,13 +13,14 @@ import { useCallback, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLike } from '../state/cache';
 import { events } from '../state/events';
+import { showToast } from '../components/ui/Toast';
 import * as postsApi from '../api/posts';
 
 interface UseLikePostOptions {
   /** 切换成功后回调（PostCard 用于触发父组件刷新） */
-  onToggle?: () => void;
+  onToggle?: (() => void) | undefined;
   /** 状态变化通知（父组件更新列表项） */
-  onChange?: (postId: number, liked: boolean, likeCount: number) => void;
+  onChange?: ((postId: number, liked: boolean, likeCount: number) => void) | undefined;
 }
 
 export function useLikePost(postId: number, options?: UseLikePostOptions) {
@@ -66,6 +67,7 @@ export function useLikePost(postId: number, options?: UseLikePostOptions) {
         setLikeCount(prevCount);
         setLikeInfo(postId, false, prevCount);
       }
+      showToast('操作失败，请重试');
     }
   }, [liked, likeCount, user, postId, openLoginPrompt, setLikeInfo, onToggle, onChange]);
 

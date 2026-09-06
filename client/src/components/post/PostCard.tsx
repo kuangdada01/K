@@ -105,7 +105,9 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
     if (!el) return;
 
     const observer = new IntersectionObserver(
-      ([entry]) => {
+      (entries) => {
+        const entry = entries[0];
+        if (!entry) return;
         setIsPartiallyVisible(entry.isIntersecting && entry.intersectionRatio >= 0.5);
         setIsFullyVisible(entry.isIntersecting && entry.intersectionRatio >= 0.95);
       },
@@ -308,7 +310,7 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
       startIndex = settledIndexRef.current;
       moveHandler = (te: TouchEvent) => {
         if (!active || te.touches.length !== 1) return;
-        const touch = te.touches[0];
+        const touch = te.touches[0]!;
         const dx = touch.clientX - startX;
         const dy = touch.clientY - startY;
         if (!horizontal) {

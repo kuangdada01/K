@@ -107,7 +107,7 @@ export default function CreatePost() {
 
     // 本地预览：HEIC/HEIF 经 WASM 实时转 JPEG，其余格式直接 blob URL（保持选择顺序）
     Promise.all(validFiles.map((f) => fileToPreviewUrl(f))).then((urls) => {
-      setImages((prev) => [...prev, ...urls.map((url, i) => ({ url, file: validFiles[i] }))]);
+      setImages((prev) => [...prev, ...urls.map((url, i) => ({ url, file: validFiles[i]! }))]);
     });
     e.target.value = '';
   };
@@ -201,15 +201,29 @@ export default function CreatePost() {
     setVideoError(false);
   };
 
-  // 组件卸载 / 预览变更时自动回收 Blob URL，防止大文件常驻内存导致 OOM
+  // 卸载兜底专用镜像 ref：cleanup 依赖为空，从 ref 读最新值，增删/排序过程中绝不提前 revoke
+  // （旧实现把 images/videoPreview 放进依赖，cleanup 每次变化都 revoke 全部预览，
+  //  拖拽排序后 <img> 用已 revoke 的 URL 重载 → 全部变成 HEIC 占位图）
+  const videoPreviewRef = useRef<string | null>(null);
+  const videoCoverPreviewRef = useRef<string | null>(null);
+  useEffect(() => {
+    videoPreviewRef.current = videoPreview;
+    videoCoverPreviewRef.current = videoCoverPreview;
+  }, [videoPreview, videoCoverPreview]);
   useEffect(() => {
     imagePreviewsRef.current = images.map((img) => img.url);
+  }, [images]);
+
+  // 组件卸载时统一回收 Blob URL，防止大文件常驻内存导致 OOM
+  useEffect(() => {
     return () => {
       try {
-        if (videoPreview) URL.revokeObjectURL(videoPreview);
+        const vp = videoPreviewRef.current;
+        if (vp) URL.revokeObjectURL(vp);
       } catch {}
       try {
-        if (videoCoverPreview) URL.revokeObjectURL(videoCoverPreview);
+        const vcp = videoCoverPreviewRef.current;
+        if (vcp) URL.revokeObjectURL(vcp);
       } catch {}
       imagePreviewsRef.current.forEach((u) => {
         if (u.startsWith('blob:')) {
@@ -219,7 +233,8 @@ export default function CreatePost() {
         }
       });
     };
-  }, [videoPreview, videoCoverPreview, images]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 卸载兜底：仅挂载/卸载各执行一次，经 ref 读最新值
+  }, []);
 
   // 从视频中截取指定时间的帧（限制画布到 720p 以防 4K 画布 OOM 闪退）
   // 注意：同值 seek（如 loadeddata 后截第 0 帧）不会触发 seeked 事件，

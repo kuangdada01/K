@@ -48,7 +48,7 @@ function downloadBlob(blob: Blob, filename: string): void {
 function floatToInt16(samples: Float32Array): Int16Array {
   const out = new Int16Array(samples.length);
   for (let i = 0; i < samples.length; i++) {
-    const s = Math.max(-1, Math.min(1, samples[i]));
+    const s = Math.max(-1, Math.min(1, samples[i]!));
     out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
   }
   return out;
@@ -73,7 +73,7 @@ function resampleFloat32(input: Float32Array, fromRate: number, toRate: number):
     const i0 = Math.floor(pos);
     const i1 = Math.min(i0 + 1, input.length - 1);
     const frac = pos - i0;
-    out[i] = input[i0] * (1 - frac) + input[i1] * frac;
+    out[i] = input[i0]! * (1 - frac) + input[i1]! * frac;
   }
   return out;
 }
@@ -121,7 +121,7 @@ async function encodeMp3(buffer: AudioBuffer): Promise<Blob> {
     mono = new Float32Array(len);
     for (let c = 0; c < chs; c++) {
       const data = buffer.getChannelData(c);
-      for (let i = 0; i < len; i++) mono[i] += data[i] / chs;
+      for (let i = 0; i < len; i++) mono[i] = mono[i]! + data[i]! / chs;
     }
   }
   return encodePcmToMp3(mono, buffer.sampleRate);

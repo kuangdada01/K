@@ -120,7 +120,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
   }
 
   // 提取 token（去掉 "Bearer " 前缀），签名 + token_version 一并校验
-  const live = verifyLiveToken(authHeader.split(' ')[1]);
+  const live = verifyLiveToken(authHeader.slice('Bearer '.length));
   if (!live) {
     res.status(401).json({ error: 'Invalid token' });
     return;
@@ -189,7 +189,7 @@ export function optionalAuth(req: Request, _res: Response, next: NextFunction): 
   const authHeader = req.headers.authorization;
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    const live = verifyLiveToken(authHeader.split(' ')[1]);
+    const live = verifyLiveToken(authHeader.slice('Bearer '.length));
     if (live) {
       req.user = { id: live.id, username: live.username, role: live.role };
     }

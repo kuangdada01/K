@@ -38,7 +38,7 @@ router.get('/', (_req, res) => {
         let artist = '未知艺术家';
 
         if (parts.length >= 2) {
-          artist = parts[0].trim();
+          artist = parts[0]!.trim();
           title = parts.slice(1).join(' - ').trim();
         }
 

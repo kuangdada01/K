@@ -79,9 +79,9 @@ export class GuestIdAllocator {
     if (this.free.length > 0) {
       let bestIdx = 0;
       for (let i = 1; i < this.free.length; i++) {
-        if (this.free[i] > this.free[bestIdx]) bestIdx = i;
+        if ((this.free[i] ?? -Infinity) > (this.free[bestIdx] ?? -Infinity)) bestIdx = i;
       }
-      const [id] = this.free.splice(bestIdx, 1);
+      const id = this.free.splice(bestIdx, 1)[0]!;
       this.used.add(id);
       return id;
     }

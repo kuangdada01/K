@@ -61,7 +61,12 @@ export interface PostListResponse {
 
 /** 信息流列表 */
 export function listPosts(page = 1, limit = 20, opts?: { timeout?: number }): Promise<PostListResponse> {
-  return api.get(`/posts`, { params: { page, limit }, timeout: opts?.timeout }).then((r) => r.data);
+  return api
+    .get(`/posts`, {
+      params: { page, limit },
+      ...(opts?.timeout !== undefined ? { timeout: opts.timeout } : {}),
+    })
+    .then((r) => r.data);
 }
 
 /** 搜索帖子（q=关键词模糊匹配；tag=话题精确匹配，优先于 q） */
@@ -71,9 +76,31 @@ export function searchPosts(q: string, page = 1, limit = 20, tag?: string): Prom
     .then((r) => r.data);
 }
 
-/** 帖子详情（含评论） */
-export function getPost(postId: number): Promise<{ post: Post; comments: Comment[] }> {
-  return api.get(`/posts/${postId}`).then((r) => r.data);
+export interface PostDetailResponse {
+  post: Post;
+  comments: Comment[];
+  /** 分页模式（传 commentLimit）下的附加字段；全量模式为 undefined */
+  comments_has_more?: boolean;
+  comments_total?: number;
+}
+
+/** 帖子详情（commentLimit 缺省 = 全量评论，兼容旧契约；传入则按顶级评论分页） */
+export function getPost(postId: number, opts?: { commentLimit?: number }): Promise<PostDetailResponse> {
+  return api
+    .get(`/posts/${postId}`, {
+      params: opts?.commentLimit !== undefined ? { comment_limit: opts.commentLimit } : undefined,
+    })
+    .then((r) => r.data);
+}
+
+/** 评论分页续拉（顶级评论升序游标） */
+export function listCommentsPaged(
+  postId: number,
+  opts: { afterId: number; limit?: number }
+): Promise<{ comments: Comment[]; has_more: boolean; total: number }> {
+  return api
+    .get(`/posts/${postId}/comments`, { params: { after_id: opts.afterId, limit: opts.limit ?? 10 } })
+    .then((r) => r.data);
 }
 
 /** 收藏列表 */

@@ -40,18 +40,40 @@ const HEARTBEAT_MS = 30_000;
 /** 文字聊天发送节流（每条消息间隔下限，防刷屏；状态挂在连接上，断开即释放） */
 const CHAT_THROTTLE_MS = 400;
 
+/**
+ * 信令转发限流（令牌桶）：允许 ICE 候选/SDP 的短时突发（SIGNAL_BURST 条），
+ * 持续速率上限 SIGNAL_REFILL_PER_SEC 条/秒。信令是机器节奏的消息，不能用聊天那种
+ * 固定最小间隔节流，否则会误杀 trickle ICE 突发导致建联失败。
+ */
+const SIGNAL_BURST = 40;
+const SIGNAL_REFILL_PER_SEC = 20;
+
 /** 控制字符（除 \n 换行外）剔除：入库前清理，防协议/显示污染 */
 const CONTROL_CHAR_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
 
 /** 带存活标记的连接（心跳用；guestIp 为访客连接的来源 IP，断开时归还引用） */
-type VoiceWs = WebSocket & { isAlive?: boolean; guestIp?: string; lastChatAt?: number };
+type VoiceWs = WebSocket & {
+  isAlive?: boolean;
+  guestIp?: string;
+  lastChatAt?: number;
+  /** 信令令牌桶状态（见 SIGNAL_BURST/SIGNAL_REFILL_PER_SEC） */
+  signalTokens?: number;
+  signalLastRefill?: number;
+};
 
 /**
  * 把语音 WS 服务挂到 HTTP 服务器上（index.ts 启动时调用一次）。
  * 与 Express app 解耦：测试可自建 http server 挂载。
  */
 export function attachVoiceWs(server: Server): WebSocketServer {
-  const wss = new WebSocketServer({ server, path: '/api/voice/ws' });
+  const wss = new WebSocketServer({
+    server,
+    path: '/api/voice/ws',
+    // 未认证连接也能到达这里（访客可进房），必须限制单帧大小：
+    // ws 库默认 100MiB，不设限的话一条垃圾帧就能造成内存尖峰 + 主线程解析阻塞。
+    // 真实信令（SDP offer/answer + ICE 候选）远小于 64KB。
+    maxPayload: 64 * 1024,
+  });
 
   // 心跳：标记存活 → ping，下轮仍存活则强制断开
   const interval = setInterval(() => {
@@ -114,7 +136,8 @@ export function attachVoiceWs(server: Server): WebSocketServer {
 
     // ---- 消息处理 ----
     ws.on('message', (raw) => {
-      let msg: any;
+      // 入站信令的最小形状：具体字段在各 case 内按需窄化校验
+      let msg: { type?: string; [key: string]: unknown } | undefined;
       try {
         msg = JSON.parse(String(raw));
       } catch {
@@ -201,6 +224,23 @@ export function attachVoiceWs(server: Server): WebSocketServer {
         case 'signal': {
           const to = Number(msg.to);
           if (!Number.isInteger(to)) return;
+          // 令牌桶限流：突发额度内全放行，超出后按持续速率补充
+          const now = Date.now();
+          if (ws.signalTokens === undefined || ws.signalLastRefill === undefined) {
+            ws.signalTokens = SIGNAL_BURST;
+            ws.signalLastRefill = now;
+          }
+          ws.signalTokens = Math.min(
+            SIGNAL_BURST,
+            ws.signalTokens + ((now - ws.signalLastRefill) / 1000) * SIGNAL_REFILL_PER_SEC
+          );
+          ws.signalLastRefill = now;
+          if (ws.signalTokens < 1) return;
+          // 只在已加入房间后、且收发双方同房间时转发：
+          // 否则可向任意在线用户定向灌包并探测其在线状态
+          const roomId = hub.getMemberRoomId(user.id);
+          if (roomId === undefined || hub.getMemberRoomId(to) !== roomId) return;
+          ws.signalTokens -= 1;
           hub.sendToUser(to, { type: 'signal', from: user.id, data: msg.data });
           break;
         }

@@ -28,7 +28,8 @@ import TaggedText from '../TaggedText';
 
 const LazyProfileOverlay = lazy(() => import('../profile/ProfileOverlay'));
 import ConfirmDialog from '../ui/ConfirmDialog';
-import api from '../../api/http';
+import api, { getApiErrorMessage } from '../../api/http';
+import * as postsApi from '../../api/posts';
 import { isAxiosError } from 'axios';
 import { Post, Comment } from '../../types';
 import { computeInitialCollapsedIds, buildVisibleComments } from '../../lib/comments';
@@ -107,6 +108,10 @@ export default function PostDetail({
   const [showTooltip, setShowTooltip] = useState(false);
   const highlightRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
+  // 评论分页：comment_limit 首屏拉最近一页，after_id 游标续拉（高亮跳转场景走全量）
+  const [commentHasMore, setCommentHasMore] = useState(false);
+  const [commentTotal, setCommentTotal] = useState(0);
+  const [commentsLoadingMore, setCommentsLoadingMore] = useState(false);
   const commentsEndRef = useRef<HTMLDivElement>(null);
   const detailVideoRef = useRef<HTMLVideoElement>(null);
   const heartRef = useRef<SVGSVGElement>(null);
@@ -123,6 +128,11 @@ export default function PostDetail({
     setLoadError(false);
     setActiveHighlightId(null);
     setCurrentImageIndex(initialImageIndex);
+    // 切换帖子：清空上一帖的评论与分页游标（避免旧帖评论在新帖下短暂残留）
+    setComments([]);
+    setCommentHasMore(false);
+    setCommentTotal(0);
+    setCommentsLoadingMore(false);
   }
 
   const { closing, handleClose } = usePostDetailClose({
@@ -141,48 +151,51 @@ export default function PostDetail({
   // 加载评论，全部折叠，若有高亮评论ID则展开其祖先
   // （loadError/highlight 重置已在渲染期完成）
   useEffect(() => {
-    api
-      .get(`/posts/${postId}`)
+    // 高亮跳转需要全量评论定位目标；普通打开按顶级评论分页（回复随顶级携带）
+    postsApi
+      .getPost(postId, highlightCommentId ? undefined : { commentLimit: 10 })
       .then(async (res) => {
-        setPost(res.data.post);
-        setComments(res.data.comments);
+        setPost(res.post);
+        setComments(res.comments);
+        setCommentHasMore(!!res.comments_has_more);
+        setCommentTotal(res.comments_total ?? res.comments.length);
         const cachedLike = getLikeInfo(postId);
         if (cachedLike) {
           setLiked(cachedLike.liked);
           setLikeCount(cachedLike.likeCount);
         } else {
-          setLiked(!!res.data.post.liked);
-          setLikeCount(res.data.post.like_count);
+          setLiked(!!res.post.liked);
+          setLikeCount(res.post.like_count);
         }
-        setShareCount(res.data.post.share_count || 0);
-        setAlreadyShared(!!res.data.post.shared);
+        setShareCount(res.post.share_count || 0);
+        setAlreadyShared(!!res.post.shared);
         const cachedBookmark = getBookmarked(postId);
         if (cachedBookmark !== undefined) {
           setBookmarked(cachedBookmark);
         } else {
-          setBookmarked(!!res.data.post.bookmarked);
+          setBookmarked(!!res.post.bookmarked);
         }
         const cachedRepost = getReposted(postId);
         if (cachedRepost !== undefined) {
           setReposted(cachedRepost);
         } else {
-          setReposted(!!res.data.post.reposted);
+          setReposted(!!res.post.reposted);
         }
-        setRepostCount(res.data.post.repost_count || 0);
-        if (user && res.data.post.user_id !== user.id) {
-          const cached = getFollowStatus(res.data.post.user_id);
+        setRepostCount(res.post.repost_count || 0);
+        if (user && res.post.user_id !== user.id) {
+          const cached = getFollowStatus(res.post.user_id);
           if (cached !== undefined) {
             setIsFollowing(cached);
           } else {
             try {
-              const statusRes = await api.get(`/friends/status/${res.data.post.user_id}`);
+              const statusRes = await api.get(`/friends/status/${res.post.user_id}`);
               setIsFollowing(statusRes.data.is_following);
-              setFollowStatus(res.data.post.user_id, statusRes.data.is_following);
+              setFollowStatus(res.post.user_id, statusRes.data.is_following);
             } catch {}
           }
         }
         // 默认折叠所有回复线程；若有高亮评论ID则展开其祖先使目标可见
-        setCollapsedReplies(computeInitialCollapsedIds(res.data.comments, highlightCommentId));
+        setCollapsedReplies(computeInitialCollapsedIds(res.comments, highlightCommentId));
 
         // 重新渲染后滚动 + 高亮
         if (highlightCommentId) {
@@ -257,25 +270,50 @@ export default function PostDetail({
     if (!newComment.trim() || submitting || post?.close_comments) return;
     setSubmitting(true);
     try {
-      const res = await api.post(`/posts/${postId}/comments`, {
+      const res = await postsApi.createComment(postId, {
         content: newComment,
         parentId: replyingTo?.id || null,
       });
-      setComments((prev) => {
-        const updated = [...prev, res.data];
-        onCommentChange?.(postId, updated.length);
-        events.emit('post:comment', { postId, commentCount: updated.length });
-        return updated;
-      });
+      // updater 必须纯函数：事件/回调副作用放在 setState 之外（StrictMode 下 updater 会双调用）
+      const updated = [...comments, res];
+      setComments(updated);
+      const newTotal = commentTotal + 1;
+      setCommentTotal(newTotal);
+      onCommentChange?.(postId, newTotal);
+      events.emit('post:comment', { postId, commentCount: newTotal });
       setNewComment('');
       setReplyingTo(null);
       setTimeout(() => commentsEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
     } catch (err) {
       if (isAxiosError(err) && err.response?.status === 403) {
         showToast('此帖子已关闭评论');
+      } else {
+        showToast(getApiErrorMessage(err, '评论发送失败，请重试'));
       }
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  /** 向上续拉下一页评论：游标 = 已加载的最后一条顶级评论 id */
+  const loadMoreComments = async () => {
+    if (commentsLoadingMore || !commentHasMore) return;
+    const tops = comments.filter((c) => !c.parent_id);
+    const lastTop = tops[tops.length - 1];
+    if (!lastTop) return;
+    setCommentsLoadingMore(true);
+    try {
+      const res = await postsApi.listCommentsPaged(postId, { afterId: lastTop.id, limit: 10 });
+      setComments((prev) => {
+        const seen = new Set(prev.map((c) => c.id));
+        return [...prev, ...res.comments.filter((c) => !seen.has(c.id))];
+      });
+      setCommentHasMore(!!res.has_more);
+      setCommentTotal(res.total ?? commentTotal);
+    } catch (err) {
+      showToast(getApiErrorMessage(err, '评论加载失败，请重试'));
+    } finally {
+      setCommentsLoadingMore(false);
     }
   };
 
@@ -286,29 +324,34 @@ export default function PostDetail({
   const handleDeletePost = async () => {
     if (!post) return;
     try {
-      await api.delete(`/posts/${post.id}`);
+      await postsApi.deletePost(post.id);
       showToast('帖子已删除');
       // 同步移除信息流缓存，删除后立即生效（staleTime: Infinity 不会自动重取）
       updatePostsFeed(queryClient, (prev) => prev.filter((p) => p.id !== post.id));
       queryClient.invalidateQueries({ queryKey: postsFeedKey });
       events.emit('post:deleted', post.id);
       handleClose();
-    } catch {}
+    } catch (err) {
+      showToast(getApiErrorMessage(err, '删除失败，请重试'));
+    }
     setShowDeletePostConfirm(false);
   };
 
   const confirmDeleteComment = async () => {
     if (deleteTargetId === null) return;
     try {
-      await api.delete(`/posts/comments/${deleteTargetId}`);
-      setComments((prev) => {
-        const updated = prev.filter((c) => c.id !== deleteTargetId && c.parent_id !== deleteTargetId);
-        onCommentChange?.(postId, updated.length);
-        events.emit('post:comment', { postId, commentCount: updated.length });
-        return updated;
-      });
+      await postsApi.deleteComment(deleteTargetId);
+      const updated = comments.filter((c) => c.id !== deleteTargetId && c.parent_id !== deleteTargetId);
+      setComments(updated);
+      // 分页下总数按已加载列表的收缩量回推（被删回复可能级联多条）
+      const newTotal = Math.max(0, commentTotal - (comments.length - updated.length));
+      setCommentTotal(newTotal);
+      onCommentChange?.(postId, newTotal);
+      events.emit('post:comment', { postId, commentCount: newTotal });
       showToast('评论已删除');
-    } catch {}
+    } catch (err) {
+      showToast(getApiErrorMessage(err, '删除评论失败，请重试'));
+    }
     setDeleteTargetId(null);
   };
 
@@ -333,14 +376,15 @@ export default function PostDetail({
 
     try {
       if (wasLiked) {
-        await api.delete(`/posts/comments/${commentId}/like`);
+        await postsApi.unlikeComment(commentId);
       } else {
-        await api.post(`/posts/comments/${commentId}/like`);
+        await postsApi.likeComment(commentId);
       }
     } catch {
       setComments((prev) =>
         prev.map((c) => (c.id === commentId ? { ...c, liked: wasLiked ? 1 : 0, like_count: prevCount } : c))
       );
+      showToast('操作失败，请重试');
     }
   };
 
@@ -382,8 +426,8 @@ export default function PostDetail({
     setTimeout(() => setShowTooltip(false), 1500);
     if (!alreadyShared && user) {
       try {
-        const res = await api.post(`/posts/${postId}/share`);
-        setShareCount(res.data.share_count);
+        const res = await postsApi.sharePost(postId);
+        setShareCount(res.share_count);
         setAlreadyShared(true);
       } catch {}
     }
@@ -393,7 +437,7 @@ export default function PostDetail({
     // 提取 /profile/:id 中的 userId
     const match = path.match(/\/profile\/(\d+)/);
     if (match) {
-      setProfileUserId(parseInt(match[1]));
+      setProfileUserId(parseInt(match[1]!));
     }
   };
 
@@ -595,6 +639,17 @@ export default function PostDetail({
                 );
               });
             })()}
+            {commentHasMore && (
+              <button
+                className={styles.commentsLoadMore}
+                onClick={loadMoreComments}
+                disabled={commentsLoadingMore}
+              >
+                {commentsLoadingMore
+                  ? '加载中…'
+                  : `加载更多评论（已加载 ${comments.length}/${commentTotal}）`}
+              </button>
+            )}
             <div ref={commentsEndRef} />
           </div>
 
@@ -603,7 +658,7 @@ export default function PostDetail({
             <PostDetailActions
               liked={liked}
               likeCount={likeCount}
-              commentsCount={comments.length}
+              commentsCount={commentTotal || comments.length}
               reposted={reposted}
               repostCount={repostCount}
               shareCount={shareCount}

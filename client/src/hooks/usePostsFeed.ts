@@ -45,11 +45,9 @@ export function updatePostsFeed(queryClient: QueryClient, updater: (posts: Post[
     });
     // 若展开后数组比原来短（删除），把多出来的尾部补到最后一页
     const remaining = all.slice(offset);
-    if (remaining.length > 0 && pages.length > 0) {
-      pages[pages.length - 1] = {
-        ...pages[pages.length - 1],
-        posts: [...pages[pages.length - 1].posts, ...remaining],
-      };
+    const lastPage = pages.length > 0 ? pages[pages.length - 1] : undefined;
+    if (remaining.length > 0 && lastPage) {
+      pages[pages.length - 1] = { ...lastPage, posts: [...lastPage.posts, ...remaining] };
     }
     return { ...prev, pages };
   });

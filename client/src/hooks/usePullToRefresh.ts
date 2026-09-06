@@ -191,14 +191,18 @@ export function usePullToRefresh(options: PullToRefreshOptions): void {
     const onTouchStart = (e: TouchEvent) => {
       if (refreshingRef.current) return;
       // 只有当滚动容器在顶部时才触发下拉刷新
-      armAt(e.touches[0].clientX, e.touches[0].clientY);
+      const t0 = e.touches[0];
+      if (!t0) return;
+      armAt(t0.clientX, t0.clientY);
     };
 
     const onTouchMove = (e: TouchEvent) => {
       bumpActivity();
       if (refreshingRef.current) return;
-      const y = e.touches[0].clientY;
-      const x = e.touches[0].clientX;
+      const t0 = e.touches[0];
+      if (!t0) return;
+      const y = t0.clientY;
+      const x = t0.clientX;
 
       if (touchStartY.current === 0) {
         // 手势中途武装：从列表中间滑回顶部后继续下拉属于同一手势，

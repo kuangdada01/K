@@ -16,8 +16,8 @@ export function getClientIp(req: IncomingMessage): string {
   let ip: string | undefined;
   if (env.TRUST_PROXY) {
     const fwd = req.headers['x-forwarded-for'];
-    if (typeof fwd === 'string') ip = fwd.split(',')[0].trim();
-    else if (Array.isArray(fwd) && fwd.length > 0) ip = fwd[0].trim();
+    if (typeof fwd === 'string') ip = fwd.split(',')[0]?.trim();
+    else if (Array.isArray(fwd) && fwd.length > 0) ip = fwd[0]?.trim();
   }
   if (!ip) ip = req.socket.remoteAddress ?? 'unknown';
   if (ip.startsWith('::ffff:')) ip = ip.slice(7);

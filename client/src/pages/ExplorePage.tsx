@@ -15,9 +15,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search, X, Heart, MessageCircle, Layers, Play } from 'lucide-react';
-import api from '../api/http';
+import { getApiErrorMessage } from '../api/http';
+import { listPosts, searchPosts } from '../api/posts';
 import { resolveMediaUrl } from '../utils';
 import { events } from '../state/events';
+import { showToast } from '../components/ui/Toast';
 import PostDetail from '../components/post/PostDetail';
 import { Post } from '../types';
 import styles from './ExplorePage.module.css';
@@ -36,37 +38,36 @@ export default function ExplorePage() {
 
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const loadingRef = useRef(false);
+  // 请求序号守卫：只有最新一次请求的响应才允许落地（旧的请求不再阻塞新请求，
+  // 也不丢弃新请求——此前 loadingRef 直接 return 会把飞行中的新搜索静默吞掉）
+  const reqSeqRef = useRef(0);
 
   // 加载帖子（首页全部 / 关键词搜索 / #话题精确搜索）
   const loadPosts = useCallback(async (pageNum: number, query: string, append: boolean) => {
-    if (loadingRef.current) return;
-    loadingRef.current = true;
+    const seq = ++reqSeqRef.current;
     setLoading(true);
 
     try {
       const trimmed = query.trim();
-      let endpoint: string;
-      if (trimmed.startsWith('#') && trimmed.length > 1) {
-        // #开头 → 话题精确搜索
-        endpoint = `/posts/search?tag=${encodeURIComponent(trimmed.slice(1))}&page=${pageNum}&limit=20`;
-      } else if (trimmed) {
-        endpoint = `/posts/search?q=${encodeURIComponent(trimmed)}&page=${pageNum}&limit=20`;
-      } else {
-        endpoint = `/posts?page=${pageNum}&limit=20`;
-      }
-
-      const res = await api.get(endpoint);
-      const newPosts: Post[] = res.data.posts || [];
+      // 类型化 API 层：#话题精确搜索 / 关键词搜索 / 全部帖子
+      const data = await (trimmed.startsWith('#') && trimmed.length > 1
+        ? searchPosts('', pageNum, 20, trimmed.slice(1))
+        : trimmed
+          ? searchPosts(trimmed, pageNum, 20)
+          : listPosts(pageNum, 20));
+      if (seq !== reqSeqRef.current) return; // 已有更新的请求，丢弃过期响应
+      const newPosts: Post[] = data.posts || [];
 
       setPosts((prev) => (append ? [...prev, ...newPosts] : newPosts));
-      setHasMore(pageNum < res.data.totalPages);
-      setTotalResults(res.data.total || 0);
+      setHasMore(pageNum < data.totalPages);
+      setTotalResults(data.total || 0);
       setPage(pageNum);
-    } catch {
+    } catch (err) {
+      if (seq === reqSeqRef.current) {
+        showToast(getApiErrorMessage(err, '加载失败，请稍后重试'));
+      }
     } finally {
-      setLoading(false);
-      loadingRef.current = false;
+      if (seq === reqSeqRef.current) setLoading(false);
     }
   }, []);
 
@@ -111,7 +112,7 @@ export default function ExplorePage() {
     if (!loadMoreRef.current) return;
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries[0].isIntersecting && hasMore && !loading) {
+        if (entries[0]?.isIntersecting && hasMore && !loading) {
           loadPosts(page + 1, keyword, true);
         }
       },
@@ -182,7 +183,7 @@ export default function ExplorePage() {
   const getThumbnail = (post: Post): string => {
     let raw = '';
     if (post.video_cover) raw = post.video_cover;
-    else if (post.images && post.images.length > 0) raw = post.images[0];
+    else if (post.images && post.images.length > 0) raw = post.images[0] ?? '';
     else {
       try {
         const parsed = JSON.parse(post.image_url);

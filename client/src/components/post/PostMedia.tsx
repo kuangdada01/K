@@ -81,8 +81,8 @@ export default function PostMedia({
   ) => {
     if (!track) return;
     const target = width * index;
-    if (Math.abs(setOffset === setMainOffset ? mainOffsetRef.current : zoomOffsetRef.current - target) < 1)
-      return;
+    const current = setOffset === setMainOffset ? mainOffsetRef.current : zoomOffsetRef.current;
+    if (Math.abs(current - target) < 1) return;
     track.style.transition = 'transform 400ms cubic-bezier(0.22, 1, 0.36, 1)';
     setOffset(target);
     const t = setTimeout(() => {
@@ -131,7 +131,7 @@ export default function PostMedia({
       startIndex = getSettled();
       moveHandler = (te: TouchEvent) => {
         if (!active || te.touches.length !== 1) return;
-        const touch = te.touches[0];
+        const touch = te.touches[0]!;
         const dx = touch.clientX - startX;
         const dy = touch.clientY - startY;
         if (!horizontal) {
