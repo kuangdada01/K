@@ -36,6 +36,8 @@ const envSchema = z.object({
   APP_VERSION: z.string().optional(),
   APP_APK_URL: z.string().optional(),
   APP_UPDATE_NOTES: z.string().optional(),
+  // 数据库文件路径覆盖（e2e 测试用独立库文件，避免写入开发/生产 k.db）
+  DB_PATH: z.string().optional(),
 });
 
 /** 校验并导出环境变量（启动时执行一次） */
@@ -62,8 +64,8 @@ export const PATHS = {
   uploadsPrivate: path.join(SERVER_ROOT, 'uploads_private'),
   /** 图书数据目录: server/books */
   books: path.join(SERVER_ROOT, 'books'),
-  /** 数据库文件: server/k.db */
-  db: path.join(SERVER_ROOT, 'k.db'),
+  /** 数据库文件: server/k.db（可设 DB_PATH 环境变量覆盖，如 e2e 测试指向独立库） */
+  db: env.DB_PATH ? path.resolve(env.DB_PATH) : path.join(SERVER_ROOT, 'k.db'),
   /** 前端构建产物目录: client/dist */
   clientDist: path.join(SERVER_ROOT, '..', 'client', 'dist'),
   /** 音乐目录: client/public/music */

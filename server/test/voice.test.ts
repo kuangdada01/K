@@ -129,6 +129,20 @@ describe('voiceRepo 房间 CRUD', () => {
   });
 });
 
+describe('创建者房间数计数（创建频控依据）', () => {
+  it('按登录用户与访客 IP 分别计数', () => {
+    const before = voiceRepo.countRoomsByCreatorId(aliceId);
+    voiceRepo.createRoom(aliceId, '频控房', '', { creatorName: 'alice' });
+    expect(voiceRepo.countRoomsByCreatorId(aliceId)).toBe(before + 1);
+
+    const ip = '203.0.113.77';
+    const beforeIp = voiceRepo.countRoomsByCreatorIp(ip);
+    voiceRepo.createRoom(0, '访客房', '', { creatorName: '未登录-1', creatorIp: ip });
+    expect(voiceRepo.countRoomsByCreatorIp(ip)).toBe(beforeIp + 1);
+    expect(voiceRepo.countRoomsByCreatorIp('198.51.100.1')).toBe(0);
+  });
+});
+
 describe('WS 信令全链路', () => {
   it('join → joined / peer-joined，signal 定向中转，mute 广播，leave → peer-left', async () => {
     const room = voiceRepo.createRoom(aliceId, '测试房', '', { creatorName: 'alice' });

@@ -40,10 +40,10 @@ test('探索页搜索', async ({ page }) => {
   await page.goto('/explore');
   const input = page.locator('input[placeholder*="搜索"]').first();
   await expect(input).toBeVisible();
-  await input.fill('K');
-  await page.waitForTimeout(1200);
-  // 搜索后页面保持可用（结果或空态，二者均为正常渲染）
-  await expect(page.locator('body')).toContainText(/帖子|没有|暂无|搜索/);
+  // 搜索一个必然无结果的关键词：断言空态文案真实出现
+  // （旧断言 body 包含 /帖子|没有|暂无|搜索/ 会被搜索框自身 placeholder 满足，恒真无保护力）
+  await input.fill(`zzx-no-match-${Date.now()}`);
+  await expect(page.getByText('未找到相关帖子')).toBeVisible({ timeout: 10_000 });
 });
 
 test('受保护路由未登录时重定向首页', async ({ page }) => {
