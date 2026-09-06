@@ -27,8 +27,17 @@ const router = Router();
 /** 书籍根目录: server/books */
 const BOOKS_DIR = PATHS.books;
 
+/** book.json 元数据形状（字段均为可选，读取时给默认值） */
+interface BookMeta {
+  title?: string;
+  author?: string;
+  description?: string;
+  cover?: string;
+  volumes?: unknown;
+}
+
 /** 读取 book.json 元数据（无则返回默认值） */
-function readMeta(bookId: string) {
+function readMeta(bookId: string): BookMeta {
   const metaFile = path.join(BOOKS_DIR, bookId, 'book.json');
   if (fs.existsSync(metaFile)) {
     try {
@@ -121,7 +130,7 @@ function safeResolve(bookId: string, relPath: string): string | null {
 }
 
 /** 图书封面 URL（book.json 的 cover 字段指向 bookId 目录内的文件，如 cover.jpg） */
-function coverUrl(bookId: string, meta: any): string | null {
+function coverUrl(bookId: string, meta: BookMeta | null): string | null {
   const cover = meta?.cover;
   if (!cover) return null;
   if (safeResolve(bookId, cover)) return `/api/books/${bookId}/cover`;

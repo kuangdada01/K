@@ -20,7 +20,7 @@ interface CommentItemProps {
   replyCount: number;
   activeHighlighted: boolean;
   currentUserId: number | null | undefined;
-  innerRef?: React.Ref<HTMLDivElement>;
+  innerRef?: React.Ref<HTMLDivElement> | undefined;
   onProfileClick: (userId: number) => void;
   onReply: (comment: Comment) => void;
   onToggleReplies: (commentId: number) => void;

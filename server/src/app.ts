@@ -99,13 +99,15 @@ export function createApp(): express.Express {
           return { ...s, url: s.url?.split('?')[0] };
         },
       },
-      transport:
-        env.NODE_ENV === 'production'
-          ? undefined
-          : {
+      // exactOptionalPropertyTypes：非生产才注入 pino-pretty transport，生产不给可选字段传 undefined
+      ...(env.NODE_ENV === 'production'
+        ? {}
+        : {
+            transport: {
               target: 'pino-pretty',
               options: { translateTime: 'SYS:HH:MM:ss', ignore: 'pid,hostname' },
             },
+          }),
     })
   );
 

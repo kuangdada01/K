@@ -42,7 +42,9 @@ export function asyncHandler(
  * 全局错误处理中间件（挂在所有路由之后）
  * 分支与文案与历史版本保持一致，保证对外行为不变
  */
-export function errorHandler(err: any, _req: Request, res: Response, _next: NextFunction): void {
+export function errorHandler(rawErr: unknown, _req: Request, res: Response, _next: NextFunction): void {
+  // Express 传来的错误形态开放（AppError/MulterError/SyntaxError/未知），逐分支窄化
+  const err = rawErr as { status?: number; message?: string; code?: string } | null;
   // 带状态码的业务错误（如 CORS 拒绝）
   if (err?.status) {
     res.status(err.status).json({ error: err.message });

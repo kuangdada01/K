@@ -13,8 +13,13 @@ import pino from 'pino';
 import { env } from '../config';
 
 export const logger = pino({
-  transport:
-    env.NODE_ENV === 'development'
-      ? { target: 'pino-pretty', options: { translateTime: 'SYS:HH:MM:ss', ignore: 'pid,hostname' } }
-      : undefined,
+  // exactOptionalPropertyTypes：不给可选字段显式传 undefined，用条件展开
+  ...(env.NODE_ENV === 'development'
+    ? {
+        transport: {
+          target: 'pino-pretty',
+          options: { translateTime: 'SYS:HH:MM:ss', ignore: 'pid,hostname' },
+        },
+      }
+    : {}),
 });

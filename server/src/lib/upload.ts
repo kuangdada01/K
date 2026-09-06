@@ -58,7 +58,8 @@ export function createUploader(options: {
   return multer({
     storage,
     limits: { fileSize: options.maxSize },
-    fileFilter: options.fileFilter,
+    // fileFilter 在调用方的 options 里恒存在，multer 的类型是可选字段——条件展开避免显式 undefined
+    ...(options.fileFilter ? { fileFilter: options.fileFilter } : {}),
   });
 }
 

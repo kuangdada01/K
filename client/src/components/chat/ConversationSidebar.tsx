@@ -25,7 +25,7 @@ interface ConversationSidebarProps {
   setActiveTab: (tab: 'messages' | 'notifications') => void;
   unreadNotifs: number;
   conversations: Conversation[];
-  selectedPartnerId?: number;
+  selectedPartnerId?: number | undefined;
   onSelectConversation: (conv: Conversation) => void;
   notifications: Notification[];
   onNotificationClick: (notif: Notification) => void;

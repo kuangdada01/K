@@ -54,14 +54,17 @@ RUN cd server && npm ci --omit=dev --no-audit --no-fund
 
 # E4：非 root 运行（uploads/k.db 等可写路径由 VOLUME 挂载，宿主授权）
 # k.db 必须预建为空文件：VOLUME 声明的路径若不存在，Docker 会创建为"目录"，
-# better-sqlite3 打不开目录会导致全新 docker run 直接崩溃
+# better-sqlite3 打不开目录会导致全新 docker run 直接崩溃。
+# uploads/uploads_private/books 必须预建目录：镜像内不存在的 VOLUME 路径会被
+# Docker 以 root:root 自动创建，非 root 的 app 用户无法写入，上传会静默 500。
 RUN useradd -r -m app \
   && touch /app/server/k.db \
+  && mkdir -p /app/server/uploads /app/server/uploads_private /app/server/books /app/client/public/music \
   && chown -R app:app /app
 USER app
 
 # 持久化数据目录与数据库
-VOLUME ["/app/server/uploads", "/app/server/books", "/app/server/k.db"]
+VOLUME ["/app/server/uploads", "/app/server/uploads_private", "/app/server/books", "/app/server/k.db"]
 
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

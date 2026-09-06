@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# 同分支新推送取消仍在跑的旧 CI，省排队与额度
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -33,16 +38,55 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: 测试（server vitest）
+      - name: 测试（server + client vitest）
         run: npm run test
 
-      - name: 测试（client vitest）
-        run: npm run test:client
-
-      - name: E2E 冒烟（Playwright）
+      - name: E2E（Playwright，覆盖只读冒烟 + 注册/发帖/互动真实写路径）
         env:
           # E3 修复：build 步骤已产出 dist，webServer 跳过重复构建
           SKIP_BUILD: '1'
         run: |
           npx playwright install --with-deps chromium
           npm run e2e
+
+      - name: 上传 e2e 失败产物（截图/报告，仅失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # 独立 job 验证 Docker 镜像可构建（历史上镜像构建期 chown/卷属主问题曾静默损坏运行时上传，
+  # 只有 docker build 能发现）。与主 job 并行跑，不阻塞其结果。
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Docker 镜像构建验证
+        run: docker build -t k-ci-check:latest .
+
+      # 冒烟：容器能通过健康检查（同时验证非 root 卷属主/预建目录等运行时前提）
+      - name: 容器健康检查冒烟
+        run: |
+          docker run -d --name k-smoke -p 3000:3000 \
+            -e JWT_SECRET=ci-secret-ci-secret-ci-secret-1234 \
+            k-ci-check:latest
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3000/api/health > /dev/null; then
+              echo "healthcheck passed"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "healthcheck failed"
+          docker logs k-smoke
+          exit 1

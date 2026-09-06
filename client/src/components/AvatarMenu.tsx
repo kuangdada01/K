@@ -43,7 +43,7 @@ interface AvatarMenuProps {
   /** 外层包裹类名（用于宿主布局定位） */
   wrapperClassName?: string;
   /** 触发器按钮附加类名（用于宿主覆盖样式） */
-  triggerClassName?: string;
+  triggerClassName?: string | undefined;
 }
 
 type ThemeOption = { key: 'system' | 'light' | 'dark'; label: string; icon: React.ReactNode };

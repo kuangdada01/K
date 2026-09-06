@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 client 轻量部署：SFTP 上传 k-client-only.tar.gz → 远端备份 dist → 解压覆盖 /var/www/k/client
-用法：DEPLOY_PASSWORD=... python .workbuddy/tmp/deploy-client-lite.py --package <tar.gz>
+用法：DEPLOY_PASSWORD=<密码> python deploy-client-lite.py --server <IP> --package <tar.gz>
+（--server 必填；仓库不内置生产地址）
 退出码：0 成功；非 0 失败。
 """
 import argparse, io, os, sys, time

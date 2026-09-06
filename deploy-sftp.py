@@ -24,6 +24,9 @@ def main():
     ap.add_argument("--apk-name", default="", help="上传到 dist/apk 的版本化文件名（k-app-<version>-release.apk）")
     ap.add_argument("--user", default="root")
     ap.add_argument("--port", type=int, default=22)
+    ap.add_argument("--trust-host", action="store_true",
+                    help="跳过主机密钥校验（MITM 风险）。仅首次连接新服务器时使用，"
+                         "连上后建议把指纹存入本机 known_hosts")
     a = ap.parse_args()
     want_apk = bool(a.apk and a.apk_name)
     pwd = os.environ.get("DEPLOY_PASSWORD", "").strip()
@@ -33,8 +36,24 @@ def main():
 
     import paramiko
     c = paramiko.SSHClient()
-    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(a.server, a.port, a.user, pwd, timeout=30)
+    if a.trust_host:
+        # 显式豁免：首次连接新服务器时可临时使用（不校验主机密钥存在中间人风险）
+        print("[警告] --trust-host 已启用：本次连接不校验服务器指纹")
+        c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    else:
+        # 默认严格：只接受本机 known_hosts 里已有的指纹，防止 DNS/ARP 劫持截获 root 密码
+        c.load_system_host_keys()
+        known_hosts = os.path.expanduser("~/.ssh/known_hosts")
+        if os.path.exists(known_hosts):
+            c.load_host_keys(known_hosts)
+        c.set_missing_host_key_policy(paramiko.RejectPolicy())
+    try:
+        c.connect(a.server, a.port, a.user, pwd, timeout=30)
+    except paramiko.SSHException as e:
+        print(f"[FAIL] 主机密钥校验失败（{e}）。", file=sys.stderr)
+        print("首次连接该服务器可加 --trust-host；确认后建议执行：", file=sys.stderr)
+        print(f"  ssh-keyscan -p {a.port} {a.server} >> ~/.ssh/known_hosts", file=sys.stderr)
+        return 2
 
     # ---------- SFTP 上传 ----------
     print("=== [SFTP] 上传 ===")
@@ -65,7 +84,7 @@ tar -xzf /tmp/k-deploy.tar.gz
 rm /tmp/k-deploy.tar.gz
 echo '--- 检查 Node.js ---'
 if ! command -v node &> /dev/null; then
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y nodejs
 fi
 node -v

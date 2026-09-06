@@ -34,7 +34,7 @@ interface EventContextType {
   editPost: EditPostData | null; // 编辑中的帖子数据（null=不在编辑状态）
   openEdit: (post: EditPostData) => void; // 打开编辑模态框
   closeEdit: () => void; // 关闭编辑模态框
-  onEditSave?: () => void; // 编辑保存后的回调函数
+  onEditSave?: (() => void) | undefined; // 编辑保存后的回调函数
   setOnEditSave: (callback: () => void) => void; // 注册编辑保存回调
 }
 

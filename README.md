@@ -19,7 +19,7 @@
 - **CSS Modules + 设计令牌** — 组件级样式隔离，亮/暗双主题
 - **Lucide React** — 图标库
 - **Capacitor 8** — Android 原生打包
-- **Vitest + Testing Library** — 单元测试（`8 文件 49 用例`：hooks 乐观更新/回滚、SSE 重连、评论树、事件总线等）
+- **Vitest + Testing Library** — 单元测试（`8 文件 50 用例`：hooks 乐观更新/回滚、SSE 票据连接/退避重连/单例分发、评论树、事件总线等）
 
 ### 后端（server）
 
@@ -34,7 +34,7 @@
 - **pino** — 结构化日志
 - **nodemailer** — 邮箱验证码
 - **优雅停机** — SIGTERM 后断开 WS/SSE、等存量请求收尾（10 秒兜底），PM2 reload 无断崖
-- **Vitest** — 单元测试（`server/test`，13 文件 82 用例）
+- **Vitest** — 单元测试（`server/test`，16 文件 100 用例；全部注入 `:memory:` 库，真实 k.db 零接触）
 
 ### 共享（shared）
 
@@ -44,9 +44,9 @@
 
 - 三包结构（shared / server / client），根目录统一脚本
 - **ESLint + Prettier + EditorConfig** — 代码规范（Prettier 已纳入 CI 门禁；`npm run format` 修格式、`format:check` 检查）
-- **GitHub Actions CI** — push 自动执行 `install → prettier → build → lint → vitest（双端）→ Playwright e2e`
+- **GitHub Actions CI** — push 自动执行 `install → prettier → build → lint → vitest（双端）→ Playwright e2e`，另有并行 Docker job 验证镜像构建 + 容器健康检查冒烟；e2e 失败自动上传报告产物
 - **Dockerfile** — 一键容器化（非 root 运行 + 健康检查 + k.db 预建）
-- **Playwright** — E2E 冒烟测试（`e2e/`：smoke 只读公开流程 + b1b2 回归验证）
+- **Playwright** — E2E 测试（`e2e/`：smoke 只读公开流程 + b1b2 回归 + write-path 真实写路径——注册→登录→发帖→点赞→评论，跑在 DB_PATH 指向的独立测试库上）
 
 ---
 
@@ -83,20 +83,20 @@ k/
 │   │   ├── config.ts            # zod 校验环境变量 + PATHS 路径常量
 │   │   ├── db/                  # connection（含预编译语句缓存）/schema/migrations（24 个版本化迁移）
 │   │   ├── middleware/          # auth / error / cors / validate
-│   │   ├── repositories/        # 全部 SQL 收敛（强类型行，无 as any）
+│   │   ├── repositories/        # 全部 SQL 收敛（强类型行，src 零 any）
 │   │   ├── routes/              # auth/posts/messages/friends/admin/books/music/events...
 │   │   └── lib/                 # upload 工厂 / video / mailer
 │   ├── test/                    # Vitest 单元测试（:memory: SQLite）
 │   ├── uploads/                 # 用户上传文件（images/avatars/temp，不入库）
 │   └── package.json
-├── e2e/                         # Playwright 冒烟测试（smoke + b1b2 回归）
+├── e2e/                         # Playwright 测试（smoke + b1b2 回归 + write-path 写路径）
 ├── .github/workflows/ci.yml     # CI
 ├── Dockerfile
 ├── deploy.ps1                   # 完整部署脚本（本地构建/打包；传输走 SFTP：deploy-sftp.py）
 ├── deploy-interactive.ps1       # 部署交互包装：依次输入服务器 IP 与 SSH 密码后调用 deploy.ps1
 ├── deploy-sftp.py               # 完整部署传输/远端部署后端（SFTP，paramiko）
 ├── deploy-client-lite.py        # 仅 client 变更时的轻量部署（dist+public，自动备份）
-├── archive/                     # 历史归档（目录重命名/改名/包名迁移记录等）
+├── archive/                     # 历史归档（本地保留，不入库：目录重命名/改名/包名迁移记录等）
 └── package.json                 # 根目录统一脚本
 ```
 
@@ -166,7 +166,7 @@ npm run dev
 
 ```bash
 npm run lint         # ESLint（三个包）
-npm test             # 服务端 Vitest 单元测试
+npm test             # Vitest 单元测试（服务端 + 客户端串行执行）
 npm run test:client  # 客户端 Vitest 单元测试
 npm run e2e          # Playwright 冒烟测试（自动构建并在 3200 端口启动）
 npm run format:check # Prettier 格式检查（CI 同款门禁；修复用 npm run format）
@@ -199,7 +199,8 @@ docker run -p 3000:3000 \
 
 - 脚本：`deploy.ps1`（本地构建/打包）+ `deploy-sftp.py`（SFTP 传输与远端部署，替代不可靠的 pscp/plink）。
 - 调用（推荐，交互输入）：`pwsh -NoProfile -ExecutionPolicy Bypass -File deploy-interactive.ps1`——弹窗依次输入**服务器 IP 与 SSH 密码**（IP 不内置默认值，公开仓库不暴露生产地址），密码掩码显示、不落盘、不进历史。
-- 调用（免交互）：`pwsh -ExecutionPolicy Bypass -File deploy.ps1 -SERVER <IP> -PASSWORD <密码>`（密码经环境变量安全传入）。
+- 调用（免交互）：`pwsh -ExecutionPolicy Bypass -File deploy.ps1 -SERVER <IP> -PASSWORD <密码>`（密码经环境变量传给 SFTP 后端，但仍会留在本机 shell 历史/进程命令行，推荐优先用上面的交互方式）。
+- 首次部署新服务器：`deploy-sftp.py` 默认校验本机 `~/.ssh/known_hosts` 中的主机指纹（防中间人截获密码），未知主机会被拒绝；确认网络可信后可加 `--trust-host` 豁免一次，或先 `ssh-keyscan -p <端口> <IP> >> ~/.ssh/known_hosts`。
 - **必须用 PowerShell 7（`pwsh`）**：`deploy.ps1` 等脚本含 UTF-8 无 BOM 中文内容，Windows 自带的 PowerShell 5.1（`powershell`）按 GBK 解码会报语法错误（如意外的标记 `)`）。
 - 目标目录 `/var/www/k`；PM2 进程 `k-server`；nginx 站点 `sites-enabled/k`（默认站反向代理到 `127.0.0.1:3000`）；共享包链接 `server/node_modules/@k/shared`。
 - 流程：`npm run build` → 打包 dist/books/.env（**不含 uploads**，防覆盖生产用户数据）→ SFTP 上传 → 远端解压、重建 `@k/shared` 链接、`npm install --omit=dev`、`pm2 delete`+`start`+`save` → 部署后自动校验（首页/health 200、dist 时间戳、node_modules 无外链、nginx root 仅指向 `/var/www/k`）。

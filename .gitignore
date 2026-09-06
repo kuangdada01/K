@@ -82,3 +82,9 @@ client/public/apk/
 
 # WorkBuddy workspace data
 .workbuddy/
+
+# E2E 独立测试库（playwright webServer DB_PATH 指向）
+e2e/.tmp/
+
+# 历史归档笔记（一次性迁移/重命名过程文档，已完成使命，不入库；本地保留）
+archive/

@@ -20,12 +20,12 @@ import {
 import styles from './PostDetail.module.css';
 
 export function usePostDetailClose(opts: {
-  onClose?: () => void;
+  onClose?: (() => void) | undefined;
   zoomed: boolean;
   setZoomed: (v: boolean) => void;
   overlayRef: RefObject<HTMLDivElement | null>;
   /** 关闭动画启动时调用（主组件在此恢复音乐播放） */
-  onClosing?: () => void;
+  onClosing?: (() => void) | undefined;
 }): { closing: boolean; handleClose: () => void } {
   const { onClose, zoomed, setZoomed, overlayRef, onClosing } = opts;
   const navigate = useNavigate();

@@ -12,9 +12,16 @@ export default tseslint.config(
       },
     },
     rules: {
-      // 现有代码存在历史 any，P1 repository 类型化后收紧为 error
-      '@typescript-eslint/no-explicit-any': 'off',
-      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+      // src 已清零 any（books/ws/error 均已给出真实类型）；测试的 mock 桩单独豁免
+      '@typescript-eslint/no-explicit-any': 'error',
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
+    },
+  },
+  {
+    // 测试文件：WebSocket/mock 桩大量使用 as any，统一降为警告并限制在测试目录
+    files: ['test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'warn',
     },
   }
 );

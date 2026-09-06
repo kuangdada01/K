@@ -17,10 +17,10 @@ import { HTMLAttributes } from 'react';
 import { resolveMediaUrl } from '../../utils';
 
 interface AvatarProps extends HTMLAttributes<HTMLDivElement> {
-  src?: string | null;
+  src?: string | null | undefined;
   username: string;
   size?: number;
-  className?: string;
+  className?: string | undefined;
 }
 
 export default function Avatar({ src, username, size = 40, className = '', ...props }: AvatarProps) {
