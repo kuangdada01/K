@@ -19,6 +19,7 @@
 - **CSS Modules + 设计令牌** — 组件级样式隔离，亮/暗双主题
 - **Lucide React** — 图标库
 - **Capacitor 8** — Android 原生打包
+- **Vitest + Testing Library** — 单元测试（`8 文件 49 用例`：hooks 乐观更新/回滚、SSE 重连、评论树、事件总线等）
 
 ### 后端（server）
 
@@ -26,11 +27,13 @@
 - **better-sqlite3** — SQLite（WAL 模式 + 外键级联 + 索引 + 版本化迁移）
 - **zod** — 环境变量校验、请求参数校验
 - **分层架构** — `routes`（端点声明）→ `repositories`（SQL 收敛、强类型行）→ `middleware` / `lib`
-- **JWT + bcryptjs** — 认证（authMiddleware / optionalAuth / adminMiddleware）
+- **JWT + bcryptjs** — 认证（authMiddleware / optionalAuth / adminMiddleware，签名算法钉死 HS256 + token_version 实时失效）
 - **multer + sharp** — 文件上传、图片压缩、路径穿越防护、孤儿文件清理
+- **ws** — 语音房间 WebSocket 信令（心跳、顶号、连接回收）
 - **SSE** — 实时推送（新私信/通知/公告），心跳保活
 - **pino** — 结构化日志
 - **nodemailer** — 邮箱验证码
+- **优雅停机** — SIGTERM 后断开 WS/SSE、等存量请求收尾（10 秒兜底），PM2 reload 无断崖
 - **Vitest** — 单元测试（`server/test`，13 文件 82 用例）
 
 ### 共享（shared）
@@ -40,9 +43,9 @@
 ### 工程化
 
 - 三包结构（shared / server / client），根目录统一脚本
-- **ESLint + Prettier + EditorConfig** — 代码规范
-- **GitHub Actions CI** — push 自动执行 `install → build → lint → vitest → Playwright e2e`
-- **Dockerfile** — 一键容器化
+- **ESLint + Prettier + EditorConfig** — 代码规范（Prettier 已纳入 CI 门禁；`npm run format` 修格式、`format:check` 检查）
+- **GitHub Actions CI** — push 自动执行 `install → prettier → build → lint → vitest（双端）→ Playwright e2e`
+- **Dockerfile** — 一键容器化（非 root 运行 + 健康检查 + k.db 预建）
 - **Playwright** — E2E 冒烟测试（`e2e/`：smoke 只读公开流程 + b1b2 回归验证）
 
 ---
@@ -63,32 +66,34 @@ k/
 │   │   │   ├── post/            # PostCard/PostDetail/PostMedia/PostDescriptionPanel
 │   │   │   ├── chat/            # ChatWindow/MessageBubble/ConversationSidebar...
 │   │   │   └── profile/         # ProfileHeader/ProfilePostGrid/PrivateFolder
-│   │   ├── context/             # 仅存 Auth/Theme/Music/Event 四个 Context
+│   │   ├── context/             # Auth/Theme/Music/Event/Voice 五个 Context（业务事件走 mitt）
 │   │   ├── hooks/               # usePostsFeed/useLikePost/useFollowUser/useSse...
 │   │   ├── lib/                 # 纯函数（scroll/comments）
 │   │   ├── pages/               # 页面级组件（Home/Explore/Profile/Admin/Books...）
 │   │   ├── state/               # queryClient、mitt 事件总线、交互缓存
+│   │   ├── voice/               # VoiceSession 及子系统（sdp/denoiser/qualityMonitor/recording...）
 │   │   └── styles/              # global.css + tokens（其余已模块化）
 │   ├── android/                 # Capacitor Android 工程
+│   ├── scripts/                 # 一次性验证脚本（b5-verify）
 │   └── package.json
 ├── server/                      # 后端
 │   ├── src/
 │   │   ├── index.ts             # 仅 bootstrap
 │   │   ├── app.ts               # 组装 express 应用（helmet/pino/静态资源/SPA 回退）
 │   │   ├── config.ts            # zod 校验环境变量 + PATHS 路径常量
-│   │   ├── db/                  # connection/schema/migrations（24 个版本化迁移）
+│   │   ├── db/                  # connection（含预编译语句缓存）/schema/migrations（24 个版本化迁移）
 │   │   ├── middleware/          # auth / error / cors / validate
 │   │   ├── repositories/        # 全部 SQL 收敛（强类型行，无 as any）
 │   │   ├── routes/              # auth/posts/messages/friends/admin/books/music/events...
 │   │   └── lib/                 # upload 工厂 / video / mailer
 │   ├── test/                    # Vitest 单元测试（:memory: SQLite）
-│   ├── uploads/                 # 用户上传文件（images/avatars/temp）
+│   ├── uploads/                 # 用户上传文件（images/avatars/temp，不入库）
 │   └── package.json
 ├── e2e/                         # Playwright 冒烟测试（smoke + b1b2 回归）
 ├── .github/workflows/ci.yml     # CI
 ├── Dockerfile
-├── deploy.ps1                   # 完整部署脚本（传输走 SFTP：deploy-sftp.py）
-├── deploy-interactive.ps1       # 部署交互包装：掩码输入 SSH 密码后调用 deploy.ps1
+├── deploy.ps1                   # 完整部署脚本（本地构建/打包；传输走 SFTP：deploy-sftp.py）
+├── deploy-interactive.ps1       # 部署交互包装：依次输入服务器 IP 与 SSH 密码后调用 deploy.ps1
 ├── deploy-sftp.py               # 完整部署传输/远端部署后端（SFTP，paramiko）
 ├── deploy-client-lite.py        # 仅 client 变更时的轻量部署（dist+public，自动备份）
 ├── archive/                     # 历史归档（目录重命名/改名/包名迁移记录等）
@@ -143,6 +148,8 @@ SMTP_USER=your-email@qq.com
 SMTP_PASS=your-smtp-auth-code
 ```
 
+> 以上仅为常用子集；完整可配置项（反代信任 `TRUST_PROXY`、ffmpeg 路径、TURN 中继、App 更新检测等）见 `.env.example` 内的逐项注释。
+
 ### 3. 启动开发环境
 
 ```bash
@@ -158,9 +165,11 @@ npm run dev
 ### 4. 测试
 
 ```bash
-npm run lint        # ESLint（三个包）
-npm test            # 服务端 Vitest 单元测试
-npm run e2e         # Playwright 冒烟测试（自动构建并在 3200 端口启动）
+npm run lint         # ESLint（三个包）
+npm test             # 服务端 Vitest 单元测试
+npm run test:client  # 客户端 Vitest 单元测试
+npm run e2e          # Playwright 冒烟测试（自动构建并在 3200 端口启动）
+npm run format:check # Prettier 格式检查（CI 同款门禁；修复用 npm run format）
 ```
 
 ### 5. 构建生产版本
@@ -178,17 +187,23 @@ cd server && npm start
 
 ```bash
 docker build -t k .
-docker run -p 3000:3000 -v $(pwd)/server/uploads:/app/server/uploads k
+# 生产建议显式挂载 uploads 与数据库（k.db/books 已声明 VOLUME，不挂载则为匿名卷，容器删除即失）
+docker run -p 3000:3000 \
+  -v $(pwd)/server/uploads:/app/server/uploads \
+  -v $(pwd)/server/k.db:/app/server/k.db \
+  -v $(pwd)/server/books:/app/server/books \
+  k
 ```
 
 ### 传统部署（当前生产方式）
 
 - 脚本：`deploy.ps1`（本地构建/打包）+ `deploy-sftp.py`（SFTP 传输与远端部署，替代不可靠的 pscp/plink）。
-- 调用（推荐，交互输密码）：`pwsh -NoProfile -ExecutionPolicy Bypass -File deploy-interactive.ps1`——弹窗掩码输入 SSH 密码后调用 `deploy.ps1`，密码不落盘、不进历史。
+- 调用（推荐，交互输入）：`pwsh -NoProfile -ExecutionPolicy Bypass -File deploy-interactive.ps1`——弹窗依次输入**服务器 IP 与 SSH 密码**（IP 不内置默认值，公开仓库不暴露生产地址），密码掩码显示、不落盘、不进历史。
 - 调用（免交互）：`pwsh -ExecutionPolicy Bypass -File deploy.ps1 -SERVER <IP> -PASSWORD <密码>`（密码经环境变量安全传入）。
 - **必须用 PowerShell 7（`pwsh`）**：`deploy.ps1` 等脚本含 UTF-8 无 BOM 中文内容，Windows 自带的 PowerShell 5.1（`powershell`）按 GBK 解码会报语法错误（如意外的标记 `)`）。
 - 目标目录 `/var/www/k`；PM2 进程 `k-server`；nginx 站点 `sites-enabled/k`（默认站反向代理到 `127.0.0.1:3000`）；共享包链接 `server/node_modules/@k/shared`。
-- 流程：`npm run build` → 打包 dist/uploads/books/.env → SFTP 上传 → 远端解压、重建 `@k/shared` 链接、`npm install --omit=dev`、`pm2 delete`+`start`+`save` → 部署后自动校验（首页/health 200、dist 时间戳、node_modules 无外链、nginx root 仅指向 `/var/www/k`）。
+- 流程：`npm run build` → 打包 dist/books/.env（**不含 uploads**，防覆盖生产用户数据）→ SFTP 上传 → 远端解压、重建 `@k/shared` 链接、`npm install --omit=dev`、`pm2 delete`+`start`+`save` → 部署后自动校验（首页/health 200、dist 时间戳、node_modules 无外链、nginx root 仅指向 `/var/www/k`）。
+- PM2 重启时服务端执行优雅停机（SIGTERM → 断开语音 WS 与 SSE、等存量请求收尾，10 秒兜底强退），重启窗口比瞬时 kill 稍长属正常现象。
 
 #### 轻量部署（仅前端变更时，推荐）
 
