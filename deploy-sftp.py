@@ -98,17 +98,17 @@ echo '--- 检查 PM2 ---'
 if ! command -v pm2 &> /dev/null; then
     npm install -g pm2
 fi
-echo '--- 重建 @k/shared 链接（先建 @k 目录再 ln，旧绝对链接必重建） ---'
-mkdir -p $D/server/node_modules/@k
-ln -sfn $D/shared $D/server/node_modules/@k/shared
-readlink -f $D/server/node_modules/@k/shared
 echo '--- 清理旧布局依赖（workspaces 迁移后依赖统一装根 node_modules；
         旧 server/node_modules 若残留会先于根被 Node 解析，遮蔽新依赖） ---'
 rm -rf $D/server/node_modules
-mkdir -p $D/server/node_modules/@k
-ln -sfn $D/shared $D/server/node_modules/@k/shared
 echo '--- 安装依赖（workspaces 根安装：npm 按根 lockfile 解析全部 workspace） ---'
 cd $D && npm install --omit=dev
+echo '--- 重建 @k/shared 链接（npm install 会整理 workspace 链接，装完后补建：
+        根 node_modules/@k/shared 由 npm 管理；server/node_modules/@k/shared
+        双保险覆盖，防解析落到旧/悬空路径） ---'
+mkdir -p $D/server/node_modules/@k
+ln -sfn $D/shared $D/server/node_modules/@k/shared
+readlink -f $D/server/node_modules/@k/shared
 echo '--- PM2 换名/重启 ---'
 pm2 delete k-server 2>/dev/null || true
 # ecosystem.config.js 在 server/ 子目录（deploy.ps1 打包时复制到 $tmpDir/server/）
@@ -218,7 +218,9 @@ echo APK_PRUNE_DONE
         # （-k 忽略自指 IP 的证书不匹配，-L 跟随 301 到 https）
         ("首页/健康", "curl -skL -o /dev/null -w 'page(%{http_code}) ' http://127.0.0.1/; curl -s -o /dev/null -w 'health(%{http_code})' http://127.0.0.1:3000/api/health", lambda o: "page(200)" in o and "health(200)" in o),
         ("dist 时间戳已更新", "stat -c '%y' "+REMOTE_DIR+"/server/dist/index.js", None),
-        ("@k/shared 链接", "readlink -f "+REMOTE_DIR+"/server/node_modules/@k/shared", lambda o: o.strip() == REMOTE_DIR+"/shared"),
+        ("@k/shared 链接（server 或根 node_modules 任一解析到 shared）",
+            "readlink -f "+REMOTE_DIR+"/server/node_modules/@k/shared 2>/dev/null; readlink -f "+REMOTE_DIR+"/node_modules/@k/shared 2>/dev/null",
+            lambda o: REMOTE_DIR+"/shared" in o),
         ("node_modules 无指向仓库外的符号链接（防旧绝对链接悬空）", "find "+REMOTE_DIR+"/server/node_modules -maxdepth 2 -type l -exec readlink -f {} \\; 2>/dev/null | grep -vc '^"+REMOTE_DIR+"/' || true", lambda o: o.strip() == "0"),
         ("PM2", "pm2 describe k-server | grep -E 'status|script path|exec cwd|uptime'", lambda o: "online" in o and REMOTE_DIR+"/server" in o),
         ("nginx root 仅指向 k 站点与系统默认（无仓库外路径）", "nginx -T 2>/dev/null | grep -E '^\\s*root ' | grep -vcE '/var/www/k/client/dist|/var/www/html' || true", lambda o: o.strip() == "0"),
