@@ -6,14 +6,23 @@
  * - 上一章 / 下一章（同一卷内）
  * - 字体大小调节
  * - 返回目录
+ *
+ * 数据层（§4.2）：手写 loading/error/数据 状态收敛为两个 useQuery
+ * （书籍结构 + 章节内容）。行为不变量：
+ * - 请求时机不变（file/id 变化即取，失败不重试，原「取消标志」丢弃
+ *   过期响应由 query key 天然覆盖——旧 key 的响应只落旧缓存）
+ * - loading 与原实现一致：仅由章节内容拉取驱动（file 为空不加载、
+ *   章节切换期间显示加载中——isFetching 含缓存命中后的挂载重取）
+ * - 失败仍静默降级为空内容（原 catch → setContent('')）
  * ============================================================
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, ChevronLeft, ChevronRight, List, AArrowUp, AArrowDown } from 'lucide-react';
 import api from '../api/http';
-import { BookDetail, BookChapter, BookVolume } from '../types';
+import type { BookDetail, BookChapter, BookVolume } from '../types';
 import styles from './BookReaderPage.module.css';
 
 export default function BookReaderPage() {
@@ -22,19 +31,31 @@ export default function BookReaderPage() {
   const file = searchParams.get('file') || '';
   const navigate = useNavigate();
 
-  const [book, setBook] = useState<BookDetail | null>(null);
-  const [content, setContent] = useState('');
-  const [loading, setLoading] = useState(true);
   const [fontSize, setFontSize] = useState(17);
 
-  // 加载态调整（渲染期 prev 值模式，替代 effect 内同步 setState）：
-  // file 为空 → 结束加载态；file/id 变化 → 进入加载态
-  const [prevLoadKey, setPrevLoadKey] = useState('');
-  if (!file && loading) setLoading(false);
-  if (file && `${id}|${file}` !== prevLoadKey) {
-    setPrevLoadKey(`${id}|${file}`);
-    setLoading(true);
-  }
+  // 书籍结构（失败静默置空：原 catch → setBook(null)）
+  const bookQuery = useQuery({
+    queryKey: ['book', id],
+    queryFn: async () => {
+      const res = await api.get(`/books/${id}`);
+      return res.data as BookDetail;
+    },
+    // 切换书籍时旧书先显示（原 book state 在响应前保持不变）
+    placeholderData: keepPreviousData,
+  });
+  const book = bookQuery.data;
+
+  // 章节内容（file 为空不发请求；响应期 loading，与历史一致）
+  const contentQuery = useQuery({
+    queryKey: ['book', 'content', id, file],
+    queryFn: async () => {
+      const res = await api.get(`/books/${id}/content`, { params: { file }, responseType: 'text' });
+      return res.data as string;
+    },
+    enabled: !!file,
+  });
+  const content = contentQuery.data ?? '';
+  const loading = file ? contentQuery.isFetching : false;
 
   // 扁平化章节列表，用于上/下一章导航
   const flatChapters = useMemo(() => {
@@ -48,34 +69,6 @@ export default function BookReaderPage() {
     () => flatChapters.findIndex((ch: BookChapter) => ch.file === file),
     [flatChapters, file]
   );
-
-  useEffect(() => {
-    if (!file) return;
-    // 取消标志：连续切换章节时丢弃慢到的旧章节内容
-    let cancelled = false;
-    api
-      .get(`/books/${id}/content`, { params: { file }, responseType: 'text' })
-      .then((res) => {
-        if (!cancelled) setContent(res.data as string);
-      })
-      .catch(() => {
-        if (!cancelled) setContent('');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [id, file]);
-
-  useEffect(() => {
-    if (!id) return;
-    api
-      .get(`/books/${id}`)
-      .then((res) => setBook(res.data))
-      .catch(() => setBook(null));
-  }, [id]);
 
   const goChapter = (chapter: BookChapter) => {
     if (chapter.type === 'pdf') {

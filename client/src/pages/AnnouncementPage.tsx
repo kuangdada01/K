@@ -8,34 +8,45 @@
  * - 公告列表（全局公告 + 定向公告）
  * - 已读/未读状态标记
  * - 点击标记为已读
+ *
+ * 数据层（§4.2）：手写 loading/error/数据 状态收敛为 useQuery——
+ * 请求时机不变（挂载即取、失败不重试），错误 toast 文案不变，
+ * markRead 乐观更新经 setQueryData 就地写入（不触发整页重载）。
  * ============================================================
  */
 
-import { useState, useEffect } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Megaphone, Bell } from 'lucide-react';
 import api, { getApiErrorMessage } from '../api/http';
-import { Announcement } from '../types';
+import type { Announcement } from '../types';
 import { events } from '../state/events';
 import { parseDbTime } from '../utils';
 import { showToast } from '../components/ui/Toast';
 import styles from './AnnouncementPage.module.css';
 
 export default function AnnouncementPage() {
-  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    api
-      .get('/announcements')
-      .then((res) => setAnnouncements(res.data.announcements))
-      .catch((err) => showToast(getApiErrorMessage(err, '公告加载失败')))
-      .finally(() => setLoading(false));
-  }, []);
+  const queryClient = useQueryClient();
+  const announcementsQuery = useQuery({
+    queryKey: ['announcements'],
+    queryFn: async () => {
+      try {
+        const res = await api.get('/announcements');
+        return res.data.announcements as Announcement[];
+      } catch (err) {
+        showToast(getApiErrorMessage(err, '公告加载失败'));
+        throw err;
+      }
+    },
+  });
+  const announcements = announcementsQuery.data ?? [];
+  const loading = announcementsQuery.isPending;
 
   const markRead = async (id: number) => {
     try {
       await api.put(`/announcements/${id}/read`);
-      setAnnouncements((prev) => prev.map((a) => (a.id === id ? { ...a, is_read: 1 } : a)));
+      queryClient.setQueryData<Announcement[]>(['announcements'], (prev) =>
+        (prev ?? []).map((a) => (a.id === id ? { ...a, is_read: 1 } : a))
+      );
       events.emit('badge:changed', { source: 'ann' });
     } catch {
       showToast('标记已读失败');

@@ -4,15 +4,24 @@
  * ============================================================
  * 管理员专属页面，需要 admin 权限。
  *
- * 状态与数据逻辑全部集中在本组件（与拆分前一致：postPage/公告表单/
- * PostDetail 等跨 tab 切换保留）；三个 tab 的视图拆分到
+ * 数据层（§4.2）：三 tab 列表手写 effect + 请求序号守卫收敛为三个
+ * useQuery（enabled 按 tab 门控、key 含分页参数）——
+ * - 请求时机不变：进入 tab / 翻页即取，失败不重试；原 reqSeqRef 的
+ *   「过期响应丢弃」由 query key 的 latest-wins 天然覆盖
+ * - 切换 tab 保留旧数据（缓存常驻），切回/翻页时 keepPreviousData
+ *   保持「旧列表先显示、新数据到达后替换」的历史 UI
+ * - 删除/封禁/解封的乐观更新经 setQueryData 就地写入，不整页重载；
+ *   发送公告后 invalidateQueries 触发列表重取（等价原 loadAnnouncements）
+ * - 目标用户搜索下拉保持原实现（防抖 + 选中跳过标记 + 序号守卫）
+ *
+ * 状态与数据逻辑全部集中在本组件；三个 tab 的视图拆分到
  * AdminUsersTab / AdminPostsTab / AdminAnnouncementsTab（展示层）。
  * ============================================================
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Navigate } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { updatePostsFeed } from '../../hooks/usePostsFeed';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { Users, FileText, Megaphone } from 'lucide-react';
@@ -29,23 +38,36 @@ import styles from '../AdminPage.module.css';
 
 type Tab = 'users' | 'posts' | 'announcements';
 
+/** 用户列表查询（users tab 展开时拉取，缓存常驻） */
+function loadAdminUsers() {
+  return api.get('/admin/users').then((res) => res.data.users as AdminUser[]);
+}
+
+/** 帖子列表查询（key 含分页：翻页即取，keepPreviousData 保持旧页显示） */
+function loadAdminPosts(postPage: number) {
+  return api
+    .get(`/admin/posts?page=${postPage}&limit=20`)
+    .then((res) => ({ posts: res.data.posts as AdminPost[], totalPages: res.data.totalPages as number }));
+}
+
+/** 公告列表查询（announcements tab 展开时拉取，缓存常驻） */
+function loadAdminAnnouncements() {
+  return api.get('/admin/announcements').then((res) => res.data.announcements as AdminAnnouncement[]);
+}
+
 export default function AdminPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<Tab>('users');
 
-  // Users state
-  const [users, setUsers] = useState<AdminUser[]>([]);
+  // Users state（搜索为本地过滤，见 AdminUsersTab）
   const [userSearch, setUserSearch] = useState('');
 
   // Posts state
-  const [posts, setPosts] = useState<AdminPost[]>([]);
   const [postPage, setPostPage] = useState(1);
-  const [postTotal, setPostTotal] = useState(0);
   const [postSearch, setPostSearch] = useState('');
 
   // Announcements state
-  const [announcements, setAnnouncements] = useState<AdminAnnouncement[]>([]);
   const [showSendForm, setShowSendForm] = useState(false);
   const [annTitle, setAnnTitle] = useState('');
   const [annContent, setAnnContent] = useState('');
@@ -60,8 +82,6 @@ export default function AdminPage() {
   // （防抖值滞后一拍回落到 username 时不再发出搜索请求）
   const annSearchSeqRef = useRef(0);
   const skipAnnSearchRef = useRef(false);
-  // 请求序号守卫：快速翻页/切换 tab 时只允许最新请求的响应落地（§5.2，仿 ExplorePage）
-  const reqSeqRef = useRef(0);
 
   // Confirm dialog
   const [confirmAction, setConfirmAction] = useState<(() => void) | null>(null);
@@ -75,59 +95,50 @@ export default function AdminPage() {
   // Post detail（页面级渲染：切换 tab 时保持打开，与历史实现一致）
   const [selectedPostId, setSelectedPostId] = useState<number | null>(null);
 
-  useEffect(() => {
-    // 数据加载内联在 effect 中（.then 回调内的 setState 属于异步回调，
-    // 不触发 react-hooks/set-state-in-effect）
-    const seq = ++reqSeqRef.current;
-    if (tab === 'users') {
-      api
-        .get('/admin/users')
-        .then((res) => {
-          if (seq !== reqSeqRef.current) return; // 已有更新的请求，丢弃过期响应
-          setUsers(res.data.users);
-        })
-        .catch((err) => {
-          if (seq === reqSeqRef.current) showToast(getApiErrorMessage(err, '用户列表加载失败'));
-        });
-    } else if (tab === 'posts') {
-      api
-        .get(`/admin/posts?page=${postPage}&limit=20`)
-        .then((res) => {
-          if (seq !== reqSeqRef.current) return; // 已有更新的请求，丢弃过期响应
-          setPosts(res.data.posts);
-          setPostTotal(res.data.totalPages);
-        })
-        .catch((err) => {
-          if (seq === reqSeqRef.current) showToast(getApiErrorMessage(err, '帖子列表加载失败'));
-        });
-    } else if (tab === 'announcements') {
-      api
-        .get('/admin/announcements')
-        .then((res) => {
-          if (seq !== reqSeqRef.current) return; // 已有更新的请求，丢弃过期响应
-          setAnnouncements(res.data.announcements);
-        })
-        .catch((err) => {
-          if (seq === reqSeqRef.current) showToast(getApiErrorMessage(err, '公告列表加载失败'));
-        });
-    }
-  }, [tab, postPage]);
+  // ---- 三 tab 列表数据（§4.2：useQuery 取代手写 effect + 序号守卫）----
+  const usersQuery = useQuery({
+    queryKey: ['admin', 'users'],
+    queryFn: () =>
+      loadAdminUsers().catch((err) => {
+        showToast(getApiErrorMessage(err, '用户列表加载失败'));
+        throw err;
+      }),
+    enabled: tab === 'users',
+  });
+  const users = usersQuery.data ?? [];
 
-  const loadAnnouncements = useCallback(async () => {
-    try {
-      const res = await api.get('/admin/announcements');
-      setAnnouncements(res.data.announcements);
-    } catch (err) {
-      showToast(getApiErrorMessage(err, '公告列表加载失败'));
-    }
-  }, []);
+  const postsQuery = useQuery({
+    queryKey: ['admin', 'posts', postPage],
+    queryFn: () =>
+      loadAdminPosts(postPage).catch((err) => {
+        showToast(getApiErrorMessage(err, '帖子列表加载失败'));
+        throw err;
+      }),
+    enabled: tab === 'posts',
+    placeholderData: keepPreviousData,
+  });
+  const posts = postsQuery.data?.posts ?? [];
+  const postTotal = postsQuery.data?.totalPages ?? 0;
+
+  const announcementsQuery = useQuery({
+    queryKey: ['admin', 'announcements'],
+    queryFn: () =>
+      loadAdminAnnouncements().catch((err) => {
+        showToast(getApiErrorMessage(err, '公告列表加载失败'));
+        throw err;
+      }),
+    enabled: tab === 'announcements',
+  });
+  const announcements = announcementsQuery.data ?? [];
 
   const handleDeleteUser = (u: AdminUser) => {
     setConfirmMsg(`确定要删除用户 "${u.username}" 吗？该用户的帖子、评论等数据将一并删除。`);
     setConfirmAction(() => async () => {
       try {
         await api.delete(`/admin/users/${u.id}`);
-        setUsers((prev) => prev.filter((x) => x.id !== u.id));
+        queryClient.setQueryData<AdminUser[]>(['admin', 'users'], (prev) =>
+          (prev ?? []).filter((x) => x.id !== u.id)
+        );
         showToast('用户已删除');
       } catch {
         showToast('删除失败');
@@ -142,8 +153,8 @@ export default function AdminPage() {
     if (!banTarget) return;
     try {
       await api.post(`/admin/users/${banTarget.id}/ban`, { days });
-      setUsers((prev) =>
-        prev.map((x) =>
+      queryClient.setQueryData<AdminUser[]>(['admin', 'users'], (prev) =>
+        (prev ?? []).map((x) =>
           x.id === banTarget.id
             ? { ...x, banned_until: new Date(Date.now() + days * 86400000).toISOString() }
             : x
@@ -159,7 +170,9 @@ export default function AdminPage() {
   const handleUnban = async (u: AdminUser) => {
     try {
       await api.post(`/admin/users/${u.id}/unban`);
-      setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, banned_until: null } : x)));
+      queryClient.setQueryData<AdminUser[]>(['admin', 'users'], (prev) =>
+        (prev ?? []).map((x) => (x.id === u.id ? { ...x, banned_until: null } : x))
+      );
       showToast(`已解封 ${u.username}`);
     } catch {
       showToast('解封失败');
@@ -171,7 +184,10 @@ export default function AdminPage() {
     setConfirmAction(() => async () => {
       try {
         await api.delete(`/admin/posts/${p.id}`);
-        setPosts((prev) => prev.filter((x) => x.id !== p.id));
+        queryClient.setQueryData<{ posts: AdminPost[]; totalPages: number }>(
+          ['admin', 'posts', postPage],
+          (prev) => (prev ? { ...prev, posts: prev.posts.filter((x) => x.id !== p.id) } : prev)
+        );
         // 同步前台信息流缓存，删除后立即生效
         updatePostsFeed(queryClient, (prev) => prev.filter((x) => x.id !== p.id));
         showToast('帖子已删除');
@@ -186,7 +202,9 @@ export default function AdminPage() {
     setConfirmAction(() => async () => {
       try {
         await api.delete(`/admin/announcements/${a.id}`);
-        setAnnouncements((prev) => prev.filter((x) => x.id !== a.id));
+        queryClient.setQueryData<AdminAnnouncement[]>(['admin', 'announcements'], (prev) =>
+          (prev ?? []).filter((x) => x.id !== a.id)
+        );
         showToast('公告已删除');
       } catch {
         showToast('删除失败');
@@ -227,7 +245,7 @@ export default function AdminPage() {
       setAnnTargetName('');
       setAnnSearch('');
       setShowSendForm(false);
-      loadAnnouncements();
+      queryClient.invalidateQueries({ queryKey: ['admin', 'announcements'] });
     } catch {
       showToast('发送失败');
     }
