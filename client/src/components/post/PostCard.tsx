@@ -14,7 +14,7 @@
  * ============================================================
  */
 
-import { useState, useEffect, useRef, memo } from 'react';
+import { useState, useEffect, useRef, useMemo, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MessageCircle, Share2, Repeat2 } from 'lucide-react';
 import RepostCheck from '../icons/RepostCheck';
@@ -26,6 +26,9 @@ import { useFollow, useLike, useRepost } from '../../state/cache';
 import { useFollowUser } from '../../hooks/useFollowUser';
 import { useLikePost } from '../../hooks/useLikePost';
 import { useRepostPost } from '../../hooks/useRepostPost';
+import { useVisibility } from '../../hooks/useVisibility';
+import { useSwipeCarousel } from '../../hooks/useSwipeCarousel';
+import { useVideoAutoplay } from '../../hooks/useVideoAutoplay';
 import { events } from '../../state/events';
 import { showToast } from '../ui/Toast';
 import { formatRelativeTime, resolveMediaUrl } from '../../utils';
@@ -71,23 +74,21 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   // 用户手动触摸/滑动过轮播图后停止自动轮播（移动端无 hover，isPaused 恒 false，
   // 此前手动切图 3 秒后会被自动轮播切走——"抢权限"；触摸过一次即不再自动播）
   const [userInteracted, setUserInteracted] = useState(false);
-  const [isFullyVisible, setIsFullyVisible] = useState(false);
-  const [isPartiallyVisible, setIsPartiallyVisible] = useState(false);
-  const [videoReady, setVideoReady] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // transform 轨道：GPU 合成器驱动，60fps 丝滑（scrollLeft 走主线程会掉帧）
   const trackRef = useRef<HTMLDivElement>(null);
-  // 当前轨道像素偏移（0 = 第一张），供手势跟手与动画共用
-  const offsetRef = useRef(0);
-  const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const heartRef = useRef<SVGSVGElement>(null);
-  // 上次稳定停靠的图片索引：手势完全接管分页（一次最多翻一页）
-  const settledIndexRef = useRef(0);
   const navigate = useNavigate();
 
-  const images = (() => {
+  // 帖子可见性检测（IntersectionObserver 逻辑自 useVisibility 拆出，行为不变）
+  const { isFullyVisible, isPartiallyVisible } = useVisibility(cardRef);
+  // 手势轮播轨道（手势/动画逻辑自 useSwipeCarousel 拆出，行为不变）
+  const swipeCarousel = useSwipeCarousel(trackRef, scrollRef);
+
+  // useMemo 化：post 未变时返回同一引用，避免手势 effect 依赖 [images] 每次渲染 detach/reattach
+  const images = useMemo<string[]>(() => {
     if (post.images && post.images.length > 0) return post.images;
     // Fallback: image_url might be JSON string or single URL
     try {
@@ -95,28 +96,7 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
       if (Array.isArray(parsed) && parsed.length > 0) return parsed;
     } catch {}
     return [post.image_url];
-  })();
-
-  // Intersection Observer: 检测帖子可见程度
-  // - ≥95% 完全可见：视频自动播放
-  // - ≥50% 部分可见：图片轮播自动播放（大卡片/小视口下 95% 不可达，需放宽）
-  useEffect(() => {
-    const el = cardRef.current;
-    if (!el) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries[0];
-        if (!entry) return;
-        setIsPartiallyVisible(entry.isIntersecting && entry.intersectionRatio >= 0.5);
-        setIsFullyVisible(entry.isIntersecting && entry.intersectionRatio >= 0.95);
-      },
-      { threshold: [0.5, 0.95] }
-    );
-
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
+  }, [post.images, post.image_url]);
 
   // Auto-play carousel: 部分可见且未悬停暂停时每 3 秒推进一张；
   // 用户手动触摸/滑动过后（userInteracted）不再自动播
@@ -141,41 +121,12 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   // 离开视口后同步重置吸附基准（渲染期不写 ref，放 effect 里避免 lint 告警）
   useEffect(() => {
     if (!isPartiallyVisible) {
-      settledIndexRef.current = 0;
+      swipeCarousel.setSettled(0);
     }
-  }, [isPartiallyVisible]);
-  // 卸载时清理 transition 定时器
-  useEffect(() => {
-    return () => {
-      if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
-    };
-  }, []);
-  if (!videoShouldBeReady && videoReady) setVideoReady(false);
-  useEffect(() => {
-    if (!videoShouldBeReady) return;
-    const video = videoRef.current;
-    if (!video) return;
-
-    let onReady: (() => void) | null = null;
-
-    // 延迟启动：完全可见一小会儿后再加载，划过不误触
-    const delayTimer = window.setTimeout(() => {
-      video.muted = true;
-      onReady = () => {
-        setVideoReady(true);
-        video.play().catch(() => {});
-      };
-      video.addEventListener('loadeddata', onReady);
-      video.load();
-    }, VIDEO_AUTOPLAY_DELAY_MS);
-
-    return () => {
-      window.clearTimeout(delayTimer);
-      if (onReady) video.removeEventListener('loadeddata', onReady);
-      video.pause();
-      setVideoReady(false);
-    };
-  }, [videoShouldBeReady]);
+  }, [isPartiallyVisible, swipeCarousel]);
+  // 视频延迟自动播放（延迟判定与定时器清理语义自 useVideoAutoplay 拆出，行为不变；
+  // 卸载清理 transition 定时器已随手势逻辑移入 useSwipeCarousel）
+  const videoReady = useVideoAutoplay(videoRef, videoShouldBeReady, VIDEO_AUTOPLAY_DELAY_MS);
 
   // 关注状态：缓存命中时渲染期同步，未命中才发请求；并监听全局 follow:changed 实时更新
   if (user && post.user_id !== user.id) {
@@ -250,124 +201,28 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）——
   // transform 轨道驱动：touchmove 直接写 translate3d（合成器线程，不触发 layout，
   // 60fps 丝滑）；松手用 CSS transition（同样走合成器）落位。
-  // 轨道位移基准：offset = index * 容器宽度。
-  const setTrackOffset = (offset: number) => {
-    const track = trackRef.current;
-    if (!track) return;
-    offsetRef.current = offset;
-    track.style.transform = `translate3d(${-offset}px, 0, 0)`;
-  };
-
-  // 落位动画：CSS transition（合成器执行，帧率满格）
-  const animateTrackTo = (index: number) => {
-    const track = trackRef.current;
-    if (!track) return;
-    const width = scrollRef.current?.clientWidth || 0;
-    const target = width * index;
-    if (Math.abs(offsetRef.current - target) < 1) return;
-    if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
-    track.style.transition = 'transform 400ms cubic-bezier(0.22, 1, 0.36, 1)';
-    track.style.transform = `translate3d(${-target}px, 0, 0)`;
-    offsetRef.current = target;
-    transitionTimerRef.current = setTimeout(() => {
-      if (trackRef.current) trackRef.current.style.transition = 'none';
-    }, 460);
-  };
+  // 轨道位移基准：offset = index * 容器宽度。（手势/轨道逻辑已拆出至 useSwipeCarousel，行为不变）
 
   // index 变化 → 轨道动画到对应位置（自动轮播/重置/外部切换统一走这里）
   useEffect(() => {
     if (images.length <= 1 || isPaused) return;
-    animateTrackTo(currentImageIndex);
-  }, [currentImageIndex, images.length, isPaused]);
+    swipeCarousel.animateTrackTo(currentImageIndex);
+  }, [currentImageIndex, images.length, isPaused, swipeCarousel]);
 
   useEffect(() => {
     const track = trackRef.current;
     const viewport = scrollRef.current;
     // 事件绑定在 viewport 上（覆盖含黑色填充的整个区域；横版图片黑边处也能滑动翻页）
     if (!track || !viewport || images.length <= 1) return;
-    let startX = 0;
-    let startY = 0;
-    let startOffset = 0;
-    let startIndex = 0;
-    let active = false;
-    let horizontal = false; // 是否已判定为横向手势（横向主导才接管滚动）
-    let moveHandler: ((e: TouchEvent) => void) | null = null;
-
-    const down = (e: PointerEvent) => {
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      setUserInteracted(true); // 手动触摸后停止自动轮播
-      // 动画中途再次触摸：取消 transition，从当前位置继续跟手
-      track.style.transition = 'none';
-      if (transitionTimerRef.current) {
-        clearTimeout(transitionTimerRef.current);
-        transitionTimerRef.current = null;
-      }
-      active = true;
-      horizontal = false;
-      startX = e.clientX;
-      startY = e.clientY;
-      startOffset = offsetRef.current;
-      startIndex = settledIndexRef.current;
-      moveHandler = (te: TouchEvent) => {
-        if (!active || te.touches.length !== 1) return;
-        const touch = te.touches[0]!;
-        const dx = touch.clientX - startX;
-        const dy = touch.clientY - startY;
-        if (!horizontal) {
-          // 首次位移判定方向：横向主导才接管，纵向主导（浏览页面）立即放手
-          if (Math.abs(dx) > Math.abs(dy) + 2) {
-            horizontal = true;
-          } else if (Math.abs(dy) > Math.abs(dx) + 2) {
-            active = false; // 交给浏览器纵向滚动页面
-            if (moveHandler) {
-              viewport.removeEventListener('touchmove', moveHandler);
-              moveHandler = null;
-            }
-            return;
-          } else {
-            return; // 位移太小，继续观察
-          }
-        }
-        te.preventDefault();
-        setTrackOffset(startOffset - dx);
-      };
-      // passive:false 才能 preventDefault 禁掉原生惯性滚动
-      viewport.addEventListener('touchmove', moveHandler, { passive: false });
-    };
-
-    const up = () => {
-      if (!active) return;
-      active = false;
-      if (moveHandler) {
-        viewport.removeEventListener('touchmove', moveHandler);
-        moveHandler = null;
-      }
-      const dx = offsetRef.current - startOffset; // 正向 = 手指左滑（offset 增大）= 下一张
-      const width = scrollRef.current?.clientWidth || 1;
-      let target = startIndex;
-      if (Math.abs(dx) > width * 0.12) {
-        // 拖动超过 ~1/8 屏 → 翻一页（最多一页，绝不过 2 张）
-        if (dx > 0) target = Math.min(images.length - 1, startIndex + 1);
-        else if (dx < 0) target = Math.max(0, startIndex - 1);
-      } else {
-        // 微动 → 回到起点
-        target = startIndex;
-      }
-      settledIndexRef.current = target;
-      setCurrentImageIndex(target);
-      animateTrackTo(target);
-    };
-
-    viewport.addEventListener('pointerdown', down);
-    viewport.addEventListener('pointerup', up);
-    viewport.addEventListener('pointercancel', up);
-    return () => {
-      viewport.removeEventListener('pointerdown', down);
-      viewport.removeEventListener('pointerup', up);
-      viewport.removeEventListener('pointercancel', up);
-      if (moveHandler) viewport.removeEventListener('touchmove', moveHandler);
-    };
-  }, [images]);
+    const detach = swipeCarousel.attachGesture(
+      viewport,
+      track,
+      images.length,
+      () => setUserInteracted(true), // 手动触摸后停止自动轮播
+      (target) => setCurrentImageIndex(target)
+    );
+    return detach;
+  }, [images, swipeCarousel]);
 
   const handleFollow = async (e: React.MouseEvent) => {
     e.stopPropagation();

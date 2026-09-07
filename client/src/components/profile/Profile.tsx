@@ -23,20 +23,22 @@ import { useQueryClient } from '@tanstack/react-query';
 import { postsFeedKey, updatePostsFeed } from '../../hooks/usePostsFeed';
 import api from '../../api/http';
 import { getApiErrorMessage } from '../../api/http';
-import { User, Post } from '../../types';
-import { fileToPreviewUrl } from '../../utils';
+import { Post } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { useFollow } from '../../state/cache';
 import { useFollowUser } from '../../hooks/useFollowUser';
 import { useEvent } from '../../context/EventContext';
 import { events } from '../../state/events';
 import { showToast } from '../ui/Toast';
+import { useProfileData } from '../../hooks/useProfileData';
+import { useProfileEventsSync } from '../../hooks/useProfileEventsSync';
+import { usePrivateFolder } from '../../hooks/usePrivateFolder';
 import ConfirmDialog from '../ui/ConfirmDialog';
 import PostDetail from '../post/PostDetail';
 import FollowersModal from './FollowersModal';
 import ProfileHeader from './ProfileHeader';
 import ProfilePostGrid from './ProfilePostGrid';
-import PrivateFolder, { PrivateImageItem, PrivateNewFileItem, PrivateZoomItem } from './PrivateFolder';
+import PrivateFolder from './PrivateFolder';
 import styles from './Profile.module.css';
 
 interface ProfileProps {
@@ -52,20 +54,8 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
   const { getFollowStatus, setFollowStatus } = useFollow();
   const { follow, unfollow } = useFollowUser();
   const { openEdit, setOnEditSave } = useEvent();
-  const [profileUser, setProfileUser] = useState<User | null>(null);
-  const [posts, setPosts] = useState<Post[]>([]);
   const [editing, setEditing] = useState(false);
-  const [username, setUsername] = useState('');
-  const [bio, setBio] = useState('');
   const [selectedPostId, setSelectedPostId] = useState<number | null>(null);
-  const [isFollowing, setIsFollowing] = useState(false);
-  const [followersCount, setFollowersCount] = useState(0);
-  const [followingCount, setFollowingCount] = useState(0);
-  const [showPrivateFolder, setShowPrivateFolder] = useState(false);
-  const [privateImages, setPrivateImages] = useState<PrivateImageItem[]>([]);
-  const [privateNewFiles, setPrivateNewFiles] = useState<PrivateNewFileItem[]>([]);
-  const [privateDeletedIds, setPrivateDeletedIds] = useState<Set<number>>(new Set());
-  const [privateZoomIndex, setPrivateZoomIndex] = useState<number | null>(null);
   const [deletePostId, setDeletePostId] = useState<number | null>(null);
   const [showFollowModal, setShowFollowModal] = useState<'followers' | 'following' | null>(null);
   const [activeTab, setActiveTab] = useState<'posts' | 'bookmarks' | 'reposts'>('posts');
@@ -74,124 +64,38 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
   const [repostedPosts, setRepostedPosts] = useState<Post[]>([]);
   const [loadingReposts, setLoadingReposts] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const privateFileInputRef = useRef<HTMLInputElement>(null);
 
   const isOwnProfile = !!(embeddedUserId
     ? currentUser && embeddedUserId === currentUser.id
     : !id || (currentUser && parseInt(id) === currentUser.id));
   const userId = embeddedUserId || (id ? parseInt(id) : currentUser?.id);
 
-  // 全部实时：点赞/转发/评论/删除/新增/更新/关注 均同步本页
-  useEffect(() => {
-    const onDeleted = (deletedId: number) => {
-      setPosts((prev) => prev.filter((p) => p.id !== deletedId));
-      setBookmarkedPosts((prev) => prev.filter((p) => p.id !== deletedId));
-      setRepostedPosts((prev) => prev.filter((p) => p.id !== deletedId));
-    };
-    const onLike = ({ postId, liked, likeCount }: { postId: number; liked: boolean; likeCount: number }) => {
-      const upd = (p: Post) => (p.id === postId ? { ...p, liked: liked ? 1 : 0, like_count: likeCount } : p);
-      setPosts((prev) => prev.map(upd));
-      setBookmarkedPosts((prev) => prev.map(upd));
-      setRepostedPosts((prev) => prev.map(upd));
-    };
-    const onRepost = ({
-      postId,
-      reposted,
-      repostCount,
-    }: {
-      postId: number;
-      reposted: boolean;
-      repostCount: number;
-    }) => {
-      const upd = (p: Post) =>
-        p.id === postId ? { ...p, reposted: reposted ? 1 : 0, repost_count: repostCount } : p;
-      setPosts((prev) => prev.map(upd));
-      setBookmarkedPosts((prev) => prev.map(upd));
-      setRepostedPosts((prev) => prev.map(upd));
-    };
-    const onComment = ({ postId, commentCount }: { postId: number; commentCount: number }) => {
-      const upd = (p: Post) => (p.id === postId ? { ...p, comment_count: commentCount } : p);
-      setPosts((prev) => prev.map(upd));
-      setBookmarkedPosts((prev) => prev.map(upd));
-      setRepostedPosts((prev) => prev.map(upd));
-    };
-    const onFollow = (uid: number) => {
-      if (uid === userId) {
-        const c = getFollowStatus(uid);
-        if (c !== undefined) setIsFollowing(c);
-      }
-    };
-    const onCreated = () => {
-      if (userId)
-        api
-          .get(`/users/${userId}/posts`)
-          .then((r) => setPosts(r.data.posts))
-          .catch(() => {});
-    };
-    const onUpdated = () => {
-      if (userId)
-        api
-          .get(`/users/${userId}/posts`)
-          .then((r) => setPosts(r.data.posts))
-          .catch(() => {});
-    };
-    events.on('post:deleted', onDeleted);
-    events.on('post:like', onLike);
-    events.on('post:repost', onRepost);
-    events.on('post:comment', onComment);
-    events.on('post:created', onCreated);
-    events.on('post:updated', onUpdated);
-    events.on('follow:changed', onFollow);
-    return () => {
-      events.off('post:deleted', onDeleted);
-      events.off('post:like', onLike);
-      events.off('post:repost', onRepost);
-      events.off('post:comment', onComment);
-      events.off('post:created', onCreated);
-      events.off('post:updated', onUpdated);
-      events.off('follow:changed', onFollow);
-    };
-  }, [userId, getFollowStatus]);
+  // 资料加载：cancelled 守卫 + 非本人关注状态回填（自 useProfileData 拆出，行为不变）
+  const {
+    profileUser,
+    setProfileUser,
+    posts,
+    setPosts,
+    username,
+    setUsername,
+    bio,
+    setBio,
+    followersCount,
+    setFollowersCount,
+    followingCount,
+    isFollowing,
+    setIsFollowing,
+  } = useProfileData({ userId, currentUser, getFollowStatus, setFollowStatus });
 
-  useEffect(() => {
-    if (!userId) return;
-    // 取消标志：快速切换 userId 时丢弃慢到的旧响应，避免旧用户资料覆盖新页面
-    let cancelled = false;
-    const loadProfile = async () => {
-      try {
-        const [userRes, postsRes] = await Promise.all([
-          api.get(`/users/${userId}`),
-          api.get(`/users/${userId}/posts`),
-        ]);
-        if (cancelled) return;
-        setProfileUser(userRes.data);
-        setPosts(postsRes.data.posts);
-        setUsername(userRes.data.username);
-        setBio(userRes.data.bio || '');
-        setFollowersCount(userRes.data.followers_count || 0);
-        setFollowingCount(userRes.data.following_count || 0);
-
-        // Load follow status if not own profile
-        if (currentUser && userId !== currentUser.id) {
-          const cached = getFollowStatus(userId);
-          if (cached !== undefined) {
-            setIsFollowing(cached);
-          } else {
-            const statusRes = await api.get(`/friends/status/${userId}`);
-            if (cancelled) return;
-            setIsFollowing(statusRes.data.is_following);
-            setFollowStatus(userId, statusRes.data.is_following);
-          }
-        }
-      } catch {
-        if (!cancelled) showToast('加载失败');
-      }
-    };
-    loadProfile();
-    return () => {
-      cancelled = true;
-    };
-  }, [userId, currentUser, getFollowStatus, setFollowStatus]);
+  // 帖子事件 → 三份本地列表 + 关注态实时同步（自 useProfileEventsSync 拆出，行为不变）
+  useProfileEventsSync({
+    userId,
+    getFollowStatus,
+    setPosts,
+    setBookmarkedPosts,
+    setRepostedPosts,
+    setIsFollowing,
+  });
 
   // 切到收藏/转发标签时进入加载态（渲染期 prev 值模式，替代 effect 内同步 setState）
   const [prevActiveTab, setPrevActiveTab] = useState(activeTab);
@@ -335,90 +239,23 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
     });
   };
 
-  const handleOpenPrivateFolder = async () => {
-    setShowPrivateFolder(true);
-    setPrivateDeletedIds(new Set());
-    setPrivateNewFiles([]);
-    try {
-      const res = await api.get('/users/me/private-images');
-      setPrivateImages(res.data.images);
-    } catch {
-      showToast('私密图片加载失败');
-    }
-  };
-
-  const handleAddPrivateImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    const visibleCount =
-      privateImages.filter((img) => !privateDeletedIds.has(img.id)).length + privateNewFiles.length;
-    const remaining = 10 - visibleCount;
-    const toAdd = files.slice(0, remaining);
-    if (toAdd.length === 0) return;
-    // HEIC/HEIF 经 WASM 实时转 JPEG 预览，其余格式直接 blob URL
-    const newItems = await Promise.all(
-      toAdd.map(async (file) => ({ file, preview: await fileToPreviewUrl(file) }))
-    );
-    setPrivateNewFiles((prev) => [...prev, ...newItems]);
-    e.target.value = '';
-  };
-
-  const handleRemovePrivateNewFile = (index: number) => {
-    setPrivateNewFiles((prev) => {
-      const f = prev[index];
-      if (f) URL.revokeObjectURL(f.preview);
-      return prev.filter((_, i) => i !== index);
-    });
-  };
-
-  const handleToggleDeletePrivate = (id: number) => {
-    setPrivateDeletedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  const handleSavePrivateFolder = async () => {
-    try {
-      // Delete marked images
-      for (const id of privateDeletedIds) {
-        await api.delete(`/users/me/private-images/${id}`);
-      }
-      // Upload new images
-      for (const item of privateNewFiles) {
-        const formData = new FormData();
-        formData.append('image', item.file);
-        await api.post('/users/me/private-images', formData, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        });
-      }
-      // Refresh
-      const res = await api.get('/users/me/private-images');
-      setPrivateImages(res.data.images);
-      setPrivateNewFiles([]);
-      setPrivateDeletedIds(new Set());
-      setShowPrivateFolder(false);
-      showToast('保存成功！');
-    } catch (err) {
-      showToast(getApiErrorMessage(err, '保存失败'));
-    }
-  };
-
-  const handleCancelPrivateFolder = () => {
-    privateNewFiles.forEach((item) => URL.revokeObjectURL(item.preview));
-    setPrivateNewFiles([]);
-    setPrivateDeletedIds(new Set());
-    setShowPrivateFolder(false);
-  };
-
-  const getAllPrivateImages = (): PrivateZoomItem[] => {
-    const existing = privateImages
-      .filter((img) => !privateDeletedIds.has(img.id))
-      .map((img) => ({ type: 'existing' as const, url: img.image_url, id: img.id }));
-    const newOnes = privateNewFiles.map((item, i) => ({ type: 'new' as const, url: item.preview, index: i }));
-    return [...existing, ...newOnes];
-  };
+  // 私密文件夹状态机（objectURL 生命周期 + 保存串行，自 usePrivateFolder 拆出，行为不变）
+  const {
+    showPrivateFolder,
+    privateImages,
+    privateNewFiles,
+    privateDeletedIds,
+    privateZoomIndex,
+    setPrivateZoomIndex,
+    privateFileInputRef,
+    handleOpenPrivateFolder,
+    handleAddPrivateImages,
+    handleRemovePrivateNewFile,
+    handleToggleDeletePrivate,
+    handleSavePrivateFolder,
+    handleCancelPrivateFolder,
+    getAllPrivateImages,
+  } = usePrivateFolder();
 
   const handleSaveProfile = async () => {
     try {

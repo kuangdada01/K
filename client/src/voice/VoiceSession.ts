@@ -103,28 +103,21 @@ const SPEAKING_THRESHOLD = 0.045;
 const SPEAKING_INTERVAL_MS = 100;
 /** 断线重连间隔 */
 const RECONNECT_DELAY_MS = 3000;
-/** 音量范围 0-100% */
-const MIC_VOLUME_KEY = 'voice:micVolume';
-/** 麦克风降噪开关偏好（默认关；刷新/重新进房后保持） */
-export const NOISE_REDUCTION_KEY = 'voice:noiseReduction';
-/** 音乐模式开关偏好（默认关：高码率立体声 + 关闭回声消除/降噪处理链） */
-export const MUSIC_MODE_KEY = 'voice:musicMode';
-const peerVolumeKey = (selfId: number, peerId: number) => `voice:vol:${selfId}:${peerId}`;
+// 偏好持久化键与读写辅助收敛于 ./prefs（行为不变）；re-export 兼容既有导入
+import {
+  MIC_VOLUME_KEY,
+  NOISE_REDUCTION_KEY,
+  MUSIC_MODE_KEY,
+  peerVolumeKey,
+  loadNumber,
+  loadFlag,
+} from './prefs';
+export { NOISE_REDUCTION_KEY, MUSIC_MODE_KEY };
 
 /** ICE 兜底配置（接口失败时使用，与服务端默认一致） */
 const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
   { urls: ['stun:stun.qq.com:3478', 'stun:stun.miwifi.com:3478', 'stun:stun.l.google.com:19302'] },
 ];
-
-function loadNumber(key: string, fallback: number): number {
-  const v = parseFloat(localStorage.getItem(key) ?? '');
-  return Number.isFinite(v) ? v : fallback;
-}
-
-/** 读取 '1'/'0' 开关偏好（缺省 false） */
-function loadFlag(key: string): boolean {
-  return localStorage.getItem(key) === '1';
-}
 
 export class VoiceSession {
   private cb: VoiceSessionCallbacks;
@@ -432,8 +425,24 @@ export class VoiceSession {
         this.teardown('auth');
         return;
       }
+      if (e.code === 4003) {
+        // 房间已被删除（服务端 hub.closeRoom 主动关闭）。若 room-closed 消息弱网丢失，
+        // 只能靠关闭码终止——否则会按 3s 间隔无限重连一个已不存在的房间
+        this.teardown('room-closed');
+        return;
+      }
       // 其余（网络抖动等）自动重连：清空对等连接后重新加入房间
       this.cleanupPeers();
+      // 重连对账（P1 修复）：共享状态以服务端为准。断线期间服务端已清除
+      // member.sharing 并广播，本地不同步清掉会：观看方残留死流舞台永不关闭；
+      // 共享方重连后把旧捕获流挂到新连接持续推流，与后来的共享者形成“双共享者”
+      if (this.sharingActive) this.stopScreenShare(false);
+      if (this.shareSharer) {
+        this.shareSharer = null;
+        this.disposeShareAudio();
+        this.cb.onShareVideo(null);
+        this.cb.onShareChanged({ userId: null, audio: false });
+      }
       this.emitStatus('reconnecting');
       this.reconnectTimer = window.setTimeout(() => this.openWs(), RECONNECT_DELAY_MS);
     };
@@ -479,7 +488,12 @@ export class VoiceSession {
         this.emitStatus('connected');
         for (const p of msg.participants as VoiceParticipant[]) {
           const entry = this.ensurePeer(p);
-          this.initiateOffer(entry).catch(() => this.teardown('negotiation'));
+          this.initiateOffer(entry).catch(() => {
+            // 单对端协商失败（对端恰在此时退出/PC 关闭等）只摘除该对端，
+            // 不再整会话 teardown——异常对端不应成为打崩整个房间的武器
+            this.removePeer(entry.participant.userId);
+            this.emitParticipants();
+          });
         }
         // 加入时已有人在共享：先立状态与徽标（画面随后经该共享者的补挂重协商到达）
         const sharer = (msg.participants as VoiceParticipant[]).find((p) => p.sharing);
@@ -517,7 +531,15 @@ export class VoiceSession {
         break;
       }
       case 'signal':
-        this.handleSignal(msg.from, msg.data).catch(() => this.teardown('negotiation'));
+        this.handleSignal(msg.from, msg.data).catch(() => {
+          // 坏信令（畸形 ICE 候选/过期 answer 等，服务端原样转发零校验）只降级到
+          // 摘除该对端，不销毁整个会话
+          const entry = this.peers.get(msg.from);
+          if (entry) {
+            this.removePeer(msg.from);
+            this.emitParticipants();
+          }
+        });
         break;
       case 'share-changed': {
         const userId = Number(msg.userId);
@@ -761,6 +783,10 @@ export class VoiceSession {
   /** onnegotiationneeded：共享 track 增删后自动重协商（初始协商被抑制，由确定性规则发起） */
   private async handleNegotiationNeeded(entry: PeerEntry): Promise<void> {
     if (this.destroyed || entry.negotiateSuppressed) return;
+    // 完美协商守卫（P1 修复）：本端已有 offer 在途或未回到 stable 时，忽略重复触发的
+    // negotiationneeded。此前在 have-local-offer 态再次 createOffer 会抛错（被吞），
+    // 留下双 offer 竞争窗口，是“偶发画面/音频缺失”的候选根因
+    if (entry.makingOffer || entry.pc.signalingState !== 'stable') return;
     try {
       await this.initiateOffer(entry);
     } catch {
@@ -795,8 +821,15 @@ export class VoiceSession {
       // 也会触发本方法，这里同步调用即时兜底。
       this.flushPendingOffer(entry);
     } else if (data.type === 'candidate') {
-      if (entry.remoteDescSet) await entry.pc.addIceCandidate(data.candidate);
-      else entry.pendingCandidates.push(data.candidate);
+      if (entry.remoteDescSet) {
+        try {
+          await entry.pc.addIceCandidate(data.candidate);
+        } catch {
+          // 畸形/过期候选或 PC 已关闭：静默忽略（与 flushCandidates 一致）。
+          // 服务端对 signal data 原样转发，异常客户端可投递任意坏候选，
+          // 不能因单条坏包影响会话
+        }
+      } else entry.pendingCandidates.push(data.candidate);
     }
   }
 
@@ -825,7 +858,11 @@ export class VoiceSession {
     if (!pending) return;
     if (entry.makingOffer || entry.pc.signalingState !== 'stable') return; // 仍忙：下次 stable 再试
     entry.pendingOffer = null;
-    void this.processRemoteOffer(entry, pending.sdp).catch(() => this.teardown('negotiation'));
+    void this.processRemoteOffer(entry, pending.sdp).catch(() => {
+      // 补处理失败只摘除该对端（与 handleSignal 同粒度），不整会话 teardown
+      this.removePeer(entry.participant.userId);
+      this.emitParticipants();
+    });
   }
 
   private async flushCandidates(entry: PeerEntry): Promise<void> {

@@ -6,6 +6,7 @@
  * - 图片轮播 + 指示点 + 左右切换（受控组件，索引/缩放状态由调用方管理）
  * - 详情页主轮播：无自动轮播，手势跟手翻页（transform 轨道驱动，GPU 合成器 60fps）
  * - 缩放查看 overlay（全屏）：点击进入/退出，滑动翻页（同样 transform 驱动）
+ * - 手势/轨道通用逻辑已拆出至 hooks/useTransformCarousel（行为不变）
  * ============================================================
  */
 
@@ -13,6 +14,7 @@ import { useEffect, useRef, RefObject } from 'react';
 import { X, ZoomIn, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { Post } from '../../types';
 import { resolveMediaUrl } from '../../utils';
+import { useTransformCarousel } from '../../hooks/useTransformCarousel';
 import styles from './PostMedia.module.css';
 
 interface PostMediaProps {
@@ -40,169 +42,28 @@ export default function PostMedia({
   const zoomScrollRef = useRef<HTMLDivElement>(null);
   const mainTrackRef = useRef<HTMLDivElement>(null);
   const zoomTrackRef = useRef<HTMLDivElement>(null);
-  // 当前轨道像素偏移（0 = 第一张），手势跟手与动画共用
-  const mainOffsetRef = useRef(0);
-  const zoomOffsetRef = useRef(0);
   // 全屏内最后停靠的图片索引（同步写入 ref，退出时以此为准，避免依赖可能过期的 state）
   const lastZoomIndexRef = useRef(0);
-  // 上次稳定停靠的图片索引：一次手势最多翻一页（防惯性一下跳过 2 张）
-  const mainSettledRef = useRef(0);
-  const zoomSettledRef = useRef(0);
-  // transition 结束后的清理定时器
-  const transTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
-  const clearTransTimers = () => {
-    transTimersRef.current.forEach((t) => clearTimeout(t));
-    transTimersRef.current = [];
-  };
-
-  /** 主轮播轨道位移（transform 驱动，合成器线程，不触发 layout） */
-  const setMainOffset = (x: number) => {
-    mainOffsetRef.current = x;
-    if (mainTrackRef.current) {
-      mainTrackRef.current.style.transform = `translate3d(${-x}px, 0, 0)`;
-    }
-  };
-
-  /** 全屏轮播轨道位移 */
-  const setZoomOffset = (x: number) => {
-    zoomOffsetRef.current = x;
-    if (zoomTrackRef.current) {
-      zoomTrackRef.current.style.transform = `translate3d(${-x}px, 0, 0)`;
-    }
-  };
-
-  /** 轨道落位动画：CSS transition（合成器执行，帧率满格） */
-  const animateTrackTo = (
-    track: HTMLDivElement | null,
-    setOffset: (x: number) => void,
-    index: number,
-    width: number
-  ) => {
-    if (!track) return;
-    const target = width * index;
-    const current = setOffset === setMainOffset ? mainOffsetRef.current : zoomOffsetRef.current;
-    if (Math.abs(current - target) < 1) return;
-    track.style.transition = 'transform 400ms cubic-bezier(0.22, 1, 0.36, 1)';
-    setOffset(target);
-    const t = setTimeout(() => {
-      if (track) track.style.transition = 'none';
-    }, 460);
-    transTimersRef.current.push(t);
-  };
+  // 两个 transform 轨道实例（主轮播 + 全屏轮播）：
+  // 各持 offsetRef/settledRef/transition 定时器与自己的 animateTrackTo
+  // （手势/轨道逻辑已拆出至 useTransformCarousel，行为不变）
+  const mainCarousel = useTransformCarousel(mainTrackRef);
+  const zoomCarousel = useTransformCarousel(zoomTrackRef);
 
   // 全屏滑动时主轮播同步跟随（退出全屏无追回动画）
   const syncMainCarousel = (index: number) => {
     const width = scrollRef.current?.clientWidth || 0;
-    setMainOffset(width * index);
-  };
-
-  // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）——
-  // transform 轨道驱动：touchmove 直接写 translate3d（合成器线程，60fps 丝滑）；
-  // 松手用 CSS transition 落位。纵向主导的手势交还浏览器滚动页面。
-  const attachGesture = (
-    viewport: HTMLDivElement | null,
-    track: HTMLDivElement | null,
-    getSettled: () => number,
-    setSettled: (v: number) => void,
-    onMove: (index: number) => void,
-    setOffset: (x: number) => void,
-    getOffset: () => number
-  ) => {
-    if (!viewport || !track) return () => {};
-    let startX = 0;
-    let startY = 0;
-    let startOffset = 0;
-    let startIndex = 0;
-    let active = false;
-    let horizontal = false; // 是否已判定为横向手势（横向主导才接管滚动）
-    let moveHandler: ((e: TouchEvent) => void) | null = null;
-
-    const down = (e: PointerEvent) => {
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      // 动画中途再次触摸：取消 transition，从当前位置继续跟手，无缝衔接
-      track.style.transition = 'none';
-      clearTransTimers();
-      active = true;
-      horizontal = false;
-      startX = e.clientX;
-      startY = e.clientY;
-      startOffset = getOffset();
-      startIndex = getSettled();
-      moveHandler = (te: TouchEvent) => {
-        if (!active || te.touches.length !== 1) return;
-        const touch = te.touches[0]!;
-        const dx = touch.clientX - startX;
-        const dy = touch.clientY - startY;
-        if (!horizontal) {
-          // 首次位移判定方向：横向主导才接管，纵向主导（浏览页面）立即放手
-          if (Math.abs(dx) > Math.abs(dy) + 2) {
-            horizontal = true;
-          } else if (Math.abs(dy) > Math.abs(dx) + 2) {
-            active = false; // 交给浏览器纵向滚动页面
-            if (moveHandler) {
-              viewport.removeEventListener('touchmove', moveHandler);
-              moveHandler = null;
-            }
-            return;
-          } else {
-            return; // 位移太小，继续观察
-          }
-        }
-        te.preventDefault();
-        setOffset(startOffset - dx);
-      };
-      // passive:false 才能 preventDefault 禁掉原生惯性滚动
-      viewport.addEventListener('touchmove', moveHandler, { passive: false });
-    };
-
-    const up = (e: PointerEvent) => {
-      if (!active) return;
-      active = false;
-      if (moveHandler) {
-        viewport.removeEventListener('touchmove', moveHandler);
-        moveHandler = null;
-      }
-      const dx = getOffset() - startOffset; // 正向 = 手指左滑（offset 增大）= 下一张
-      const width = viewport.clientWidth || 1;
-      const total = images.length;
-      let target = startIndex;
-      if (Math.abs(dx) > width * 0.12 || e.pointerType === 'mouse') {
-        // 拖动超过 ~1/8 屏 → 翻一页（最多一页，绝不过 2 张）
-        if (dx > 0) target = Math.min(total - 1, startIndex + 1);
-        else if (dx < 0) target = Math.max(0, startIndex - 1);
-      } else {
-        // 微动 → 回到起点
-        target = startIndex;
-      }
-      setSettled(target);
-      onMove(target);
-      animateTrackTo(track, setOffset, target, width);
-    };
-
-    viewport.addEventListener('pointerdown', down);
-    viewport.addEventListener('pointerup', up);
-    viewport.addEventListener('pointercancel', up);
-    return () => {
-      viewport.removeEventListener('pointerdown', down);
-      viewport.removeEventListener('pointerup', up);
-      viewport.removeEventListener('pointercancel', up);
-      if (moveHandler) viewport.removeEventListener('touchmove', moveHandler);
-    };
+    mainCarousel.setOffset(width * index);
   };
 
   // 主轮播手势（详情页）
   useEffect(() => {
-    const detach = attachGesture(
+    const detach = mainCarousel.attachGesture(
       scrollRef.current,
       mainTrackRef.current,
-      () => mainSettledRef.current,
-      (v) => {
-        mainSettledRef.current = v;
-      },
-      (index) => setCurrentImageIndex(index),
-      setMainOffset,
-      () => mainOffsetRef.current
+      images.length,
+      (index) => setCurrentImageIndex(index)
     );
     return detach;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -211,21 +72,18 @@ export default function PostMedia({
   // 全屏轮播手势（zoom overlay 条件渲染，zoomed 后挂载）
   useEffect(() => {
     if (!zoomed || !zoomScrollRef.current) return;
-    const detach = attachGesture(
+    const detach = zoomCarousel.attachGesture(
       zoomScrollRef.current,
       zoomTrackRef.current,
-      () => zoomSettledRef.current,
-      (v) => {
-        zoomSettledRef.current = v;
-        lastZoomIndexRef.current = v;
-      },
+      images.length,
       (index) => {
         setCurrentImageIndex(index);
         lastZoomIndexRef.current = index;
         syncMainCarousel(index);
       },
-      setZoomOffset,
-      () => zoomOffsetRef.current
+      (v) => {
+        lastZoomIndexRef.current = v;
+      }
     );
     return detach;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -239,22 +97,22 @@ export default function PostMedia({
     prevImagesRef.current = images;
     if (currentImageIndex <= 0 || !scrollRef.current) return;
     const targetIndex = Math.min(currentImageIndex, Math.max(images.length - 1, 0));
-    mainSettledRef.current = targetIndex;
-    setMainOffset((scrollRef.current?.clientWidth || 0) * targetIndex);
+    mainCarousel.setSettled(targetIndex);
+    mainCarousel.setOffset((scrollRef.current?.clientWidth || 0) * targetIndex);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [images]);
+  }, [images, mainCarousel]);
 
   // 进入全屏：zoomOverlay 条件渲染后轨道为 0，需定位到当前图片
   // （rAF 等一轮布局：图片异步加载不影响 clientWidth，但确保容器已排布）
   useEffect(() => {
     if (!zoomed || !zoomScrollRef.current) return;
-    zoomSettledRef.current = currentImageIndex;
+    zoomCarousel.setSettled(currentImageIndex);
     const raf = requestAnimationFrame(() => {
-      setZoomOffset((zoomScrollRef.current?.clientWidth || 0) * currentImageIndex);
+      zoomCarousel.setOffset((zoomScrollRef.current?.clientWidth || 0) * currentImageIndex);
     });
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [zoomed]);
+  }, [zoomed, zoomCarousel]);
 
   // 退出全屏：主轮播对齐到全屏最后停靠的图片。
   // 全屏滑动时主轮播已实时同步（syncMainCarousel），此处仅兜底瞬时对齐，
@@ -263,25 +121,21 @@ export default function PostMedia({
   useEffect(() => {
     if (zoomed || !scrollRef.current) return;
     const target = (scrollRef.current?.clientWidth || 0) * lastZoomIndexRef.current;
-    mainSettledRef.current = lastZoomIndexRef.current;
-    setMainOffset(target);
-  }, [zoomed]);
+    mainCarousel.setSettled(lastZoomIndexRef.current);
+    mainCarousel.setOffset(target);
+  }, [zoomed, mainCarousel]);
 
-  // 卸载时清理 transition 定时器
-  useEffect(() => {
-    return () => clearTransTimers();
-  }, []);
-
+  // （卸载清理 transition 定时器已随手势/轨道逻辑移入 useTransformCarousel）
   const scrollToIndex = (index: number) => {
     setCurrentImageIndex(index);
     if (zoomed && zoomScrollRef.current) {
-      zoomSettledRef.current = index;
-      animateTrackTo(zoomTrackRef.current, setZoomOffset, index, zoomScrollRef.current.clientWidth || 0);
+      zoomCarousel.setSettled(index);
+      zoomCarousel.animateTrackTo(index, zoomScrollRef.current.clientWidth || 0);
       // 全屏内点箭头/指示点切换时，主轮播同步跟随（退出全屏无追回动画）
       syncMainCarousel(index);
     } else if (scrollRef.current) {
-      mainSettledRef.current = index;
-      animateTrackTo(mainTrackRef.current, setMainOffset, index, scrollRef.current.clientWidth || 0);
+      mainCarousel.setSettled(index);
+      mainCarousel.animateTrackTo(index, scrollRef.current.clientWidth || 0);
     }
   };
 

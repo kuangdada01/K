@@ -19,19 +19,17 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
-import { follow, listRecommended } from '../api/friends';
 import PostCard from '../components/post/PostCard';
 import PostDetail from '../components/post/PostDetail';
 const LazyProfileOverlay = lazy(() => import('../components/profile/ProfileOverlay'));
-import RecommendCard, { RecommendUser } from '../components/RecommendCard';
+import RecommendCard from '../components/RecommendCard';
 import IcpFooter from '../components/IcpFooter';
 import MusicPlayer from '../components/MusicPlayer';
 import EmptyState from '../components/ui/EmptyState';
 import { useFollow } from '../state/cache';
-import { events } from '../state/events';
-import { showToast } from '../components/ui/Toast';
-import { usePostsFeed, postsFeedKey, feedPostsFlat, updatePostsFeed } from '../hooks/usePostsFeed';
-import type { Post } from '../types';
+import { usePostsFeed, feedPostsFlat, updatePostsFeed } from '../hooks/usePostsFeed';
+import { usePostEventsSync } from '../hooks/usePostEventsSync';
+import { useRecommendFollow } from '../hooks/useRecommendFollow';
 import { useScrollRestore } from '../hooks/useScrollRestore';
 import { usePullToRefresh, PULL_CIRCUMFERENCE } from '../hooks/usePullToRefresh';
 import {
@@ -66,8 +64,6 @@ export default function HomePage() {
   const loading = isPending || (isError && isFetching);
   const loadError = isError && !isFetching;
 
-  const [recommendUsers, setRecommendUsers] = useState<RecommendUser[]>([]);
-  const [removingIds, setRemovingIds] = useState<Set<number>>(new Set());
   const [refreshing, setRefreshing] = useState(false);
 
   const initialPostId = urlPostId ? parseInt(urlPostId) : queryPostId ? parseInt(queryPostId) : null;
@@ -85,6 +81,14 @@ export default function HomePage() {
   // 打开详情页时记住卡片上正在看的图片索引，详情页/全屏首屏定位到同一张
   const [overlayImageIndex, setOverlayImageIndex] = useState(0);
   const [profileUserId, setProfileUserId] = useState<number | null>(null);
+
+  // /post/:id 路由参数变化时同步 overlay（渲染期 prev 值模式，与 PostDetail 一致）：
+  // 参数为 null（关闭后回到 /）时不覆盖状态，保持关闭动画语义
+  const [prevInitialPostId, setPrevInitialPostId] = useState<number | null>(null);
+  if (initialPostId !== null && initialPostId !== prevInitialPostId) {
+    setPrevInitialPostId(initialPostId);
+    setOverlayPostId(initialPostId);
+  }
 
   // Save scroll position continuously while on homepage
   useEffect(() => {
@@ -118,18 +122,12 @@ export default function HomePage() {
     return () => observer.disconnect();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
-  // Initial load: 推荐关注（游客也可看到，服务端返回随机用户）
-  useEffect(() => {
-    let cancelled = false;
-    listRecommended()
-      .then(({ users }) => {
-        if (!cancelled) setRecommendUsers(users);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // 推荐关注：列表加载 + 关注成功/失败 + 400ms 移除动画（自 useRecommendFollow 拆出，行为不变）
+  const { recommendUsers, removingIds, handleRecommendFollow } = useRecommendFollow({
+    user,
+    openLoginPrompt,
+    setFollowStatus,
+  });
 
   // Pull-to-refresh — 用 ref 直接操作 DOM，零延迟跟手
   const containerRef = useRef<HTMLDivElement>(null);
@@ -148,105 +146,9 @@ export default function HomePage() {
     },
   });
 
-  // Post created → 实时插入首位，无需等待 refetch（app 无需手动刷新）
-  useEffect(() => {
-    const handler = (newPost?: Post | void) => {
-      if (newPost && typeof newPost === 'object' && 'id' in newPost) {
-        updatePostsFeed(queryClient, (prev) => [
-          newPost as Post,
-          ...prev.filter((p) => p.id !== (newPost as Post).id),
-        ]);
-      } else {
-        // 无帖子载荷时（如发布后回执）整体重取，保持与历史行为一致
-        refetch();
-      }
-    };
-    events.on('post:created', handler);
-    return () => {
-      events.off('post:created', handler);
-    };
-  }, [refetch, queryClient]);
-
-  // Post deleted → 立即从信息流移除，无需下拉或切页（修复 app 切页才更新）
-  useEffect(() => {
-    const handler = (deletedId: number) => {
-      updatePostsFeed(queryClient, (prev) => prev.filter((p) => p.id !== deletedId));
-    };
-    events.on('post:deleted', handler);
-    return () => {
-      events.off('post:deleted', handler);
-    };
-  }, [queryClient]);
-
-  // Post updated（编辑）→ 失效重取，保证描述/图片实时
-  useEffect(() => {
-    const handler = () => {
-      queryClient.invalidateQueries({ queryKey: postsFeedKey });
-    };
-    events.on('post:updated', handler);
-    return () => {
-      events.off('post:updated', handler);
-    };
-  }, [queryClient]);
-
-  // 全部状态实时：点赞/转发/评论 数在任意页面变更后，信息流立即同步（无需切页）
-  useEffect(() => {
-    const onLike = ({ postId, liked, likeCount }: { postId: number; liked: boolean; likeCount: number }) => {
-      updatePostsFeed(queryClient, (prev) =>
-        prev.map((p) => (p.id === postId ? { ...p, liked: liked ? 1 : 0, like_count: likeCount } : p))
-      );
-    };
-    const onRepost = ({
-      postId,
-      reposted,
-      repostCount,
-    }: {
-      postId: number;
-      reposted: boolean;
-      repostCount: number;
-    }) => {
-      updatePostsFeed(queryClient, (prev) =>
-        prev.map((p) =>
-          p.id === postId ? { ...p, reposted: reposted ? 1 : 0, repost_count: repostCount } : p
-        )
-      );
-    };
-    const onComment = ({ postId, commentCount }: { postId: number; commentCount: number }) => {
-      updatePostsFeed(queryClient, (prev) =>
-        prev.map((p) => (p.id === postId ? { ...p, comment_count: commentCount } : p))
-      );
-    };
-    events.on('post:like', onLike);
-    events.on('post:repost', onRepost);
-    events.on('post:comment', onComment);
-    return () => {
-      events.off('post:like', onLike);
-      events.off('post:repost', onRepost);
-      events.off('post:comment', onComment);
-    };
-  }, [queryClient]);
-
-  // Follow changed → animate remove from recommend（mitt 事件总线）
-  useEffect(() => {
-    const handler = (userId: number) => {
-      const inList = recommendUsers.some((u) => u.id === userId);
-      if (inList) {
-        setRemovingIds((prev) => new Set(prev).add(userId));
-        setTimeout(() => {
-          setRecommendUsers((prev) => prev.filter((item) => item.id !== userId));
-          setRemovingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(userId);
-            return next;
-          });
-        }, 400);
-      }
-    };
-    events.on('follow:changed', handler);
-    return () => {
-      events.off('follow:changed', handler);
-    };
-  }, [recommendUsers]);
+  // 帖子事件 → 信息流缓存实时同步（自 usePostEventsSync 拆出，行为不变；
+  // 含 post:created 无载荷时的 refetch 分支）
+  usePostEventsSync(queryClient, refetch);
 
   const handleLikeChange = useCallback(
     (postId: number, liked: boolean, likeCount: number) => {
@@ -286,30 +188,6 @@ export default function HomePage() {
   const handleProfileClick = useCallback((userId: number) => {
     setProfileUserId(userId);
   }, []);
-
-  /** 推荐卡片关注 */
-  const handleRecommendFollow = async (u: RecommendUser) => {
-    if (!user) {
-      openLoginPrompt();
-      return;
-    }
-    try {
-      await follow(u.id);
-      setFollowStatus(u.id, true);
-      setRemovingIds((prev) => new Set(prev).add(u.id));
-      setTimeout(() => {
-        setRecommendUsers((prev) => prev.filter((item) => item.id !== u.id));
-        setRemovingIds((prev) => {
-          const next = new Set(prev);
-          next.delete(u.id);
-          return next;
-        });
-      }, 400);
-      showToast('ヾ(≧▽≦*)o关注成功！');
-    } catch {
-      showToast('关注失败，请重试');
-    }
-  };
 
   return (
     <>
