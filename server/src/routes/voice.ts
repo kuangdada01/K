@@ -34,7 +34,8 @@ import * as voiceHub from '../voice/hub';
 import { guestIds } from '../voice/guest-ids';
 import { getClientIp } from '../lib/client-ip';
 import { env } from '../config';
-import { createVoiceRoomSchema, STUN_SERVER_URLS } from '@k/shared';
+import { createVoiceRoomSchema } from '@k/shared/schemas';
+import { STUN_SERVER_URLS } from '@k/shared';
 
 const router = Router();
 

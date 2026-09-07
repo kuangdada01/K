@@ -29,7 +29,7 @@ import {
   loginSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
-} from '@k/shared';
+} from '@k/shared/schemas';
 import * as authRepo from '../repositories/auth.repo';
 import * as userRepo from '../repositories/user.repo';
 

@@ -17,7 +17,8 @@ import { PATHS } from '../config';
 import { AppError } from '../middleware/error';
 import { compressImage } from '../lib/image';
 import { safeDeleteFile, safeDeleteUpload, parseImageUrlArray, deletePostMediaFiles } from '../lib/file';
-import { postTextSchema, extractTags } from '@k/shared';
+import { postTextSchema } from '@k/shared/schemas';
+import { extractTags } from '@k/shared';
 import * as postRepo from '../repositories/post.repo';
 
 /** 图片压缩参数（帖子图片最大1920px，质量80） */

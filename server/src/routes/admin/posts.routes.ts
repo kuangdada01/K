@@ -14,7 +14,7 @@ import { Router, Request, Response } from 'express';
 import { asyncHandler, AppError } from '../../middleware/error';
 import { withImages } from '../../lib/image';
 import { deletePostMediaFiles } from '../../lib/file';
-import { pageQuerySchema, limitQuerySchema } from '@k/shared';
+import { pageQuerySchema, limitQuerySchema } from '@k/shared/schemas';
 import * as adminRepo from '../../repositories/admin.repo';
 
 const router = Router();

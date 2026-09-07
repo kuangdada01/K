@@ -15,7 +15,8 @@ import type WebSocket from 'ws';
 import { getRoomById } from '../repositories/voice.repo';
 import { insertVoiceChatMessage } from '../repositories/voice-chat.repo';
 import * as hub from './hub';
-import { CONTROL_CHAR_RE, VOICE_MAX_ROOM_SIZE, voiceChatSchema } from '@k/shared';
+import { voiceChatSchema } from '@k/shared/schemas';
+import { CONTROL_CHAR_RE, VOICE_MAX_ROOM_SIZE } from '@k/shared';
 
 /** 文字聊天发送节流（每条消息间隔下限，防刷屏；状态挂在连接上，断开即释放） */
 const CHAT_THROTTLE_MS = 400;

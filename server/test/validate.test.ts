@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import { validateBody } from '../src/validate';
-import { loginSchema } from '@k/shared';
+import { loginSchema } from '@k/shared/schemas';
 import { PATHS, SERVER_ROOT } from '../src/config';
 
 function mockRes() {

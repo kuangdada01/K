@@ -11,7 +11,7 @@ import { PATHS } from '../../config';
 import { authMiddleware, optionalAuth } from '../../middleware/auth';
 import { asyncHandler, AppError } from '../../middleware/error';
 import { withImages, imageFileFilter } from '../../lib/image';
-import { pageQuerySchema, limitQuerySchema } from '@k/shared';
+import { pageQuerySchema, limitQuerySchema } from '@k/shared/schemas';
 import { createUploader, timestampFilename } from '../../lib/upload';
 import * as postRepo from '../../repositories/post.repo';
 import * as commentRepo from '../../repositories/comment.repo';

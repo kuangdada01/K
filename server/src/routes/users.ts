@@ -24,7 +24,7 @@ import { asyncHandler, AppError } from '../middleware/error';
 import { withImages, imageFileFilter, compressImage } from '../lib/image';
 import { safeDeleteFile } from '../lib/file';
 import { validateBody } from '../validate';
-import { updateProfileSchema, pageQuerySchema, limitQuerySchema } from '@k/shared';
+import { updateProfileSchema, pageQuerySchema, limitQuerySchema } from '@k/shared/schemas';
 import { createAvatarUploader, createUploader, timestampFilename } from '../lib/upload';
 import * as userRepo from '../repositories/user.repo';
 import * as postRepo from '../repositories/post.repo';

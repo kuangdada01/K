@@ -18,7 +18,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { asyncHandler, AppError } from '../../middleware/error';
 import { validateBody } from '../../validate';
-import { adminResetPasswordSchema, adminBanSchema } from '@k/shared';
+import { adminResetPasswordSchema, adminBanSchema } from '@k/shared/schemas';
 import * as adminRepo from '../../repositories/admin.repo';
 import { deleteUser } from '../../services/userDeletion.service';
 

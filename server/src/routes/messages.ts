@@ -27,7 +27,7 @@ import { authMiddleware } from '../middleware/auth';
 import { asyncHandler, AppError } from '../middleware/error';
 import { imageFileFilter } from '../lib/image';
 import { validateBody } from '../validate';
-import { sendMessageSchema } from '@k/shared';
+import { sendMessageSchema } from '@k/shared/schemas';
 import { createUploader, messageFilename } from '../lib/upload';
 import * as messageRepo from '../repositories/message.repo';
 import { getSafeUser } from '../repositories/user.repo';

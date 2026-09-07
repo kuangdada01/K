@@ -16,7 +16,7 @@ import { Router, Request, Response } from 'express';
 import { asyncHandler } from '../../middleware/error';
 import { validateBody } from '../../validate';
 import { notifyUser, notifyAllUsers } from '../../sse';
-import { announcementSchema } from '@k/shared';
+import { announcementSchema } from '@k/shared/schemas';
 import * as adminRepo from '../../repositories/admin.repo';
 
 const router = Router();

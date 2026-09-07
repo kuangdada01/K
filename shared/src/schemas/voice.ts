@@ -2,15 +2,15 @@
  * ============================================================
  * 语音房间请求体 schema（/api/voice）
  * ============================================================
+ * 常量（VOICE_MAX_ROOM_SIZE / VOICE_CHAT_MAX_LEN）定义于
+ * constants/voice.ts（双端主入口可用），此处 re-export 保持
+ * @k/shared/schemas 导出面不变。
  */
 
 import { z } from 'zod';
+import { VOICE_MAX_ROOM_SIZE, VOICE_CHAT_MAX_LEN } from '../constants/voice';
 
-/** 语音房间人数上限（Mesh P2P 架构下音频路数的合理上限） */
-export const VOICE_MAX_ROOM_SIZE = 10;
-
-/** 语音房间文字聊天：单条消息长度上限（字符） */
-export const VOICE_CHAT_MAX_LEN = 500;
+export { VOICE_MAX_ROOM_SIZE, VOICE_CHAT_MAX_LEN };
 
 /** 创建语音房间校验 */
 export const createVoiceRoomSchema = z.object({

@@ -8,7 +8,7 @@ import { Router, Request, Response } from 'express';
 import { authMiddleware, optionalAuth } from '../../middleware/auth';
 import { asyncHandler, AppError } from '../../middleware/error';
 import { validateBody } from '../../validate';
-import { commentSchema } from '@k/shared';
+import { commentSchema } from '@k/shared/schemas';
 import { notifyUser } from '../../sse';
 import * as postRepo from '../../repositories/post.repo';
 import * as commentRepo from '../../repositories/comment.repo';

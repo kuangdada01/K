@@ -31,3 +31,9 @@ export const STUN_SERVER_URLS = [
  * 若未来改为逐次 exec/match/test 的用法，需自行处理 lastIndex 复位。
  */
 export const CONTROL_CHAR_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
+
+/** 语音房间人数上限（Mesh P2P 架构下音频路数的合理上限） */
+export const VOICE_MAX_ROOM_SIZE = 10;
+
+/** 语音房间文字聊天：单条消息长度上限（字符） */
+export const VOICE_CHAT_MAX_LEN = 500;
