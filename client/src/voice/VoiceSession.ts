@@ -17,9 +17,7 @@
  * 音量偏好按用户持久化在 localStorage。
  */
 
-import { Capacitor } from '@capacitor/core';
 import { CONTROL_CHAR_RE, STUN_SERVER_URLS } from '@k/shared';
-import { getServerUrl } from '../config';
 import { getVoiceIceServers } from '../api/voice';
 import { showToast } from '../components/ui/Toast';
 import type { VoiceChatMessage, VoiceParticipant } from '../types';
@@ -31,6 +29,7 @@ import { Denoiser } from './denoiser';
 import { RoomRecorder } from './recording/roomRecorder';
 import { QualityMonitor } from './qualityMonitor';
 import { ScreenShareController, type ScreenShareSink } from './share/screenShareController';
+import { WsSignaling } from './signaling/wsSignaling';
 import {
   SHARE_QUALITY_PRESETS,
   type ScreenShareStartResult,
@@ -96,8 +95,6 @@ interface PeerEntry {
 const SPEAKING_THRESHOLD = 0.045;
 /** 说话检测轮询间隔 */
 const SPEAKING_INTERVAL_MS = 100;
-/** 断线重连间隔 */
-const RECONNECT_DELAY_MS = 3000;
 // 偏好持久化键与读写辅助收敛于 ./prefs（行为不变）；re-export 兼容既有导入
 import {
   MIC_VOLUME_KEY,
@@ -117,9 +114,40 @@ export class VoiceSession {
   private self: VoiceParticipant;
   private roomId: number | null = null;
 
-  private ws: WebSocket | null = null;
+  /** 信令 WS 传输（连接/断开/自动重连/终止类关闭码，见 ./signaling/wsSignaling.ts） */
+  private signaling = new WsSignaling({
+    onOpen: () => {
+      this.send({
+        type: 'join',
+        roomId: this.roomId,
+        muted: this.self.muted,
+        listener: this.self.listener,
+      });
+    },
+    onMessage: (msg) => this.handleServerMessage(msg as VoiceServerMessage),
+    onTerminalClose: (code) => {
+      // 主动踢出类关闭码直接结束会话（原因必须说清楚）
+      if (code === 4002) {
+        // 同账号单点在线：被另一设备顶掉。静默退出会让用户以为"互通坏了"，
+        // 必须把原因说出来。
+        showToast('该账号已在其他设备进入语音，本机已退出房间');
+        this.teardown('replaced');
+      } else if (code === 4001) {
+        this.teardown('auth');
+      } else if (code === 4003) {
+        // 房间已被删除（服务端 hub.closeRoom 主动关闭）。若 room-closed 消息弱网丢失，
+        // 只能靠关闭码终止——否则会按 3s 间隔无限重连一个已不存在的房间
+        this.teardown('room-closed');
+      }
+    },
+    onNetworkClose: () => {
+      // 共享状态以服务端为准的重连对账见 share.onWsClosed()（screenShareController）
+      this.cleanupPeers();
+      this.share.onWsClosed();
+      this.emitStatus('reconnecting');
+    },
+  });
   private iceServers: RTCIceServer[] = FALLBACK_ICE_SERVERS;
-  private intentionalClose = false;
 
   private audioCtx: AudioContext | null = null;
   private micStream: MediaStream | null = null;
@@ -131,7 +159,6 @@ export class VoiceSession {
 
   private peers = new Map<number, PeerEntry>();
   private speakTimer: number | null = null;
-  private reconnectTimer: number | null = null;
   private destroyed = false;
   private resumeHandler: (() => void) | null = null;
   /** 语音质量评估（自报语义，实现见 ./qualityMonitor.ts） */
@@ -244,7 +271,6 @@ export class VoiceSession {
   async join(roomId: number): Promise<void> {
     if (this.destroyed || this.roomId !== null) return;
     this.roomId = roomId;
-    this.intentionalClose = false;
     this.emitStatus('connecting');
 
     // 进房即广播本地成员（自己）：底部麦克风按钮/成员卡片由 participants[0] 驱动，
@@ -315,7 +341,7 @@ export class VoiceSession {
     // 麦克风权限结果已定（正常开麦 / 听者模式），再广播一次同步准确状态
     this.emitParticipants();
 
-    this.openWs();
+    this.signaling.open();
     this.startSpeakingLoop();
     this.quality.start();
   }
@@ -385,74 +411,12 @@ export class VoiceSession {
   }
 
   // ============================================================
-  // WebSocket 信令
+  // WebSocket 信令（传输/自动重连/终止类关闭码收敛于 ./signaling/wsSignaling.ts；
+  // 消息分发见 handleServerMessage）
   // ============================================================
 
-  private wsUrl(): string {
-    const token = localStorage.getItem('k_token') ?? '';
-    const serverUrl = getServerUrl();
-    let base: string;
-    if (Capacitor.isNativePlatform() && serverUrl) {
-      // 仅原生端直连配置的服务器（无混合内容限制）
-      base = serverUrl.replace(/^http/, 'ws'); // http→ws / https→wss
-    } else {
-      // 网页端必须同源：https 页面发起 ws:// 会被浏览器当作混合内容直接拦截
-      // （SERVER_URL 烘进网页包曾导致语音信令全灭，网页一律走 location.host）
-      base = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}`;
-    }
-    return `${base}/api/voice/ws?token=${encodeURIComponent(token)}`;
-  }
-
-  private openWs(): void {
-    if (this.destroyed) return;
-    this.ws = new WebSocket(this.wsUrl());
-
-    this.ws.onopen = () => {
-      this.send({ type: 'join', roomId: this.roomId, muted: this.self.muted, listener: this.self.listener });
-    };
-
-    this.ws.onmessage = (e) => {
-      let msg: VoiceServerMessage;
-      try {
-        msg = JSON.parse(String(e.data)) as VoiceServerMessage;
-      } catch {
-        return;
-      }
-      this.handleServerMessage(msg);
-    };
-
-    this.ws.onclose = (e) => {
-      this.ws = null;
-      if (this.destroyed || this.intentionalClose) return;
-      // 主动踢出类关闭码直接结束会话
-      if (e.code === 4002) {
-        // 同账号单点在线：被另一设备顶掉。静默退出会让用户以为“互通坏了”，
-        // 必须把原因说出来。
-        showToast('该账号已在其他设备进入语音，本机已退出房间');
-        this.teardown('replaced');
-        return;
-      }
-      if (e.code === 4001) {
-        this.teardown('auth');
-        return;
-      }
-      if (e.code === 4003) {
-        // 房间已被删除（服务端 hub.closeRoom 主动关闭）。若 room-closed 消息弱网丢失，
-        // 只能靠关闭码终止——否则会按 3s 间隔无限重连一个已不存在的房间
-        this.teardown('room-closed');
-        return;
-      }
-      // 其余（网络抖动等）自动重连：清空对等连接后重新加入房间。
-      // 共享状态以服务端为准的重连对账在 share.onWsClosed()（见 screenShareController）
-      this.cleanupPeers();
-      this.share.onWsClosed();
-      this.emitStatus('reconnecting');
-      this.reconnectTimer = window.setTimeout(() => this.openWs(), RECONNECT_DELAY_MS);
-    };
-  }
-
   private send(msg: unknown): void {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(msg));
+    this.signaling.send(msg);
   }
 
   /**
@@ -466,7 +430,7 @@ export class VoiceSession {
     const trimmed = content.trim();
     if (!trimmed || trimmed.length > 500) return false;
     if (this.destroyed || !this.roomId) return false;
-    if (this.ws?.readyState !== WebSocket.OPEN) return false;
+    if (!this.signaling.isOpen()) return false;
     // 与控制字符清洗保持一致（共享 @k/shared 的 CONTROL_CHAR_RE，服务器也会再做一次）
     const cleaned = trimmed.replace(CONTROL_CHAR_RE, '');
     if (!cleaned) return false;
@@ -1348,12 +1312,7 @@ export class VoiceSession {
   private teardown(reason: string, detail?: string): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    this.intentionalClose = true;
     this.detachResumeHandler();
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
     if (this.speakTimer) {
       clearInterval(this.speakTimer);
       this.speakTimer = null;
@@ -1399,14 +1358,8 @@ export class VoiceSession {
     });
     this.audioCtx = null;
 
-    if (this.ws) {
-      try {
-        this.ws.close(1000);
-      } catch {
-        /* 已关闭 */
-      }
-      this.ws = null;
-    }
+    // 信令 WS 终止（含取消重连定时器），与 intentionalClose 同理
+    this.signaling.close();
 
     this.emitStatus('ended', detail);
     if (reason === 'room-closed') this.cb.onClosed(detail || '房间已被删除');
