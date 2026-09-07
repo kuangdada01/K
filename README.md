@@ -26,7 +26,7 @@
 - **Express 5** — Web 框架
 - **better-sqlite3** — SQLite（WAL 模式 + 外键级联 + 索引 + 版本化迁移）
 - **zod** — 环境变量校验、请求参数校验
-- **分层架构** — `routes`（端点声明）→ `repositories`（SQL 收敛、强类型行）→ `middleware` / `lib`
+- **分层架构** — `routes`（端点声明）→ `services`（业务编排，如 post.service）→ `repositories`（SQL 收敛、强类型行）；`serializers`（响应装配）、`middleware` / `lib` / `voice`（信令与消息处理）
 - **JWT + bcryptjs** — 认证（authMiddleware / optionalAuth / adminMiddleware，签名算法钉死 HS256 + token_version 实时失效）
 - **multer + sharp** — 文件上传、图片压缩、路径穿越防护、孤儿文件清理
 - **ws** — 语音房间 WebSocket 信令（心跳、顶号、连接回收）
@@ -45,7 +45,7 @@
 - 三包结构（shared / server / client），根目录统一脚本
 - **ESLint + Prettier + EditorConfig** — 代码规范（Prettier 已纳入 CI 门禁；`npm run format` 修格式、`format:check` 检查）
 - **GitHub Actions CI** — push 自动执行 `install → prettier → build → lint → vitest（双端）→ Playwright e2e`，另有并行 Docker job 验证镜像构建 + 容器健康检查冒烟；e2e 失败自动上传报告产物；同分支新推送自动取消在跑的旧 CI（省排队与额度）
-- **Dockerfile** — 一键容器化（非 root 运行 + 健康检查 + 数据目录预建，数据库文件走挂载或 DB_PATH；运行阶段为 shared 单独装生产依赖，规避 file: 依赖不携带子包 node_modules 导致的 MODULE_NOT_FOUND）
+- **Dockerfile** — 一键容器化（非 root 运行 + 健康检查 + 数据目录预建，数据库文件走挂载或 DB_PATH；运行阶段按 workspace 装 shared/server 生产依赖（`npm ci --omit=dev -w shared -w server`），client 为纯静态产物不装依赖）
 - **Playwright** — E2E 测试（`e2e/`：smoke 只读公开流程 + b1b2 回归 + write-path 真实写路径——注册→登录→发帖→点赞→评论，跑在 DB_PATH 指向的独立测试库上）
 
 ---
@@ -56,20 +56,28 @@
 k/
 ├── shared/                      # 前后端共享包（唯一事实来源）
 │   └── src/
-│       ├── schemas/             # zod schema（auth/post/user/message/admin/common）
+│       ├── schemas/             # zod schema（auth/post/user/message/admin/common/voice + 子入口 index）
+│       ├── constants/           # 双端常量（STUN/控制字符正则/语音房间上限）
+│       ├── utils/               # 双端工具（extractTags）
 │       └── types.ts             # z.infer 导出类型
 ├── client/                      # 前端
 │   ├── src/
-│   │   ├── api/                 # 类型化 API 模块（auth.ts/posts.ts/friends.ts）
+│   │   ├── api/                 # 类型化 API 模块（http.ts 实例/posts/friends/voice）
 │   │   ├── components/          # 可复用组件
-│   │   │   ├── ui/              # 基础件（Avatar/Toast/ConfirmDialog/EmptyState）
+│   │   │   ├── ui/              # 基础件（Avatar/Toast/ConfirmDialog/EmptyState/VolumeSlider）
 │   │   │   ├── post/            # PostCard/PostDetail/PostMedia/PostDescriptionPanel
 │   │   │   ├── chat/            # ChatWindow/MessageBubble/ConversationSidebar...
-│   │   │   └── profile/         # ProfileHeader/ProfilePostGrid/PrivateFolder
+│   │   │   ├── profile/         # ProfileHeader/ProfilePostGrid/PrivateFolder
+│   │   │   ├── auth/            # LoginForm/RegisterForm/ForgotForm
+│   │   │   ├── voice/           # MemberCard
+│   │   │   └── icons/           # 图标组件
 │   │   ├── context/             # Auth/Theme/Music/Event/Voice 五个 Context（业务事件走 mitt）
-│   │   ├── hooks/               # usePostsFeed/useLikePost/useFollowUser/useSse...
-│   │   ├── lib/                 # 纯函数（scroll/comments）
-│   │   ├── pages/               # 页面级组件（Home/Explore/Profile/Admin/Books...）
+│   │   ├── features/            # 业务域内聚（messages：私信 hooks/组件）
+│   │   ├── hooks/               # usePostsFeed/useLikePost/useFollowUser/useSse + 语音域 hook...
+│   │   ├── layouts/             # MainLayout
+│   │   ├── lib/                 # 纯函数（scroll/comments/parsePostImages）
+│   │   ├── pages/               # 页面级组件（Home/Explore/Profile/Admin/Books/voice/...）
+│   │   ├── router/              # AppRoutes/ProtectedRoute
 │   │   ├── state/               # queryClient、mitt 事件总线、交互缓存
 │   │   ├── voice/               # 语音域（见「语音域架构与维护」）：VoiceSession 门面 + share/signaling/audio/mesh 子模块 + recorder/rnnoise
 │   │   ├── music/               # MusicEngine（audio 元素生命周期/播放列表/ended 自切歌）
@@ -83,10 +91,15 @@ k/
 │   │   ├── app.ts               # 组装 express 应用（helmet/pino/静态资源/SPA 回退）
 │   │   ├── config.ts            # zod 校验环境变量 + PATHS 路径常量
 │   │   ├── db/                  # connection（含预编译语句缓存）/schema/migrations（24 个版本化迁移）
-│   │   ├── middleware/          # auth / error / cors / validate
+│   │   ├── middleware/          # auth / error / cors（validate 为顶层工厂）
 │   │   ├── repositories/        # 全部 SQL 收敛（强类型行，src 零 any）
+│   │   ├── services/            # 业务编排（post.service / userDeletion.service）
+│   │   ├── serializers/         # 响应装配（posts/messages）
 │   │   ├── routes/              # auth/posts/messages/friends/admin/books/music/events...
-│   │   └── lib/                 # upload 工厂 / video / mailer
+│   │   ├── voice/               # 语音信令 hub + WS 消息处理（messageHandlers）
+│   │   ├── lib/                 # jwt/file/image/upload/heicPool/chunkUploadRegistry/logger + video/ 子目录
+│   │   ├── mailer.ts / sse.ts / validate.ts   # 邮件 / SSE 推送 / 校验中间件工厂
+│   │   └── types.ts             # 全局类型
 │   ├── test/                    # Vitest 单元测试（:memory: SQLite）
 │   ├── uploads/                 # 用户上传文件（images/avatars/temp，不入库）
 │   └── package.json
@@ -274,7 +287,7 @@ docker run -p 3000:3000 \
 - 首次部署新服务器：`deploy-sftp.py` 默认校验本机 `~/.ssh/known_hosts` 中的主机指纹（防中间人截获密码），未知主机会被拒绝；确认网络可信后可加 `--trust-host` 豁免一次，或先 `ssh-keyscan -p <端口> <IP> >> ~/.ssh/known_hosts`。
 - **必须用 PowerShell 7（`pwsh`）**：`deploy.ps1` 等脚本含 UTF-8 无 BOM 中文内容，Windows 自带的 PowerShell 5.1（`powershell`）按 GBK 解码会报语法错误（如意外的标记 `)`）。
 - 目标目录 `/var/www/k`；PM2 进程 `k-server`；nginx 站点 `sites-enabled/k`（默认站反向代理到 `127.0.0.1:3000`）；共享包链接 `server/node_modules/@k/shared`。
-- 流程：`npm run build` → 打包 dist/books/.env（**不含 uploads**，防覆盖生产用户数据）→ SFTP 上传 → 远端解压、重建 `@k/shared` 链接、`npm install --omit=dev`、`pm2 delete`+`start`+`save` → 新版 APK 单独上传（大小核验，保留最近 5 个、清理更旧）→ 部署后自动校验（首页/health 200、dist 时间戳、node_modules 无外链、nginx root 仅指向 `/var/www/k`）。
+- 流程：`npm run build` → 打包 dist/books/.env（**不含 uploads**，防覆盖生产用户数据）→ SFTP 上传 → 远端**清空三个 dist 后解压**（防旧产物残留被 Node 文件优先解析）、清旧 `server/node_modules`、**根目录 `npm install --omit=dev`**（npm workspaces 按根 lockfile 装齐 shared/server）、重建 `@k/shared` 链接、`pm2 delete`+`start`+`save` → 新版 APK 单独上传（大小核验，保留最近 5 个、清理更旧）→ 部署后自动校验（首页/health 200、dist 时间戳、node_modules 无外链、nginx root 仅指向 `/var/www/k`）。
 - PM2 重启时服务端执行优雅停机（SIGTERM → 断开语音 WS 与 SSE、等存量请求收尾，10 秒兜底强退），重启窗口比瞬时 kill 稍长属正常现象。
 
 #### 轻量部署（仅前端变更时，推荐）
