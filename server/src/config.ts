@@ -49,6 +49,11 @@ const envSchema = z.object({
 /** 校验并导出环境变量（启动时执行一次） */
 export const env = envSchema.parse(process.env);
 
+// §4.4：生产环境 JWT_SECRET 过短时告警（不阻断启动；fail-fast 已由 envSchema 保证必填）
+if (env.NODE_ENV === 'production' && env.JWT_SECRET.length < 16) {
+  console.warn('[config] 警告：JWT_SECRET 长度不足 16 位，建议使用强随机密钥（如 openssl rand -base64 48）');
+}
+
 // ============================================================
 // 路径常量
 // ============================================================
