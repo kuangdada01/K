@@ -28,11 +28,10 @@ import TaggedText from '../TaggedText';
 
 const LazyProfileOverlay = lazy(() => import('../profile/ProfileOverlay'));
 import ConfirmDialog from '../ui/ConfirmDialog';
-import api, { getApiErrorMessage } from '../../api/http';
+import { getApiErrorMessage } from '../../api/http';
 import * as postsApi from '../../api/posts';
 import { isAxiosError } from 'axios';
-import { Post, Comment } from '../../types';
-import { computeInitialCollapsedIds, buildVisibleComments } from '../../lib/comments';
+import { buildVisibleComments } from '../../lib/comments';
 import { useAuth } from '../../context/AuthContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { postsFeedKey, updatePostsFeed } from '../../hooks/usePostsFeed';
@@ -41,10 +40,12 @@ import { useFollowUser } from '../../hooks/useFollowUser';
 import { useLikePost } from '../../hooks/useLikePost';
 import { useRepostPost } from '../../hooks/useRepostPost';
 import { useBookmarkPost } from '../../hooks/useBookmarkPost';
+import { usePostDetailData } from '../../hooks/usePostDetailData';
 import { useEvent } from '../../context/EventContext';
 import { events } from '../../state/events';
 import { showToast } from '../ui/Toast';
 import { resolveMediaUrl } from '../../utils';
+import { parsePostImages } from '../../lib/parsePostImages';
 import PostDetailActions from './PostDetailActions';
 import CommentComposer from './CommentComposer';
 import { usePostDetailClose } from './usePostDetailClose';
@@ -79,13 +80,8 @@ export default function PostDetail({
   // P6 修复：PostDetail 不再整包消费 MusicContext。开视频时发 music:pause 事件，
   // 关闭时发 music:resume（MusicProvider 内部处理"是否真的在播/是否要恢复"）。
   const [musicWasPlaying, setMusicWasPlaying] = useState(false);
-  const [post, setPost] = useState<Post | null>(null);
-  const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState('');
   const [replyingTo, setReplyingTo] = useState<{ id: number; username: string } | null>(null);
-  const [isFollowing, setIsFollowing] = useState(false);
-  const [shareCount, setShareCount] = useState(0);
-  const [alreadyShared, setAlreadyShared] = useState(false);
   const { getReposted } = useRepost();
   const { requireLogin, follow, unfollow } = useFollowUser();
   const {
@@ -101,39 +97,66 @@ export default function PostDetail({
   // 首页卡片点开时带图片索引进来，详情页/全屏首屏定位到同一张
   const [currentImageIndex, setCurrentImageIndex] = useState(initialImageIndex);
   const [zoomed, setZoomed] = useState(false);
-  const [collapsedReplies, setCollapsedReplies] = useState<Set<number>>(new Set());
   const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
   const [profileUserId, setProfileUserId] = useState<number | null>(null);
   const [showDeletePostConfirm, setShowDeletePostConfirm] = useState(false);
   const [showTooltip, setShowTooltip] = useState(false);
   const highlightRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-  // 评论分页：comment_limit 首屏拉最近一页，after_id 游标续拉（高亮跳转场景走全量）
-  const [commentHasMore, setCommentHasMore] = useState(false);
-  const [commentTotal, setCommentTotal] = useState(0);
+  // 评论分页续拉状态（首屏游标在 usePostDetailData 内管理）
   const [commentsLoadingMore, setCommentsLoadingMore] = useState(false);
   const commentsEndRef = useRef<HTMLDivElement>(null);
   const detailVideoRef = useRef<HTMLVideoElement>(null);
   const heartRef = useRef<SVGSVGElement>(null);
   const commentInputRef = useRef<HTMLInputElement>(null);
 
-  const [loadError, setLoadError] = useState(false);
   const [activeHighlightId, setActiveHighlightId] = useState<number | null>(null);
 
-  // 帖子/用户切换时重置加载错误与高亮（渲染期 prev 值模式，替代 effect 内同步 setState）
+  // 帖子/用户切换时重置高亮与图片索引（渲染期 prev 值模式，替代 effect 内同步 setState；
+  // 评论/分页/加载错误的重置在 usePostDetailData 内同步完成）
   const [prevDetailKey, setPrevDetailKey] = useState('');
   const detailKey = `${postId}|${user?.id ?? 'anon'}`;
   if (detailKey !== prevDetailKey) {
     setPrevDetailKey(detailKey);
-    setLoadError(false);
     setActiveHighlightId(null);
     setCurrentImageIndex(initialImageIndex);
-    // 切换帖子：清空上一帖的评论与分页游标（避免旧帖评论在新帖下短暂残留）
-    setComments([]);
-    setCommentHasMore(false);
-    setCommentTotal(0);
     setCommentsLoadingMore(false);
   }
+
+  // 详情数据层：帖子/评论首屏拉取、登录态字段回填、切换重置（自本组件拆出，行为不变）
+  const {
+    post,
+    comments,
+    setComments,
+    commentHasMore,
+    setCommentHasMore,
+    commentTotal,
+    setCommentTotal,
+    loadError,
+    shareCount,
+    setShareCount,
+    alreadyShared,
+    setAlreadyShared,
+    isFollowing,
+    setIsFollowing,
+    collapsedReplies,
+    setCollapsedReplies,
+  } = usePostDetailData({
+    postId,
+    userId: user?.id,
+    highlightCommentId,
+    getFollowStatus,
+    setFollowStatus,
+    getLikeInfo,
+    getBookmarked,
+    getReposted,
+    setLiked,
+    setLikeCount,
+    setBookmarked,
+    setReposted,
+    setRepostCount,
+    onHighlight: setActiveHighlightId,
+  });
 
   const { closing, handleClose } = usePostDetailClose({
     onClose,
@@ -147,86 +170,6 @@ export default function PostDetail({
       }
     },
   });
-
-  // 加载评论，全部折叠，若有高亮评论ID则展开其祖先
-  // （loadError/highlight 重置已在渲染期完成）
-  useEffect(() => {
-    // 高亮跳转需要全量评论定位目标；普通打开按顶级评论分页（回复随顶级携带）
-    postsApi
-      .getPost(postId, highlightCommentId ? undefined : { commentLimit: 10 })
-      .then(async (res) => {
-        setPost(res.post);
-        setComments(res.comments);
-        setCommentHasMore(!!res.comments_has_more);
-        setCommentTotal(res.comments_total ?? res.comments.length);
-        const cachedLike = getLikeInfo(postId);
-        if (cachedLike) {
-          setLiked(cachedLike.liked);
-          setLikeCount(cachedLike.likeCount);
-        } else {
-          setLiked(!!res.post.liked);
-          setLikeCount(res.post.like_count);
-        }
-        setShareCount(res.post.share_count || 0);
-        setAlreadyShared(!!res.post.shared);
-        const cachedBookmark = getBookmarked(postId);
-        if (cachedBookmark !== undefined) {
-          setBookmarked(cachedBookmark);
-        } else {
-          setBookmarked(!!res.post.bookmarked);
-        }
-        const cachedRepost = getReposted(postId);
-        if (cachedRepost !== undefined) {
-          setReposted(cachedRepost);
-        } else {
-          setReposted(!!res.post.reposted);
-        }
-        setRepostCount(res.post.repost_count || 0);
-        if (user && res.post.user_id !== user.id) {
-          const cached = getFollowStatus(res.post.user_id);
-          if (cached !== undefined) {
-            setIsFollowing(cached);
-          } else {
-            try {
-              const statusRes = await api.get(`/friends/status/${res.post.user_id}`);
-              setIsFollowing(statusRes.data.is_following);
-              setFollowStatus(res.post.user_id, statusRes.data.is_following);
-            } catch {}
-          }
-        }
-        // 默认折叠所有回复线程；若有高亮评论ID则展开其祖先使目标可见
-        setCollapsedReplies(computeInitialCollapsedIds(res.comments, highlightCommentId));
-
-        // 重新渲染后滚动 + 高亮
-        if (highlightCommentId) {
-          const targetId = Number(highlightCommentId);
-          requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              const el = document.getElementById(`comment-${targetId}`);
-              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              setActiveHighlightId(targetId);
-            });
-          });
-        }
-      })
-      .catch(() => {
-        setLoadError(true);
-      });
-  }, [
-    postId,
-    user,
-    getFollowStatus,
-    setFollowStatus,
-    getBookmarked,
-    getLikeInfo,
-    getReposted,
-    highlightCommentId,
-    setBookmarked,
-    setLikeCount,
-    setLiked,
-    setRepostCount,
-    setReposted,
-  ]);
 
   // 帖子加载时自动播放带声音的视频，并暂停音乐（P6：经事件总线通知 MusicProvider 暂停）
   useEffect(() => {
@@ -489,14 +432,7 @@ export default function PostDetail({
 
   if (!post) return null;
 
-  const images = (() => {
-    if (post.images && post.images.length > 0) return post.images;
-    try {
-      const parsed = JSON.parse(post.image_url);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    } catch {}
-    return [post.image_url];
-  })();
+  const images = parsePostImages(post);
 
   const overlayClass = `${styles.overlay} ${closing ? styles.closing : ''} ${noAnimation ? styles.noAnimation : ''}`;
   const containerClass = `${styles.container} ${closing ? styles.closing : ''} ${noAnimation ? styles.noAnimation : ''}`;

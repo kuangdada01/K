@@ -17,7 +17,7 @@
  * ============================================================
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { ImagePlus, Video, X } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { useQueryClient } from '@tanstack/react-query';
@@ -32,6 +32,7 @@ import { events } from '../../state/events';
 import { updatePostsFeed } from '../../hooks/usePostsFeed';
 import { showToast } from '../ui/Toast';
 import { useImageGridDrag } from '../../hooks/useImageGridDrag';
+import { useComposerLifecycle } from '../../hooks/useComposerLifecycle';
 import { createImagePost, createVideoPost, createVideoPostChunked } from '../../api/posts';
 import { IMAGE_PREVIEW_FALLBACK, fileToPreviewUrl } from '../../utils';
 import styles from './CreatePost.module.css';
@@ -75,8 +76,6 @@ export default function CreatePost() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [closeComments, setCloseComments] = useState(false);
   const [pinned, setPinned] = useState(false);
-  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
-  const [closing, setClosing] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
 
   // 图片拖拽排序（按下即拖，实时重排；重置统一数组，拖拽=上传顺序）
@@ -107,7 +106,9 @@ export default function CreatePost() {
 
     // 本地预览：HEIC/HEIF 经 WASM 实时转 JPEG，其余格式直接 blob URL（保持选择顺序）
     Promise.all(validFiles.map((f) => fileToPreviewUrl(f))).then((urls) => {
-      setImages((prev) => [...prev, ...urls.map((url, i) => ({ url, file: validFiles[i]! }))]);
+      // P1 修复：截断放进 functional updater——remaining 基于闭包旧值，
+      // 快速连续选择时无条件追加会突破 9 张上限（服务端 multer 会直接 400）
+      setImages((prev) => [...prev, ...urls.map((url, i) => ({ url, file: validFiles[i]! }))].slice(0, 9));
     });
     e.target.value = '';
   };
@@ -233,7 +234,7 @@ export default function CreatePost() {
         }
       });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 卸载兜底：仅挂载/卸载各执行一次，经 ref 读最新值
+    // 卸载兜底：仅挂载/卸载各执行一次，经 ref 读最新值
   }, []);
 
   // 从视频中截取指定时间的帧（限制画布到 720p 以防 4K 画布 OOM 闪退）
@@ -380,70 +381,27 @@ export default function CreatePost() {
 
   const hasContent = images.length > 0 || videoFile !== null;
 
-  const handleClose = useCallback(() => {
-    setClosing(true);
-    setTimeout(() => {
-      closeCreate();
-    }, 200);
-  }, [closeCreate]);
-
-  const handleDiscard = useCallback(() => {
-    if (hasContent) {
-      setShowDiscardConfirm(true);
-    } else handleClose();
-  }, [hasContent, handleClose]);
-
-  const confirmDiscard = () => {
-    images.forEach((u) => {
-      if (u.url.startsWith('blob:')) {
-        try {
-          URL.revokeObjectURL(u.url);
-        } catch {}
-      }
+  // 关闭/放弃/历史条目/返回键/ESC 生命周期（自 hooks/useComposerLifecycle 拆出，行为不变）
+  const { closing, showDiscardConfirm, setShowDiscardConfirm, handleClose, handleDiscard, confirmDiscard } =
+    useComposerLifecycle({
+      hasContent,
+      // 确认放弃时的清理：blob 撤销 + 草稿字段复位
+      onConfirmDiscard: () => {
+        images.forEach((u) => {
+          if (u.url.startsWith('blob:')) {
+            try {
+              URL.revokeObjectURL(u.url);
+            } catch {}
+          }
+        });
+        setImages([]);
+        handleRemoveVideo();
+        setDescription('');
+        setCurrentImageIndex(0);
+        setStep(1);
+      },
+      closeCreate,
     });
-    setImages([]);
-    handleRemoveVideo();
-    setDescription('');
-    setCurrentImageIndex(0);
-    setStep(1);
-    setShowDiscardConfirm(false);
-    handleClose();
-  };
-
-  // 打开时推入历史记录，让返回键可以触发放弃操作
-  useEffect(() => {
-    window.history.pushState(null, '', window.location.href);
-  }, []);
-
-  // Android 返回键：触发放弃操作
-  // 使用 capture phase + stopPropagation 阻止 HomePage 的 popstate 处理器
-  useEffect(() => {
-    const handlePopState = (e: PopStateEvent) => {
-      e.stopPropagation(); // 阻止 HomePage 的 capture handler
-      if (showDiscardConfirm) {
-        setShowDiscardConfirm(false);
-      } else {
-        handleDiscard();
-      }
-    };
-    window.addEventListener('popstate', handlePopState, true); // capture phase
-    return () => window.removeEventListener('popstate', handlePopState, true);
-  }, [showDiscardConfirm, hasContent, handleDiscard]);
-
-  // ESC 键关闭（有内容时弹出放弃确认）
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (showDiscardConfirm) {
-          setShowDiscardConfirm(false);
-        } else {
-          handleDiscard();
-        }
-      }
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [showDiscardConfirm, hasContent, handleDiscard]);
 
   const handleContinue = () => {
     if (videoFile)
