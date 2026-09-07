@@ -24,7 +24,7 @@ import userRoutes from './routes/users'; // 用户路由: /api/users
 import messageRoutes from './routes/messages'; // 私信路由: /api/messages
 import friendRoutes from './routes/friends'; // 好友路由: /api/friends
 import notificationRoutes from './routes/notifications'; // 通知路由: /api/notifications
-import adminRoutes from './routes/admin'; // 管理路由: /api/admin
+import adminRoutes from './routes/admin/index'; // 管理路由: /api/admin（显式 index：防旧构建残留 admin.js 被文件优先解析）
 import announcementRoutes from './routes/announcements'; // 公告路由: /api/announcements
 import bookRoutes from './routes/books'; // 图书路由: /api/books
 import musicRoutes from './routes/music'; // 音乐列表: /api/music

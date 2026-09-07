@@ -79,6 +79,9 @@ D={REMOTE_DIR}
 echo '--- 创建部署目录 ---'
 mkdir -p $D
 cd $D
+echo '--- 清空旧产物（tar 解压不删文件：旧 dist 残留会造成 require 文件优先
+        于目录解析到过期代码，曾致管理页 500） ---'
+rm -rf $D/server/dist $D/client/dist $D/shared/dist
 echo '--- 解压部署包 ---'
 tar -xzf /tmp/k-deploy.tar.gz
 rm /tmp/k-deploy.tar.gz
