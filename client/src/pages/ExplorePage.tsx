@@ -18,9 +18,11 @@ import { Search, X, Heart, MessageCircle, Layers, Play } from 'lucide-react';
 import { getApiErrorMessage } from '../api/http';
 import { listPosts, searchPosts } from '../api/posts';
 import { resolveMediaUrl } from '../utils';
-import { events } from '../state/events';
 import { showToast } from '../components/ui/Toast';
 import PostDetail from '../components/post/PostDetail';
+import { useInfiniteScrollSentinel } from '../hooks/useInfiniteScrollSentinel';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { useExplorePostEventsSync } from '../hooks/useExplorePostEventsSync';
 import { Post } from '../types';
 import styles from './ExplorePage.module.css';
 
@@ -37,10 +39,12 @@ export default function ExplorePage() {
   const [overlayPostId, setOverlayPostId] = useState<number | null>(null);
 
   const loadMoreRef = useRef<HTMLDivElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 请求序号守卫：只有最新一次请求的响应才允许落地（旧的请求不再阻塞新请求，
   // 也不丢弃新请求——此前 loadingRef 直接 return 会把飞行中的新搜索静默吞掉）
   const reqSeqRef = useRef(0);
+  // §5.2 首挂载双发请求修复：挂载时初始化 effect 已负责首次加载，
+  // 搜索防抖 effect 首次运行且关键词为空时直接跳过，不再重复请求
+  const initializedRef = useRef(false);
 
   // 加载帖子（首页全部 / 关键词搜索 / #话题精确搜索）
   const loadPosts = useCallback(async (pageNum: number, query: string, append: boolean) => {
@@ -88,39 +92,41 @@ export default function ExplorePage() {
     return () => clearTimeout(timer);
   }, [loadPosts, urlTag]);
 
-  // 搜索防抖
+  // 搜索防抖：输入停止 500ms 后触发搜索（防抖值自 useDebouncedValue 拆出，
+  // 延迟值不变，仅换实现方式）
+  const debouncedKeyword = useDebouncedValue(keyword, 500);
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-
-    debounceRef.current = setTimeout(() => {
-      if (keyword.trim()) {
+    // §5.2 首挂载双发请求修复：挂载时 keyword 为空且初始化 effect 已发过
+    // loadPosts(1,'',false)，首次运行直接跳过；输入触发搜索/清空回到全部不变
+    if (!initializedRef.current) {
+      initializedRef.current = true;
+      if (!debouncedKeyword.trim()) return;
+    }
+    // 延迟一帧执行：loadPosts 的同步前缀会 setState，
+    // effect 内同步调用会触发 react-hooks/set-state-in-effect（与初始化 effect 同模式）
+    const timer = setTimeout(() => {
+      if (debouncedKeyword.trim()) {
         setSearched(true);
-        loadPosts(1, keyword, false);
+        loadPosts(1, debouncedKeyword, false);
       } else {
         setSearched(false);
         loadPosts(1, '', false);
       }
-    }, 500);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [debouncedKeyword, loadPosts]);
 
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [keyword, loadPosts]);
+  // 加载更多：哨兵可见时追加下一页（哨兵逻辑自 IntersectionObserver effect 拆出）
+  const handleLoadMore = useCallback(() => {
+    loadPosts(page + 1, keyword, true);
+  }, [loadPosts, page, keyword]);
 
-  // IntersectionObserver 自动加载更多
-  useEffect(() => {
-    if (!loadMoreRef.current) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting && hasMore && !loading) {
-          loadPosts(page + 1, keyword, true);
-        }
-      },
-      { threshold: 0.1 }
-    );
-    observer.observe(loadMoreRef.current);
-    return () => observer.disconnect();
-  }, [hasMore, loading, page, keyword, loadPosts]);
+  // IntersectionObserver 自动加载更多（自 useInfiniteScrollSentinel 拆出，行为不变）
+  useInfiniteScrollSentinel(loadMoreRef, {
+    hasMore,
+    loading,
+    onLoadMore: handleLoadMore,
+  });
 
   const handleClear = () => {
     setKeyword('');
@@ -140,45 +146,9 @@ export default function ExplorePage() {
   };
 
   // 全部实时：任意页面点赞/转发/评论/删除/新增 后，网格立即同步
-  useEffect(() => {
-    const onLike = ({ postId, liked, likeCount }: { postId: number; liked: boolean; likeCount: number }) =>
-      setPosts((prev) =>
-        prev.map((p) => (p.id === postId ? { ...p, liked: liked ? 1 : 0, like_count: likeCount } : p))
-      );
-    const onRepost = ({
-      postId,
-      reposted,
-      repostCount,
-    }: {
-      postId: number;
-      reposted: boolean;
-      repostCount: number;
-    }) =>
-      setPosts((prev) =>
-        prev.map((p) =>
-          p.id === postId ? { ...p, reposted: reposted ? 1 : 0, repost_count: repostCount } : p
-        )
-      );
-    const onComment = ({ postId, commentCount }: { postId: number; commentCount: number }) =>
-      setPosts((prev) => prev.map((p) => (p.id === postId ? { ...p, comment_count: commentCount } : p)));
-    const onDeleted = (deletedId: number) => setPosts((prev) => prev.filter((p) => p.id !== deletedId));
-    const onCreated = () => loadPosts(1, keyword, false);
-    const onUpdated = () => loadPosts(1, keyword, false);
-    events.on('post:like', onLike);
-    events.on('post:repost', onRepost);
-    events.on('post:comment', onComment);
-    events.on('post:deleted', onDeleted);
-    events.on('post:created', onCreated);
-    events.on('post:updated', onUpdated);
-    return () => {
-      events.off('post:like', onLike);
-      events.off('post:repost', onRepost);
-      events.off('post:comment', onComment);
-      events.off('post:deleted', onDeleted);
-      events.off('post:created', onCreated);
-      events.off('post:updated', onUpdated);
-    };
-  }, [keyword, loadPosts]);
+  // （事件订阅自 useExplorePostEventsSync 拆出，行为不变；本地列表形态，
+  // 参照 useProfileEventsSync 的模式单独成文件）
+  useExplorePostEventsSync({ keyword, loadPosts, setPosts });
 
   const getThumbnail = (post: Post): string => {
     let raw = '';

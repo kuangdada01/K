@@ -29,9 +29,12 @@ import { useRepostPost } from '../../hooks/useRepostPost';
 import { useVisibility } from '../../hooks/useVisibility';
 import { useSwipeCarousel } from '../../hooks/useSwipeCarousel';
 import { useVideoAutoplay } from '../../hooks/useVideoAutoplay';
+import { useFollowToggle } from '../../hooks/useFollowToggle';
+import { useShareLink } from '../../hooks/useShareLink';
+import { useHeartFill } from '../../hooks/useHeartFill';
 import { events } from '../../state/events';
-import { showToast } from '../ui/Toast';
 import { formatRelativeTime, resolveMediaUrl } from '../../utils';
+import { parsePostImages } from '../../lib/parsePostImages';
 import Avatar from '../ui/Avatar';
 import TaggedText from '../TaggedText';
 import styles from './PostCard.module.css';
@@ -52,7 +55,7 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   const { user, openLoginPrompt } = useAuth();
   const inRoom = useVoiceInRoom();
   const { getFollowStatus, setFollowStatus } = useFollow();
-  const { requireLogin, follow, unfollow, notifyChanged } = useFollowUser();
+  const { requireLogin, notifyChanged } = useFollowUser();
   const { getLikeInfo } = useLike();
   const { getReposted } = useRepost();
   // 点赞/转发：交互逻辑统一由 hooks 提供（与 PostDetail 共用同一实现）
@@ -88,15 +91,8 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   const swipeCarousel = useSwipeCarousel(trackRef, scrollRef);
 
   // useMemo 化：post 未变时返回同一引用，避免手势 effect 依赖 [images] 每次渲染 detach/reattach
-  const images = useMemo<string[]>(() => {
-    if (post.images && post.images.length > 0) return post.images;
-    // Fallback: image_url might be JSON string or single URL
-    try {
-      const parsed = JSON.parse(post.image_url);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    } catch {}
-    return [post.image_url];
-  }, [post.images, post.image_url]);
+  // （图片数组解析自 lib/parsePostImages 拆出，行为不变：images 非空直接返回）
+  const images = useMemo(() => parsePostImages(post), [post]);
 
   // Auto-play carousel: 部分可见且未悬停暂停时每 3 秒推进一张；
   // 用户手动触摸/滑动过后（userInteracted）不再自动播
@@ -179,24 +175,8 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [post.id]);
 
-  // 直接操作 SVG DOM，绕过 React 渲染
-  useEffect(() => {
-    const svg = heartRef.current;
-    if (!svg) return;
-    const path = svg.querySelector('path');
-    if (!path) return;
-    // SVG presentation attribute 不支持 var()，需读取 CSS 变量实际值
-    const dangerColor =
-      getComputedStyle(document.documentElement).getPropertyValue('--danger').trim() || '#ed4956';
-    const c = liked ? dangerColor : 'none';
-    const s = liked ? dangerColor : 'currentColor';
-    path.setAttribute('fill', c);
-    path.setAttribute('stroke', s);
-    svg.setAttribute('fill', c);
-    svg.setAttribute('stroke', s);
-    // 强制重绘
-    void svg.getBoundingClientRect();
-  }, [liked]);
+  // 直接操作 SVG DOM，绕过 React 渲染（自 useHeartFill 拆出，行为不变）
+  useHeartFill(heartRef, liked);
 
   // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）——
   // transform 轨道驱动：touchmove 直接写 translate3d（合成器线程，不触发 layout，
@@ -224,45 +204,25 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
     return detach;
   }, [images, swipeCarousel]);
 
-  const handleFollow = async (e: React.MouseEvent) => {
+  // —— 关注切换 / 分享：自 handleFollow / handleShare 拆出至
+  // useFollowToggle / useShareLink（行为不变）——
+  const { toggle: toggleFollow } = useFollowToggle({
+    userId: post.user_id,
+    isFollowing,
+    setIsFollowing,
+    onSuccess: () => notifyChanged(post.user_id),
+  });
+
+  const handleFollow = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!requireLogin()) return;
-    try {
-      if (isFollowing) {
-        await unfollow(post.user_id);
-        setIsFollowing(false);
-        showToast('o(TヘTo)取消关注成功！');
-      } else {
-        await follow(post.user_id);
-        setIsFollowing(true);
-        showToast('ヾ(≧▽≦*)o关注成功！');
-      }
-      notifyChanged(post.user_id);
-    } catch {
-      showToast('操作失败');
-    }
+    void toggleFollow();
   };
 
-  const handleShare = async () => {
-    if (!user) {
-      openLoginPrompt();
-      return;
-    }
-    const url = `${window.location.origin}/post/${post.id}`;
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch {
-      // HTTP 环境降级：用 textarea 复制
-      const ta = document.createElement('textarea');
-      ta.value = url;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-    }
-    setShowTooltip(true);
-    setTimeout(() => setShowTooltip(false), 1500);
-  };
+  const handleShare = useShareLink({
+    postId: post.id,
+    requireLogin,
+    setShowTooltip,
+  });
 
   return (
     <div className={styles.card} ref={cardRef}>

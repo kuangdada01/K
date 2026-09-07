@@ -7,6 +7,10 @@
  * 功能:
  * - 图片增删、拖拽排序（与 CreatePost 相同的拖拽逻辑）
  * - 修改帖子描述
+ *
+ * 复用（阶段 3A）:
+ * - useMediaDraft: 新增图片的选图/校验/HEIC 预览/9 图截断与 blob 生命周期
+ *   （isNew 语义；新增图片卸载兜底 revoke）；已有图片经 lib/parsePostImages 解析
  * - 开关评论功能
  * - 高级设置折叠面板
  * ============================================================
@@ -16,6 +20,8 @@ import { useState, useRef, useEffect, useMemo } from 'react';
 import { ChevronDown, ChevronUp, X, ImagePlus } from 'lucide-react';
 import { extractTags } from '@k/shared';
 import { useImageGridDrag } from '../../hooks/useImageGridDrag';
+import { useMediaDraft } from '../../hooks/useMediaDraft';
+import { parsePostImages } from '../../lib/parsePostImages';
 import EmojiPicker from '../EmojiPicker';
 import ConfirmDialog from '../ui/ConfirmDialog';
 import { getApiErrorMessage } from '../../api/http';
@@ -24,7 +30,7 @@ import { useEvent, type EditPostData } from '../../context/EventContext';
 import { events } from '../../state/events';
 import { showToast } from '../ui/Toast';
 import { updatePost } from '../../api/posts';
-import { resolveMediaUrl, IMAGE_PREVIEW_FALLBACK, fileToPreviewUrl } from '../../utils';
+import { resolveMediaUrl, IMAGE_PREVIEW_FALLBACK } from '../../utils';
 import composer from './PostComposer.module.css';
 import panel from './PostDescriptionPanel.module.css';
 
@@ -51,8 +57,18 @@ export default function EditPost() {
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
 
-  // Image management - unified array
-  const [images, setImages] = useState<ImageItem[]>([]);
+  // Image management - unified array（复用 useMediaDraft：选图 9 张截断/10MB 校验/HEIC 预览、
+  // isNew 条目删除 revoke、卸载兜底 revoke——补上此前缺失的新增图片 blob 卸载回收）
+  const {
+    images,
+    setImages,
+    handleFileSelect: handleAddImages,
+    handleRemoveImage: removeDraftImage,
+  } = useMediaDraft<ImageItem>({
+    makeItem: (url, file) => ({ url, isNew: true, file }),
+    // 仅新增条目（isNew）revoke；已有服务端图片不 revoke
+    shouldRevoke: (item) => item.isNew,
+  });
 
   // Drag state for 9-grid
   const [step, setStep] = useState<'grid' | 'edit'>('grid');
@@ -69,9 +85,14 @@ export default function EditPost() {
     setCloseComments(editPost.closeComments);
     setPinned(editPost.pinned);
     // 视频帖子：image_url 为 '[]' 时 withImages 会产出 ['[]'] 脏数据，需过滤；直接置空
+    // 图片列表经 lib/parsePostImages 解析（优先 images，其次 image_url JSON，最后单元素兜底）；
+    // EditPostData 无 image_url 字段，传空串使兜底路径与旧内联语义一致（parse('') 抛错 → [''] → 被下方过滤）；
+    // parsePostImages 不过滤 '[]'/'["[]"]'，此处补过滤保留原展示行为（构造方已清洗，此为防御）
     const cleanImages = editPost.videoUrl
       ? []
-      : editPost.images.filter((url) => url !== '[]' && url !== '["[]"]');
+      : parsePostImages({ images: editPost.images, image_url: '' }).filter(
+          (url) => url !== '[]' && url !== '["[]"]'
+        );
     setImages(cleanImages.map((url) => ({ url, isNew: false })));
     setCurrentImageIndex(0);
     // Video posts skip grid step, go directly to edit
@@ -91,41 +112,9 @@ export default function EditPost() {
     }
   }, [step]);
 
-  const handleAddImages = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    const remaining = 9 - images.length;
-    const toAdd = files.slice(0, remaining);
-    if (toAdd.length === 0) return;
-
-    // 检查文件大小 (10MB)
-    const maxSize = 10 * 1024 * 1024;
-    const validFiles = toAdd.filter((file) => {
-      if (file.size > maxSize) {
-        showToast(`"${file.name}" 超过10MB限制`);
-        return false;
-      }
-      return true;
-    });
-
-    if (validFiles.length === 0) return;
-    // HEIC/HEIF 经 WASM 实时转 JPEG 预览，其余格式直接 blob URL
-    const newItems: ImageItem[] = await Promise.all(
-      validFiles.map(async (file) => ({ url: await fileToPreviewUrl(file), isNew: true, file }))
-    );
-    // P1 修复：截断放进 functional updater——remaining 基于闭包旧值，
-    // 快速连续选择时无条件追加会突破 9 张上限（服务端 multer 会直接 400）
-    setImages((prev) => [...prev, ...newItems].slice(0, 9));
-    e.target.value = '';
-  };
-
   const handleRemoveImage = (index: number) => {
-    setImages((prev) => {
-      const item = prev[index];
-      if (item?.isNew) {
-        URL.revokeObjectURL(item.url);
-      }
-      return prev.filter((_, i) => i !== index);
-    });
+    // revoke 由 useMediaDraft 处理（isNew 谓词命中才 revoke）
+    removeDraftImage(index);
     if (currentImageIndex >= images.length - 1) {
       setCurrentImageIndex(Math.max(0, images.length - 2));
     }

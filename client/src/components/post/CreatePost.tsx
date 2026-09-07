@@ -14,28 +14,35 @@
  * - 视频封面截取（滑动时间轴选择帧）
  * - 放弃确认对话框
  * - 关闭动画效果
+ *
+ * 职责拆分（阶段 3A）:
+ * - useComposerLifecycle: 关闭/放弃/历史条目
+ * - useMediaDraft: 图片/视频草稿状态、文件处理与 blob 生命周期
+ * - useVideoCoverCapture: 视频封面截帧/解码状态
+ * - MediaPickerStep: 第 1 步（选择媒体）展示
+ * - 本组件: 步骤编排 + 提交（FormData 组装/分片上传/进度）
  * ============================================================
  */
 
-import { useState, useRef, useEffect } from 'react';
-import { ImagePlus, Video, X } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { Video } from 'lucide-react';
 import { Capacitor } from '@capacitor/core';
 import { useQueryClient } from '@tanstack/react-query';
-import ConfirmDialog from '../ui/ConfirmDialog';
 import { getApiErrorMessage } from '../../api/http';
 import VideoCoverEditor from './VideoCoverEditor';
 import PostDescriptionPanel from './PostDescriptionPanel';
+import MediaPickerStep from './MediaPickerStep';
 import { useAuth } from '../../context/AuthContext';
 import { useVoiceInRoom } from '../../context/VoiceContext';
 import { useEvent } from '../../context/EventContext';
 import { events } from '../../state/events';
 import { updatePostsFeed } from '../../hooks/usePostsFeed';
 import { showToast } from '../ui/Toast';
-import { useImageGridDrag } from '../../hooks/useImageGridDrag';
 import { useComposerLifecycle } from '../../hooks/useComposerLifecycle';
+import { useMediaDraft } from '../../hooks/useMediaDraft';
+import { useVideoCoverCapture } from '../../hooks/useVideoCoverCapture';
 import { createImagePost, createVideoPost, createVideoPostChunked } from '../../api/posts';
-import { IMAGE_PREVIEW_FALLBACK, fileToPreviewUrl } from '../../utils';
-import styles from './CreatePost.module.css';
+import { IMAGE_PREVIEW_FALLBACK } from '../../utils';
 import composer from './PostComposer.module.css';
 
 export default function CreatePost() {
@@ -49,10 +56,8 @@ export default function CreatePost() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // 供卸载时兜底回收图片预览 blob URL（避免 effect 依赖重建导致误 revoke 正在显示的图）
-  const imagePreviewsRef = useRef<string[]>([]);
 
-  // 统一的图片项：{ url, isNew, file }。B2 修复——拖拽重排这一个数组，
+  // 统一的图片项：{ url, file }。B2 修复——拖拽重排这一个数组，
   // 上传时按其遍历，保证"所见即所得"（此前 imageFiles/imagePreviews 两个
   // 平行数组导致拖拽排序不反映在实际上传顺序）。
   interface ImageItem {
@@ -62,14 +67,6 @@ export default function CreatePost() {
 
   // 步骤: 1 = 选择媒体, 2 = 视频封面, 3 = 编辑分享
   const [step, setStep] = useState(1);
-  const [images, setImages] = useState<ImageItem[]>([]);
-  const [videoFile, setVideoFile] = useState<File | null>(null);
-  const [videoPreview, setVideoPreview] = useState<string | null>(null);
-  const [videoCoverFile, setVideoCoverFile] = useState<File | null>(null);
-  const [videoCoverPreview, setVideoCoverPreview] = useState<string | null>(null);
-  const [videoDuration, setVideoDuration] = useState(0);
-  const [coverTime, setCoverTime] = useState(0);
-  const [videoError, setVideoError] = useState(false);
   const [description, setDescription] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -78,306 +75,46 @@ export default function CreatePost() {
   const [pinned, setPinned] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
 
-  // 图片拖拽排序（按下即拖，实时重排；重置统一数组，拖拽=上传顺序）
-  const { dragIndex, gridRefs, handlers: dragHandlers } = useImageGridDrag(setImages);
+  // 媒体草稿：图片/视频状态、文件处理（9图截断/10MB/300MB 校验、HEIC 预览）、
+  // blob 生命周期（删除 revoke + 卸载兜底 revoke）（自 hooks/useMediaDraft 拆出，行为不变）
+  const {
+    images,
+    setImages,
+    videoFile,
+    videoPreview,
+    setVideoPreview,
+    videoCoverFile,
+    videoCoverPreview,
+    coverTime,
+    setCoverTime,
+    videoError,
+    setVideoError,
+    setVideoCoverFile,
+    setVideoCoverPreview,
+    handleFileSelect,
+    handleRemoveImage,
+    handleVideoSelect,
+    handleRemoveVideo,
+    resetDraft,
+  } = useMediaDraft<ImageItem>({
+    makeItem: (url, file) => ({ url, file }),
+    // 选择视频后自动跳转到封面编辑（原 setStep(2)，成功/失败路径均要跳转）
+    onVideoSelected: () => setStep(2),
+  });
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    const remaining = 9 - images.length;
-    const toAdd = files.slice(0, remaining);
-    if (toAdd.length === 0) return;
-
-    // 检查文件大小 (10MB)
-    const maxSize = 10 * 1024 * 1024;
-    const validFiles = toAdd.filter((file) => {
-      if (file.size > maxSize) {
-        showToast(`"${file.name}" 超过10MB限制`);
-        return false;
-      }
-      return true;
+  // 封面截帧/解码状态：extractFrame（720p 画布限制/同值 seek 直接截取/2s 超时兜底）、
+  // 黑屏判定、时长读取（自 hooks/useVideoCoverCapture 拆出，行为不变；P2 超时定时器已清理）
+  const { videoDuration, handleVideoLoaded, handleVideoError, handleCoverTimeChange, handleCoverFileSelect } =
+    useVideoCoverCapture({
+      videoRef,
+      canvasRef,
+      videoFile,
+      videoCoverPreview,
+      setVideoCoverFile,
+      setVideoCoverPreview,
+      setCoverTime,
+      setVideoError,
     });
-
-    if (validFiles.length === 0) return;
-
-    // 选择照片时清除视频状态
-    if (videoFile) {
-      handleRemoveVideo();
-    }
-
-    // 本地预览：HEIC/HEIF 经 WASM 实时转 JPEG，其余格式直接 blob URL（保持选择顺序）
-    Promise.all(validFiles.map((f) => fileToPreviewUrl(f))).then((urls) => {
-      // P1 修复：截断放进 functional updater——remaining 基于闭包旧值，
-      // 快速连续选择时无条件追加会突破 9 张上限（服务端 multer 会直接 400）
-      setImages((prev) => [...prev, ...urls.map((url, i) => ({ url, file: validFiles[i]! }))].slice(0, 9));
-    });
-    e.target.value = '';
-  };
-
-  const handleRemoveImage = (index: number) => {
-    const removed = images[index];
-    if (removed && removed.url.startsWith('blob:')) {
-      try {
-        URL.revokeObjectURL(removed.url);
-      } catch {}
-    }
-    setImages((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const handleVideoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    // 检查视频大小 (300MB)
-    const maxSize = 300 * 1024 * 1024;
-    if (file.size > maxSize) {
-      const sizeMB = (file.size / 1024 / 1024).toFixed(1);
-      showToast(`视频大小 ${sizeMB}MB，超过300MB限制`);
-      e.target.value = '';
-      return;
-    }
-
-    // Android WebView 提示：大文件仅影响自动截帧，预览仍尝试（metadata 模式不占大内存）
-    const isNative = Capacitor.isNativePlatform();
-    if (isNative && file.size > 150 * 1024 * 1024) {
-      showToast(`视频较大(${(file.size / 1024 / 1024).toFixed(0)}MB)，将使用分片上传，预览可能较慢`);
-    }
-
-    // 选择视频时清除照片状态
-    if (images.length > 0) {
-      images.forEach((u) => {
-        if (u.url.startsWith('blob:')) {
-          try {
-            URL.revokeObjectURL(u.url);
-          } catch {}
-        }
-      });
-      setImages([]);
-    }
-
-    try {
-      // 清理旧 URL 防止泄漏
-      if (videoPreview) {
-        try {
-          URL.revokeObjectURL(videoPreview);
-        } catch {}
-      }
-      if (videoCoverPreview) {
-        try {
-          URL.revokeObjectURL(videoCoverPreview);
-        } catch {}
-      }
-      setVideoFile(file);
-      const url = URL.createObjectURL(file);
-      setVideoPreview(url);
-      setVideoCoverFile(null);
-      setVideoCoverPreview(null);
-      setCoverTime(0);
-      setVideoError(false);
-      setStep(2); // 自动跳转到封面编辑
-    } catch (err) {
-      console.error('视频预览创建失败', err);
-      showToast('视频预览失败，请重试或选择更小的文件');
-      // 仍保留 file 以便尝试直接发布（不依赖预览）
-      setVideoFile(file);
-      setVideoPreview(null);
-      setVideoError(true);
-      setStep(2);
-    } finally {
-      e.target.value = '';
-    }
-  };
-
-  const handleRemoveVideo = () => {
-    try {
-      if (videoPreview) URL.revokeObjectURL(videoPreview);
-    } catch {}
-    try {
-      if (videoCoverPreview) URL.revokeObjectURL(videoCoverPreview);
-    } catch {}
-    setVideoFile(null);
-    setVideoPreview(null);
-    setVideoCoverFile(null);
-    setVideoCoverPreview(null);
-    setCoverTime(0);
-    setVideoError(false);
-  };
-
-  // 卸载兜底专用镜像 ref：cleanup 依赖为空，从 ref 读最新值，增删/排序过程中绝不提前 revoke
-  // （旧实现把 images/videoPreview 放进依赖，cleanup 每次变化都 revoke 全部预览，
-  //  拖拽排序后 <img> 用已 revoke 的 URL 重载 → 全部变成 HEIC 占位图）
-  const videoPreviewRef = useRef<string | null>(null);
-  const videoCoverPreviewRef = useRef<string | null>(null);
-  useEffect(() => {
-    videoPreviewRef.current = videoPreview;
-    videoCoverPreviewRef.current = videoCoverPreview;
-  }, [videoPreview, videoCoverPreview]);
-  useEffect(() => {
-    imagePreviewsRef.current = images.map((img) => img.url);
-  }, [images]);
-
-  // 组件卸载时统一回收 Blob URL，防止大文件常驻内存导致 OOM
-  useEffect(() => {
-    return () => {
-      try {
-        const vp = videoPreviewRef.current;
-        if (vp) URL.revokeObjectURL(vp);
-      } catch {}
-      try {
-        const vcp = videoCoverPreviewRef.current;
-        if (vcp) URL.revokeObjectURL(vcp);
-      } catch {}
-      imagePreviewsRef.current.forEach((u) => {
-        if (u.startsWith('blob:')) {
-          try {
-            URL.revokeObjectURL(u);
-          } catch {}
-        }
-      });
-    };
-    // 卸载兜底：仅挂载/卸载各执行一次，经 ref 读最新值
-  }, []);
-
-  // 从视频中截取指定时间的帧（限制画布到 720p 以防 4K 画布 OOM 闪退）
-  // 注意：同值 seek（如 loadeddata 后截第 0 帧）不会触发 seeked 事件，
-  // 必须先判断"已停在目标帧"直接截取，否则封面永远生成不出来
-  const extractFrame = (time: number) => {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas) return;
-
-    const capture = () => {
-      try {
-        const vw = video.videoWidth || 1280;
-        const vh = video.videoHeight || 720;
-        // 封顶 720p：x264 封面不需要 4K，画布内存与面积成正比，4K画布约 33MB 易触发 WebView OOM
-        const maxW = 720;
-        let cw = vw;
-        let ch = vh;
-        if (vw > maxW) {
-          cw = maxW;
-          ch = Math.round((vh * maxW) / vw);
-        }
-        canvas.width = cw;
-        canvas.height = ch;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-        ctx.drawImage(video, 0, 0, cw, ch);
-        canvas.toBlob(
-          (blob) => {
-            if (!blob) return;
-            try {
-              const file = new File([blob], 'cover.jpg', { type: 'image/jpeg' });
-              if (videoCoverPreview) {
-                try {
-                  URL.revokeObjectURL(videoCoverPreview);
-                } catch {}
-              }
-              setVideoCoverFile(file);
-              setVideoCoverPreview(URL.createObjectURL(file));
-            } catch (e) {
-              console.error('封面 blob 创建失败', e);
-              showToast('封面截取失败，可手动上传封面或直接发布（服务端会兜底生成）');
-            }
-          },
-          'image/jpeg',
-          0.75
-        );
-      } catch (e) {
-        console.error('extractFrame 失败', e);
-        showToast('封面截取失败，可手动上传封面');
-      }
-    };
-
-    try {
-      // 已停在目标帧附近且帧数据可用：直接截取
-      if (Math.abs(video.currentTime - time) < 0.05 && video.readyState >= 2) {
-        video.onseeked = null;
-        capture();
-        return;
-      }
-      video.onseeked = capture;
-      // 超大文件 seek 可能卡死，设置 2s 超时兜底清理
-      const t = window.setTimeout(() => {
-        if (video.onseeked === capture) {
-          video.onseeked = null;
-          console.warn('video seek 超时，跳过截帧');
-        }
-      }, 2000);
-      const orig = capture;
-      video.onseeked = () => {
-        window.clearTimeout(t);
-        orig();
-      };
-      video.currentTime = time;
-    } catch (e) {
-      console.error('video seek 失败', e);
-    }
-  };
-
-  const handleCoverTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const time = parseFloat(e.target.value);
-    setCoverTime(time);
-    extractFrame(time);
-  };
-
-  const handleCoverFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      if (videoCoverPreview) {
-        try {
-          URL.revokeObjectURL(videoCoverPreview);
-        } catch {}
-      }
-      setVideoCoverFile(file);
-      setVideoCoverPreview(URL.createObjectURL(file));
-    } catch (e) {
-      console.error('封面预览失败', e);
-      showToast('封面加载失败');
-    } finally {
-      e.target.value = '';
-    }
-  };
-
-  const handleVideoLoaded = () => {
-    const video = videoRef.current;
-    if (!video) return;
-    try {
-      // duration 可能是 Infinity（直播流/异常），做保护
-      const d = Number.isFinite(video.duration) ? video.duration : 0;
-      setVideoDuration(d);
-      // 检测黑屏：若 videoWidth 为 0 说明解码失败（HEVC 在 WebView 不支持），延迟 300ms 再判一次避免竞态
-      if (video.videoWidth === 0 || video.videoHeight === 0) {
-        setTimeout(() => {
-          if (video.videoWidth === 0 || video.videoHeight === 0) {
-            console.warn('videoWidth 0，判定为解码失败');
-            setVideoError(true);
-            showToast('该视频预览不支持（HEVC等），可直接下一步，发布后服务端自动转码');
-          } else {
-            setVideoError(false);
-            if ((videoFile?.size || 0) <= 150 * 1024 * 1024) extractFrame(0);
-          }
-        }, 300);
-        return;
-      }
-      setVideoError(false);
-      // 仅在视频可解码且非超大文件时自动截帧；超大文件跳过以防 OOM（不留日志），依赖服务端兜底
-      const isLarge = (videoFile?.size || 0) > 150 * 1024 * 1024;
-      if (!isLarge) {
-        extractFrame(0);
-      }
-    } catch (e) {
-      console.error('handleVideoLoaded 失败', e);
-      setVideoError(true);
-    }
-  };
-
-  const handleVideoError = () => {
-    console.error('视频解码失败，可能是 HEVC/编码不支持');
-    setVideoError(true);
-    showToast('该视频编码预览失败，仍可尝试发布（服务端会自动转码）');
-    // 不清空 file，允许用户直接发布，服务端会转码并生成封面
-  };
 
   const hasContent = images.length > 0 || videoFile !== null;
 
@@ -385,17 +122,9 @@ export default function CreatePost() {
   const { closing, showDiscardConfirm, setShowDiscardConfirm, handleClose, handleDiscard, confirmDiscard } =
     useComposerLifecycle({
       hasContent,
-      // 确认放弃时的清理：blob 撤销 + 草稿字段复位
+      // 确认放弃时的清理：blob 撤销 + 草稿字段复位（resetDraft = 图片 revoke + 清空 + 视频复位）
       onConfirmDiscard: () => {
-        images.forEach((u) => {
-          if (u.url.startsWith('blob:')) {
-            try {
-              URL.revokeObjectURL(u.url);
-            } catch {}
-          }
-        });
-        setImages([]);
-        handleRemoveVideo();
+        resetDraft();
         setDescription('');
         setCurrentImageIndex(0);
         setStep(1);
@@ -485,124 +214,29 @@ export default function CreatePost() {
     }
   };
 
-  const renderGrid = () => {
-    return (
-      <div className={composer.gridWrapper}>
-        <div className={composer.grid}>
-          {images.map((img, i) => (
-            <div
-              key={`${img.url}-${i}`}
-              ref={(el) => {
-                gridRefs.current[i] = el;
-              }}
-              className={[composer.gridItem, i === dragIndex ? composer.dragging || '' : '']
-                .filter(Boolean)
-                .join(' ')}
-              onPointerDown={(e) => dragHandlers.onPointerDown(e, i)}
-            >
-              <img
-                src={img.url}
-                alt={`图片 ${i + 1}`}
-                draggable={false}
-                onError={(e) => {
-                  e.currentTarget.onerror = null;
-                  e.currentTarget.src = IMAGE_PREVIEW_FALLBACK;
-                }}
-              />
-              <span className={composer.gridIndex}>{i + 1}</span>
-              <button
-                className={composer.gridDeleteBtn}
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleRemoveImage(i);
-                }}
-              >
-                <X size={14} />
-              </button>
-            </div>
-          ))}
-          {images.length < 9 && (
-            <div className={composer.gridAdd} onClick={() => fileInputRef.current?.click()}>
-              <ImagePlus size={28} />
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  };
-
-  // 步骤 1: 选择媒体
+  // 步骤 1: 选择媒体（视图见 MediaPickerStep；状态与 handler 全部下传）
   if (step === 1) {
     return (
-      <div
-        className={`${composer.overlay}${closing ? ` ${composer.closing}` : ''}`}
-        onPointerMove={dragHandlers.onPointerMove}
-        onPointerUp={dragHandlers.onPointerUp}
-        onPointerCancel={dragHandlers.onPointerCancel}
-      >
-        <div className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}>
-          <div className={composer.overlayHeader}>
-            <button className={`${composer.overlayBtn} ${composer.danger}`} data-back onClick={handleDiscard}>
-              放弃
-            </button>
-            <span className={composer.overlayTitle}>选择照片/视频</span>
-            <button
-              className={`${composer.overlayBtn} ${composer.primary}`}
-              onClick={handleContinue}
-              disabled={!hasContent}
-            >
-              继续
-            </button>
-          </div>
-          <div className={composer.overlayBody}>
-            {images.length > 0 ? (
-              renderGrid()
-            ) : (
-              <div className={styles.uploadArea}>
-                <div className={styles.uploadBtns}>
-                  <button className={styles.uploadBtn} onClick={() => fileInputRef.current?.click()}>
-                    <ImagePlus size={20} />
-                    选择照片
-                  </button>
-                  <button className={styles.uploadBtn} onClick={() => videoInputRef.current?.click()}>
-                    <Video size={20} />
-                    选择视频
-                  </button>
-                </div>
-                <div className={styles.uploadHint}>照片最多9张，支持 HEIC/HEIF，视频支持 mp4、mov</div>
-              </div>
-            )}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/jpeg,image/jpg,image/png,image/gif,image/webp,image/avif,image/heic,image/heif"
-              multiple
-              style={{ display: 'none' }}
-              onChange={handleFileSelect}
-            />
-            <input
-              ref={videoInputRef}
-              type="file"
-              accept="video/mp4,video/quicktime"
-              style={{ display: 'none' }}
-              onChange={handleVideoSelect}
-            />
-          </div>
-        </div>
-
-        {showDiscardConfirm && (
-          <ConfirmDialog
-            message="确定要放弃此次分享吗？"
-            onConfirm={confirmDiscard}
-            onCancel={() => setShowDiscardConfirm(false)}
-          />
-        )}
-      </div>
+      <MediaPickerStep
+        images={images}
+        setImages={setImages}
+        hasContent={hasContent}
+        closing={closing}
+        fileInputRef={fileInputRef}
+        videoInputRef={videoInputRef}
+        onFileSelect={handleFileSelect}
+        onVideoSelect={handleVideoSelect}
+        onRemoveImage={handleRemoveImage}
+        onDiscard={handleDiscard}
+        onContinue={handleContinue}
+        showDiscardConfirm={showDiscardConfirm}
+        onDiscardConfirm={confirmDiscard}
+        onDiscardCancel={() => setShowDiscardConfirm(false)}
+      />
     );
   }
 
-  // 步骤 2: 视频封面编辑（视图见 VideoCoverEditor；截帧/解码状态留在本组件）
+  // 步骤 2: 视频封面编辑（视图见 VideoCoverEditor；截帧/解码状态自 useVideoCoverCapture）
   if (step === 2 && videoFile) {
     return (
       <VideoCoverEditor

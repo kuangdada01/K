@@ -11,6 +11,10 @@
  * 把它们放进 effect 依赖数组时，每次渲染都会触发 effect 重跑
  * （曾导致 PostDetail 展开回复后被重新折叠、重复请求）。
  *
+ * 四个同构 hook 现由 makeInteractionCache 工厂收敛生成
+ * （自四份手写实现拆出，行为不变）：工厂返回带 useCallback
+ * get/set 的 hook，各导出 hook 仅做 getter/setter 命名适配。
+ *
  * 后续（P3）可进一步演进为 useMutation 乐观更新，缓存层无需再动。
  */
 
@@ -41,25 +45,54 @@ export function seedFollowedUsers(friendIds: number[]): void {
 }
 
 // ============================================================
+// 交互缓存工厂（makeInteractionCache）
+// ============================================================
+
+/**
+ * 收拢"keyFn 定位缓存 + 读缓存/写缓存"的同构逻辑，生成带 useCallback
+ * get/set 的缓存 hook（useFollow/useLike/useRepost/useBookmark 均由它生成）：
+ * - get(id)        读缓存值（未命中返回 undefined）
+ * - set(id, ...)   写缓存值；pack 提供时用它把 setter 入参组装成缓存值
+ *   （如 useLike 的 (liked, likeCount) => ({ liked, likeCount })），
+ *   缺省时 setter 的最后一个参数即缓存值（boolean 类缓存）。
+ */
+function makeInteractionCache<TValue, TSetArgs extends unknown[] = [TValue]>(
+  name: string,
+  keyFn: (id: number) => readonly unknown[],
+  pack?: (...args: TSetArgs) => TValue
+): () => {
+  get: (id: number) => TValue | undefined;
+  set: (id: number, ...args: TSetArgs) => void;
+} {
+  // name：缓存语义名（'follow'/'like'/'repost'/'bookmark'）。当前仅作标识保留，
+  // 为 P3 演进 useMutation 乐观更新预留命名空间/错误定位，行为不依赖它。
+  void name;
+  return function useInteractionCache() {
+    const qc = useQueryClient();
+    const get = useCallback((id: number): TValue | undefined => qc.getQueryData<TValue>(keyFn(id)), [qc]);
+    const set = useCallback(
+      (id: number, ...args: TSetArgs): void => {
+        const value = pack ? pack(...args) : (args[args.length - 1] as unknown as TValue);
+        qc.setQueryData(keyFn(id), value);
+      },
+      // keyFn/pack 为工厂模块级常量（外部不可变），无需也不应列入依赖
+      [qc]
+    );
+    return useMemo(() => ({ get, set }), [get, set]);
+  };
+}
+
+// ============================================================
 // 关注状态缓存
 // ============================================================
 
 const followKey = (userId: number) => ['cache', 'follow', userId] as const;
+const useFollowCache = makeInteractionCache<boolean>('follow', followKey);
 
 /** 关注状态缓存 hook（接口与原 useFollow 一致） */
 export function useFollow() {
-  const qc = useQueryClient();
-  const getFollowStatus = useCallback(
-    (userId: number): boolean | undefined => qc.getQueryData<boolean>(followKey(userId)),
-    [qc]
-  );
-  const setFollowStatus = useCallback(
-    (userId: number, isFollowing: boolean): void => {
-      qc.setQueryData(followKey(userId), isFollowing);
-    },
-    [qc]
-  );
-  return useMemo(() => ({ getFollowStatus, setFollowStatus }), [getFollowStatus, setFollowStatus]);
+  const { get, set } = useFollowCache();
+  return useMemo(() => ({ getFollowStatus: get, setFollowStatus: set }), [get, set]);
 }
 
 // ============================================================
@@ -72,21 +105,16 @@ export interface LikeInfo {
 }
 
 const likeKey = (postId: number) => ['cache', 'like', postId] as const;
+// TValue/TSetArgs 均由 pack 推断（显式传 TValue 会跳过对 pack 的类型参数推断）
+const useLikeCache = makeInteractionCache('like', likeKey, (liked: boolean, likeCount: number) => ({
+  liked,
+  likeCount,
+}));
 
 /** 点赞缓存 hook（接口与原 useLike 一致） */
 export function useLike() {
-  const qc = useQueryClient();
-  const getLikeInfo = useCallback(
-    (postId: number): LikeInfo | undefined => qc.getQueryData<LikeInfo>(likeKey(postId)),
-    [qc]
-  );
-  const setLikeInfo = useCallback(
-    (postId: number, liked: boolean, likeCount: number): void => {
-      qc.setQueryData(likeKey(postId), { liked, likeCount });
-    },
-    [qc]
-  );
-  return useMemo(() => ({ getLikeInfo, setLikeInfo }), [getLikeInfo, setLikeInfo]);
+  const { get, set } = useLikeCache();
+  return useMemo(() => ({ getLikeInfo: get, setLikeInfo: set }), [get, set]);
 }
 
 // ============================================================
@@ -94,21 +122,12 @@ export function useLike() {
 // ============================================================
 
 const repostKey = (postId: number) => ['cache', 'repost', postId] as const;
+const useRepostCache = makeInteractionCache<boolean>('repost', repostKey);
 
 /** 转发缓存 hook（接口与原 useRepost 一致） */
 export function useRepost() {
-  const qc = useQueryClient();
-  const getReposted = useCallback(
-    (postId: number): boolean | undefined => qc.getQueryData<boolean>(repostKey(postId)),
-    [qc]
-  );
-  const setReposted = useCallback(
-    (postId: number, reposted: boolean): void => {
-      qc.setQueryData(repostKey(postId), reposted);
-    },
-    [qc]
-  );
-  return useMemo(() => ({ getReposted, setReposted }), [getReposted, setReposted]);
+  const { get, set } = useRepostCache();
+  return useMemo(() => ({ getReposted: get, setReposted: set }), [get, set]);
 }
 
 // ============================================================
@@ -116,19 +135,10 @@ export function useRepost() {
 // ============================================================
 
 const bookmarkKey = (postId: number) => ['cache', 'bookmark', postId] as const;
+const useBookmarkCache = makeInteractionCache<boolean>('bookmark', bookmarkKey);
 
 /** 收藏缓存 hook（接口与原 useBookmark 一致） */
 export function useBookmark() {
-  const qc = useQueryClient();
-  const getBookmarked = useCallback(
-    (postId: number): boolean | undefined => qc.getQueryData<boolean>(bookmarkKey(postId)),
-    [qc]
-  );
-  const setBookmarked = useCallback(
-    (postId: number, bookmarked: boolean): void => {
-      qc.setQueryData(bookmarkKey(postId), bookmarked);
-    },
-    [qc]
-  );
-  return useMemo(() => ({ getBookmarked, setBookmarked }), [getBookmarked, setBookmarked]);
+  const { get, set } = useBookmarkCache();
+  return useMemo(() => ({ getBookmarked: get, setBookmarked: set }), [get, set]);
 }

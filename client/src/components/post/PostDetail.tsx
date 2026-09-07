@@ -37,6 +37,9 @@ import { useQueryClient } from '@tanstack/react-query';
 import { postsFeedKey, updatePostsFeed } from '../../hooks/usePostsFeed';
 import { useFollow, useLike, useBookmark, useRepost } from '../../state/cache';
 import { useFollowUser } from '../../hooks/useFollowUser';
+import { useFollowToggle } from '../../hooks/useFollowToggle';
+import { useShareLink } from '../../hooks/useShareLink';
+import { useHeartFill } from '../../hooks/useHeartFill';
 import { useLikePost } from '../../hooks/useLikePost';
 import { useRepostPost } from '../../hooks/useRepostPost';
 import { useBookmarkPost } from '../../hooks/useBookmarkPost';
@@ -83,7 +86,7 @@ export default function PostDetail({
   const [newComment, setNewComment] = useState('');
   const [replyingTo, setReplyingTo] = useState<{ id: number; username: string } | null>(null);
   const { getReposted } = useRepost();
-  const { requireLogin, follow, unfollow } = useFollowUser();
+  const { requireLogin } = useFollowUser();
   const {
     liked,
     setLiked,
@@ -187,23 +190,28 @@ export default function PostDetail({
     return () => clearTimeout(timer);
   }, [post?.video_url]);
 
-  // 直接操作 SVG DOM
-  useEffect(() => {
-    const svg = heartRef.current;
-    if (!svg) return;
-    const path = svg.querySelector('path');
-    if (!path) return;
-    // SVG presentation attribute 不支持 var()，需读取 CSS 变量实际值
-    const dangerColor =
-      getComputedStyle(document.documentElement).getPropertyValue('--danger').trim() || '#ed4956';
-    const c = liked ? dangerColor : 'none';
-    const s = liked ? dangerColor : 'currentColor';
-    path.setAttribute('fill', c);
-    path.setAttribute('stroke', s);
-    svg.setAttribute('fill', c);
-    svg.setAttribute('stroke', s);
-    void svg.getBoundingClientRect();
-  }, [liked]);
+  // 直接操作 SVG DOM，绕过 React 渲染（自 useHeartFill 拆出，行为不变）
+  useHeartFill(heartRef, liked);
+
+  // —— 关注切换 / 分享：自 handleFollow / handleShare 拆出至
+  // useFollowToggle / useShareLink（行为不变）——
+  // userId 未就绪（post 未加载）时切换短路，对应原 handleFollow 的 "if (!post) return" 守卫
+  const { toggle: toggleFollow } = useFollowToggle({
+    userId: post?.user_id,
+    isFollowing,
+    setIsFollowing,
+  });
+  const handleFollow = () => {
+    void toggleFollow();
+  };
+  const handleShare = useShareLink({
+    postId,
+    requireLogin,
+    setShowTooltip,
+    alreadyShared,
+    setAlreadyShared,
+    setShareCount,
+  });
 
   const handleComment = async () => {
     if (!user) {
@@ -328,51 +336,6 @@ export default function PostDetail({
         prev.map((c) => (c.id === commentId ? { ...c, liked: wasLiked ? 1 : 0, like_count: prevCount } : c))
       );
       showToast('操作失败，请重试');
-    }
-  };
-
-  const handleFollow = async () => {
-    if (!requireLogin()) return;
-    if (!post) return;
-    try {
-      if (isFollowing) {
-        await unfollow(post.user_id);
-        setIsFollowing(false);
-        showToast('o(TヘTo)取消关注成功！');
-      } else {
-        await follow(post.user_id);
-        setIsFollowing(true);
-        showToast('ヾ(≧▽≦*)o关注成功！');
-      }
-    } catch {
-      showToast('操作失败');
-    }
-  };
-
-  const handleShare = async () => {
-    if (!user) {
-      openLoginPrompt();
-      return;
-    }
-    const url = `${window.location.origin}/post/${postId}`;
-    try {
-      await navigator.clipboard.writeText(url);
-    } catch {
-      const ta = document.createElement('textarea');
-      ta.value = url;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
-    }
-    setShowTooltip(true);
-    setTimeout(() => setShowTooltip(false), 1500);
-    if (!alreadyShared && user) {
-      try {
-        const res = await postsApi.sharePost(postId);
-        setShareCount(res.share_count);
-        setAlreadyShared(true);
-      } catch {}
     }
   };
 
