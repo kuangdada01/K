@@ -57,6 +57,9 @@
   --bg-danger-light: rgba(181, 84, 74, 0.12);
   --bg-frosted: rgba(255, 255, 255, 0.62);
   --shadow-dropdown: 0 8px 24px rgba(31, 60, 48, 0.14);
+
+  /* 浅色主题：浏览器按此渲染原生控件/滚动条（不设置时深色页面会残留浅色滚动条） */
+  color-scheme: light;
 }
 
 /* 暗色模式变量覆盖（玄夜鎏金） */
@@ -86,6 +89,9 @@
   --bg-danger-light: rgba(224, 88, 107, 0.15);
   --bg-frosted: rgba(28, 32, 42, 0.58);
   --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+  /* 深色主题：滚动条/原生表单控件随主题变深色，避免浅色滚动条突兀 */
+  color-scheme: dark;
 }
 
 * {
@@ -93,6 +99,32 @@
   padding: 0;
   box-sizing: border-box;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* 细滚动条（Chrome/Edge/Safari）——颜色跟随主题变量：
+   浅色=瓷缘灰绿描边感，深色=深灰，不再残留浏览器默认浅色滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Firefox：细滚动条 + 主题色 */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
 }
 
 /* 桌面端预留滚动条槽位（不强制创建滚动条）：
