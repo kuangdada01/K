@@ -25,16 +25,24 @@ export function useBookmarkPost(postId: number) {
     const wasBookmarked = bookmarked;
     setBookmarked(!wasBookmarked);
     setBookmarkedCache(postId, !wasBookmarked);
-    events.emit('post:bookmark', { postId, bookmarked: !wasBookmarked });
     try {
       if (wasBookmarked) {
-        await postsApi.unbookmarkPost(postId);
+        const res = await postsApi.unbookmarkPost(postId);
+        // 成功后才广播（服务端真值）；失败回滚同样广播回滚真值，
+        // 保证经事件总线同步的其他组件与本地状态一致
+        setBookmarked(res.bookmarked);
+        setBookmarkedCache(postId, res.bookmarked);
+        events.emit('post:bookmark', { postId, bookmarked: res.bookmarked });
       } else {
-        await postsApi.bookmarkPost(postId);
+        const res = await postsApi.bookmarkPost(postId);
+        setBookmarked(res.bookmarked);
+        setBookmarkedCache(postId, res.bookmarked);
+        events.emit('post:bookmark', { postId, bookmarked: res.bookmarked });
       }
     } catch {
       setBookmarked(wasBookmarked);
       setBookmarkedCache(postId, wasBookmarked);
+      events.emit('post:bookmark', { postId, bookmarked: wasBookmarked });
       showToast('收藏失败，请重试');
     }
   }, [bookmarked, user, postId, openLoginPrompt, setBookmarkedCache]);

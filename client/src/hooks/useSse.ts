@@ -100,6 +100,13 @@ async function openConnection(userId: number): Promise<void> {
     if (es === source) es = null;
     scheduleReconnect(userId, token);
   };
+  // 被服务端主动踢出（同账号超过 5 条并发连接）：关闭且不安排重连，
+  // 避免新标签页反复顶掉旧连接、旧连接又重连顶回新连接的震荡环
+  source.addEventListener('kicked', () => {
+    if (token !== connToken) return;
+    source.close();
+    if (es === source) es = null;
+  });
 }
 
 export function useSse(userId: number | null | undefined, onEvent: SseEventHandler): void {

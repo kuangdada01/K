@@ -152,7 +152,10 @@ export class RoomRecorder {
     // 关键：MediaRecorder.stop() 异步派发的最后一次 dataavailable 可能已把尾部数据
     // 写入 recChunks（见 start 中 ondataavailable），这里必须整体丢弃，杜绝“退出房间时
     // 把上一次录制的残片再次结算下载成 webm”。
-    if (!this.recorder && !this.pcmProcessor) {
+    // P1 修复：条件必须与 start() 的回滚检查/isRecording() 一致地包含 pcmWorklet——
+    // MediaRecorder 不可用、仅 AudioWorklet 采集时，漏判会让 stop() 静默丢数据、
+    // 节点不销毁、isRecording() 永久为 true（录制功能整个页面生命周期内卡死）。
+    if (!this.recorder && !this.pcmProcessor && !this.pcmWorklet) {
       this.recChunks = [];
       this.recMime = '';
       this.recRoomName = '';

@@ -112,7 +112,9 @@ export default function EditPost() {
     const newItems: ImageItem[] = await Promise.all(
       validFiles.map(async (file) => ({ url: await fileToPreviewUrl(file), isNew: true, file }))
     );
-    setImages((prev) => [...prev, ...newItems]);
+    // P1 修复：截断放进 functional updater——remaining 基于闭包旧值，
+    // 快速连续选择时无条件追加会突破 9 张上限（服务端 multer 会直接 400）
+    setImages((prev) => [...prev, ...newItems].slice(0, 9));
     e.target.value = '';
   };
 

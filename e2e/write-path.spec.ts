@@ -79,18 +79,27 @@ test('注册 → 登录态 → 发帖 → 点赞 → 评论 全链路', async ({
   // 步骤1（选媒体）→「继续」进入描述页
   await page.getByRole('button', { name: '继续' }).click();
   await page.locator('textarea').first().fill(postText);
-  // 描述页提交按钮与侧边栏「分享」重名，取最后一个（模态框渲染在后）；
-  // 同时拦截 POST /api/posts 的响应拿新帖 id（响应返回即已提交，无跨进程读库的时序问题）
+  // 描述页提交按钮与侧边栏「分享」重名，取最后一个（模态框渲染在后）。
+  // 拦截 POST /api/posts 确认 201；新帖 id 改直查独立测试库（更强地验证写库成功）。
+  // 不能读响应体：发布成功后弹窗关闭会归还 history 条目（history.back），
+  // Playwright 的响应体在导航后不可读（产品 UI 无感知，这是测试框架的限制）
   const postResponse = page.waitForResponse(
-    (r) => r.url().includes('/api/posts') && r.request().method() === 'POST' && r.status() === 201
+    (r) => r.url().includes('/api/posts') && r.request().method() === 'POST'
   );
   await page
     .getByRole('button', { name: /分享|发布中|上传中/ })
     .last()
     .click();
-  const respJson = await (await postResponse).json();
-  const postId = Number(respJson.id);
-  expect(postId, '发布接口应返回新帖 id').toBeGreaterThan(0);
+  const response = await postResponse;
+  expect(response.status(), '发布接口应返回 201').toBe(201);
+
+  const db2 = new Database(DB_PATH);
+  const row = db2
+    .prepare('SELECT id FROM posts WHERE description = ? ORDER BY id DESC LIMIT 1')
+    .get(postText) as { id: number } | undefined;
+  db2.close();
+  expect(row?.id, '新帖应写入数据库').toBeGreaterThan(0);
+  const postId = Number(row!.id);
 
   // 发布成功 → 信息流出现新帖（post:created 事件同步，无需手动刷新）
   await expect(page.getByText(postText).first()).toBeVisible({ timeout: 15_000 });

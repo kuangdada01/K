@@ -15,9 +15,19 @@ class MockEventSource {
   onmessage: ((e: { data: string }) => void) | null = null;
   onerror: (() => void) | null = null;
   closed = false;
+  private listeners = new Map<string, (() => void)[]>();
   constructor(url: string) {
     this.url = url;
     MockEventSource.instances.push(this);
+  }
+  addEventListener(type: string, handler: () => void) {
+    const list = this.listeners.get(type) ?? [];
+    list.push(handler);
+    this.listeners.set(type, list);
+  }
+  /** 测试辅助：派发自定义事件（如服务端的 kicked 终止事件） */
+  dispatch(type: string) {
+    for (const h of this.listeners.get(type) ?? []) h();
   }
   close() {
     this.closed = true;
@@ -145,6 +155,24 @@ describe('useSse', () => {
       await vi.advanceTimersByTimeAsync(1000);
     });
     expect(MockEventSource.instances).toHaveLength(4);
+    unmount();
+  });
+
+  it('收到 kicked 终止事件后关闭且不安排重连（防 6+ 标签页互踢震荡）', async () => {
+    vi.useFakeTimers();
+    const { unmount } = renderHook(() => useSse(1, vi.fn()));
+    await act(async () => {}); // 首连
+    const es = MockEventSource.instances[0]!;
+
+    act(() => {
+      es.dispatch('kicked');
+    });
+    expect(es.closed).toBe(true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    expect(MockEventSource.instances).toHaveLength(1); // 被踢后不再退避重连
     unmount();
   });
 
