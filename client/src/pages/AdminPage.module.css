@@ -117,9 +117,10 @@
   vertical-align: middle;
 }
 
-/* 最后一行底线贯穿整行（含所有列），与上方行线对齐 */
+/* 最后一行不再画底线：表格底部直接以容器圆角收尾，
+   避免「数据最后一行下面还多一条横线」的割裂感 */
 .table tr:last-child td {
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: none;
 }
 
 .table tr:hover td {
