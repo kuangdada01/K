@@ -92,6 +92,7 @@ export default function RegisterForm({
       <input
         className={styles.input}
         type="text"
+        name="username"
         placeholder="用户名"
         value={username}
         onChange={(e) => onUsernameChange(e.target.value)}
@@ -101,6 +102,7 @@ export default function RegisterForm({
         <input
           className={styles.input}
           type="email"
+          name="email"
           placeholder="邮箱"
           value={email}
           onChange={(e) => onEmailChange(e.target.value)}
@@ -125,6 +127,7 @@ export default function RegisterForm({
       <input
         className={styles.input}
         type="password"
+        name="password"
         placeholder="密码"
         value={password}
         onChange={(e) => onPasswordChange(e.target.value)}
@@ -133,6 +136,7 @@ export default function RegisterForm({
       <input
         className={styles.input}
         type="password"
+        name="confirm-password"
         placeholder="确认密码"
         value={confirmPassword}
         onChange={(e) => onConfirmPasswordChange(e.target.value)}
@@ -141,6 +145,7 @@ export default function RegisterForm({
       <input
         className={styles.input}
         type="text"
+        name="code"
         placeholder="验证码"
         value={code}
         onChange={(e) => onCodeChange(e.target.value)}

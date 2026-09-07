@@ -82,6 +82,7 @@ export default function ChatComposer({
           <input
             ref={chatInputRef}
             className={styles.input}
+            name="chat-message"
             placeholder="发送消息..."
             value={text}
             onChange={(e) => setText(e.target.value)}

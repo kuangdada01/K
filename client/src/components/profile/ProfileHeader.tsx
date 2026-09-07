@@ -152,6 +152,7 @@ export default function ProfileHeader({
           <div className={styles.formGroup}>
             <label className={styles.formLabel}>用户名</label>
             <input
+              name="username"
               className={styles.formInput}
               value={username}
               onChange={(e) => setUsername(e.target.value)}

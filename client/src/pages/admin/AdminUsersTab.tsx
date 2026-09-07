@@ -59,6 +59,7 @@ export default function AdminUsersTab({
           <div className={styles.search}>
             <Search size={16} />
             <input
+              name="search-users"
               placeholder="搜索用户名或邮箱"
               value={userSearch}
               onChange={(e) => setUserSearch(e.target.value)}
@@ -142,6 +143,7 @@ export default function AdminUsersTab({
             <h3>修改 {pwTarget.username} 的密码</h3>
             <input
               type="password"
+              name="new-password"
               placeholder="新密码（至少6位）"
               value={newPw}
               onChange={(e) => setNewPw(e.target.value)}

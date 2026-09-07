@@ -92,6 +92,7 @@ export default function ForgotForm({
         <input
           className={styles.input}
           type="email"
+          name="email"
           placeholder="邮箱"
           value={email}
           onChange={(e) => onEmailChange(e.target.value)}
@@ -116,6 +117,7 @@ export default function ForgotForm({
       <input
         className={styles.input}
         type="text"
+        name="code"
         placeholder="验证码"
         value={code}
         onChange={(e) => onCodeChange(e.target.value)}
@@ -125,6 +127,7 @@ export default function ForgotForm({
       <input
         className={styles.input}
         type="password"
+        name="new-password"
         placeholder="新密码"
         value={password}
         onChange={(e) => onPasswordChange(e.target.value)}
@@ -133,6 +136,7 @@ export default function ForgotForm({
       <input
         className={styles.input}
         type="password"
+        name="confirm-password"
         placeholder="确认新密码"
         value={confirmPassword}
         onChange={(e) => onConfirmPasswordChange(e.target.value)}

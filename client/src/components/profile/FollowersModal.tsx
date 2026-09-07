@@ -124,6 +124,7 @@ export default function FollowersModal({ type, userId, onClose }: FollowersModal
           <input
             ref={searchInputRef}
             className={styles.searchInput}
+            name="search-username"
             placeholder="搜索用户名"
             value={searchKeyword}
             onChange={(e) => setSearchKeyword(e.target.value)}

@@ -72,7 +72,12 @@ export default function AdminAnnouncementsTab({
       </div>
       {showSendForm && (
         <div className={styles.sendForm}>
-          <input placeholder="公告标题" value={annTitle} onChange={(e) => setAnnTitle(e.target.value)} />
+          <input
+            name="ann-title"
+            placeholder="公告标题"
+            value={annTitle}
+            onChange={(e) => setAnnTitle(e.target.value)}
+          />
           <textarea
             placeholder="公告内容"
             value={annContent}
@@ -84,6 +89,7 @@ export default function AdminAnnouncementsTab({
               <Search size={16} />
               <input
                 className={styles.annInput}
+                name="ann-target-search"
                 placeholder="搜索用户（输入用户名或ID）"
                 value={annSearch}
                 onChange={(e) => onSearch(e.target.value)}

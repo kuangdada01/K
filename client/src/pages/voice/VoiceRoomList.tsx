@@ -140,6 +140,7 @@ export default function VoiceRoomList({
             <input
               ref={nameInputRef}
               className={styles.input}
+              name="room-name"
               placeholder="房间名（1-30字）"
               value={newName}
               maxLength={30}
@@ -147,6 +148,7 @@ export default function VoiceRoomList({
             />
             <input
               className={styles.input}
+              name="room-desc"
               placeholder="简介（可选，100字以内）"
               value={newDesc}
               maxLength={100}

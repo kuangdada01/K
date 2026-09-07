@@ -59,6 +59,7 @@ export default function CommentComposer({
           onClose={() => {}}
         />
         <input
+          name="comment"
           ref={inputRef}
           className={`${styles.input}${!isLoggedIn ? ` ${styles.inputLocked}` : ''}`}
           placeholder={

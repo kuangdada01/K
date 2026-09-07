@@ -167,6 +167,7 @@ export default function VoiceChatPanel({
         <div className={styles.chatInputRow}>
           <input
             className={styles.chatInput}
+            name="chat-message"
             placeholder="输入消息，回车发送（500字以内）"
             value={chatDraft}
             maxLength={500}

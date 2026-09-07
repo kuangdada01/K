@@ -65,6 +65,7 @@ export default function LoginForm({
       <input
         className={styles.input}
         type="email"
+        name="email"
         placeholder="邮箱"
         value={email}
         onChange={(e) => onEmailChange(e.target.value)}
@@ -73,6 +74,7 @@ export default function LoginForm({
       <input
         className={styles.input}
         type="password"
+        name="password"
         placeholder="密码"
         value={password}
         onChange={(e) => onPasswordChange(e.target.value)}

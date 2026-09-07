@@ -184,6 +184,7 @@ export default function ExplorePage() {
           </span>
           <input
             className={styles.input}
+            name="search"
             placeholder="搜索"
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}

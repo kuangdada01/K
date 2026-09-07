@@ -58,6 +58,7 @@ export default function ConversationSidebar({
           <Search size={14} className={styles.followSearchIcon} />
           <input
             className={styles.followSearchInput}
+            name="search-user"
             placeholder="搜索用户"
             value={followSearch}
             onChange={(e) => setFollowSearch(e.target.value)}

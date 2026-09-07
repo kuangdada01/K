@@ -46,6 +46,7 @@ export default function AdminPostsTab({
         <div className={styles.search}>
           <Search size={16} />
           <input
+            name="search-posts"
             placeholder="搜索用户ID或用户名"
             value={postSearch}
             onChange={(e) => setPostSearch(e.target.value)}
