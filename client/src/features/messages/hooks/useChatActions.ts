@@ -7,7 +7,7 @@
  * 纪元守卫、滚动到底部等）。
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from 'react';
 import api from '../../../api/http';
 import { showToast } from '../../../components/ui/Toast';
@@ -45,6 +45,14 @@ export function useChatActions({
   const [sending, setSending] = useState(false);
   const [quoteMsg, setQuoteMsg] = useState<Message | null>(null);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+
+  // §5.2：切换会话后清空引用预览，避免跨会话残留。
+  // setState 经 setTimeout 宏任务触发，避开 react-hooks/set-state-in-effect；
+  // 首次挂载时 quoteMsg 已是 null，setQuoteMsg(null) 为 no-op
+  useEffect(() => {
+    const timer = setTimeout(() => setQuoteMsg(null), 0);
+    return () => clearTimeout(timer);
+  }, [selectedPartner?.partner_id]);
 
   const handleClearMessages = () => {
     if (!selectedPartner) return;

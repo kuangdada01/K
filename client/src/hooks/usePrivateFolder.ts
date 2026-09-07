@@ -100,29 +100,42 @@ export function usePrivateFolder(): UsePrivateFolderResult {
   };
 
   const handleSavePrivateFolder = async () => {
-    try {
-      // Delete marked images
-      for (const id of privateDeletedIds) {
+    let failed = false;
+    // 任一步失败：toast 提示后继续执行剩余删除/上传项，
+    // 最后无论如何都重新拉取列表，使 UI 收敛到服务端真实状态（§5.2）
+    for (const id of privateDeletedIds) {
+      try {
         await api.delete(`/users/me/private-images/${id}`);
+      } catch (err) {
+        failed = true;
+        showToast(getApiErrorMessage(err, '保存失败'));
       }
-      // Upload new images
-      for (const item of privateNewFiles) {
+    }
+    for (const item of privateNewFiles) {
+      try {
         const formData = new FormData();
         formData.append('image', item.file);
         await api.post('/users/me/private-images', formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
+      } catch (err) {
+        failed = true;
+        showToast(getApiErrorMessage(err, '保存失败'));
       }
-      // Refresh
+    }
+    // Refresh（无论成败都执行）
+    try {
       const res = await api.get('/users/me/private-images');
       setPrivateImages(res.data.images);
-      setPrivateNewFiles([]);
-      setPrivateDeletedIds(new Set());
-      setShowPrivateFolder(false);
-      showToast('保存成功！');
     } catch (err) {
+      failed = true;
       showToast(getApiErrorMessage(err, '保存失败'));
     }
+    setPrivateNewFiles([]);
+    setPrivateDeletedIds(new Set());
+    if (failed) return; // 保留弹窗，展示已收敛的服务端真实状态，用户可调整后重试
+    setShowPrivateFolder(false);
+    showToast('保存成功！');
   };
 
   const handleCancelPrivateFolder = () => {

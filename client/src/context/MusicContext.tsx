@@ -146,9 +146,11 @@ export function MusicProvider({ children }: { children: ReactNode }) {
     if (!isCurrent) {
       audio.src = currentSong.src;
       audio.load();
-      if (isPlaying) {
-        audio.play().catch(() => {});
-      }
+    }
+    // §5.2：播放当前曲目（isCurrent 命中）时不重设 src，这里直接 play，
+    // 否则 playSong(当前曲目) 只置 isPlaying(true)，UI 显示播放中但无声
+    if (isPlaying) {
+      audio.play().catch(() => {});
     }
   }, [currentIndex, currentSong, isPlaying]);
 

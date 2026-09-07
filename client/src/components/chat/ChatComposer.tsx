@@ -86,7 +86,9 @@ export default function ChatComposer({
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') submit();
+              // §5.2：中文输入法选词回车（isComposing）不发送；
+              // 移动端 isComposing 可能为 undefined，按 false 处理（不拦截）
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) submit();
             }}
           />
         </div>

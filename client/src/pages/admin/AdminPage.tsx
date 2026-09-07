@@ -55,6 +55,8 @@ export default function AdminPage() {
   const [showAnnDropdown, setShowAnnDropdown] = useState(false);
   const annSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const annDropdownRef = useRef<HTMLDivElement>(null);
+  // 请求序号守卫：快速翻页/切换 tab 时只允许最新请求的响应落地（§5.2，仿 ExplorePage）
+  const reqSeqRef = useRef(0);
 
   // Confirm dialog
   const [confirmAction, setConfirmAction] = useState<(() => void) | null>(null);
@@ -71,24 +73,38 @@ export default function AdminPage() {
   useEffect(() => {
     // 数据加载内联在 effect 中（.then 回调内的 setState 属于异步回调，
     // 不触发 react-hooks/set-state-in-effect）
+    const seq = ++reqSeqRef.current;
     if (tab === 'users') {
       api
         .get('/admin/users')
-        .then((res) => setUsers(res.data.users))
-        .catch((err) => showToast(getApiErrorMessage(err, '用户列表加载失败')));
+        .then((res) => {
+          if (seq !== reqSeqRef.current) return; // 已有更新的请求，丢弃过期响应
+          setUsers(res.data.users);
+        })
+        .catch((err) => {
+          if (seq === reqSeqRef.current) showToast(getApiErrorMessage(err, '用户列表加载失败'));
+        });
     } else if (tab === 'posts') {
       api
         .get(`/admin/posts?page=${postPage}&limit=20`)
         .then((res) => {
+          if (seq !== reqSeqRef.current) return; // 已有更新的请求，丢弃过期响应
           setPosts(res.data.posts);
           setPostTotal(res.data.totalPages);
         })
-        .catch((err) => showToast(getApiErrorMessage(err, '帖子列表加载失败')));
+        .catch((err) => {
+          if (seq === reqSeqRef.current) showToast(getApiErrorMessage(err, '帖子列表加载失败'));
+        });
     } else if (tab === 'announcements') {
       api
         .get('/admin/announcements')
-        .then((res) => setAnnouncements(res.data.announcements))
-        .catch((err) => showToast(getApiErrorMessage(err, '公告列表加载失败')));
+        .then((res) => {
+          if (seq !== reqSeqRef.current) return; // 已有更新的请求，丢弃过期响应
+          setAnnouncements(res.data.announcements);
+        })
+        .catch((err) => {
+          if (seq === reqSeqRef.current) showToast(getApiErrorMessage(err, '公告列表加载失败'));
+        });
     }
   }, [tab, postPage]);
 
