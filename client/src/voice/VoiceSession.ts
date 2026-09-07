@@ -30,7 +30,7 @@ import { applyOpusPreferences } from './sdp';
 import { Denoiser } from './denoiser';
 import { RoomRecorder } from './recording/roomRecorder';
 import { QualityMonitor } from './qualityMonitor';
-import { ShareStatsMonitor } from './share/shareStatsMonitor';
+import { ScreenShareController, type ScreenShareSink } from './share/screenShareController';
 import {
   SHARE_QUALITY_PRESETS,
   type ScreenShareStartResult,
@@ -53,12 +53,6 @@ export type {
   VoiceSessionCallbacks,
 } from './types';
 export { SHARE_QUALITY_PRESETS } from './types';
-
-/** 屏幕共享质量偏好（localStorage 键随会话类使用） */
-const SHARE_QUALITY_KEY = 'voice:shareQuality';
-const SHARE_SHARP_KEY = 'voice:shareSharpText';
-// 默认流畅 30fps：带宽不足时 60fps 会触发解码饥荒（绿块/画面停滞倒回），极清档留给手动选择
-const SHARE_QUALITY_KEY_DEFAULT: ShareQuality = '1080p30';
 
 /** 远端流音频节点（每人对一条） */
 interface PeerAudio {
@@ -175,41 +169,59 @@ export class VoiceSession {
   );
 
   // ---- 屏幕共享 ----
-  /** 本端捕获流（video + 可选系统声音；getDisplayMedia 的原始返回） */
-  private shareStream: MediaStream | null = null;
-  private sharingActive = false;
-  private withShareAudio = false;
-  /** 发送侧包装流：固定 stream id，接收端据此把"同对端第二条音频流"识别为共享系统声音 */
-  private shareSendVideoStream: MediaStream | null = null;
-  private shareSendAudioStream: MediaStream | null = null;
-  /** 质量档位与"清晰文字"模式（偏好持久化，下次共享沿用） */
-  private shareQuality: ShareQuality;
-  private shareSharpText: boolean;
-  /** 接收端共享声音开关（默认静音以符合自动播放策略，舞台上手动开启） */
-  private shareMuted = true;
-  private shareAudioEl: HTMLAudioElement | null = null;
-  /** 当前共享者（全房间唯一；服务端 share-changed 广播驱动） */
-  private shareSharer: { userId: number; audio: boolean } | null = null;
-  /** 发送端共享画面统计与自动降档（实现见 ./share/shareStatsMonitor.ts） */
-  private shareStats = new ShareStatsMonitor({
-    isSharing: () => this.sharingActive,
+  /** 屏幕共享状态机（发送/接收端状态与「断线重连对账」决策集中于此，见
+   *  ./share/screenShareController.ts；副作用经 sink 回调回来执行） */
+  private share = new ScreenShareController({
+    getSelfUserId: () => this.self.userId,
+    onSelfSharingChanged: (sharing) => {
+      this.self.sharing = sharing;
+    },
+    sendShareStart: (withAudio) => this.send({ type: 'share-start', audio: withAudio }),
+    sendShareStop: () => this.send({ type: 'share-stop' }),
+    emitParticipants: () => this.emitParticipants(),
     getVideoSenders: () => [...this.peers.values()].flatMap((e) => (e.videoSender ? [e.videoSender] : [])),
     getPeerCount: () => this.peers.size,
-    getCaptureStream: () => this.shareStream,
-    getQuality: () => this.shareQuality,
-    onStats: (stats) => this.cb.onShareStats(stats),
-    onAutoDowngrade: () => this.setShareQuality('1080p30'),
-  });
+    attachShareTracksToAll: () => {
+      for (const entry of this.peers.values()) this.maybeAttachShareTracks(entry);
+      this.applyShareQuality();
+    },
+    detachShareTracksFromAll: () => {
+      for (const entry of this.peers.values()) {
+        if (entry.videoSender) {
+          try {
+            entry.pc.removeTrack(entry.videoSender);
+          } catch {
+            /* PC 已关闭 */
+          }
+          entry.videoSender = null;
+        }
+        if (entry.shareAudioSender) {
+          try {
+            entry.pc.removeTrack(entry.shareAudioSender);
+          } catch {
+            /* PC 已关闭 */
+          }
+          entry.shareAudioSender = null;
+        }
+      }
+    },
+    applyShareQuality: () => this.applyShareQuality(),
+    onShareVideo: (stream) => this.cb.onShareVideo(stream),
+    onShareChanged: (info) => this.cb.onShareChanged(info),
+    onShareStats: (stats) => this.cb.onShareStats(stats),
+    onShareQualityChange: (q) => this.cb.onShareQualityChange?.(q),
+    attachRemoteShareAudio: (stream, muted) => this.attachShareAudioElement(stream, muted),
+    disposeRemoteShareAudio: () => this.disposeShareAudioElement(),
+    applyShareMuted: (muted) => this.applyShareAudioMuted(muted),
+  } satisfies ScreenShareSink);
+  /** 远端共享系统声音的 audio 元素（独立直连播放；不进 WebAudio 音量链与房间录制） */
+  private shareAudioEl: HTMLAudioElement | null = null;
 
   constructor(self: VoiceSelfInfo, cb: VoiceSessionCallbacks) {
     this.cb = cb;
     this.micVolume = Math.min(1, Math.max(0, loadNumber(MIC_VOLUME_KEY, 1)));
     this.noiseReductionOn = loadFlag(NOISE_REDUCTION_KEY);
     this.musicModeOn = loadFlag(MUSIC_MODE_KEY);
-    const savedQuality = localStorage.getItem(SHARE_QUALITY_KEY) as ShareQuality | null;
-    this.shareQuality =
-      savedQuality && savedQuality in SHARE_QUALITY_PRESETS ? savedQuality : SHARE_QUALITY_KEY_DEFAULT;
-    this.shareSharpText = loadFlag(SHARE_SHARP_KEY);
     this.self = {
       userId: self.userId,
       username: self.username,
@@ -430,18 +442,10 @@ export class VoiceSession {
         this.teardown('room-closed');
         return;
       }
-      // 其余（网络抖动等）自动重连：清空对等连接后重新加入房间
+      // 其余（网络抖动等）自动重连：清空对等连接后重新加入房间。
+      // 共享状态以服务端为准的重连对账在 share.onWsClosed()（见 screenShareController）
       this.cleanupPeers();
-      // 重连对账（P1 修复）：共享状态以服务端为准。断线期间服务端已清除
-      // member.sharing 并广播，本地不同步清掉会：观看方残留死流舞台永不关闭；
-      // 共享方重连后把旧捕获流挂到新连接持续推流，与后来的共享者形成“双共享者”
-      if (this.sharingActive) this.stopScreenShare(false);
-      if (this.shareSharer) {
-        this.shareSharer = null;
-        this.disposeShareAudio();
-        this.cb.onShareVideo(null);
-        this.cb.onShareChanged({ userId: null, audio: false });
-      }
+      this.share.onWsClosed();
       this.emitStatus('reconnecting');
       this.reconnectTimer = window.setTimeout(() => this.openWs(), RECONNECT_DELAY_MS);
     };
@@ -495,11 +499,7 @@ export class VoiceSession {
           });
         }
         // 加入时已有人在共享：先立状态与徽标（画面随后经该共享者的补挂重协商到达）
-        const sharer = (msg.participants as VoiceParticipant[]).find((p) => p.sharing);
-        if (sharer) {
-          this.shareSharer = { userId: sharer.userId, audio: false };
-          this.cb.onShareChanged({ userId: sharer.userId, audio: false });
-        }
+        this.share.onJoined(msg.participants as VoiceParticipant[]);
         this.emitParticipants();
         break;
       }
@@ -550,23 +550,12 @@ export class VoiceSession {
           entry.participant.sharing = active;
           this.emitParticipants();
         }
-        if (active) {
-          this.shareSharer = { userId, audio };
-        } else if (this.shareSharer?.userId === userId) {
-          this.shareSharer = null;
-          this.disposeShareAudio();
-          this.cb.onShareVideo(null);
-        }
-        // 被服务端判定不再共享（被抢占等）：本地兜底停止采集（状态由服务端管理，不再回发 share-stop）
-        if (userId === this.self.userId && !active && this.sharingActive) {
-          this.stopScreenShare(false);
-        }
-        this.cb.onShareChanged({ userId: active ? userId : null, audio });
+        this.share.onShareChanged(userId, active, audio);
         break;
       }
       case 'share-force-stop':
         // 被新共享者抢占：服务端已广播状态，本地静默停止采集即可
-        this.stopScreenShare(false);
+        this.share.onForceStop();
         break;
       case 'chat':
         // 新聊天消息（含自己在别的设备发的）：交给上层（去重/追加由 VoiceContext 处理）
@@ -638,15 +627,14 @@ export class VoiceSession {
         } catch {
           /* 浏览器不支持则忽略 */
         }
-        this.shareSharer = { userId: participant.userId, audio: this.shareSharer?.audio ?? false };
-        this.cb.onShareVideo(e.streams[0]);
+        this.share.onRemoteVideo(participant.userId, e.streams[0]);
         return;
       }
       // 音频分流：同对端第一条音频流 = 麦克风（走 WebAudio 音量链路），
       // 共享开始后新出现的第二条音频流 = 共享系统声音（独立 audio 元素直连播放）
       const streamId = e.streams[0].id;
       if (entry.micStreamId !== null && streamId !== entry.micStreamId) {
-        this.attachShareAudio(e.streams[0]);
+        this.share.onRemoteShareAudio(e.streams[0]);
         return;
       }
       // 音频接收端抖动缓冲目标 80ms：防长时间通话的"延迟爬升"（丢包高峰后缓冲
@@ -914,12 +902,7 @@ export class VoiceSession {
     this.quality.forget(userId); // 成员已离开：清掉其残留的质量显示状态与窗口计数器
     if (entry.speaking) this.cb.onSpeaking(userId, false);
     // 离开的正是当前共享者：关闭舞台与共享声音
-    if (this.shareSharer?.userId === userId) {
-      this.shareSharer = null;
-      this.disposeShareAudio();
-      this.cb.onShareVideo(null);
-      this.cb.onShareChanged({ userId: null, audio: false });
-    }
+    this.share.onPeerLeft(userId);
   }
 
   private disposePeer(entry: PeerEntry): void {
@@ -1152,16 +1135,15 @@ export class VoiceSession {
   }
 
   isSharing(): boolean {
-    return this.sharingActive;
+    return this.share.isSharing();
   }
 
   /**
    * 发起屏幕共享：getDisplayMedia（1080p60 ideal，系统声音由浏览器共享选择器决定是否携带）
-   * → 向服务端声明（抢占旧共享者并广播）→ 把 video/共享音频 track 挂到各对端 PC
-   * → onnegotiationneeded 逐对端自动重协商，画面即达。
+   * → 状态登记与广播由 share.start() 完成（挂 track/应用质量档/启动统计/UI 回调）。
    */
   async startScreenShare(): Promise<ScreenShareStartResult> {
-    if (this.destroyed || this.sharingActive) return 'cancelled';
+    if (this.destroyed || this.share.isSharing()) return 'cancelled';
     if (!this.supportsScreenShare()) return 'unsupported';
     let stream: MediaStream;
     try {
@@ -1184,99 +1166,32 @@ export class VoiceSession {
       return 'cancelled';
     }
 
-    this.shareStream = stream;
-    const video = stream.getVideoTracks()[0] ?? null;
-    this.withShareAudio = stream.getAudioTracks().length > 0;
-    if (video) {
-      // 注意：不设 contentHint='motion' —— 它会开启 Chrome 屏幕捕获的"平滑模式"
-      // （帧间混合保帧率），动态画面出现明显拖影/回退感。清晰文字模式仍用 detail。
-      if (this.shareSharpText) video.contentHint = 'detail';
-      // 浏览器自带的"停止共享"条 → 与主动停止走同一清理路径
-      video.onended = () => {
-        void this.stopScreenShare();
-      };
-    }
-    // 记录捕获实际帧率与分辨率：窗口/标签共享被 Chromium 限制最高 30fps，
-    // 只有整屏(monitor)共享能到 60 —— 后续 UI 据此提示"选 60 档但实际只有 30"
-    const capSettings = video?.getSettings();
-    this.shareStats.reset({ captureFps: capSettings?.frameRate ?? 0 });
-    // 发送侧包装流（固定 stream id，接收端区分共享声音与麦克风）
-    this.shareSendVideoStream = video ? new MediaStream([video]) : null;
-    const audio = stream.getAudioTracks()[0] ?? null;
-    this.shareSendAudioStream = audio ? new MediaStream([audio]) : null;
-
-    this.sharingActive = true;
-    this.self.sharing = true;
-    this.emitParticipants();
-
-    // 先声明状态（服务端互斥/抢占并广播），随后挂 track；重协商由 onnegotiationneeded 自动完成
-    this.send({ type: 'share-start', audio: this.withShareAudio });
-    for (const entry of this.peers.values()) this.maybeAttachShareTracks(entry);
-    this.applyShareQuality();
-    this.shareStats.start();
-
-    this.cb.onShareChanged({ userId: this.self.userId, audio: this.withShareAudio });
-    if (this.shareSendVideoStream) this.cb.onShareVideo(this.shareSendVideoStream);
+    this.share.start(stream);
     return 'started';
   }
 
   /** 停止屏幕共享；notify=false 用于被抢占/服务端兜底（状态已在服务端翻转，不再回发 share-stop） */
   stopScreenShare(notify = true): void {
-    if (!this.sharingActive && !this.shareStream) return;
-    this.sharingActive = false;
-    this.self.sharing = false;
-    if (this.shareSharer?.userId === this.self.userId) this.shareSharer = null;
-    for (const entry of this.peers.values()) {
-      if (entry.videoSender) {
-        try {
-          entry.pc.removeTrack(entry.videoSender);
-        } catch {
-          /* PC 已关闭 */
-        }
-        entry.videoSender = null;
-      }
-      if (entry.shareAudioSender) {
-        try {
-          entry.pc.removeTrack(entry.shareAudioSender);
-        } catch {
-          /* PC 已关闭 */
-        }
-        entry.shareAudioSender = null;
-      }
-    }
-    if (this.shareStream) {
-      for (const t of this.shareStream.getTracks()) t.onended = null;
-      this.shareStream.getTracks().forEach((t) => t.stop());
-    }
-    this.shareStream = null;
-    this.shareSendVideoStream = null;
-    this.shareSendAudioStream = null;
-    this.withShareAudio = false;
-    this.shareStats.stop();
-    this.emitParticipants();
-    if (notify) this.send({ type: 'share-stop' });
-    // removeTrack 触发各对端 onnegotiationneeded → 自动重协商回纯音频
-    this.cb.onShareVideo(null);
-    this.cb.onShareChanged({ userId: null, audio: false });
+    this.share.stop(notify);
   }
 
   /** 把当前共享的 video / 系统声音 track 挂到对端 PC（开始共享遍历全房间；对端新建连接后补挂） */
   private maybeAttachShareTracks(entry: PeerEntry): void {
-    if (!this.sharingActive || !this.shareStream) return;
-    const video = this.shareSendVideoStream?.getVideoTracks()[0];
-    if (video && this.shareSendVideoStream && !entry.videoSender) {
+    if (!this.share.sharingActive || !this.share.shareStream) return;
+    const video = this.share.shareSendVideoStream?.getVideoTracks()[0];
+    if (video && this.share.shareSendVideoStream && !entry.videoSender) {
       // addTransceiver（而非 addTrack）：直接拿到收发器，便于设置编解码偏好
       const transceiver = entry.pc.addTransceiver(video, {
         direction: 'sendonly',
-        streams: [this.shareSendVideoStream],
+        streams: [this.share.shareSendVideoStream],
       });
       entry.videoSender = transceiver.sender;
       this.preferH264ForSender(transceiver);
       this.applyShareQualityToSender(entry.videoSender);
     }
-    const audio = this.withShareAudio ? this.shareSendAudioStream?.getAudioTracks()[0] : null;
-    if (audio && this.shareSendAudioStream && !entry.shareAudioSender) {
-      entry.shareAudioSender = entry.pc.addTrack(audio, this.shareSendAudioStream);
+    const audio = this.share.withShareAudio ? this.share.shareSendAudioStream?.getAudioTracks()[0] : null;
+    if (audio && this.share.shareSendAudioStream && !entry.shareAudioSender) {
+      entry.shareAudioSender = entry.pc.addTrack(audio, this.share.shareSendAudioStream);
     }
   }
 
@@ -1301,48 +1216,29 @@ export class VoiceSession {
   }
 
   getShareQuality(): ShareQuality {
-    return this.shareQuality;
+    return this.share.getShareQuality();
   }
 
   setShareQuality(q: ShareQuality): void {
-    if (!(q in SHARE_QUALITY_PRESETS)) return;
-    this.shareQuality = q;
-    localStorage.setItem(SHARE_QUALITY_KEY, q);
-    this.applyShareQuality();
-    // 自动降档（1080p60 CPU 瓶颈）等内部触发的档位变更也要同步给上层 UI
-    this.cb.onShareQualityChange?.(q);
+    this.share.setShareQuality(q);
   }
 
   getShareSharpText(): boolean {
-    return this.shareSharpText;
+    return this.share.getShareSharpText();
   }
 
   /** "清晰文字"模式：contentHint=detail + 带宽不足时保分辨率降帧率（写代码/文档场景）；关 = 捕获默认行为 */
   setShareSharpText(on: boolean): void {
-    this.shareSharpText = on;
-    localStorage.setItem(SHARE_SHARP_KEY, on ? '1' : '0');
-    const video = this.shareStream?.getVideoTracks()[0];
-    if (video) {
-      if (on) video.contentHint = 'detail';
-      else video.contentHint = ''; // 清空 = 回到浏览器默认捕获行为（无平滑混帧）
-    }
-    this.applyShareQuality();
+    this.share.setShareSharpText(on);
   }
 
   /** 接收端共享声音开关（默认静音；开启动作本身即用户手势，满足自动播放策略） */
   setShareMuted(muted: boolean): void {
-    this.shareMuted = muted;
-    if (this.shareAudioEl) {
-      this.shareAudioEl.muted = muted;
-      if (!muted)
-        this.shareAudioEl.play().catch(() => {
-          /* 仍被拦截则等下次交互 */
-        });
-    }
+    this.share.setShareMuted(muted);
   }
 
   getShareMuted(): boolean {
-    return this.shareMuted;
+    return this.share.getShareMuted();
   }
 
   /** 把当前档位应用到全部视频 sender（码率/分辨率缩放/降级偏好） */
@@ -1353,7 +1249,7 @@ export class VoiceSession {
   }
 
   private applyShareQualityToSender(sender: RTCRtpSender): void {
-    const preset = SHARE_QUALITY_PRESETS[this.shareQuality];
+    const preset = SHARE_QUALITY_PRESETS[this.share.shareQuality];
     try {
       const params = sender.getParameters();
       if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
@@ -1363,7 +1259,7 @@ export class VoiceSession {
       // 高动态自动爬升），minBitrate 既不生效也无必要，设了反而可能浪费 mesh 上行
       enc.scaleResolutionDownBy = preset.scale;
       // 60fps 档优先保帧率；清晰文字模式优先保分辨率（文字不糊比流畅重要）
-      (params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = this
+      (params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = this.share
         .shareSharpText
         ? 'maintain-resolution'
         : preset.degradation;
@@ -1376,23 +1272,31 @@ export class VoiceSession {
   }
 
   /** 远端共享系统声音：独立 audio 元素直连播放（默认静音；不进 WebAudio 音量链与房间录制） */
-  private attachShareAudio(stream: MediaStream): void {
+  private attachShareAudioElement(stream: MediaStream, muted: boolean): void {
     if (!this.shareAudioEl) {
       const el = document.createElement('audio');
-      el.muted = this.shareMuted;
+      el.muted = muted;
       this.shareAudioEl = el;
     }
     this.shareAudioEl.srcObject = stream;
     this.shareAudioEl.play().catch(() => {
       /* 自动播放拦截：舞台上点声音开关时会重试 */
     });
-    if (this.shareSharer) this.cb.onShareChanged({ userId: this.shareSharer.userId, audio: true });
   }
 
-  private disposeShareAudio(): void {
+  private disposeShareAudioElement(): void {
     if (!this.shareAudioEl) return;
     this.shareAudioEl.srcObject = null;
     this.shareAudioEl = null;
+  }
+
+  private applyShareAudioMuted(muted: boolean): void {
+    if (!this.shareAudioEl) return;
+    this.shareAudioEl.muted = muted;
+    if (!muted)
+      this.shareAudioEl.play().catch(() => {
+        /* 仍被拦截则等下次交互 */
+      });
   }
 
   // ============================================================
@@ -1458,18 +1362,8 @@ export class VoiceSession {
     this.stopRecording(); // 退出时结算录制文件（转码下载在后台完成）
     this.cleanupPeers();
 
-    // 屏幕共享清理（会话级销毁：不发 share-stop，服务端随连接移除广播 share-changed(false)）
-    this.sharingActive = false;
-    this.shareSharer = null;
-    this.shareStats.stop();
-    if (this.shareStream) {
-      for (const t of this.shareStream.getTracks()) t.onended = null;
-      this.shareStream.getTracks().forEach((t) => t.stop());
-    }
-    this.shareStream = null;
-    this.shareSendVideoStream = null;
-    this.shareSendAudioStream = null;
-    this.disposeShareAudio();
+    // 屏幕共享会话级清理（不发 share-stop，服务端随连接移除广播 share-changed(false)）
+    this.share.destroy();
 
     this.micStream?.getTracks().forEach((t) => t.stop());
     this.micStream = null;
