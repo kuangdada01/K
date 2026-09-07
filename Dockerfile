@@ -1,38 +1,39 @@
 # ============================================================
-# 霜晨月 Docker 镜像
+# 霜晨月 Docker 镜像（npm workspaces 版）
 # 多阶段构建：shared/server/client 编译 → 精简运行时
 # 运行时需提供环境变量（JWT_SECRET/SMTP_*/ADMIN_EMAIL 等）
 # 或挂载 .env 到 /app/.env
 #
-# E4 修复：
-# 1. 运行阶段以非 root 用户（app）运行；
-# 2. 依赖安装先于源码 COPY（只拷 package*.json 装依赖），
-#    源码变更不再使依赖层缓存全部失效；
-# 3. 运行阶段只拷 shared 的 dist + 清单（不含 dev 依赖），并为 shared
-#    单独 npm ci 装生产依赖（E5：file: 软链不会带出 shared 自身的依赖）。
+# npm workspaces 迁移说明：
+# - 根 npm ci 一次安装全部三个 workspace（依赖单一根 lockfile）；
+#   子目录内 npm ci 不再适用（npm 不支持在 workspace 内单独 ci）。
+# - 运行时只装 shared/server 两个 workspace 的生产依赖
+#   （-w shared -w server），client 是纯静态产物不装依赖。
+#
+# 历史修复保留：
+# E4: 非 root（app）运行；依赖先于源码 COPY（缓存友好）。
+# E5: shared 的 dist 运行时要 require('zod') 等生产依赖——workspaces 下
+#     根 node_modules 统一 hoist，npm ci -w 会为指定 workspace 装齐依赖树。
 # ============================================================
 
 # ---------- 构建阶段 ----------
 FROM node:22-slim AS build
 WORKDIR /app
 
-# 依赖层缓存：shared/server 无 file: 交叉依赖，先只拷清单装依赖
-COPY shared/package*.json ./shared/
-COPY server/package*.json ./server/
-RUN cd shared && npm ci --no-audit --no-fund
-RUN cd server && npm ci --no-audit --no-fund
+# 依赖层缓存：只拷清单装依赖（根 lockfile + 三个子包清单），源码变更不失效
+COPY package.json package-lock.json ./
+COPY shared/package.json ./shared/
+COPY server/package.json ./server/
+COPY client/package.json ./client/
+RUN npm ci --no-audit --no-fund
 
-# 源码层：拷代码并构建 shared → server
+# 源码层：拷代码并构建 shared → server → client
 COPY shared ./shared
 COPY server ./server
-RUN cd shared && npm run build
-RUN cd server && npm run build
-
-# client 依赖 file:../shared，须在 shared 源码/产物就位后安装
-COPY client/package*.json ./client/
-RUN cd client && npm ci --no-audit --no-fund
+RUN npm run build --prefix shared
+RUN npm run build --prefix server
 COPY client ./client
-RUN cd client && npm run build
+RUN npm run build --prefix client
 
 # ---------- 运行时阶段 ----------
 FROM node:22-slim
@@ -43,19 +44,16 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 # 只拷产物与清单（不需要 dev 依赖/源码）
-COPY --from=build /app/shared/dist ./shared/dist
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/package-lock.json ./package-lock.json
 COPY --from=build /app/shared/package.json ./shared/package.json
-COPY --from=build /app/shared/package-lock.json ./shared/package-lock.json
 COPY --from=build /app/server/package.json ./server/package.json
-COPY --from=build /app/server/package-lock.json ./server/package-lock.json
+COPY --from=build /app/shared/dist ./shared/dist
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
 
-# E5 修复：shared 的 dist 运行时要 require('zod') 等生产依赖，而 server 的
-# npm ci（file:../shared 只建软链，不装 shared 自身依赖）不会生成
-# /app/shared/node_modules，容器内启动会 MODULE_NOT_FOUND——须为 shared 单独装生产依赖。
-RUN cd shared && npm ci --omit=dev --no-audit --no-fund
-RUN cd server && npm ci --omit=dev --no-audit --no-fund
+# 为 shared/server 两个 workspace 装生产依赖（client 是静态产物，不装）
+RUN npm ci --omit=dev --no-audit --no-fund -w shared -w server
 
 # E4：非 root 运行
 # k.db 预建为空文件（不声明 VOLUME）：新版 Docker/containerd 拒绝把卷挂到已存在的

@@ -48,9 +48,5 @@
   },
   "overrides": {
     "qs": "6.16.0"
-  },
-  "allowScripts": {
-    "better-sqlite3@12.10.0": true,
-    "esbuild@0.28.1": true
   }
 }

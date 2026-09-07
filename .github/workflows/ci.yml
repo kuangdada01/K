@@ -20,14 +20,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            shared/package-lock.json
-            server/package-lock.json
-            client/package-lock.json
+          # npm workspaces：单一根 lockfile 覆盖全部三个 workspace
+          cache-dependency-path: package-lock.json
 
-      - name: 安装依赖（npm ci 一步完成，E3 修复：此前 npm install + install:all 根目录装两遍且可能改写 lockfile）
-        run: npm ci && npm ci --prefix shared && npm ci --prefix server && npm ci --prefix client
+      - name: 安装依赖（npm ci 一次装全部 workspace）
+        run: npm ci
 
       - name: Prettier 格式检查
         run: npm run format:check
