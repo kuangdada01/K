@@ -2,24 +2,22 @@
  * ============================================================
  * 帖子路由（/api/posts）- CRUD 与搜索
  * ============================================================
+ * 写路径编排（创建图文帖 / 编辑 / 删除）已移至 services/post.service.ts，
+ * 本文件路由层仅保留 multer、认证、参数解析、调用 service 与响应映射。
  */
 
 import { Router, Request, Response } from 'express';
-import path from 'path';
 import { PATHS } from '../../config';
 import { authMiddleware, optionalAuth } from '../../middleware/auth';
 import { asyncHandler, AppError } from '../../middleware/error';
-import { withImages, imageFileFilter, compressImage } from '../../lib/image';
-import { safeDeleteFile, safeDeleteUpload, parseImageUrlArray, deletePostMediaFiles } from '../../lib/file';
-import { pageQuerySchema, limitQuerySchema, extractTags, postTextSchema } from '@k/shared';
+import { withImages, imageFileFilter } from '../../lib/image';
+import { pageQuerySchema, limitQuerySchema } from '@k/shared';
 import { createUploader, timestampFilename } from '../../lib/upload';
 import * as postRepo from '../../repositories/post.repo';
 import * as commentRepo from '../../repositories/comment.repo';
+import * as postService from '../../services/post.service';
 
 const router = Router();
-
-/** 图片压缩参数（帖子图片最大1920px，质量80） */
-const POST_IMAGE_MAX = 1920;
 
 /** 帖子图片上传中间件: 限制10MB，仅允许 jpg/png/gif/webp */
 const imageUpload = createUploader({
@@ -166,7 +164,8 @@ router.get(
       res.json({ post: withImages(post), comments });
       return;
     }
-    const commentLimit = Math.min(Math.max(commentLimitRaw, 0), 50) || 10;
+    // §5.1 修复: 允许客户端请求 0 条顶级评论（原 `|| 10` 会把 0 吞成默认 10）
+    const commentLimit = Math.min(Math.max(commentLimitRaw, 0), 50);
     const paged = commentRepo.listCommentsPaged(postId, userId, { topLevelLimit: commentLimit });
     res.json({
       post: withImages(post),
@@ -196,44 +195,14 @@ router.post(
   authMiddleware,
   imageUpload.array('images', 9),
   asyncHandler(async (req: Request, res: Response) => {
-    const files = req.files as Express.Multer.File[];
-    if (!files || files.length === 0) {
-      throw new AppError(400, '请选择图片');
-    }
-
-    // multipart 文本字段校验（标题/正文长度上限）：放在压缩等磁盘副作用之前，
-    // 失败时清理 multer 已落盘的文件再返回 400，避免孤儿文件
-    const parsedText = postTextSchema.safeParse({
-      title: req.body.title || '',
-      description: req.body.description || '',
-    });
-    if (!parsedText.success) {
-      for (const f of files) safeDeleteUpload(f.path);
-      throw new AppError(400, parsedText.error.issues[0]?.message || '参数错误');
-    }
-
-    // 上传后压缩（并行处理，减少响应等待；heic 会转成 jpg，以返回路径为准）
-    const processedFiles = await Promise.all(
-      files.map((f) => compressImage(path.join(PATHS.uploads, f.filename), { maxWidth: POST_IMAGE_MAX }))
-    );
-
-    // 将所有图片路径转为 JSON 数组存储
-    const imageUrls = processedFiles.map((p) => `/uploads/${path.basename(p)}`);
-    const imageUrl = JSON.stringify(imageUrls);
-    const title = parsedText.data.title;
-    const description = parsedText.data.description;
-    const closeComments = req.body.close_comments === '1' ? 1 : 0;
-    const pinned = req.body.pinned === '1' ? 1 : 0;
-
-    const post = postRepo.createPost({
+    const post = await postService.createPost({
       userId: req.user!.id,
-      imageUrl,
-      title,
-      description,
-      closeComments,
-      pinned,
+      files: (req.files as Express.Multer.File[]) || [],
+      title: req.body.title,
+      description: req.body.description,
+      closeComments: req.body.close_comments === '1' ? 1 : 0,
+      pinned: req.body.pinned === '1' ? 1 : 0,
     });
-    postRepo.syncPostTags(post.id, extractTags(description));
 
     res.status(201).json(withImages(post));
   })
@@ -259,88 +228,16 @@ router.put(
   imageUpload.array('images', 9),
   asyncHandler(async (req: Request, res: Response) => {
     const postId = parseInt(req.params.id as string);
-    const post = postRepo.findOwnPost(postId, req.user!.id);
 
-    if (!post) {
-      throw new AppError(404, '帖子不存在或无权编辑');
-    }
-
-    const description = req.body.description;
-    let keepImages: string[] = [];
-    if (req.body.keepImages) {
-      try {
-        // multipart 客户端传 JSON 字符串；JSON 客户端可能直接传数组。
-        // 不能 JSON.parse(array)——数组会被 String() 成裸串再解析失败，
-        // 或历史行为下拆成单字符数组写脏 image_url
-        const raw =
-          typeof req.body.keepImages === 'string' ? JSON.parse(req.body.keepImages) : req.body.keepImages;
-        if (!Array.isArray(raw) || raw.some((u) => typeof u !== 'string')) {
-          throw new Error('keepImages 必须是字符串数组');
-        }
-        keepImages = raw as string[];
-      } catch {
-        throw new AppError(400, 'keepImages 格式错误');
-      }
-    }
-
-    // 正文长度校验（编辑不涉及标题），失败清理 multer 已落盘文件后返回 400
-    const parsedText = postTextSchema.pick({ description: true }).safeParse({
-      description: description ?? '',
-    });
-    if (!parsedText.success) {
-      for (const f of (req.files as Express.Multer.File[]) || []) safeDeleteUpload(f.path);
-      throw new AppError(400, parsedText.error.issues[0]?.message || '参数错误');
-    }
-
-    // 合并保留的图片和新上传的图片（新图先压缩，heic 转 jpg 后以返回路径为准）
-    const processedNew = await Promise.all(
-      ((req.files as Express.Multer.File[]) || []).map((f) =>
-        compressImage(path.join(PATHS.uploads, f.filename), { maxWidth: POST_IMAGE_MAX })
-      )
-    );
-    const newFiles = processedNew.map((p) => `/uploads/${path.basename(p)}`);
-    const allImages = [...keepImages, ...newFiles];
-
-    // 视频帖子允许空图片（image_url 为 '[]'），仅图文帖子要求至少一张
-    const isVideoPost = !!post.video_url;
-    if (allImages.length === 0 && !isVideoPost) {
-      // 清理本次新上传的文件，避免孤儿文件
-      for (const url of newFiles) {
-        safeDeleteFile(url);
-      }
-      throw new AppError(400, '至少需要一张图片');
-    }
-
-    // 待删除的旧图列表：推迟到 DB 更新成功后再物理删除。
-    // 否则后续校验/更新失败时，DB 仍指向已删除的文件，帖子图片将永久丢失。
-    const removedOldImages = parseImageUrlArray(post.image_url).filter((url) => !keepImages.includes(url));
-
-    // 视频帖子保持 image_url 为 '[]'，避免存成 '["[]"]' 这种脏数据
-    const finalImageUrl = isVideoPost && allImages.length === 0 ? '[]' : JSON.stringify(allImages);
-
-    const closeComments = req.body.close_comments === '1' ? 1 : 0;
-    const pinned = req.body.pinned === '1' ? 1 : 0;
-
-    const updated = postRepo.updatePost({
+    const updated = await postService.updatePost({
       postId,
       userId: req.user!.id,
-      imageUrl: finalImageUrl,
-      description: description || '',
-      closeComments,
-      pinned,
+      files: (req.files as Express.Multer.File[]) || [],
+      keepImages: req.body.keepImages,
+      description: req.body.description,
+      closeComments: req.body.close_comments === '1' ? 1 : 0,
+      pinned: req.body.pinned === '1' ? 1 : 0,
     });
-
-    if (!updated) {
-      for (const url of newFiles) {
-        safeDeleteFile(url);
-      }
-      throw new AppError(404, '帖子不存在或无权编辑');
-    }
-
-    for (const url of removedOldImages) {
-      safeDeleteFile(url);
-    }
-    postRepo.syncPostTags(postId, extractTags(updated.description));
 
     res.json(withImages(updated));
   })
@@ -352,25 +249,17 @@ router.put(
  * 认证: 必须（只能删除自己的帖子）
  *
  * 级联操作:
- * 1. 删除帖子的所有图片文件
- * 2. 删除视频文件和封面（如有）
- * 3. 删除相关通知
- * 4. 删除帖子记录（数据库外键会自动删除评论、点赞等）
+ * 1. 删除帖子记录（数据库外键会自动删除评论、点赞、通知等）
+ * 2. 删除帖子的所有图片/视频/封面文件（DB 成功后再删磁盘）
  */
 router.delete(
   '/:id',
   authMiddleware,
   asyncHandler(async (req: Request, res: Response) => {
     const postId = parseInt(req.params.id as string);
-    const post = postRepo.findOwnPost(postId, req.user!.id);
 
-    if (!post) {
-      throw new AppError(404, '帖子不存在或无权删除');
-    }
+    postService.deletePost(postId, req.user!.id);
 
-    // 删除媒体文件（图片/视频/封面），再删记录（外键级联会自动删除评论、点赞、通知等）
-    deletePostMediaFiles(post);
-    postRepo.deletePost(postId);
     res.json({ message: 'Post deleted' });
   })
 );

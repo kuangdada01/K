@@ -4,96 +4,28 @@
  * ============================================================
  * 提供 JWT (JSON Web Token) 认证功能
  *
- * 包含4个导出函数:
+ * 包含3个导出函数:
  * 1. authMiddleware    - 必须认证，无效token返回401
  * 2. adminMiddleware   - 管理员权限检查，需配合 authMiddleware 使用
  * 3. optionalAuth      - 可选认证，无效token不报错（用于公开接口获取可选用户信息）
- * 4. generateToken     - 生成JWT token（7天有效期）
+ *
+ * JWT 密钥/校验/签发逻辑已拆分到 ../lib/jwt（verifyLiveToken / generateToken /
+ * LiveToken / JWT_SECRET）；Express Request.user 类型扩展在 ../types/express.d.ts。
+ * 下方保留兼容 re-export：routes/auth.ts、routes/events.ts、voice/ws.ts 及
+ * 测试文件仍从本模块导入上述符号（路径未变），新代码请直接改从 '../lib/jwt' 导入。
  * ============================================================
  */
 
 import { Request, Response, NextFunction } from 'express';
-import jwt from 'jsonwebtoken';
-import { env } from '../config';
-import { getAuthState } from '../repositories/admin.repo';
+import { verifyLiveToken } from '../lib/jwt';
 
-// ============================================================
-// 配置常量
-// ============================================================
-
-/**
- * JWT 密钥
- * 强校验在 config.ts 的 envSchema：未设置 JWT_SECRET 时进程拒绝启动
- * （任何环境一视同仁——生产环境若漏配 NODE_ENV/JWT_SECRET，
- * 旧实现会静默回退到公开的 dev 密钥，攻击者可用其自签任意 token）
- */
-const JWT_SECRET = env.JWT_SECRET;
-
-export { JWT_SECRET };
-
-// ============================================================
-// 类型声明扩展
-// ============================================================
-
-/**
- * 扩展 Express Request 类型，添加 user 属性
- * 由认证中间件解析 token 后注入
- */
-/* eslint-disable @typescript-eslint/no-namespace -- Express 类型扩展的标准做法 */
-declare global {
-  namespace Express {
-    interface Request {
-      /** 当前认证用户信息（由 authMiddleware 注入） */
-      user?: {
-        id: number; // 用户ID
-        username: string; // 用户名
-        role?: string; // 角色: 'user' | 'admin'
-      };
-    }
-  }
-}
-/* eslint-enable @typescript-eslint/no-namespace */
+// 兼容导出（历史调用方继续从本模块取 JWT 符号，行为不变）
+export { JWT_SECRET, generateToken, verifyLiveToken } from '../lib/jwt';
+export type { LiveToken } from '../lib/jwt';
 
 // ============================================================
 // 中间件函数
 // ============================================================
-
-/** JWT payload（tv = users.token_version，密码变更/重置后递增使旧 token 失效） */
-interface TokenPayload {
-  id: number;
-  username: string;
-  role?: string;
-  tv?: number;
-}
-
-/** 实时校验结果（role/banned_until/token_version 来自数据库，非 token 冗余） */
-export interface LiveToken {
-  id: number;
-  username: string;
-  role: string;
-  banned_until: string | null;
-  token_version: number;
-}
-
-/**
- * 校验 access token：签名 + token_version 与数据库比对。
- * 用户被删除、密码已变更/重置（版本不匹配）均判定失效。
- * authMiddleware / optionalAuth / SSE（events.ts）/ 语音 WS（voice/ws.ts）共用，
- * 返回的 role 为数据库实时值（管理员降级立即生效）。
- */
-export function verifyLiveToken(token: string): LiveToken | undefined {
-  let decoded: TokenPayload;
-  try {
-    // 显式钉死签名算法：即使未来密钥形态变化，也不接受 alg 头指定的其他算法
-    decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as TokenPayload;
-  } catch {
-    return undefined;
-  }
-  const state = getAuthState(decoded.id);
-  // 缺失 tv 视为版本 0（兼容本字段上线前签发的 token），改密后版本必然 > 0 照样失效
-  if (!state || (decoded.tv ?? 0) !== state.token_version) return undefined;
-  return { id: decoded.id, username: decoded.username, ...state };
-}
 
 /**
  * 必须认证中间件
@@ -152,20 +84,6 @@ export function adminMiddleware(req: Request, res: Response, next: NextFunction)
     return;
   }
   next();
-}
-
-/**
- * 生成 JWT token
- *
- * @param user - 用户信息对象
- * @param user.id - 用户ID
- * @param user.username - 用户名
- * @param user.role - 用户角色（可选）
- * @param user.tv - 令牌版本（users.token_version，改密后递增）
- * @returns 签名后的 JWT token 字符串（7天有效期）
- */
-export function generateToken(user: { id: number; username: string; role?: string; tv?: number }): string {
-  return jwt.sign(user, JWT_SECRET, { expiresIn: '7d', algorithm: 'HS256' });
 }
 
 /**

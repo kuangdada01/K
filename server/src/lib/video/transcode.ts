@@ -1,8 +1,9 @@
 /**
  * ============================================================
- * 视频转码工具
+ * 视频转码工具（lib/video/transcode）
  * ============================================================
- * 发布视频时自动转码为浏览器/WebView 通用格式（H.264 + AAC 的 mp4）
+ * 自 src/video.ts 拆分：发布视频时自动转码为浏览器/WebView 通用格式
+ * （H.264 + AAC 的 mp4）
  * - 已是 H.264 mp4: 直接跳过
  * - HEVC MOV 等格式: 用 ffmpeg 转码为 H.264 mp4 并替换原文件
  * - ffmpeg 未安装或转码失败: 保留原文件，不阻塞发布流程
@@ -12,8 +13,8 @@
  * - 输出分辨率封顶 1080p（x264 内存与输出分辨率成正比，4K 原片不再打爆内存）
  * - 编码线程数限制
  * - Linux 下以 nice 低优先级运行，转码期间 Web/API 请求优先调度
- * - 后台串行队列（enqueueVideoTranscode）：同一时间只跑一个 ffmpeg，
- *   发布请求立即返回，不阻塞、不并发叠加
+ * - 由同目录 queue.ts 串行调度（enqueueVideoTranscode）：同一时间只跑一个
+ *   ffmpeg，发布请求立即返回，不阻塞、不并发叠加
  * ============================================================
  */
 
@@ -21,50 +22,21 @@ import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { env } from './config';
-import { logger } from './lib/logger';
-import { AppError } from './middleware/error';
+import { env } from '../../config';
+import { logger } from '../logger';
+import { probeVideoCodec } from './probe';
 
 const execFileAsync = promisify(execFile);
 
-/** ffmpeg/ffprobe 路径（可通过环境变量覆盖，默认从 PATH 查找） */
+/** ffmpeg 路径（可通过环境变量覆盖，默认从 PATH 查找） */
 const FFMPEG = env.FFMPEG_PATH || 'ffmpeg';
-const FFPROBE = env.FFPROBE_PATH || 'ffprobe';
-
-/**
- * 探测视频编码格式，返回视频流 codec_name（如 h264/hevc），
- * 探测失败（ffprobe 未安装或文件异常）返回 null
- */
-export async function probeVideoCodec(filePath: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync(
-      FFPROBE,
-      [
-        '-v',
-        'error',
-        '-select_streams',
-        'v:0',
-        '-show_entries',
-        'stream=codec_name',
-        '-of',
-        'json',
-        filePath,
-      ],
-      { timeout: 30000 }
-    );
-    const data = JSON.parse(stdout);
-    return data?.streams?.[0]?.codec_name ?? null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * 确保视频为浏览器通用格式（H.264 + AAC 的 mp4），输出分辨率封顶 1080p
  *
  * @param filePath - 上传后的视频完整路径
- * @param originalName - 上传时的原始文件名（含扩展名）
- * @returns 最终文件名（转码后可能变为 .mp4）
+ * @param originalName - 上传时的原始文件名（含扩展名；入队前恒为 .mp4）
+ * @returns 最终文件名（原地替换，恒等于入参 originalName）
  */
 export async function ensurePlayableVideo(filePath: string, originalName: string): Promise<string> {
   // 任务入队后、真正执行前文件可能已被删除（临时视频过期清理/帖子删除等）
@@ -75,12 +47,15 @@ export async function ensurePlayableVideo(filePath: string, originalName: string
   // 无法探测（如服务器未安装 ffprobe）或已是 H.264 mp4，保持原样
   if (codec === null || (codec === 'h264' && ext === '.mp4')) return originalName;
 
-  const dir = path.dirname(filePath);
-  const base = originalName.slice(0, originalName.length - ext.length);
-  const finalName = `${base}.mp4`;
-  const outPath = path.join(dir, finalName);
-  // 输入输出同名时（.mp4 但非 H.264），先用中间文件名避免 ffmpeg 覆盖输入
-  const actualOut = outPath === filePath ? `${filePath}.enc.mp4` : outPath;
+  // ============================================================
+  // 原地替换说明（原「非 .mp4 输入改名 finalName + unlinkSync 原文件」分支已删除）：
+  // 所有调用方（routes/posts/media.ts 的 normalizeVideoToMp4）在入队前已把
+  // 视频统一改存 .mp4 扩展名，因此输入与最终输出恒为同一路径，队列恒为原地替换——
+  // 不再存在「转码后文件名从 .mov 变 .mp4」的改名场景。
+  // 输入输出同名时使用 .enc.mp4 中间文件：先让 ffmpeg 写中间文件，避免
+  // 边读边写同一文件损坏数据；成功后删除原文件并把中间文件改名为原路径。
+  // ============================================================
+  const actualOut = `${filePath}.enc.mp4`;
 
   // scale 封顶 1080p（force_original_aspect_ratio=decrease 保持宽高比，小视频不放大）；
   // 引号内的逗号由 ffmpeg filtergraph 解析器处理（execFile 不经过 shell）
@@ -116,14 +91,11 @@ export async function ensurePlayableVideo(filePath: string, originalName: string
 
   try {
     await execFileAsync(cmd, args, { timeout: 30 * 60 * 1000 });
-    if (actualOut !== filePath) {
-      fs.unlinkSync(filePath);
-    }
-    if (actualOut !== outPath) {
-      fs.renameSync(actualOut, outPath);
-    }
-    logger.info(`视频转码完成: ${originalName} -> ${finalName}`);
-    return finalName;
+    // 原地替换原文件：先删旧文件再改名（与历史行为一致，避免目标已存在时改名失败）
+    fs.unlinkSync(filePath);
+    fs.renameSync(actualOut, filePath);
+    logger.info(`视频转码完成（原地替换）: ${originalName}`);
+    return originalName;
   } catch (err) {
     logger.error({ err }, `视频转码失败，保留原文件: ${originalName}`);
     try {
@@ -133,38 +105,6 @@ export async function ensurePlayableVideo(filePath: string, originalName: string
     }
     return originalName;
   }
-}
-
-/**
- * 后台串行转码队列：同一时间只跑一个 ffmpeg（内存/CPU 占用有界），
- * 发布请求立即返回不阻塞；转码完成后同 URL 原地替换内容。
- * 单个任务失败只影响自身，不阻塞队列。
- */
-let transcodeQueue: Promise<unknown> = Promise.resolve();
-
-/** 队列上限（含正在执行的一个）：防止无限刷入任务长期占用 ffmpeg */
-const MAX_PENDING_TRANSCODES = 20;
-let pendingTranscodes = 0;
-
-export function enqueueVideoTranscode(filePath: string, originalName: string): void {
-  if (pendingTranscodes >= MAX_PENDING_TRANSCODES) {
-    throw new AppError(429, '视频处理任务繁忙，请稍后再试');
-  }
-  pendingTranscodes++;
-  transcodeQueue = transcodeQueue
-    .then(() => {
-      logger.info(`视频转码开始: ${originalName}`);
-      return ensurePlayableVideo(filePath, originalName);
-    })
-    .then((finalName) => {
-      logger.info(`视频转码结束: ${finalName}`);
-    })
-    .catch((err) => {
-      logger.error({ err }, `视频转码任务失败(跳过): ${originalName}`);
-    })
-    .finally(() => {
-      pendingTranscodes--;
-    });
 }
 
 /**

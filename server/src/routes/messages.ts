@@ -11,6 +11,11 @@
  * - POST   /api/messages                  - 发送消息（文字或图片）
  * - DELETE /api/messages/single/:id       - 撤回单条消息（仅发送者）
  * - DELETE /api/messages/:userId          - 清除与某用户的所有消息
+ *
+ * 拆分说明：编排逻辑（图片压缩、引用校验、磁盘清理、SSE 推送双方）在
+ * services/message.service.ts；数据库行 → 响应对象在 serializers/message.ts。
+ * 本路由只保留：multer 绑定、validateBody、参数校验（§5.1：目标用户存在性
+ * 与自对话拦截）、调用 service、响应映射。中间件顺序 multer → validateBody 不可变。
  * ============================================================
  */
 
@@ -20,14 +25,14 @@ import fs from 'fs';
 import { PATHS } from '../config';
 import { authMiddleware } from '../middleware/auth';
 import { asyncHandler, AppError } from '../middleware/error';
-import { compressImage, imageFileFilter } from '../lib/image';
-import { safeDeleteFile } from '../lib/file';
+import { imageFileFilter } from '../lib/image';
 import { validateBody } from '../validate';
-import { notifyUser } from '../sse';
 import { sendMessageSchema } from '@k/shared';
 import { createUploader, messageFilename } from '../lib/upload';
 import * as messageRepo from '../repositories/message.repo';
-import * as friendRepo from '../repositories/friend.repo';
+import { getSafeUser } from '../repositories/user.repo';
+import { toMessageJson } from '../serializers/message';
+import * as messageService from '../services/message.service';
 
 const router = Router();
 
@@ -42,16 +47,6 @@ const upload = createUploader({
   maxSize: 10 * 1024 * 1024,
   fileFilter: imageFileFilter,
 });
-
-/** 数据库行 → 响应对象（文件名改写为鉴权媒体 URL） */
-function toMessageJson(m: messageRepo.MessageRow) {
-  return {
-    ...m,
-    image_url: m.image_url ? `/api/messages/${m.id}/media` : null,
-    quoted_image_url:
-      m.quoted_image_url && m.quoted_message_id ? `/api/messages/${m.quoted_message_id}/media` : null,
-  };
-}
 
 // ============================================================
 // 会话端点
@@ -109,7 +104,9 @@ router.put(
  * - limit: 每页数量（默认50，最大100）
  * - before_id: 游标（返回比该消息ID更早的消息，用于向上翻页）
  *
- * 自动将对方发送的未读消息标记为已读
+ * §5.1 校验: 目标用户不存在 → 404 '用户不存在'；自对话（otherUserId === 当前用户）
+ * → 400 '参数错误'（此前自对话会返回自己的全部历史，属逻辑缺陷）。
+ * 自动将对方发送的未读消息标记为已读。
  * 返回按时间正序排列的消息列表 + has_more（是否还有更早的消息）
  */
 router.get(
@@ -119,6 +116,9 @@ router.get(
     const currentUserId = req.user!.id;
     const otherUserId = parseInt(req.params.userId as string);
     if (!Number.isInteger(otherUserId)) throw new AppError(400, '参数错误');
+    // 目标用户存在性校验 + 自对话拦截（§5.1）
+    if (!getSafeUser(otherUserId)) throw new AppError(404, '用户不存在');
+    if (otherUserId === currentUserId) throw new AppError(400, '参数错误');
     const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 50, 1), 100);
     const beforeId = req.query.before_id ? parseInt(req.query.before_id as string) : undefined;
 
@@ -181,11 +181,11 @@ router.get(
  * - receiverId: 接收者ID
  * - content: 文字内容（可选）
  * - image: 图片文件（可选，10MB限制）
+ * - quotedMessageId: 被引用消息ID（可选）
  *
- * 验证:
- * - 不能给自己发消息
- * - 文字和图片至少有一个
- * - 接收者必须存在
+ * 中间件顺序: authMiddleware → upload.single('image') → validateBody(sendMessageSchema)
+ * （multer → validateBody 顺序不可变：validateBody 失败时按已落盘文件清理）。
+ * 编排（压缩/校验/清理/入库/SSE 推送）在 messageService.sendMessage。
  */
 router.post(
   '/',
@@ -194,53 +194,14 @@ router.post(
   validateBody(sendMessageSchema),
   asyncHandler(async (req: Request, res: Response) => {
     const { receiverId, content, quotedMessageId } = req.body;
-    const senderId = req.user!.id;
-    // image_url 只存文件名（uploads_private 不做静态暴露）
-    // 上传后立即压缩；heic 会转成 jpg，后续清理/入库一律用压缩后的文件名
-    const imageFile = req.file
-      ? path.basename(
-          await compressImage(path.join(PATHS.uploadsPrivate, req.file.filename), { maxWidth: 1280 })
-        )
-      : null;
-
-    if ((!content || !content.trim()) && !imageFile) {
-      throw new AppError(400, '请输入消息内容或发送图片');
-    }
-
-    if (receiverId === senderId) {
-      if (imageFile) safeDeleteFile(`/uploads_private/${imageFile}`, 'uploads_private');
-      throw new AppError(400, '不能给自己发消息');
-    }
-
-    // 验证接收者存在
-    const receiver = friendRepo.userExists(receiverId);
-    if (!receiver) {
-      if (imageFile) safeDeleteFile(`/uploads_private/${imageFile}`, 'uploads_private');
-      throw new AppError(404, '接收人不存在');
-    }
-
-    // 验证引用消息存在且属于当前对话
-    let quotedId: number | null = null;
-    if (quotedMessageId) {
-      if (messageRepo.isValidQuotedMessage(quotedMessageId, senderId, receiverId)) {
-        quotedId = quotedMessageId;
-      }
-    }
-
-    const message = messageRepo.insertMessage({
-      senderId,
+    const message = await messageService.sendMessage({
+      senderId: req.user!.id,
       receiverId,
-      content: (content || '').trim(),
-      imageUrl: imageFile,
-      quotedMessageId: quotedId,
+      content,
+      quotedMessageId,
+      imageFile: req.file,
     });
-
     res.status(201).json(toMessageJson(message));
-
-    // 实时推送：通知接收者和发送者（其他端会话列表实时更新）
-    const eventData = { from: senderId, to: receiverId };
-    notifyUser(receiverId, 'message', eventData);
-    notifyUser(senderId, 'message', eventData);
   })
 );
 
@@ -254,7 +215,7 @@ router.post(
  * 认证: 必须
  *
  * 仅消息发送者可以撤回自己的消息
- * 撤回后删除该消息记录
+ * 撤回后删除该消息记录（磁盘图片清理 + SSE 推送双方在 messageService.recallMessage）
  */
 router.delete(
   '/single/:id',
@@ -264,26 +225,8 @@ router.delete(
     const messageId = parseInt(req.params.id as string);
     if (!Number.isInteger(messageId)) throw new AppError(400, '参数错误');
 
-    const message = messageRepo.getMessageMedia(messageId);
-    if (!message) {
-      throw new AppError(404, '消息不存在');
-    }
-
-    if (message.sender_id !== userId) {
-      throw new AppError(403, '只能撤回自己发送的消息');
-    }
-
-    // 同步删除私有目录中的图片文件
-    if (message.image_url) {
-      safeDeleteFile(`/uploads_private/${path.basename(message.image_url)}`, 'uploads_private');
-    }
-    messageRepo.deleteMessage(messageId);
+    messageService.recallMessage(userId, messageId);
     res.json({ message: '消息已撤回' });
-
-    // 实时推送撤回事件：双方各端立即移除该消息（此前无推送 → 其他端残留幽灵消息）
-    const eventData = { from: message.sender_id, to: message.receiver_id, recalled: messageId };
-    notifyUser(message.receiver_id, 'message', eventData);
-    notifyUser(message.sender_id, 'message', eventData);
   })
 );
 
@@ -296,8 +239,11 @@ router.delete(
  *
  * 认证: 必须
  *
+ * §5.1 校验: 目标用户不存在 → 404 '用户不存在'；自对话 → 400 '参数错误'
+ * （此前自对话会把当前用户自己的历史全删掉，属逻辑缺陷）。
  * 删除双方之间的所有消息记录，并同步删除这些消息引用的磁盘私密图片
- * （引用消息共享同一物理文件；文件删除失败最多留下孤儿文件，不影响业务）
+ * （引用消息共享同一物理文件；文件删除失败最多留下孤儿文件，不影响业务）。
+ * 编排（DB 删行 + 磁盘清理 + SSE 推送双方）在 messageService.clearConversationMessages。
  */
 router.delete(
   '/:userId',
@@ -306,20 +252,12 @@ router.delete(
     const currentUserId = req.user!.id;
     const otherUserId = parseInt(req.params.userId as string);
     if (!Number.isInteger(otherUserId)) throw new AppError(400, '参数错误');
+    // 目标用户存在性校验 + 自对话拦截（§5.1）
+    if (!getSafeUser(otherUserId)) throw new AppError(404, '用户不存在');
+    if (otherUserId === currentUserId) throw new AppError(400, '参数错误');
 
-    // 事务提交（DB 行已删）后清理磁盘私密图片：引用消息共享同一物理文件，
-    // 行全删后这些文件必成孤儿，不清会永久累积（safeDeleteFile 限定 uploads_private 内）
-    const imageNames = messageRepo.clearConversation(currentUserId, otherUserId);
-    for (const name of imageNames) {
-      safeDeleteFile(`/uploads_private/${path.basename(name)}`, 'uploads_private');
-    }
-
+    messageService.clearConversationMessages(currentUserId, otherUserId);
     res.json({ message: '消息已清除' });
-
-    // 实时推送清除事件：双方各端立即清空本地会话（此前无推送 → 对方端残留幽灵消息）
-    const eventData = { from: currentUserId, to: otherUserId, cleared: true };
-    notifyUser(currentUserId, 'message', eventData);
-    notifyUser(otherUserId, 'message', eventData);
   })
 );
 

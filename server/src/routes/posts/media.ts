@@ -2,6 +2,9 @@
  * ============================================================
  * 帖子路由（/api/posts）- 视频上传与临时文件管理
  * ============================================================
+ * 分片上传会话注册表已抽至 lib/chunkUploadRegistry.ts（行为不变），
+ * 本文件改为 import 使用；属主校验语义逐字节不变
+ * （含「无属主放行」的旧文件兜底）。
  */
 
 import { Router, Request, Response } from 'express';
@@ -13,10 +16,21 @@ import { asyncHandler, AppError } from '../../middleware/error';
 import { compressImage, withImages, IMAGE_EXT_RE, IMAGE_MIME_RE } from '../../lib/image';
 import { safeDeleteFile } from '../../lib/file';
 import { extractTags, postTextSchema } from '@k/shared';
-import { enqueueVideoTranscode, generateVideoCover } from '../../video';
+import { enqueueVideoTranscode } from '../../lib/video/queue';
+import { generateVideoCover } from '../../lib/video/transcode';
 import multer from 'multer';
 import { createUploader, timestampFilename } from '../../lib/upload';
 import * as postRepo from '../../repositories/post.repo';
+import {
+  pruneChunkUploads,
+  getChunkOwner,
+  acquireChunkUpload,
+  releaseChunkUpload,
+  registerChunkUpload,
+  TEMP_VIDEO_NAME_RE,
+  MAX_TOTAL_CHUNKS,
+  MAX_VIDEO_BYTES,
+} from '../../lib/chunkUploadRegistry';
 
 const router = Router();
 
@@ -81,9 +95,6 @@ const videoTempUpload = createUploader({
   },
 });
 
-/** 临时视频文件名白名单: temp-{时间戳}-{随机数}.{视频扩展名} */
-const TEMP_VIDEO_NAME_RE = /^temp-\d+-\d+\.(mp4|mov|avi|webm|mkv|flv|wmv)$/;
-
 /**
  * 视频统一改存 .mp4 扩展名（纯重命名，内容不变）。
  * 后台转码会原地替换内容，URL 从入库起永不变化，
@@ -127,32 +138,9 @@ const chunkUpload = multer({
   limits: { fileSize: 6 * 1024 * 1024 }, // 单片 5MB + 余量
 });
 
-/** 分片上传总量上限（与单次上传 300MB 对齐，追加时校验） */
-const MAX_VIDEO_BYTES = 300 * 1024 * 1024;
-/** 分片数上限 = 总量上限 / 客户端切片大小 5MB（multer 单片 6MB 仅作硬保护） */
-const MAX_TOTAL_CHUNKS = Math.ceil(MAX_VIDEO_BYTES / (5 * 1024 * 1024));
-/** 同一用户并发分片上传上限（防批量 uploadId 占满磁盘） */
-const MAX_CONCURRENT_CHUNK_UPLOADS = 3;
-/** 上传会话 TTL（与临时文件 24h 清理周期一致） */
-const CHUNK_UPLOAD_TTL = 24 * 3600 * 1000;
-
-/**
- * 分片上传会话注册表：uploadId → 属主与创建时间
- * uploadId 由客户端生成、全局可猜，必须绑定属主，否则任意认证用户
- * 可向他人进行中的上传追加分片（污染视频内容）或无限追加写满磁盘。
- * 回收：POST /video 消费、DELETE /video-temp 放弃时显式删除；
- * 文件已不存在或超过 TTL 的条目在各请求前惰性清理。
- */
-const chunkUploadOwners = new Map<string, { userId: number; createdAt: number }>();
-
-function pruneChunkUploads(): void {
-  const cutoff = Date.now() - CHUNK_UPLOAD_TTL;
-  for (const [id, entry] of chunkUploadOwners) {
-    if (entry.createdAt < cutoff || !fs.existsSync(path.join(PATHS.uploadsTemp, id))) {
-      chunkUploadOwners.delete(id);
-    }
-  }
-}
+// 分片上传会话注册表（属主绑定 / 并发上限 / 抢占保护 / TTL 清理）已移入
+// lib/chunkUploadRegistry.ts，各路由经 pruneChunkUploads / getChunkOwner /
+// acquireChunkUpload / releaseChunkUpload / registerChunkUpload 使用。
 
 router.post(
   '/video-chunk',
@@ -182,19 +170,15 @@ router.post(
       throw new AppError(400, '分片数据缺失');
     }
     const userId = req.user!.id;
-    const owner = chunkUploadOwners.get(uploadId);
     if (chunkIndex === 0) {
-      // 首片 = 新建/重传：他人占用中的会话不可抢占
-      if (owner && owner.userId !== userId) {
-        throw new AppError(403, '该上传已被其他用户占用');
-      }
-      const userUploads = [...chunkUploadOwners.values()].filter((e) => e.userId === userId).length;
-      if (!owner && userUploads >= MAX_CONCURRENT_CHUNK_UPLOADS) {
+      // 首片 = 新建/重传：他人占用中的会话不可抢占（acquireChunkUpload 内抛 403），
+      // 并发数达上限返回 false → 400
+      if (!acquireChunkUpload(uploadId, userId)) {
         throw new AppError(400, '同时进行的上传任务过多，请稍后再试');
       }
-      chunkUploadOwners.set(uploadId, { userId, createdAt: Date.now() });
     } else {
       // 续片：必须存在会话且属主本人
+      const owner = getChunkOwner(uploadId);
       if (!owner) {
         throw new AppError(400, '上传会话已失效，请重新上传');
       }
@@ -259,7 +243,7 @@ router.post(
     enqueueVideoTranscode(path.join(PATHS.uploadsTemp, name), name);
     // 登记属主：与分片上传同一注册表。否则 DELETE /video-temp 与 POST /video
     // 只校验文件名格式，任何登录用户可删除/冒用他人的临时草稿视频
-    chunkUploadOwners.set(name, { userId: req.user!.id, createdAt: Date.now() });
+    registerChunkUpload(name, req.user!.id);
 
     res.status(201).json({ url: `/uploads/temp/${name}` });
   })
@@ -281,13 +265,13 @@ router.delete(
     }
     // 属主校验：有属主且非本人 → 拒绝。无属主（服务重启丢失登记的旧文件）放行，
     // 由 24h TTL 清理兜底，避免把用户自己放弃发布的清理路径堵死
-    const owner = chunkUploadOwners.get(name);
+    const owner = getChunkOwner(name);
     if (owner && owner.userId !== req.user!.id) {
       throw new AppError(403, '无权删除该临时视频');
     }
     safeDeleteFile(`/uploads/temp/${name}`, 'uploads');
     // 放弃上传：同步释放分片上传会话（文件删除后惰性回收也会兜底）
-    chunkUploadOwners.delete(name);
+    releaseChunkUpload(name);
     res.json({ ok: true });
   })
 );
@@ -340,7 +324,7 @@ router.post(
         throw new AppError(400, '无效的视频引用');
       }
       // 属主校验：有属主且非本人 → 拒绝（防冒用他人草稿；无属主为重启前的旧文件，放行）
-      const owner = chunkUploadOwners.get(name);
+      const owner = getChunkOwner(name);
       if (owner && owner.userId !== req.user!.id) {
         throw new AppError(403, '无权使用该临时视频');
       }
@@ -351,7 +335,7 @@ router.post(
       }
       fs.renameSync(tempPath, finalPath);
       // 分片上传会话随文件消费而结束
-      chunkUploadOwners.delete(name);
+      releaseChunkUpload(name);
       // 兼容旧客户端残留的非 .mp4 临时文件名：统一规范化并入队转码
       const normalizedName = normalizeVideoToMp4(PATHS.uploads, name);
       enqueueVideoTranscode(path.join(PATHS.uploads, normalizedName), normalizedName);
