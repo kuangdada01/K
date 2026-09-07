@@ -250,7 +250,19 @@ router.post(
     const finalPath = await compressImage(path.join(PATHS.uploadsPrivate, req.file.filename));
 
     // image_url 只存文件名（响应时由 toPrivateImageJson 改写为鉴权 URL）
-    const image = userRepo.createPrivateImage(userId, path.basename(finalPath));
+    // §5.1 上限竞态: check-then-insert 之间并发插入可能突破 10 张上限，
+    // 唯一约束冲突时清理本次压缩产物并转 400（前置检查文案保持原样）
+    let image: userRepo.PrivateImageRow;
+    try {
+      image = userRepo.createPrivateImage(userId, path.basename(finalPath));
+    } catch (err) {
+      const dbErr = err as { code?: string } | null;
+      if (dbErr?.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+        safeDeleteFile(`/uploads_private/${path.basename(finalPath)}`, 'uploads_private');
+        throw new AppError(400, '私密图片最多10张');
+      }
+      throw err;
+    }
     res.status(201).json(toPrivateImageJson(image));
   })
 );
@@ -274,10 +286,13 @@ router.delete(
       throw new AppError(404, '图片不存在');
     }
 
+    // §5.1 删除顺序: 先删 DB 行成功，再删磁盘文件（原实现先删文件后删行，
+    // 删行失败会留下指向已删文件的死链）
+    userRepo.deletePrivateImage(imageId);
+
     // 删除文件（uploads_private 目录）
     safeDeleteFile(`/uploads_private/${path.basename(image.image_url)}`, 'uploads_private');
 
-    userRepo.deletePrivateImage(imageId);
     res.json({ message: '图片已删除' });
   })
 );

@@ -15,8 +15,15 @@
 import { Request, Response, NextFunction } from 'express';
 import { env } from '../config';
 
-/** CORS 白名单：来自 ALLOWED_ORIGINS 环境变量（逗号分隔），默认仅允许开发服务器 */
-const allowedOrigins = (env.ALLOWED_ORIGINS || 'http://localhost:5173')
+/**
+ * CORS 白名单：来自 ALLOWED_ORIGINS 环境变量（逗号分隔）。
+ * 默认（未配置时）允许:
+ * - http://localhost:5173 开发服务器
+ * - http://localhost Capacitor 原生 App 来源（Android WebView / iOS WKWebView
+ *   打包后页面运行在 http://localhost，未配置 ALLOWED_ORIGINS 时若不默认放行，
+ *   App 内所有跨源请求都会被 403 拒绝）
+ */
+const allowedOrigins = (env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);

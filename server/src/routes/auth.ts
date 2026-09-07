@@ -142,7 +142,18 @@ router.post(
     const passwordHash = await bcrypt.hash(password, 10);
 
     // 插入新用户（email_verified = 1，已验证）
-    const user = authRepo.createUser(username, email, passwordHash);
+    // §5.1 注册竞态: 前置唯一性检查与插入之间可能并发插入同一用户名/邮箱，
+    // better-sqlite3 唯一约束冲突时按既有文案转 400（而非 500）
+    let user: Awaited<ReturnType<typeof authRepo.createUser>>;
+    try {
+      user = authRepo.createUser(username, email, passwordHash);
+    } catch (err) {
+      const dbErr = err as { code?: string } | null;
+      if (dbErr?.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+        throw new AppError(400, '用户名或邮箱已被注册');
+      }
+      throw err;
+    }
 
     // 删除已使用的验证码
     authRepo.deleteVerificationCodes(email);

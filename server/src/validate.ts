@@ -22,6 +22,20 @@ export function validateBody<T>(schema: ZodType<T>) {
       if (file?.path) {
         safeDeleteUpload(file.path);
       }
+      // 多文件字段同样可能已落盘：req.files 可能是数组（multer.array()）或
+      // 按字段名分组的对象（multer.fields()），两种形态都逐一清理
+      const files = req.files;
+      if (Array.isArray(files)) {
+        for (const f of files) {
+          if (f?.path) safeDeleteUpload(f.path);
+        }
+      } else if (files) {
+        for (const list of Object.values(files)) {
+          for (const f of list) {
+            if (f?.path) safeDeleteUpload(f.path);
+          }
+        }
+      }
       const message = result.error.issues[0]?.message || '参数错误';
       res.status(400).json({ error: message });
       return;

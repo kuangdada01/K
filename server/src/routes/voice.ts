@@ -21,7 +21,9 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { verifyLiveToken, optionalAuth } from '../middleware/auth';
+import rateLimit from 'express-rate-limit';
+import { verifyLiveToken } from '../lib/jwt';
+import { optionalAuth } from '../middleware/auth';
 import { AppError, asyncHandler } from '../middleware/error';
 import { validateBody } from '../validate';
 import * as voiceRepo from '../repositories/voice.repo';
@@ -194,14 +196,29 @@ router.delete(
 );
 
 /**
+ * GET /api/voice/rooms/:id/messages 轻量限流（§4.4 加固）
+ *
+ * 防刷但不影响正常使用与测试：60 秒窗口 300 次，正常翻页/增量追拉远低于此
+ * （voice-chat 测试对该端点全程数十次请求，不会触发；node 默认 headersTimeout
+ * 60s 与限流互不干扰）。
+ */
+const roomMessagesLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 300,
+  standardHeaders: true,
+});
+
+/**
  * GET /api/voice/rooms/:id/messages - 聊天记录（持久化历史）
  *
- * 认证: 可选（访客可读）
+ * 认证: 可选（无效 token 静默跳过，游客可读）
  * 游标分页: before_id 向更早翻、after_id 向更新翻（加入房间后补拉增量），
  * limit 默认 50、上限 100。房间不存在返回 404。
  */
 router.get(
   '/rooms/:id/messages',
+  optionalAuth,
+  roomMessagesLimiter,
   asyncHandler(async (req: Request, res: Response) => {
     const roomId = Number(req.params.id);
     if (!Number.isInteger(roomId)) throw new AppError(400, '参数错误');

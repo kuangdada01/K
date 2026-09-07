@@ -33,7 +33,9 @@ const wss = attachVoiceWs(server);
 // 大视频上传 + ffmpeg 转码可能耗时较长，禁用请求超时（Node 默认 5 分钟；
 // 前置 nginx 有自己的超时兜底）
 server.requestTimeout = 0;
-server.headersTimeout = 0;
+// headersTimeout 保持 Node 默认 60s（不置 0）：此前与 requestTimeout 一并置 0
+// 会让慢速 HTTP 头攻击（slowloris 类）没有超时上限，连接期无限占用；
+// requestTimeout = 0 已覆盖大视频上传场景，headersTimeout 独立控制头部接收窗口
 
 // 优雅停机：PM2 reload/stop 发 SIGTERM——停止接新连接、断开长连接、等存量请求收尾
 let shuttingDown = false;
