@@ -36,6 +36,8 @@ export default defineConfig({
       PORT: '3200',
       NODE_ENV: 'test',
       DB_PATH: path.join(e2eTmpDir, 'k-e2e.db'),
+      // JWT_SECRET 自 fail-fast 后为必填（CI 无 .env，webServer 显式注入）
+      JWT_SECRET: 'e2e-jwt-secret-0123456789abcdef',
     },
   },
 });

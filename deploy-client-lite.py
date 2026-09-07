@@ -12,6 +12,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--server", required=True, help="目标服务器 IP（不内置默认值：公开仓库不暴露生产地址）")
     ap.add_argument("--package", required=True)
+    ap.add_argument("--trust-host", action="store_true",
+                    help="跳过主机密钥校验（MITM 风险）。仅首次连接新服务器时使用，"
+                         "连上后建议把指纹存入本机 known_hosts")
     a = ap.parse_args()
     pwd = os.environ.get("DEPLOY_PASSWORD", "").strip()
     if not pwd:
@@ -20,8 +23,25 @@ def main():
 
     import paramiko
     c = paramiko.SSHClient()
-    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(a.server, 22, "root", pwd, timeout=30)
+    if a.trust_host:
+        # 显式豁免：首次连接新服务器时可临时使用（不校验主机密钥存在中间人风险）
+        print("[警告] --trust-host 已启用：本次连接不校验服务器指纹")
+        c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    else:
+        # 默认严格：只接受本机 known_hosts 里已有的指纹，防止中间人截获 root 密码
+        # （与 deploy-sftp.py 同一策略；旧实现无条件 AutoAddPolicy 会把密码交给任意对端）
+        c.load_system_host_keys()
+        known_hosts = os.path.expanduser("~/.ssh/known_hosts")
+        if os.path.exists(known_hosts):
+            c.load_host_keys(known_hosts)
+        c.set_missing_host_key_policy(paramiko.RejectPolicy())
+    try:
+        c.connect(a.server, 22, "root", pwd, timeout=30)
+    except paramiko.SSHException as e:
+        print(f"[FAIL] 主机密钥校验失败（{e}）。", file=sys.stderr)
+        print("首次连接该服务器可加 --trust-host；确认后建议执行：", file=sys.stderr)
+        print(f"  ssh-keyscan {a.server} >> ~/.ssh/known_hosts", file=sys.stderr)
+        return 2
 
     print("=== [SFTP] 上传 ===")
     sftp = c.open_sftp()

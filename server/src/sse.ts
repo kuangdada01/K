@@ -49,6 +49,12 @@ export function subscribe(userId: number, res: Response): void {
     const oldest = list.values().next().value;
     if (!oldest) break;
     list.delete(oldest);
+    // 先写 kicked 终止事件再断开：客户端据此不再安排退避重连，打破「6+ 标签页」反复互踢的震荡环
+    try {
+      oldest.write('event: kicked\ndata: {}\n\n');
+    } catch {
+      /* 连接已断开 */
+    }
     try {
       oldest.end();
     } catch {

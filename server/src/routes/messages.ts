@@ -118,6 +118,7 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const currentUserId = req.user!.id;
     const otherUserId = parseInt(req.params.userId as string);
+    if (!Number.isInteger(otherUserId)) throw new AppError(400, '参数错误');
     const limit = Math.min(Math.max(parseInt(req.query.limit as string) || 50, 1), 100);
     const beforeId = req.query.before_id ? parseInt(req.query.before_id as string) : undefined;
 
@@ -261,6 +262,7 @@ router.delete(
   asyncHandler(async (req: Request, res: Response) => {
     const userId = req.user!.id;
     const messageId = parseInt(req.params.id as string);
+    if (!Number.isInteger(messageId)) throw new AppError(400, '参数错误');
 
     const message = messageRepo.getMessageMedia(messageId);
     if (!message) {
@@ -277,6 +279,11 @@ router.delete(
     }
     messageRepo.deleteMessage(messageId);
     res.json({ message: '消息已撤回' });
+
+    // 实时推送撤回事件：双方各端立即移除该消息（此前无推送 → 其他端残留幽灵消息）
+    const eventData = { from: message.sender_id, to: message.receiver_id, recalled: messageId };
+    notifyUser(message.receiver_id, 'message', eventData);
+    notifyUser(message.sender_id, 'message', eventData);
   })
 );
 
@@ -298,6 +305,7 @@ router.delete(
   asyncHandler(async (req: Request, res: Response) => {
     const currentUserId = req.user!.id;
     const otherUserId = parseInt(req.params.userId as string);
+    if (!Number.isInteger(otherUserId)) throw new AppError(400, '参数错误');
 
     // 事务提交（DB 行已删）后清理磁盘私密图片：引用消息共享同一物理文件，
     // 行全删后这些文件必成孤儿，不清会永久累积（safeDeleteFile 限定 uploads_private 内）
@@ -307,6 +315,11 @@ router.delete(
     }
 
     res.json({ message: '消息已清除' });
+
+    // 实时推送清除事件：双方各端立即清空本地会话（此前无推送 → 对方端残留幽灵消息）
+    const eventData = { from: currentUserId, to: otherUserId, cleared: true };
+    notifyUser(currentUserId, 'message', eventData);
+    notifyUser(otherUserId, 'message', eventData);
   })
 );
 

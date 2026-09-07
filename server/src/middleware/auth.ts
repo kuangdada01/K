@@ -14,6 +14,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { env } from '../config';
 import { getAuthState } from '../repositories/admin.repo';
 
 // ============================================================
@@ -22,18 +23,11 @@ import { getAuthState } from '../repositories/admin.repo';
 
 /**
  * JWT 密钥
- * 生产环境必须通过环境变量 JWT_SECRET 设置强密钥，否则拒绝启动
- * 开发环境使用默认值（方便 clone 即用）
+ * 强校验在 config.ts 的 envSchema：未设置 JWT_SECRET 时进程拒绝启动
+ * （任何环境一视同仁——生产环境若漏配 NODE_ENV/JWT_SECRET，
+ * 旧实现会静默回退到公开的 dev 密钥，攻击者可用其自签任意 token）
  */
-const JWT_SECRET =
-  process.env.JWT_SECRET ||
-  (() => {
-    if (process.env.NODE_ENV === 'production') {
-      console.error('FATAL: JWT_SECRET 环境变量未设置，生产环境拒绝启动');
-      process.exit(1);
-    }
-    return 'k-dev-jwt-secret';
-  })();
+const JWT_SECRET = env.JWT_SECRET;
 
 export { JWT_SECRET };
 

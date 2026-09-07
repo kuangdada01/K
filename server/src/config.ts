@@ -6,17 +6,23 @@
  * - PATHS 集中管理所有磁盘路径，杜绝散落的
  *   path.join(__dirname, '..', '..', ...) 拼接（src/dist 路径差异是已知坑）
  *
- * 注意: 本模块必须在 dotenv.config() 之后首次被 import（index.ts 已保证）。
+ * 注意: 本模块自身会先加载 .env（import 顺序无关），index.ts 中的
+ * dotenv.config() 保留仅为双保险（dotenv 默认不覆盖已存在的变量）。
  */
 
 import path from 'path';
+import dotenv from 'dotenv';
 import { z } from 'zod';
 
-/** 环境变量 schema（宽松默认值 + 生产关键项由 middleware/auth.ts 单独强校验） */
+// 必须在任何 process.env 读取之前执行：ESM/CJS 的 import 提升会先求值依赖模块，
+// 若依赖 index.ts 里的 dotenv.config()，这里读到的是未加载 .env 的空环境
+dotenv.config({ path: path.join(__dirname, '..', '..', '.env') });
+
+/** 环境变量 schema（宽松默认值；JWT_SECRET 无默认值——未配置一律拒绝启动，防止生产用公开的 dev 密钥） */
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
-  JWT_SECRET: z.string().optional(),
+  JWT_SECRET: z.string().min(1, 'JWT_SECRET 未配置：请在 .env 或环境变量中设置强密钥，服务拒绝启动'),
   ALLOWED_ORIGINS: z.string().optional(),
   ADMIN_EMAIL: z.string().optional(),
   // 服务端前有反向代理（nginx）时置为非空：语音 WS 访客 IP 改从 x-forwarded-for 读取，

@@ -102,6 +102,9 @@ router.delete(
     if (!user) {
       throw new AppError(404, '用户不存在');
     }
+    if (adminRepo.getUserRole(userId) === 'admin') {
+      throw new AppError(400, '不能删除管理员账号');
+    }
 
     // 删库前收集全部磁盘文件引用（级联删除后行已不在，无从查起）
     const postMedia = adminRepo.listUserPostMedia(userId);
@@ -145,6 +148,9 @@ router.put(
     const user = adminRepo.findUser(userId);
     if (!user) {
       throw new AppError(404, '用户不存在');
+    }
+    if (adminRepo.getUserRole(userId) === 'admin') {
+      throw new AppError(400, '不能重置管理员账号的密码');
     }
     const hash = await bcrypt.hash(password, 10);
     adminRepo.resetUserPassword(userId, hash);

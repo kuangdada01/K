@@ -134,15 +134,13 @@ router.post(
 
     const userId = req.user!.id;
 
-    // 删除旧头像文件
+    // 先写库、成功后再删旧头像文件（顺序反转：DB 失败不会留下指向已删文件的死链）
     const oldAvatar = userRepo.getAvatar(userId);
+    const avatarUrl = `/uploads/avatars/${avatarFileName}`;
+    const user = userRepo.updateAvatar(userId, avatarUrl);
     if (oldAvatar) {
       safeDeleteFile(oldAvatar, 'uploads/avatars');
     }
-
-    // 更新头像路径
-    const avatarUrl = `/uploads/avatars/${avatarFileName}`;
-    const user = userRepo.updateAvatar(userId, avatarUrl);
     res.json(user);
   })
 );
