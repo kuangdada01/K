@@ -1,28 +1,16 @@
-import {
-  createContext,
-  useContext,
-  useRef,
-  useState,
-  useEffect,
-  ReactNode,
-  useCallback,
-  useMemo,
-} from 'react';
+import { createContext, useContext, useRef, useState, useEffect, useCallback, useMemo } from 'react';
+import type { ReactNode } from 'react';
 import { getApiBaseUrl, resolveMediaUrl } from '../config';
 import { events } from '../state/events';
-
-interface Song {
-  title: string;
-  artist: string;
-  src: string;
-}
+import { MusicEngine } from '../music/MusicEngine';
+import type { MusicSong } from '../music/MusicEngine';
 
 interface MusicContextType {
-  currentSong: Song | null;
+  currentSong: MusicSong | null;
   isPlaying: boolean;
   currentIndex: number;
   duration: number;
-  songs: Song[];
+  songs: MusicSong[];
   loading: boolean;
   play: () => void;
   pause: () => void;
@@ -39,12 +27,28 @@ interface MusicContextType {
 const MusicContext = createContext<MusicContextType | null>(null);
 
 export function MusicProvider({ children }: { children: ReactNode }) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
-  const [songs, setSongs] = useState<Song[]>([]);
+  const [songs, setSongs] = useState<MusicSong[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // 播放引擎（audio 生命周期/播放列表/ended 自切歌，见 ../music/MusicEngine.ts）。
+  // 惰性创建一次：callbacks 只做 state 桥接（setState 函数稳定），init/dispose
+  // 由挂载 effect 负责（与拆分前 audio 元素创建/清理同一时机）。
+  const engineRef = useRef<MusicEngine | null>(null);
+  if (engineRef.current == null) {
+    engineRef.current = new MusicEngine({
+      onIndexChange: setCurrentIndex,
+      onPlayingChange: setIsPlaying,
+      onDurationChange: setDuration,
+      onSongsChange: setSongs,
+    });
+  }
+  useEffect(() => {
+    engineRef.current!.init();
+    return () => engineRef.current!.dispose();
+  }, []);
 
   const fetchSongs = useCallback(async () => {
     try {
@@ -54,7 +58,9 @@ export function MusicProvider({ children }: { children: ReactNode }) {
       const res = await fetch(`${getApiBaseUrl()}/music`);
       if (res.ok) {
         const data = await res.json();
-        setSongs(data.map((s: Song) => ({ ...s, src: resolveMediaUrl(s.src) || s.src })));
+        engineRef.current!.setSongs(
+          data.map((s: MusicSong) => ({ ...s, src: resolveMediaUrl(s.src) || s.src }))
+        );
       }
     } catch (err) {
       console.error('Failed to fetch music list:', err);
@@ -62,21 +68,6 @@ export function MusicProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     }
   }, []);
-
-  // 用 ref 保存最新回调，避免 audio 事件监听器捕获首渲染的陈旧闭包
-  // （ref 写入放在 effect 中，渲染期写 ref 会被 react-hooks/refs 拦截）
-  const songsRef = useRef(songs);
-  useEffect(() => {
-    songsRef.current = songs;
-  }, [songs]);
-  const nextRef = useRef<() => void>(() => {});
-  useEffect(() => {
-    nextRef.current = () => {
-      const len = songsRef.current.length;
-      setCurrentIndex((prev) => (len > 0 ? (prev + 1) % len : 0));
-      setIsPlaying(true);
-    };
-  });
 
   useEffect(() => {
     // 挂载时拉取：经 Promise 回调间接调用（effect 同步路径不直接调用含 setState 的函数）
@@ -94,20 +85,18 @@ export function MusicProvider({ children }: { children: ReactNode }) {
   // （用户手动暂停后打开/关闭视频不应误恢复音乐）
   const pausedByEventRef = useRef(false);
 
-  const pauseRef = useRef<() => void>(() => {});
-  const playRef = useRef<() => void>(() => {});
   useEffect(() => {
     const onPause = () => {
       if (isPlayingRef.current) {
         pausedByEventRef.current = true;
-        pauseRef.current();
+        engineRef.current?.pause();
       }
     };
     const onResume = () => {
       if (pausedByEventRef.current) {
         pausedByEventRef.current = false;
         if (!isPlayingRef.current && currentSong) {
-          playRef.current();
+          engineRef.current?.play();
         }
       }
     };
@@ -119,88 +108,23 @@ export function MusicProvider({ children }: { children: ReactNode }) {
     };
   }, [currentSong]);
 
-  useEffect(() => {
-    audioRef.current = new Audio();
-    audioRef.current.preload = 'auto';
-    audioRef.current.volume = 0.5;
-    const audio = audioRef.current;
-    const onEnded = () => nextRef.current();
-    const onLoadedMetadata = () => {
-      setDuration(audio.duration);
-    };
-    audio.addEventListener('ended', onEnded);
-    audio.addEventListener('loadedmetadata', onLoadedMetadata);
-    return () => {
-      audio.removeEventListener('ended', onEnded);
-      audio.removeEventListener('loadedmetadata', onLoadedMetadata);
-      audio.pause();
-      audio.src = '';
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!audioRef.current || !currentSong) return;
-    const audio = audioRef.current;
-    // 相对路径时 audio.src 会解析为绝对地址，两种情况都需匹配
-    const isCurrent = audio.src === currentSong.src || audio.src === window.location.origin + currentSong.src;
-    if (!isCurrent) {
-      audio.src = currentSong.src;
-      audio.load();
-    }
-    // §5.2：播放当前曲目（isCurrent 命中）时不重设 src，这里直接 play，
-    // 否则 playSong(当前曲目) 只置 isPlaying(true)，UI 显示播放中但无声
-    if (isPlaying) {
-      audio.play().catch(() => {});
-    }
-  }, [currentIndex, currentSong, isPlaying]);
-
-  const play = useCallback(() => {
-    if (!audioRef.current || !currentSong) return;
-    audioRef.current.play().catch(() => {});
-    setIsPlaying(true);
-  }, [currentSong]);
-
-  const pause = useCallback(() => {
-    if (!audioRef.current) return;
-    audioRef.current.pause();
-    setIsPlaying(false);
-  }, []);
-
-  // 通过 effect 同步最新 pause/play 到 ref（渲染期写 ref 会被 react-hooks/refs 拦截）
-  useEffect(() => {
-    pauseRef.current = pause;
-    playRef.current = play;
-  }, [pause, play]);
+  const play = useCallback(() => engineRef.current?.play(), []);
+  const pause = useCallback(() => engineRef.current?.pause(), []);
 
   const togglePlay = useCallback(() => {
     if (isPlaying) pause();
     else play();
   }, [isPlaying, pause, play]);
 
-  const next = useCallback(() => {
-    const len = songs.length;
-    setCurrentIndex((prev) => (len > 0 ? (prev + 1) % len : 0));
-    setIsPlaying(true);
-  }, [songs.length]);
-
-  const prev = useCallback(() => {
-    const len = songs.length;
-    setCurrentIndex((prev) => (len > 0 ? (prev - 1 + len) % len : 0));
-    setIsPlaying(true);
-  }, [songs.length]);
+  const next = useCallback(() => engineRef.current?.next(), []);
+  const prev = useCallback(() => engineRef.current?.prev(), []);
 
   // P6：seek 不再更新 context currentTime；进度条组件本地维护，指令式跳转即可
-  const seek = useCallback((time: number) => {
-    if (!audioRef.current) return;
-    audioRef.current.currentTime = time;
-  }, []);
+  const seek = useCallback((time: number) => engineRef.current?.seek(time), []);
 
-  const playSong = useCallback((index: number) => {
-    setCurrentIndex(index);
-    setIsPlaying(true);
-  }, []);
+  const playSong = useCallback((index: number) => engineRef.current?.playSong(index), []);
 
-  const getAudioElement = useCallback(() => audioRef.current, []);
+  const getAudioElement = useCallback(() => engineRef.current?.getAudioElement() ?? null, []);
 
   const value = useMemo<MusicContextType>(
     () => ({
