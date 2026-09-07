@@ -9,15 +9,9 @@
     />
     <meta name="theme-color" content="#eef2ee" />
     <title>K</title>
-    <script>
-      // 防止暗色模式闪烁：在 React 挂载前同步设置 data-theme
-      (function () {
-        var mode = localStorage.getItem('theme') || 'system';
-        var dark =
-          mode === 'dark' || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-        if (dark) document.documentElement.setAttribute('data-theme', 'dark');
-      })();
-    </script>
+    <!-- 防暗色模式闪烁：同步外部脚本（CSP 'self' 放行；内联脚本的 sha256 会随
+         构建字节变化导致 helmet CSP 失配拦截，见 public/theme-init.js） -->
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>

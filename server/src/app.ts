@@ -60,11 +60,10 @@ export function createApp(): express.Express {
       contentSecurityPolicy: {
         directives: {
           ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-          'script-src': [
-            "'self'",
-            "'sha256-v5bVaFQO+UhGE6aDcmlclP7lRfBTMRh+5BgGwwfhAuo='",
-            "'wasm-unsafe-eval'",
-          ],
+          // 防暗色闪烁脚本已外置 public/theme-init.js（index.html 同步 <script src>），
+          // 'self' 即放行——不再用内联 sha256（脚本字节随构建变化会使 hash 失配拦截，
+          // 曾因 Prettier 格式化 index.html 触发）
+          'script-src': ["'self'", "'wasm-unsafe-eval'"],
           // wasm-unsafe-eval: 语音降噪 RNNoise 的 AudioWorklet 在运行期内嵌 WASM 模块
           // 需要该指令（Chrome 对 script-src 无 'unsafe-eval'/'wasm-unsafe-eval' 时会
           // 拒绝编译 WASM → worklet 构造失败 → 降噪输出静音）。
