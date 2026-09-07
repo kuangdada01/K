@@ -5,9 +5,10 @@
  * 挂载到现有 HTTP 服务器上，负责:
  * 1. 连接认证（token 查询参数 + verifyLiveToken：签名与 token_version 比对，浏览器 WS 无法自定义请求头，
  *    与 /api/events SSE 同一套方案）
- * 2. 房间加入/离开与人数上限校验
- * 3. WebRTC offer/answer/candidate 的定向中转（mesh 信令）
- * 4. 静音状态广播、成员自报网络质量广播、断线自动清理、30s 心跳
+ * 2. 连接生命周期：心跳（30s pong）、maxPayload 限制、断开清理
+ * 3. 消息分发：JSON.parse 后交给 ./messageHandlers 的 handleVoiceMessage 处理
+ *    （join/leave/mute/quality/share-start/share-stop/chat/signal 8 类消息，
+ *    含房间加入/人数上限、WebRTC 信令定向中转、静音/质量/共享广播、聊天入库）
  *
  * 消息协议（JSON）:
  * - C→S: { type: 'join', roomId } / { type: 'leave' }
@@ -24,42 +25,17 @@
  */
 
 import type { Server } from 'http';
-import { WebSocketServer, WebSocket } from 'ws';
+import { WebSocketServer } from 'ws';
 import { verifyLiveToken, type LiveToken } from '../middleware/auth';
 import { getSafeUser } from '../repositories/user.repo';
-import { getRoomById } from '../repositories/voice.repo';
 import { insertVoiceChatMessage } from '../repositories/voice-chat.repo';
 import { getClientIp } from '../lib/client-ip';
 import * as hub from './hub';
 import { guestIds } from './guest-ids';
-import { VOICE_MAX_ROOM_SIZE, voiceChatSchema } from '@k/shared';
+import { handleVoiceMessage, type VoiceWs } from './messageHandlers';
 
 /** 心跳间隔（客户端需在 30s 内响应 pong，超时断开） */
 const HEARTBEAT_MS = 30_000;
-
-/** 文字聊天发送节流（每条消息间隔下限，防刷屏；状态挂在连接上，断开即释放） */
-const CHAT_THROTTLE_MS = 400;
-
-/**
- * 信令转发限流（令牌桶）：允许 ICE 候选/SDP 的短时突发（SIGNAL_BURST 条），
- * 持续速率上限 SIGNAL_REFILL_PER_SEC 条/秒。信令是机器节奏的消息，不能用聊天那种
- * 固定最小间隔节流，否则会误杀 trickle ICE 突发导致建联失败。
- */
-const SIGNAL_BURST = 40;
-const SIGNAL_REFILL_PER_SEC = 20;
-
-/** 控制字符（除 \n 换行外）剔除：入库前清理，防协议/显示污染 */
-const CONTROL_CHAR_RE = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
-
-/** 带存活标记的连接（心跳用；guestIp 为访客连接的来源 IP，断开时归还引用） */
-type VoiceWs = WebSocket & {
-  isAlive?: boolean;
-  guestIp?: string;
-  lastChatAt?: number;
-  /** 信令令牌桶状态（见 SIGNAL_BURST/SIGNAL_REFILL_PER_SEC） */
-  signalTokens?: number;
-  signalLastRefill?: number;
-};
 
 /**
  * 把语音 WS 服务挂到 HTTP 服务器上（index.ts 启动时调用一次）。
@@ -134,7 +110,7 @@ export function attachVoiceWs(server: Server): WebSocketServer {
       stale.ws.close(4002, 'replaced');
     }
 
-    // ---- 消息处理 ----
+    // ---- 消息处理（各消息 case 的逻辑见 ./messageHandlers）----
     ws.on('message', (raw) => {
       // 入站信令的最小形状：具体字段在各 case 内按需窄化校验
       let msg: { type?: string; [key: string]: unknown } | undefined;
@@ -143,110 +119,7 @@ export function attachVoiceWs(server: Server): WebSocketServer {
       } catch {
         return;
       }
-      switch (msg?.type) {
-        case 'join': {
-          const roomId = Number(msg.roomId);
-          const room = Number.isInteger(roomId) ? getRoomById(roomId) : undefined;
-          if (!room) {
-            ws.send(JSON.stringify({ type: 'error', message: '房间不存在' }));
-            return;
-          }
-          if (hub.getRoomCount(roomId) >= VOICE_MAX_ROOM_SIZE) {
-            ws.send(JSON.stringify({ type: 'error', message: `房间已满（最多${VOICE_MAX_ROOM_SIZE}人）` }));
-            return;
-          }
-          const listener = msg.listener === true;
-          const existing = hub.joinRoom(roomId, {
-            userId: user.id,
-            username: user.username,
-            avatar: user.avatar,
-            muted: !!msg.muted || listener,
-            listener,
-            ws,
-          });
-          // 返回既有成员：由新加入者主动发起 offer（确定性规则，避免协商冲突）
-          // self：回传本次连接的完整身份——访客（无 token）的负数 id 由服务端分配，
-          // 客户端需用它校正占位身份（WebRTC 完美协商/信号路由都依赖该 id）
-          ws.send(
-            JSON.stringify({
-              type: 'joined',
-              roomId,
-              participants: existing,
-              self: { userId: user.id, username: user.username, avatar: user.avatar },
-            })
-          );
-          break;
-        }
-        case 'leave':
-          hub.leaveRoom(user.id);
-          break;
-        case 'mute':
-          hub.setMuted(user.id, !!msg.muted);
-          break;
-        case 'quality': {
-          const level = msg.level;
-          if (level === 'good' || level === 'fair' || level === 'poor') {
-            hub.setQuality(user.id, level);
-          }
-          break;
-        }
-        case 'share-start':
-          hub.setSharing(user.id, true, msg.audio === true);
-          break;
-        case 'share-stop':
-          hub.setSharing(user.id, false);
-          break;
-        case 'chat': {
-          // 文字聊天：校验 → 节流 → 入库 → 广播（含发送者本人，客户端按 id 去重/回显）
-          const { content } = voiceChatSchema.safeParse({
-            content: typeof msg.content === 'string' ? msg.content : '',
-          }).data ?? { content: '' };
-          if (!content) return;
-          const roomId = hub.getMemberRoomId(user.id);
-          if (!roomId) return;
-          // 防刷屏：同一连接 400ms 内只收一条
-          const now = Date.now();
-          if (ws.lastChatAt !== undefined && now - ws.lastChatAt < CHAT_THROTTLE_MS) return;
-          ws.lastChatAt = now;
-          // 剔除控制字符（保留 \n）后再 trim，二次校验避免“纯控制字符”消息入库
-          const cleaned = content.replace(CONTROL_CHAR_RE, '').trim();
-          if (!cleaned) return;
-          const message = insertVoiceChatMessage({
-            roomId,
-            senderId: user.id,
-            username: user.username,
-            avatar: user.avatar,
-            content: cleaned,
-          });
-          hub.broadcast(roomId, { type: 'chat', message });
-          break;
-        }
-        case 'signal': {
-          const to = Number(msg.to);
-          if (!Number.isInteger(to)) return;
-          // 令牌桶限流：突发额度内全放行，超出后按持续速率补充
-          const now = Date.now();
-          if (ws.signalTokens === undefined || ws.signalLastRefill === undefined) {
-            ws.signalTokens = SIGNAL_BURST;
-            ws.signalLastRefill = now;
-          }
-          ws.signalTokens = Math.min(
-            SIGNAL_BURST,
-            ws.signalTokens + ((now - ws.signalLastRefill) / 1000) * SIGNAL_REFILL_PER_SEC
-          );
-          ws.signalLastRefill = now;
-          if (ws.signalTokens < 1) return;
-          // 只在已加入房间后、且收发双方同房间时转发：
-          // 否则可向任意在线用户定向灌包并探测其在线状态
-          const roomId = hub.getMemberRoomId(user.id);
-          if (roomId === undefined || hub.getMemberRoomId(to) !== roomId) return;
-          ws.signalTokens -= 1;
-          hub.sendToUser(to, { type: 'signal', from: user.id, data: msg.data });
-          break;
-        }
-        default:
-          break;
-      }
+      handleVoiceMessage({ user, ws, hub, insertVoiceChatMessage }, msg);
     });
 
     // 断开清理：从房间移除并广播 peer-left；访客归还 IP 引用计数（触发 10 分钟释放倒计时）

@@ -12,5 +12,6 @@ export * from './schemas/user';
 export * from './schemas/message';
 export * from './schemas/admin';
 export * from './schemas/voice';
+export * from './constants/voice';
 export * from './utils/tag';
 export * from './types';

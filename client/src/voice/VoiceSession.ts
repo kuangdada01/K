@@ -18,6 +18,7 @@
  */
 
 import { Capacitor } from '@capacitor/core';
+import { CONTROL_CHAR_RE, STUN_SERVER_URLS } from '@k/shared';
 import { getServerUrl } from '../config';
 import { getVoiceIceServers } from '../api/voice';
 import { showToast } from '../components/ui/Toast';
@@ -114,10 +115,8 @@ import {
 } from './prefs';
 export { NOISE_REDUCTION_KEY, MUSIC_MODE_KEY };
 
-/** ICE 兜底配置（接口失败时使用，与服务端默认一致） */
-const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
-  { urls: ['stun:stun.qq.com:3478', 'stun:stun.miwifi.com:3478', 'stun:stun.l.google.com:19302'] },
-];
+/** ICE 兜底配置（接口失败时使用，与服务端默认一致；STUN 地址来自 @k/shared 共享常量） */
+const FALLBACK_ICE_SERVERS: RTCIceServer[] = [{ urls: [...STUN_SERVER_URLS] }];
 
 export class VoiceSession {
   private cb: VoiceSessionCallbacks;
@@ -464,8 +463,8 @@ export class VoiceSession {
     if (!trimmed || trimmed.length > 500) return false;
     if (this.destroyed || !this.roomId) return false;
     if (this.ws?.readyState !== WebSocket.OPEN) return false;
-    // 与控制字符清洗保持一致（服务器也会再做一次）
-    const cleaned = trimmed.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '');
+    // 与控制字符清洗保持一致（共享 @k/shared 的 CONTROL_CHAR_RE，服务器也会再做一次）
+    const cleaned = trimmed.replace(CONTROL_CHAR_RE, '');
     if (!cleaned) return false;
     this.send({ type: 'chat', content: cleaned });
     return true;

@@ -34,13 +34,14 @@ import * as voiceHub from '../voice/hub';
 import { guestIds } from '../voice/guest-ids';
 import { getClientIp } from '../lib/client-ip';
 import { env } from '../config';
-import { createVoiceRoomSchema } from '@k/shared';
+import { createVoiceRoomSchema, STUN_SERVER_URLS } from '@k/shared';
 
 const router = Router();
 
-/** ICE 服务器基础配置（STUN 部分，静态不变；urls 兼容单地址字符串与数组两种形态） */
+/** ICE 服务器基础配置（STUN 部分，静态不变；urls 兼容单地址字符串与数组两种形态。
+ *  STUN 地址来自 @k/shared 共享常量，与客户端兜底配置同源） */
 const ICE_BASE_SERVERS: { urls: string | string[]; username?: string; credential?: string }[] = [
-  { urls: ['stun:stun.qq.com:3478', 'stun:stun.miwifi.com:3478', 'stun:stun.l.google.com:19302'] },
+  { urls: [...STUN_SERVER_URLS] },
 ];
 
 /** voiceAuth 注入的访客来源 IP（请求结束释放 guestIds 引用后即失效） */
