@@ -28,6 +28,7 @@ import { applyOpusPreferences } from './sdp';
 import { Denoiser } from './denoiser';
 import { RoomRecorder } from './recording/roomRecorder';
 import { QualityMonitor } from './qualityMonitor';
+import { AudioGraph, type PeerAudio } from './audio/audioGraph';
 import { ScreenShareController, type ScreenShareSink } from './share/screenShareController';
 import { WsSignaling } from './signaling/wsSignaling';
 import {
@@ -53,23 +54,13 @@ export type {
 } from './types';
 export { SHARE_QUALITY_PRESETS } from './types';
 
-/** 远端流音频节点（每人对一条） */
-interface PeerAudio {
-  source: MediaStreamAudioSourceNode;
-  analyser: AnalyserNode;
-  gain: GainNode;
-  buffer: Uint8Array<ArrayBuffer>;
-  hiddenEl: HTMLAudioElement; // Chrome 下 WebAudio 静音 bug 的兜底：同时挂一个静音的 audio 元素
-}
-
 /** Mesh 成员条目 */
 interface PeerEntry {
   participant: VoiceParticipant;
   pc: RTCPeerConnection;
-  audio: PeerAudio | null; // ontrack 后创建
+  audio: PeerAudio | null; // ontrack 后创建（音频图节点，见 ./audio/audioGraph.ts）
   pendingCandidates: RTCIceCandidateInit[]; // 远端描述就绪前缓存的候选
   remoteDescSet: boolean;
-  speaking: boolean;
   /** 上次统计的累计丢包/收包（丢包率按窗口增量计算，避免早期网络高峰永久拖累显示） */
   lastPacketsLost: number;
   lastPacketsReceived: number;
@@ -90,11 +81,6 @@ interface PeerEntry {
   lastConcealedSamples: number;
   lastTotalSamples: number;
 }
-
-/** 说话检测 RMS 阈值（0-1 归一化振幅） */
-const SPEAKING_THRESHOLD = 0.045;
-/** 说话检测轮询间隔 */
-const SPEAKING_INTERVAL_MS = 100;
 // 偏好持久化键与读写辅助收敛于 ./prefs（行为不变）；re-export 兼容既有导入
 import {
   MIC_VOLUME_KEY,
@@ -149,18 +135,23 @@ export class VoiceSession {
   });
   private iceServers: RTCIceServer[] = FALLBACK_ICE_SERVERS;
 
-  private audioCtx: AudioContext | null = null;
+  /** WebAudio 音频图（本地链/播放总线/远端 attach/RMS 说话检测/resume 兜底，见 ./audio/audioGraph.ts） */
+  private audio = new AudioGraph({
+    getSelfUserId: () => this.self.userId,
+    isSelfMuted: () => this.self.muted,
+    onSpeaking: (userId, speaking) => this.cb.onSpeaking(userId, speaking),
+    getSpeakingPeers: () =>
+      [...this.peers.values()].map((e) => ({
+        userId: e.participant.userId,
+        audio: e.audio,
+        muted: e.participant.muted,
+      })),
+    getHiddenAudioEls: () => [...this.peers.values()].flatMap((e) => (e.audio ? [e.audio.hiddenEl] : [])),
+  });
   private micStream: MediaStream | null = null;
-  private sendTrack: MediaStreamTrack | null = null;
-  private localGain: GainNode | null = null;
-  private localAnalyser: AnalyserNode | null = null;
-  private localBuffer: Uint8Array<ArrayBuffer> | null = null;
-  private selfSpeaking = false;
 
   private peers = new Map<number, PeerEntry>();
-  private speakTimer: number | null = null;
   private destroyed = false;
-  private resumeHandler: (() => void) | null = null;
   /** 语音质量评估（自报语义，实现见 ./qualityMonitor.ts） */
   private quality = new QualityMonitor({
     getPeers: () => [...this.peers.values()].map((e) => ({ userId: e.participant.userId, pc: e.pc })),
@@ -182,12 +173,6 @@ export class VoiceSession {
   private musicModeOn: boolean;
   /** RNNoise 降噪节点生命周期（实现见 ./denoiser.ts） */
   private denoiser = new Denoiser();
-  /** 本地麦克风源节点（降噪开关切换时按需重接路由，重建整条本地链） */
-  private micSource: MediaStreamAudioSourceNode | null = null;
-
-  /** 播放总线：各远端 gain → masterGain → 压限器 → 扬声器（多人抢话叠加超 0dB 时压峰值防炸麦） */
-  private masterGain: GainNode | null = null;
-  private masterLimiter: DynamicsCompressorNode | null = null;
 
   /** 全房间录制（远端各路 + 开麦时的自己 → 混音 → PCM 直录/MediaRecorder → MP3 结算），
    *  实现见 ./recording/roomRecorder.ts */
@@ -284,31 +269,19 @@ export class VoiceSession {
       /* 用 FALLBACK_ICE_SERVERS */
     }
 
-    // RNNoise 固定 48 kHz（480 样本/10ms 帧）；优先显式指定采样率，
-    // 个别浏览器不支持时退回默认采样率，由 prepareDenoiser 检查后降级
-    const ACtor =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    try {
-      this.audioCtx = new ACtor({ sampleRate: 48000 });
-    } catch {
-      this.audioCtx = new ACtor();
-    }
+    // 创建音频上下文（RNNoise 固定 48 kHz，见 audioGraph.createContext）：
     // AudioContext 需要用户手势后才能出声（点击"加入房间"即手势）；
-    // 刷新自动回房等无手势场景由 ensureAudioResume 兜底
-    this.audioCtx.resume().catch(() => {
-      /* 已 running 时忽略 */
-    });
-    this.ensureAudioResume();
+    // 刷新自动回房等无手势场景由 AudioGraph 的 resumeFallback 兜底
+    const audioCtx = this.audio.createContext();
 
     // 播放总线（听者模式也需要）：各远端 gain 汇入 masterGain → 压限器 → 扬声器。
     // 压限器只压超 -6dB 的叠加峰值（多人同时说话叠加 >1.0 会硬削波炸麦），单人正常音量不受影响
-    this.buildMasterBus();
+    this.audio.buildMasterBus();
 
     // 预载降噪 worklet（与拿麦克风并行，不拖慢进房速度）
-    this.denoiser.prepare(this.audioCtx);
+    this.denoiser.prepare(audioCtx);
     // 预载录音采集 worklet（同理并行；录音走音频线程，主线程卡顿不丢样本）
-    this.rec.prepareWorklet(this.audioCtx);
+    this.rec.prepareWorklet(audioCtx);
 
     // 麦克风：拿不到权限则以听者模式加入
     try {
@@ -321,9 +294,12 @@ export class VoiceSession {
           autoGainControl: !this.musicModeOn,
         },
       });
-      await this.denoiser.prepare(this.audioCtx); // worklet 就绪后再接本地链路
-      if (this.noiseReductionOn && !this.musicModeOn) this.denoiser.init(this.audioCtx, this.micStream);
-      this.buildLocalChain();
+      await this.denoiser.prepare(audioCtx); // worklet 就绪后再接本地链路
+      if (this.noiseReductionOn && !this.musicModeOn) this.denoiser.init(audioCtx, this.micStream);
+      // 本地链路: 麦克风 → 增益(麦克风音量) → 发送轨道；降噪路由按当前开关重接
+      this.audio.buildLocalChain(this.micStream, this.micVolume);
+      this.audio.applyLocalRouting(this.denoiser.getNode(), this.noiseReductionOn, this.musicModeOn);
+      if (this.audio.sendTrack) this.audio.sendTrack.enabled = !this.self.muted;
       // 用户偏好开但 RNNoise 不可用（加载失败/非 48k 采样率）：浏览器 NS 兜底（音乐模式除外）
       if (this.noiseReductionOn && !this.musicModeOn && !this.denoiser.getNode()) {
         this.micStream
@@ -342,72 +318,8 @@ export class VoiceSession {
     this.emitParticipants();
 
     this.signaling.open();
-    this.startSpeakingLoop();
+    this.audio.startSpeakingLoop();
     this.quality.start();
-  }
-
-  /** 播放总线：masterGain → 压限器 → destination。阈值 -6dB/比率 20:1/knee 0/attack 1ms，
-   *  近似 brickwall limiter——只处理多人叠加超 0dB 的瞬时峰值，正常听感不受影响（~6ms 处理延迟对语音可忽略） */
-  private buildMasterBus(): void {
-    if (!this.audioCtx || this.masterGain) return;
-    this.masterGain = this.audioCtx.createGain();
-    this.masterLimiter = this.audioCtx.createDynamicsCompressor();
-    this.masterLimiter.threshold.value = -6;
-    this.masterLimiter.knee.value = 0;
-    this.masterLimiter.ratio.value = 20;
-    this.masterLimiter.attack.value = 0.001;
-    this.masterLimiter.release.value = 0.1;
-    this.masterGain.connect(this.masterLimiter);
-    this.masterLimiter.connect(this.audioCtx.destination);
-  }
-
-  /** 本地链路: 麦克风 → [worklet] → 增益(麦克风音量) → 发送轨道；旁路分析器做自己的说话检测 */
-  private buildLocalChain(): void {
-    if (!this.audioCtx || !this.micStream) return;
-    this.micSource = this.audioCtx.createMediaStreamSource(this.micStream);
-
-    this.localGain = this.audioCtx.createGain();
-    this.localGain.gain.value = this.micVolume;
-
-    const dest = this.audioCtx.createMediaStreamDestination();
-
-    this.localAnalyser = this.audioCtx.createAnalyser();
-    this.localAnalyser.fftSize = 512;
-    this.localBuffer = new Uint8Array(this.localAnalyser.fftSize);
-
-    this.applyLocalRouting();
-
-    this.localGain.connect(dest);
-
-    this.sendTrack = dest.stream.getAudioTracks()[0] ?? null;
-    if (this.sendTrack) this.sendTrack.enabled = !this.self.muted;
-  }
-
-  /** 按当前降噪开关重接本地链路：开 → 麦克风 → RNNoise worklet → 增益/说话检测；关 → 直连。
-   *  音乐模式下永远直连（RNNoise 对音乐频谱是有损压制） */
-  private applyLocalRouting(): void {
-    if (!this.micSource || !this.localGain || !this.localAnalyser) return;
-    // 先全断开再重接，避免重复 connect 导致音频叠加/重复目标连接
-    try {
-      this.micSource.disconnect();
-    } catch {
-      /* 未连接 */
-    }
-    const denoiserNode = this.denoiser.getNode();
-    try {
-      denoiserNode?.disconnect();
-    } catch {
-      /* 未连接 */
-    }
-
-    if (denoiserNode && this.noiseReductionOn && !this.musicModeOn) {
-      this.micSource.connect(denoiserNode);
-      denoiserNode.connect(this.localGain);
-      denoiserNode.connect(this.localAnalyser);
-    } else {
-      this.micSource.connect(this.localGain);
-      this.micSource.connect(this.localAnalyser);
-    }
   }
 
   // ============================================================
@@ -562,8 +474,8 @@ export class VoiceSession {
     // 还会残留一条永不复用的 recvonly m 行）。RED 编解码偏好仍可设：addTrack 返回 sender，
     // 用 getTransceivers 找回对应收发器即可。
     let audioTransceiver: RTCRtpTransceiver | null = null;
-    if (this.sendTrack) {
-      const sender = pc.addTrack(this.sendTrack, new MediaStream([this.sendTrack]));
+    if (this.audio.sendTrack) {
+      const sender = pc.addTrack(this.audio.sendTrack, new MediaStream([this.audio.sendTrack]));
       this.markSenderHighPriority(sender);
       audioTransceiver = pc.getTransceivers().find((t) => t.sender === sender) ?? null;
     } else {
@@ -608,7 +520,16 @@ export class VoiceSession {
       } catch {
         /* 浏览器不支持则忽略（沿用自适应） */
       }
-      this.attachPeerAudio(entry, e.streams[0]);
+      if (entry.audio) return; // 重复 ontrack 防御（与历史 attachPeerAudio 守卫一致）
+      const peerAudio = this.audio.attachPeerAudio(
+        e.streams[0],
+        this.peerVolumes.get(entry.participant.userId) ?? 1
+      );
+      if (!peerAudio) return; // 音频图未就绪（异常时序）：跳过接入
+      entry.micStreamId = e.streams[0].id; // 该对端的麦克风流 id（此后新出现的音频流 = 共享系统声音）
+      entry.audio = peerAudio;
+      // 录制中：中途进房的成员也接入录制总线（同样经压限，录出的 MP3 不炸）
+      this.rec.attachPeerGain(peerAudio.gain);
     };
 
     const entry: PeerEntry = {
@@ -617,7 +538,6 @@ export class VoiceSession {
       audio: null,
       pendingCandidates: [],
       remoteDescSet: false,
-      speaking: false,
       lastPacketsLost: 0,
       lastPacketsReceived: 0,
       polite: this.self.userId > participant.userId,
@@ -827,44 +747,13 @@ export class VoiceSession {
     entry.pendingCandidates = [];
   }
 
-  /** 远端流接入音频图: Source → Analyser(检测) & Gain(音量) → 播放总线(压限防叠加炸麦) */
-  private attachPeerAudio(entry: PeerEntry, stream: MediaStream): void {
-    if (entry.audio || !this.audioCtx) return;
-    entry.micStreamId = stream.id; // 该对端的麦克风流 id（此后新出现的音频流 = 共享系统声音）
-    const source = this.audioCtx.createMediaStreamSource(stream);
-    const analyser = this.audioCtx.createAnalyser();
-    analyser.fftSize = 512;
-    const gain = this.audioCtx.createGain();
-    const stored = this.peerVolumes.get(entry.participant.userId);
-    gain.gain.value = stored ?? 1;
-
-    source.connect(analyser);
-    source.connect(gain);
-    // 播放经总线压限（多人叠加 >0dB 时压峰值）；总线未建（异常时序）直连扬声器兜底
-    this.buildMasterBus();
-    gain.connect(this.masterGain ?? this.audioCtx.destination);
-    // 录制中：中途进房的成员也接入录制总线（同样经压限，录出的 MP3 不炸）
-    this.rec.attachPeerGain(gain);
-
-    // Chrome 系 bug: 远端流只接 WebAudio 会静音，需同时有 audio 元素在播放该流驱动解码。
-    // 关键：不能用 muted=true（元素不拉流，WebAudio 依旧取不到数据），用 volume=0 既驱动解码又不出声
-    const hiddenEl = document.createElement('audio');
-    hiddenEl.srcObject = stream;
-    hiddenEl.volume = 0;
-    hiddenEl.play().catch(() => {
-      /* 自动播放策略拦截，ensureAudioResume 恢复后会重试 */
-    });
-
-    entry.audio = { source, analyser, gain, buffer: new Uint8Array(analyser.fftSize), hiddenEl };
-  }
-
   private removePeer(userId: number): void {
     const entry = this.peers.get(userId);
     if (!entry) return;
     this.disposePeer(entry);
     this.peers.delete(userId);
     this.quality.forget(userId); // 成员已离开：清掉其残留的质量显示状态与窗口计数器
-    if (entry.speaking) this.cb.onSpeaking(userId, false);
+    this.audio.forgetPeer(userId); // 按最后已知说话状态补发翻转并清除
     // 离开的正是当前共享者：关闭舞台与共享声音
     this.share.onPeerLeft(userId);
   }
@@ -884,15 +773,7 @@ export class VoiceSession {
     entry.videoSender = null;
     entry.shareAudioSender = null;
     if (entry.audio) {
-      try {
-        entry.audio.source.disconnect();
-        entry.audio.analyser.disconnect();
-        entry.audio.gain.disconnect();
-      } catch {
-        /* 已断开 */
-      }
-      entry.audio.hiddenEl.srcObject = null;
-      entry.audio.hiddenEl.remove();
+      this.audio.disposePeerAudio(entry.audio);
       entry.audio = null;
     }
   }
@@ -905,78 +786,6 @@ export class VoiceSession {
   }
 
   // ============================================================
-  // 说话检测
-  // ============================================================
-
-  private startSpeakingLoop(): void {
-    this.speakTimer = window.setInterval(() => {
-      // 自己（静音/听者不显示说话）
-      const selfNow =
-        !this.self.muted &&
-        !!this.localAnalyser &&
-        !!this.localBuffer &&
-        this.rms(this.localAnalyser, this.localBuffer) > SPEAKING_THRESHOLD;
-      if (selfNow !== this.selfSpeaking) {
-        this.selfSpeaking = selfNow;
-        this.cb.onSpeaking(this.self.userId, selfNow);
-      }
-      // 远端
-      for (const [userId, entry] of this.peers) {
-        if (!entry.audio || entry.participant.muted) {
-          if (entry.speaking) {
-            entry.speaking = false;
-            this.cb.onSpeaking(userId, false);
-          }
-          continue;
-        }
-        const now = this.rms(entry.audio.analyser, entry.audio.buffer) > SPEAKING_THRESHOLD;
-        if (now !== entry.speaking) {
-          entry.speaking = now;
-          this.cb.onSpeaking(userId, now);
-        }
-      }
-    }, SPEAKING_INTERVAL_MS);
-  }
-
-  private rms(analyser: AnalyserNode, buffer: Uint8Array<ArrayBuffer>): number {
-    analyser.getByteTimeDomainData(buffer);
-    let sum = 0;
-    for (let i = 0; i < buffer.length; i++) {
-      const d = (buffer[i]! - 128) / 128;
-      sum += d * d;
-    }
-    return Math.sqrt(sum / buffer.length);
-  }
-
-  /** 无手势建会话时 AudioContext 可能是 suspended：任意首次点击/按键时恢复出声 */
-  private ensureAudioResume(): void {
-    const ctx = this.audioCtx;
-    if (!ctx || ctx.state === 'running') return;
-    const resume = () => {
-      this.detachResumeHandler();
-      this.audioCtx?.resume().catch(() => {
-        /* 忽略 */
-      });
-      // 自动播放策略此前可能拦掉了兜底音频元素的播放，一并重试
-      for (const entry of this.peers.values()) {
-        entry.audio?.hiddenEl.play().catch(() => {
-          /* 仍被拦截则等下次交互 */
-        });
-      }
-    };
-    this.resumeHandler = resume;
-    document.addEventListener('pointerdown', resume);
-    document.addEventListener('keydown', resume);
-  }
-
-  private detachResumeHandler(): void {
-    if (!this.resumeHandler) return;
-    document.removeEventListener('pointerdown', this.resumeHandler);
-    document.removeEventListener('keydown', this.resumeHandler);
-    this.resumeHandler = null;
-  }
-
-  // ============================================================
   // 对外控制
   // ============================================================
 
@@ -984,7 +793,7 @@ export class VoiceSession {
   setMuted(muted: boolean): void {
     if (this.self.listener) return; // 无麦克风权限不能开麦
     this.self.muted = muted;
-    if (this.sendTrack) this.sendTrack.enabled = !muted;
+    if (this.audio.sendTrack) this.audio.sendTrack.enabled = !muted;
     // 静音时自己的声音不进录制（录制 = 房间其他人实际听到的内容）
     this.rec.setMutedGate(muted);
     this.send({ type: 'mute', muted });
@@ -994,7 +803,7 @@ export class VoiceSession {
   /** 麦克风音量（0-1，影响对方听到的音量） */
   setMicVolume(volume: number): void {
     this.micVolume = Math.min(1, Math.max(0, volume));
-    if (this.localGain) this.localGain.gain.value = this.micVolume;
+    this.audio.setMicGain(this.micVolume);
     localStorage.setItem(MIC_VOLUME_KEY, String(this.micVolume));
   }
 
@@ -1028,11 +837,11 @@ export class VoiceSession {
     localStorage.setItem(NOISE_REDUCTION_KEY, on ? '1' : '0');
     if (on) {
       // 首次开启/重新开启：创建全新节点（RNNoise 状态复位），再按开关重接链路
-      this.denoiser.init(this.audioCtx, this.micStream);
+      this.denoiser.init(this.audio.ctx, this.micStream);
     } else {
       this.denoiser.dispose();
     }
-    this.applyLocalRouting();
+    this.audio.applyLocalRouting(this.denoiser.getNode(), this.noiseReductionOn, this.musicModeOn);
     const track = this.micStream?.getAudioTracks()[0];
     if (!track) return; // 听者模式/无麦克风：仅保存偏好，进房后按偏好生效
     // RNNoise 生效时不用浏览器 NS（双重降噪会压瘪人声）；worklet 不可用则由浏览器 NS 兜底；
@@ -1077,9 +886,9 @@ export class VoiceSession {
         /* 浏览器不支持动态切换则忽略 */
       });
     // 关闭音乐模式时若降噪开关仍开：补建 RNNoise 节点（进房时音乐模式开着则未创建）
-    if (!on && this.noiseReductionOn) this.denoiser.init(this.audioCtx, this.micStream);
+    if (!on && this.noiseReductionOn) this.denoiser.init(this.audio.ctx, this.micStream);
     // 本地链路重接（音乐模式旁路 RNNoise；关闭时若降噪开关仍开则恢复降噪链）
-    this.applyLocalRouting();
+    this.audio.applyLocalRouting(this.denoiser.getNode(), this.noiseReductionOn, this.musicModeOn);
 
     // 编码参数变化：更新各对端编解码偏好并重协商（negotiateSuppressed 的初始协商
     // 尚未完成的连接自动跳过——其 offer 会实时读取当前模式）
@@ -1269,12 +1078,13 @@ export class VoiceSession {
 
   /** 开始录制全房间混音（远端各路 + 开麦时的自己）；已在录/不支持时返回 false */
   startRecording(roomName?: string): boolean {
-    if (!this.audioCtx) return false;
+    const audioCtx = this.audio.ctx;
+    if (!audioCtx) return false;
     return this.rec.start({
       roomName: roomName ?? '',
-      audioCtx: this.audioCtx,
+      audioCtx,
       peerGains: [...this.peers.values()].flatMap((e) => (e.audio ? [e.audio.gain] : [])),
-      localGain: this.localGain,
+      localGain: this.audio.localGain,
       selfMuted: this.self.muted,
     });
   }
@@ -1312,11 +1122,8 @@ export class VoiceSession {
   private teardown(reason: string, detail?: string): void {
     if (this.destroyed) return;
     this.destroyed = true;
-    this.detachResumeHandler();
-    if (this.speakTimer) {
-      clearInterval(this.speakTimer);
-      this.speakTimer = null;
-    }
+    // 音频图会话级清理（含 resume 监听/说话轮询/节点断开/上下文关闭）
+    this.audio.dispose();
     this.quality.stop();
     this.stopRecording(); // 退出时结算录制文件（转码下载在后台完成）
     this.cleanupPeers();
@@ -1326,37 +1133,6 @@ export class VoiceSession {
 
     this.micStream?.getTracks().forEach((t) => t.stop());
     this.micStream = null;
-    this.sendTrack = null;
-    this.localGain = null;
-    this.localAnalyser = null;
-    if (this.micSource) {
-      try {
-        this.micSource.disconnect();
-      } catch {
-        /* 未连接 */
-      }
-      this.micSource = null;
-    }
-    if (this.masterLimiter) {
-      try {
-        this.masterLimiter.disconnect();
-      } catch {
-        /* 已断开 */
-      }
-      this.masterLimiter = null;
-    }
-    if (this.masterGain) {
-      try {
-        this.masterGain.disconnect();
-      } catch {
-        /* 已断开 */
-      }
-      this.masterGain = null;
-    }
-    this.audioCtx?.close().catch(() => {
-      /* 已关闭 */
-    });
-    this.audioCtx = null;
 
     // 信令 WS 终止（含取消重连定时器），与 intentionalClose 同理
     this.signaling.close();
