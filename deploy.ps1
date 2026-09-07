@@ -70,11 +70,11 @@ New-Item -ItemType Directory -Path "$tmpDir\server" -Force | Out-Null
 New-Item -ItemType Directory -Path "$tmpDir\client" -Force | Out-Null
 New-Item -ItemType Directory -Path "$tmpDir\shared" -Force | Out-Null
 
-# 复制服务端文件（node_modules 在服务器上重新安装，避免原生模块不兼容）
+# 复制服务端文件（node_modules 在服务器上重新安装，避免原生模块不兼容；
+# workspaces 迁移后 lockfile 在根目录，见下方根配置复制）
 Copy-Item -Recurse "server\dist" "$tmpDir\server\dist"
 Copy-Item "server\package.json" "$tmpDir\server\"
 Copy-Item "server\ecosystem.config.js" "$tmpDir\server\"
-Copy-Item "server\package-lock.json" "$tmpDir\server\" -ErrorAction SilentlyContinue
 
 # 复制共享类型包（服务端依赖 file:../shared，服务器安装时需要同目录结构）
 Copy-Item -Recurse "shared\dist" "$tmpDir\shared\dist"
@@ -94,9 +94,10 @@ if ($APK_LOCAL -and $APK_NAME) {
 # 缺失会导致音乐列表为空、播放器组件不显示）
 Copy-Item -Recurse "client\public" "$tmpDir\client\public"
 
-# 复制根目录配置
+# 复制根目录配置（package-lock.json 为 workspaces 单一 lockfile，远端根安装依赖用）
 Copy-Item ".env" "$tmpDir\"
 Copy-Item "package.json" "$tmpDir\"
+Copy-Item "package-lock.json" "$tmpDir\" -ErrorAction SilentlyContinue
 
 # 不复制 uploads 目录（E2 修复：本地 dev uploads 是开发数据，入包会覆盖远端生产
 # 用户上传；uploads 只在首次部署时手动初始化，日常部署排除）

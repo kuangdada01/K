@@ -102,8 +102,13 @@ echo '--- 重建 @k/shared 链接（先建 @k 目录再 ln，旧绝对链接必�
 mkdir -p $D/server/node_modules/@k
 ln -sfn $D/shared $D/server/node_modules/@k/shared
 readlink -f $D/server/node_modules/@k/shared
-echo '--- 安装依赖（npm 按新 lockfile 自动修剪多余旧作用域） ---'
-cd $D/server && npm install --omit=dev
+echo '--- 清理旧布局依赖（workspaces 迁移后依赖统一装根 node_modules；
+        旧 server/node_modules 若残留会先于根被 Node 解析，遮蔽新依赖） ---'
+rm -rf $D/server/node_modules
+mkdir -p $D/server/node_modules/@k
+ln -sfn $D/shared $D/server/node_modules/@k/shared
+echo '--- 安装依赖（workspaces 根安装：npm 按根 lockfile 解析全部 workspace） ---'
+cd $D && npm install --omit=dev
 echo '--- PM2 换名/重启 ---'
 pm2 delete k-server 2>/dev/null || true
 # ecosystem.config.js 在 server/ 子目录（deploy.ps1 打包时复制到 $tmpDir/server/）
