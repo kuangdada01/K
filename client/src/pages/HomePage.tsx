@@ -27,6 +27,7 @@ import IcpFooter from '../components/IcpFooter';
 import MusicPlayer from '../components/MusicPlayer';
 import EmptyState from '../components/ui/EmptyState';
 import { useFollow } from '../state/cache';
+import { useInfiniteScrollSentinel } from '../hooks/useInfiniteScrollSentinel';
 import { usePostsFeed, feedPostsFlat, updatePostsFeed } from '../hooks/usePostsFeed';
 import { usePostEventsSync } from '../hooks/usePostEventsSync';
 import { useRecommendFollow } from '../hooks/useRecommendFollow';
@@ -105,22 +106,15 @@ export default function HomePage() {
   // 滚动位置恢复（图片加载导致高度不足时的渐进重试）
   useScrollRestore(!!feedData);
 
-  // 无限滚动：滚动到底部哨兵时加载下一页（参照 ExplorePage 的 IntersectionObserver 模式）
+  // 无限滚动：滚动到底部哨兵时加载下一页（自内联 IntersectionObserver effect 拆出，行为不变：
+  // threshold 0.1、仅 hasNextPage 且非加载下一页时触发；fetchNextPage 为 React Query
+  // 稳定引用，直接作为 onLoadMore 传入，observer 重建条件与原 effect 依赖一致）
   const loadMoreRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = loadMoreRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting && hasNextPage && !isFetchingNextPage) {
-          fetchNextPage();
-        }
-      },
-      { threshold: 0.1 }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  useInfiniteScrollSentinel(loadMoreRef, {
+    hasMore: hasNextPage,
+    loading: isFetchingNextPage,
+    onLoadMore: fetchNextPage,
+  });
 
   // 推荐关注：列表加载 + 关注成功/失败 + 400ms 移除动画（自 useRecommendFollow 拆出，行为不变）
   const { recommendUsers, removingIds, handleRecommendFollow } = useRecommendFollow({

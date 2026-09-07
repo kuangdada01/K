@@ -16,6 +16,7 @@
  * - PostDetailActions  底部操作栏（纯展示）
  * - CommentComposer    评论输入区（纯展示）
  * - usePostDetailClose 关闭/返回/滚轮生命周期
+ * - useCommentThread   评论线程交互（提交/分页/折叠/点赞/删除/回复）
  * ============================================================
  */
 
@@ -30,7 +31,6 @@ const LazyProfileOverlay = lazy(() => import('../profile/ProfileOverlay'));
 import ConfirmDialog from '../ui/ConfirmDialog';
 import { getApiErrorMessage } from '../../api/http';
 import * as postsApi from '../../api/posts';
-import { isAxiosError } from 'axios';
 import { buildVisibleComments } from '../../lib/comments';
 import { useAuth } from '../../context/AuthContext';
 import { useQueryClient } from '@tanstack/react-query';
@@ -44,6 +44,7 @@ import { useLikePost } from '../../hooks/useLikePost';
 import { useRepostPost } from '../../hooks/useRepostPost';
 import { useBookmarkPost } from '../../hooks/useBookmarkPost';
 import { usePostDetailData } from '../../hooks/usePostDetailData';
+import { useCommentThread } from '../../hooks/useCommentThread';
 import { useEvent } from '../../context/EventContext';
 import { events } from '../../state/events';
 import { showToast } from '../ui/Toast';
@@ -83,8 +84,6 @@ export default function PostDetail({
   // P6 修复：PostDetail 不再整包消费 MusicContext。开视频时发 music:pause 事件，
   // 关闭时发 music:resume（MusicProvider 内部处理"是否真的在播/是否要恢复"）。
   const [musicWasPlaying, setMusicWasPlaying] = useState(false);
-  const [newComment, setNewComment] = useState('');
-  const [replyingTo, setReplyingTo] = useState<{ id: number; username: string } | null>(null);
   const { getReposted } = useRepost();
   const { requireLogin } = useFollowUser();
   const {
@@ -96,34 +95,27 @@ export default function PostDetail({
   } = useLikePost(postId, { onChange: onLikeChange });
   const { reposted, setReposted, repostCount, setRepostCount, toggle: toggleRepost } = useRepostPost(postId);
   const { bookmarked, setBookmarked, toggle: toggleBookmark } = useBookmarkPost(postId);
-  const [submitting, setSubmitting] = useState(false);
   // 首页卡片点开时带图片索引进来，详情页/全屏首屏定位到同一张
   const [currentImageIndex, setCurrentImageIndex] = useState(initialImageIndex);
   const [zoomed, setZoomed] = useState(false);
-  const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
   const [profileUserId, setProfileUserId] = useState<number | null>(null);
   const [showDeletePostConfirm, setShowDeletePostConfirm] = useState(false);
   const [showTooltip, setShowTooltip] = useState(false);
   const highlightRef = useRef<HTMLDivElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-  // 评论分页续拉状态（首屏游标在 usePostDetailData 内管理）
-  const [commentsLoadingMore, setCommentsLoadingMore] = useState(false);
-  const commentsEndRef = useRef<HTMLDivElement>(null);
   const detailVideoRef = useRef<HTMLVideoElement>(null);
   const heartRef = useRef<SVGSVGElement>(null);
-  const commentInputRef = useRef<HTMLInputElement>(null);
 
   const [activeHighlightId, setActiveHighlightId] = useState<number | null>(null);
 
   // 帖子/用户切换时重置高亮与图片索引（渲染期 prev 值模式，替代 effect 内同步 setState；
-  // 评论/分页/加载错误的重置在 usePostDetailData 内同步完成）
+  // 评论/分页/加载错误的重置在 usePostDetailData 内同步完成，续拉标志的重置在 useCommentThread 内同步完成）
   const [prevDetailKey, setPrevDetailKey] = useState('');
   const detailKey = `${postId}|${user?.id ?? 'anon'}`;
   if (detailKey !== prevDetailKey) {
     setPrevDetailKey(detailKey);
     setActiveHighlightId(null);
     setCurrentImageIndex(initialImageIndex);
-    setCommentsLoadingMore(false);
   }
 
   // 详情数据层：帖子/评论首屏拉取、登录态字段回填、切换重置（自本组件拆出，行为不变）
@@ -159,6 +151,44 @@ export default function PostDetail({
     setReposted,
     setRepostCount,
     onHighlight: setActiveHighlightId,
+  });
+
+  // 评论交互层：提交/分页/删除/点赞/折叠/回复（自本组件拆出，行为不变）。
+  // 评论数据层 state（comments/commentHasMore/commentTotal）由 usePostDetailData 持有
+  // （首屏注入 + 切换重置），此处注入 useCommentThread；collapsedReplies 的 setter 一并注入
+  // （getter 留在本组件供渲染）
+  const {
+    commentsLoadingMore,
+    replyingTo,
+    setReplyingTo,
+    newComment,
+    setNewComment,
+    submitting,
+    deleteTargetId,
+    setDeleteTargetId,
+    commentsEndRef,
+    commentInputRef,
+    handleComment,
+    loadMoreComments,
+    handleDeleteComment,
+    confirmDeleteComment,
+    handleCommentLike,
+    toggleReplies,
+    handleReply,
+  } = useCommentThread({
+    postId,
+    comments,
+    setComments,
+    commentHasMore,
+    setCommentHasMore,
+    commentTotal,
+    setCommentTotal,
+    setCollapsedReplies,
+    userId: user?.id,
+    closeComments: post?.close_comments,
+    detailKey,
+    openLoginPrompt,
+    onCommentChange,
   });
 
   const { closing, handleClose } = usePostDetailClose({
@@ -213,65 +243,6 @@ export default function PostDetail({
     setShareCount,
   });
 
-  const handleComment = async () => {
-    if (!user) {
-      openLoginPrompt();
-      return;
-    }
-    if (!newComment.trim() || submitting || post?.close_comments) return;
-    setSubmitting(true);
-    try {
-      const res = await postsApi.createComment(postId, {
-        content: newComment,
-        parentId: replyingTo?.id || null,
-      });
-      // updater 必须纯函数：事件/回调副作用放在 setState 之外（StrictMode 下 updater 会双调用）
-      const updated = [...comments, res];
-      setComments(updated);
-      const newTotal = commentTotal + 1;
-      setCommentTotal(newTotal);
-      onCommentChange?.(postId, newTotal);
-      events.emit('post:comment', { postId, commentCount: newTotal });
-      setNewComment('');
-      setReplyingTo(null);
-      setTimeout(() => commentsEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
-    } catch (err) {
-      if (isAxiosError(err) && err.response?.status === 403) {
-        showToast('此帖子已关闭评论');
-      } else {
-        showToast(getApiErrorMessage(err, '评论发送失败，请重试'));
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  /** 向上续拉下一页评论：游标 = 已加载的最后一条顶级评论 id */
-  const loadMoreComments = async () => {
-    if (commentsLoadingMore || !commentHasMore) return;
-    const tops = comments.filter((c) => !c.parent_id);
-    const lastTop = tops[tops.length - 1];
-    if (!lastTop) return;
-    setCommentsLoadingMore(true);
-    try {
-      const res = await postsApi.listCommentsPaged(postId, { afterId: lastTop.id, limit: 10 });
-      setComments((prev) => {
-        const seen = new Set(prev.map((c) => c.id));
-        return [...prev, ...res.comments.filter((c) => !seen.has(c.id))];
-      });
-      setCommentHasMore(!!res.has_more);
-      setCommentTotal(res.total ?? commentTotal);
-    } catch (err) {
-      showToast(getApiErrorMessage(err, '评论加载失败，请重试'));
-    } finally {
-      setCommentsLoadingMore(false);
-    }
-  };
-
-  const handleDeleteComment = (commentId: number) => {
-    setDeleteTargetId(commentId);
-  };
-
   const handleDeletePost = async () => {
     if (!post) return;
     try {
@@ -288,75 +259,12 @@ export default function PostDetail({
     setShowDeletePostConfirm(false);
   };
 
-  const confirmDeleteComment = async () => {
-    if (deleteTargetId === null) return;
-    try {
-      await postsApi.deleteComment(deleteTargetId);
-      const updated = comments.filter((c) => c.id !== deleteTargetId && c.parent_id !== deleteTargetId);
-      setComments(updated);
-      // 分页下总数按已加载列表的收缩量回推（被删回复可能级联多条）
-      const newTotal = Math.max(0, commentTotal - (comments.length - updated.length));
-      setCommentTotal(newTotal);
-      onCommentChange?.(postId, newTotal);
-      events.emit('post:comment', { postId, commentCount: newTotal });
-      showToast('评论已删除');
-    } catch (err) {
-      showToast(getApiErrorMessage(err, '删除评论失败，请重试'));
-    }
-    setDeleteTargetId(null);
-  };
-
-  const handleCommentLike = async (commentId: number) => {
-    if (!user) {
-      openLoginPrompt();
-      return;
-    }
-    const comment = comments.find((c) => c.id === commentId);
-    if (!comment) return;
-
-    const wasLiked = !!comment.liked;
-    const prevCount = comment.like_count;
-
-    setComments((prev) =>
-      prev.map((c) =>
-        c.id === commentId
-          ? { ...c, liked: wasLiked ? 0 : 1, like_count: wasLiked ? prevCount - 1 : prevCount + 1 }
-          : c
-      )
-    );
-
-    try {
-      if (wasLiked) {
-        await postsApi.unlikeComment(commentId);
-      } else {
-        await postsApi.likeComment(commentId);
-      }
-    } catch {
-      setComments((prev) =>
-        prev.map((c) => (c.id === commentId ? { ...c, liked: wasLiked ? 1 : 0, like_count: prevCount } : c))
-      );
-      showToast('操作失败，请重试');
-    }
-  };
-
   const handleNavigate = (path: string) => {
     // 提取 /profile/:id 中的 userId
     const match = path.match(/\/profile\/(\d+)/);
     if (match) {
       setProfileUserId(parseInt(match[1]!));
     }
-  };
-
-  const toggleReplies = (commentId: number) => {
-    setCollapsedReplies((prev) => {
-      const next = new Set(prev);
-      if (next.has(commentId)) {
-        next.delete(commentId);
-      } else {
-        next.add(commentId);
-      }
-      return next;
-    });
   };
 
   if (loadError) {
@@ -523,14 +431,7 @@ export default function PostDetail({
                     currentUserId={user?.id}
                     innerRef={activeHighlighted ? highlightRef : undefined}
                     onProfileClick={(id) => handleNavigate(`/profile/${id}`)}
-                    onReply={(c) => {
-                      if (!user) {
-                        openLoginPrompt();
-                        return;
-                      }
-                      setReplyingTo({ id: c.id, username: c.username });
-                      commentInputRef.current?.focus();
-                    }}
+                    onReply={handleReply}
                     onToggleReplies={toggleReplies}
                     onLike={handleCommentLike}
                     onDelete={handleDeleteComment}

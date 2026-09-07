@@ -14,6 +14,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { updatePostsFeed } from '../../hooks/usePostsFeed';
+import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { Users, FileText, Megaphone } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { showToast } from '../../components/ui/Toast';
@@ -53,8 +54,12 @@ export default function AdminPage() {
   const [annSearch, setAnnSearch] = useState('');
   const [annSearchResults, setAnnSearchResults] = useState<AnnSearchResult[]>([]);
   const [showAnnDropdown, setShowAnnDropdown] = useState(false);
-  const annSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const annDropdownRef = useRef<HTMLDivElement>(null);
+  // 目标用户搜索：防抖定时器已由 useDebouncedValue 内部管理；此处仅保留
+  // 请求序号守卫（作废选中/清除目标后的在途响应）与"选中后跳过"标记
+  // （防抖值滞后一拍回落到 username 时不再发出搜索请求）
+  const annSearchSeqRef = useRef(0);
+  const skipAnnSearchRef = useRef(false);
   // 请求序号守卫：快速翻页/切换 tab 时只允许最新请求的响应落地（§5.2，仿 ExplorePage）
   const reqSeqRef = useRef(0);
 
@@ -228,31 +233,50 @@ export default function AdminPage() {
     }
   };
 
-  // 搜索用户（debounce）
+  // 搜索用户（debounce 300ms 自 useDebouncedValue 拆出，延迟不变，仅换实现方式）
   const handleAnnSearch = (value: string) => {
     setAnnSearch(value);
     setAnnTargetId(null);
     setAnnTargetName('');
-    if (annSearchTimer.current) clearTimeout(annSearchTimer.current);
+    // 用户重新输入 → 恢复搜索（消费掉 selectAnnTarget/clearAnnTarget 的跳过标记）
+    skipAnnSearchRef.current = false;
     if (!value.trim()) {
       setAnnSearchResults([]);
       setShowAnnDropdown(false);
       return;
     }
-    annSearchTimer.current = setTimeout(async () => {
-      try {
-        const res = await api.get(`/admin/users/search?q=${encodeURIComponent(value.trim())}`);
+  };
+
+  const debouncedAnnSearch = useDebouncedValue(annSearch, 300);
+  // 防抖值非空时发起搜索，等价于原 setTimeout 回调（响应落地时带序号守卫，
+  // 丢弃过期响应；跳过标记已由 selectAnnTarget/clearAnnTarget 置位时，
+  // 防抖回落到选中值的那一拍不发出请求——选中/清除目标后不再触发旧搜索）
+  useEffect(() => {
+    if (skipAnnSearchRef.current) {
+      skipAnnSearchRef.current = false;
+      return;
+    }
+    const q = debouncedAnnSearch.trim();
+    if (!q) return;
+    const seq = ++annSearchSeqRef.current;
+    api
+      .get(`/admin/users/search?q=${encodeURIComponent(q)}`)
+      .then((res) => {
+        if (seq !== annSearchSeqRef.current) return; // 已有更新的搜索，丢弃过期响应
         setAnnSearchResults(res.data.users);
         setShowAnnDropdown(true);
-      } catch {}
-    }, 300);
-  };
+      })
+      .catch(() => {});
+  }, [debouncedAnnSearch]);
 
   const selectAnnTarget = (u: { id: number; username: string }) => {
     setAnnTargetId(u.id);
     setAnnTargetName(u.username);
     setAnnSearch(u.username);
     setShowAnnDropdown(false);
+    // 跳过防抖回落到 username 时触发的搜索，并作废仍在途的旧搜索响应
+    skipAnnSearchRef.current = true;
+    annSearchSeqRef.current++;
   };
 
   const clearAnnTarget = () => {
@@ -261,6 +285,8 @@ export default function AdminPage() {
     setAnnSearch('');
     setAnnSearchResults([]);
     setShowAnnDropdown(false);
+    skipAnnSearchRef.current = true;
+    annSearchSeqRef.current++;
   };
 
   // 点击外部关闭下拉
