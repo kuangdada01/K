@@ -19,7 +19,7 @@
 - **CSS Modules + 设计令牌** — 组件级样式隔离，亮/暗双主题
 - **Lucide React** — 图标库
 - **Capacitor 8** — Android 原生打包（Gradle 9.1 + AGP 8.13，支持 Java 25 构建）
-- **Vitest + Testing Library** — 单元测试（`8 文件 50 用例`：hooks 乐观更新/回滚、SSE 票据连接/退避重连/单例分发、评论树、事件总线等）
+- **Vitest + Testing Library** — 单元测试（`15 文件 149 用例`：语音域各子模块、hooks 乐观更新/回滚、SSE 票据连接/退避重连/单例分发、评论树、事件总线等）
 
 ### 后端（server）
 
@@ -38,7 +38,7 @@
 
 ### 共享（shared）
 
-- **`@k/shared`** — zod schema + 推断类型，前后端唯一事实来源，接口变更免人工同步
+- **`@k/shared`** — zod schema（`@k/shared/schemas` 子入口，仅服务端使用）+ 常量/工具/领域类型（双端），前后端唯一事实来源；schema 拆子入口后 client bundle 不再携带 zod（vendor 359KB → 9KB）
 
 ### 工程化
 
@@ -71,7 +71,8 @@ k/
 │   │   ├── lib/                 # 纯函数（scroll/comments）
 │   │   ├── pages/               # 页面级组件（Home/Explore/Profile/Admin/Books...）
 │   │   ├── state/               # queryClient、mitt 事件总线、交互缓存
-│   │   ├── voice/               # VoiceSession 及子系统（types/sdp/denoiser/qualityMonitor + recorder/recording/rnnoise/share）
+│   │   ├── voice/               # 语音域（见「语音域架构与维护」）：VoiceSession 门面 + share/signaling/audio/mesh 子模块 + recorder/rnnoise
+│   │   ├── music/               # MusicEngine（audio 元素生命周期/播放列表/ended 自切歌）
 │   │   └── styles/              # global.css + tokens（其余已模块化）
 │   ├── android/                 # Capacitor Android 工程
 │   ├── scripts/                 # 一次性验证脚本（b5-verify）
@@ -99,6 +100,56 @@ k/
 ├── archive/                     # 历史归档（本地保留，不入库：目录重命名/改名/包名迁移记录等）
 └── package.json                 # 根目录统一脚本
 ```
+
+---
+
+## 语音域架构与维护
+
+语音域按「状态/决策进子模块、副作用经注入回调、单测锁行为」拆分（行为不变量：公共方法签名、回调时序逐字保持）。真机回归（双人互听/弱网重连/屏幕共享/录制/移动端/双端互踢）已通过。
+
+### 模块结构
+
+```
+client/src/voice/
+├── VoiceSession.ts                    # 门面：组合子模块，公共 API 签名不变
+├── share/screenShareController.ts     # 屏幕共享状态机（发送/接收端 + 断线重连对账）
+├── signaling/wsSignaling.ts           # 信令 WS 传输（自动重连/终止关闭码）
+├── audio/audioGraph.ts                # WebAudio 图（本地链/播放总线/说话检测/resume 兜底）
+├── mesh/meshManager.ts + meshPeer.ts  # WebRTC Mesh（完美协商/ICE 重启/对端生命周期）
+├── sdp.ts / denoiser.ts / prefs.ts    # SDP 加工 / RNNoise 降噪 / 偏好持久化
+├── qualityMonitor.ts                  # 语音质量评估（自报语义）
+└── recording/ + recorder/             # 全房间混音录制（PCM→MP3 结算）
+```
+
+UI 与状态层：
+
+```
+client/src/pages/voice/               # VoiceRoomList / VoiceRoomView / VoiceChatPanel
+client/src/hooks/useChatTTS.ts        # 聊天朗读（speakingRef 置位 + onend 令牌守卫修复）
+client/src/hooks/useVoiceSessionController.ts + useVoiceChatStore.ts   # 会话控制器/聊天 store
+client/src/hooks/useCanvasVideoRenderer.ts + useFullscreenImmersive.ts # 共享舞台渲染/全屏沉浸
+client/src/music/MusicEngine.ts       # 音乐播放引擎（audio 元素生命周期/自切歌）
+```
+
+### 故障定位
+
+| 现象                                 | 定位文件                                                  |
+| ------------------------------------ | --------------------------------------------------------- |
+| 共享画面缺失/断线后舞台不关/双共享者 | `voice/share/screenShareController.ts`                    |
+| 进不了房/断线不重连/被 4002 踢       | `voice/signaling/wsSignaling.ts`                          |
+| 听不到/无声/说话指示不亮             | `voice/audio/audioGraph.ts`                               |
+| 画面或声音偶发缺失/协商失败          | `voice/mesh/meshManager.ts` + `meshPeer.ts`               |
+| 聊天消息重复/丢消息/翻页错           | `hooks/useVoiceChatStore.ts`                              |
+| 朗读不播/高亮错乱                    | `hooks/useChatTTS.ts`                                     |
+| 房间列表/控制栏/成员卡片             | `pages/voice/*`                                           |
+| 音乐不切歌/播放当前曲目无声          | `music/MusicEngine.ts`                                    |
+| 全屏/沉浸/小窗异常                   | `useFullscreenImmersive.ts` / `useCanvasVideoRenderer.ts` |
+
+排查套路：现象归类 → 跑对应模块单测（`npx vitest run src/voice/<模块>`）→ 看注入回调边界（`ScreenShareSink`/`MeshManagerOptions`/`AudioGraphOptions`）。网页端与 APK 是同一份 Web 代码，能网页复现的问题优先浏览器 DevTools 定位。
+
+### 单测覆盖（client 149 / server 101）
+
+语音域重点：screenShareController 29、meshManager 16、audioGraph 15、wsSignaling 12、MusicEngine 10、useChatTTS 8、useVoiceChatStore 8；服务端 17 文件 101 用例（全部注入 `:memory:` 库）。
 
 ---
 
