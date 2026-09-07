@@ -97,7 +97,6 @@ k/
 ├── deploy-interactive.ps1       # 部署交互包装：依次输入服务器 IP 与 SSH 密码后调用 deploy.ps1
 ├── deploy-sftp.py               # 完整部署传输/远端部署后端（SFTP，paramiko）
 ├── deploy-client-lite.py        # 仅 client 变更时的轻量部署（dist+public，自动备份）
-├── archive/                     # 历史归档（本地保留，不入库：目录重命名/改名/包名迁移记录等）
 └── package.json                 # 根目录统一脚本
 ```
 
