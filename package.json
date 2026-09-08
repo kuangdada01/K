@@ -19,12 +19,18 @@
     "install:all": "npm install",
     "test:client": "npm run test --prefix client",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "prepare": "husky"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
     "concurrently": "^10.0.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.5.0",
     "prettier": "^3.6.2"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,css,html,json,md,yaml,yml}": "prettier --write"
   },
   "allowScripts": {
     "better-sqlite3@12.11.1": true,
