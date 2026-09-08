@@ -180,7 +180,10 @@ test('移动端窄视口：发布模态框三步内容均可滚动到底部', as
     mimeType: 'image/png',
     buffer: PORTRAIT_PNG,
   }));
-  await page.locator('input[type="file"]').first().setInputFiles(files as never);
+  await page
+    .locator('input[type="file"]')
+    .first()
+    .setInputFiles(files as never);
   await expect(page.locator('[class*="gridItem"]')).toHaveCount(8);
 
   let m = await scrollCheck(page, 'gridWrapper', 'gridAdd');
