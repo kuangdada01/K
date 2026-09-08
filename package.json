@@ -20,7 +20,7 @@
     "test:client": "npm run test --prefix client",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "prepare": "husky"
+    "prepare": "husky || exit 0"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

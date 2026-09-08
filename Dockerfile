@@ -54,7 +54,8 @@ COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
 
 # 为 shared/server 两个 workspace 装生产依赖（client 是静态产物，不装）
-# HUSKY=0：运行时阶段同样无 .git，跳过 prepare 钩子安装
+# 运行时阶段 --omit=dev 会裁掉根 devDep（husky），但 npm 仍执行根 prepare 脚本；
+# prepare 已改为 "husky || exit 0"，husky 缺失时自动跳过（见根 package.json）
 RUN HUSKY=0 npm ci --omit=dev --no-audit --no-fund -w shared -w server
 
 # E4：非 root 运行
