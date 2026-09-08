@@ -28,7 +28,6 @@ let db: InstanceType<typeof Database>;
 let server: http.Server;
 let base = '';
 let aliceToken = '';
-let bobToken = '';
 
 const run = Date.now();
 const NAME = `temp-${run}-123.mp4`;
@@ -57,9 +56,9 @@ beforeAll(async () => {
     "INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, 'x', 'user')"
   );
   const aliceId = Number(insertUser.run('alice', 'alice@test.com').lastInsertRowid);
-  const bobId = Number(insertUser.run('bob', 'bob@test.com').lastInsertRowid);
+  // bob 用户仅用于注册（属主校验测试用不存在用户的会话模拟"他人"）
+  insertUser.run('bob', 'bob@test.com');
   aliceToken = generateToken({ id: aliceId, username: 'alice' });
-  bobToken = generateToken({ id: bobId, username: 'bob' });
 
   const app = createApp();
   server = http.createServer(app);
