@@ -74,6 +74,13 @@ export function errorHandler(rawErr: unknown, _req: Request, res: Response, _nex
     return;
   }
 
+  // HEIC/HEIF 图片解码失败（损坏或 libheif WASM 不支持的编码）：
+  // 是文件本身的问题，不是服务器故障，按 400 给用户明确提示而非 500
+  if (err?.message && err.message.includes('HEIC 解码')) {
+    res.status(400).json({ error: 'HEIC/HEIF 图片无法解码，请转换格式后重试' });
+    return;
+  }
+
   logger.error({ err }, 'Unhandled error');
   res.status(500).json({ error: '服务器内部错误' });
 }

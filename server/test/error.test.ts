@@ -54,6 +54,13 @@ describe('errorHandler', () => {
     expect(res.statusCode).toBe(400);
     expect(res.jsonBody).toEqual({ error: '文件过大，图片最大10MB，视频最大300MB' });
   });
+
+  it('HEIC 解码失败返回 400 明确提示（文件问题而非服务器故障）', () => {
+    const res = mockRes();
+    errorHandler(new Error('HEIC 解码失败: input buffer is not a HEIC image'), {} as any, res, vi.fn());
+    expect(res.statusCode).toBe(400);
+    expect(res.jsonBody).toEqual({ error: 'HEIC/HEIF 图片无法解码，请转换格式后重试' });
+  });
 });
 
 describe('asyncHandler', () => {
