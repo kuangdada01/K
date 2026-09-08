@@ -21,11 +21,12 @@ FROM node:22-slim AS build
 WORKDIR /app
 
 # 依赖层缓存：只拷清单装依赖（根 lockfile + 三个子包清单），源码变更不失效
+# HUSKY=0：容器内无 .git，跳过 prepare 钩子安装（husky 在无 git 目录会报错）
 COPY package.json package-lock.json ./
 COPY shared/package.json ./shared/
 COPY server/package.json ./server/
 COPY client/package.json ./client/
-RUN npm ci --no-audit --no-fund
+RUN HUSKY=0 npm ci --no-audit --no-fund
 
 # 源码层：拷代码并构建 shared → server → client
 COPY shared ./shared
@@ -53,7 +54,8 @@ COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
 
 # 为 shared/server 两个 workspace 装生产依赖（client 是静态产物，不装）
-RUN npm ci --omit=dev --no-audit --no-fund -w shared -w server
+# HUSKY=0：运行时阶段同样无 .git，跳过 prepare 钩子安装
+RUN HUSKY=0 npm ci --omit=dev --no-audit --no-fund -w shared -w server
 
 # E4：非 root 运行
 # k.db 预建为空文件（不声明 VOLUME）：新版 Docker/containerd 拒绝把卷挂到已存在的
