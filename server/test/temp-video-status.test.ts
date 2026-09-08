@@ -21,10 +21,7 @@ import { createSchema } from '../src/db/schema';
 import { setDbForTests, resetDbForTests } from '../src/db/connection';
 import { createApp } from '../src/app';
 import { generateToken } from '../src/middleware/auth';
-import {
-  registerChunkUpload,
-  releaseChunkUpload,
-} from '../src/lib/chunkUploadRegistry';
+import { registerChunkUpload, releaseChunkUpload } from '../src/lib/chunkUploadRegistry';
 import { PATHS } from '../src/config';
 
 let db: InstanceType<typeof Database>;

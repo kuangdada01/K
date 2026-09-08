@@ -37,9 +37,14 @@ function makeVideoFile(name = 'test.mp4'): File {
   return new File([new Uint8Array(1024)], name, { type: 'video/mp4' });
 }
 
-function pickVideo(hook: ReturnType<typeof renderHook<ReturnType<typeof useMediaDraft>, unknown>>['result'], file: File) {
+function pickVideo(
+  hook: ReturnType<typeof renderHook<ReturnType<typeof useMediaDraft>, unknown>>['result'],
+  file: File
+) {
   // handleVideoSelect 的 onChange 事件对象形态
-  const e = { target: { files: [file], value: 'C:\\fakepath\\' + file.name } } as unknown as ChangeEvent<HTMLInputElement>;
+  const e = {
+    target: { files: [file], value: 'C:\\fakepath\\' + file.name },
+  } as unknown as ChangeEvent<HTMLInputElement>;
   act(() => {
     hook.current.handleVideoSelect(e);
   });

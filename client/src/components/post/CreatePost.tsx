@@ -44,7 +44,13 @@ import { useMediaDraft } from '../../hooks/useMediaDraft';
 import { useVideoCoverCapture } from '../../hooks/useVideoCoverCapture';
 import { usePreviewAutoRetry } from '../../hooks/usePreviewAutoRetry';
 import { usePreviewDecodeWatchdog } from '../../hooks/usePreviewDecodeWatchdog';
-import { createImagePost, createVideoPost, createVideoPostChunked, createVideoPostFromTempUrl, getTempVideoStatus } from '../../api/posts';
+import {
+  createImagePost,
+  createVideoPost,
+  createVideoPostChunked,
+  createVideoPostFromTempUrl,
+  getTempVideoStatus,
+} from '../../api/posts';
 import { IMAGE_PREVIEW_FALLBACK } from '../../utils';
 import composer from './PostComposer.module.css';
 
@@ -121,9 +127,7 @@ export default function CreatePost() {
   // 浏览器可能缓存转码前（4K/HEVC 不可播）的响应/媒体缓存，重载同 URL 会
   // 反复拿到旧内容。版本参数随每次重试递增，强制重新拉取转码后的新文件。
   const effectiveVideoSrc =
-    tempActive && tempVideoUrl
-      ? `${window.location.origin}${tempVideoUrl}?v=${previewRetry}`
-      : videoPreview;
+    tempActive && tempVideoUrl ? `${window.location.origin}${tempVideoUrl}?v=${previewRetry}` : videoPreview;
   const handleVideoPreviewError = () => {
     // 明确报错：解除看门狗（避免超时重复判定）
     clearDecodeWatchdog();

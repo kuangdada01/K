@@ -150,7 +150,10 @@ describe('usePreviewAutoRetry（轮询状态驱动）', () => {
 
   it('reset() 复位计数：再次等待重新计满上限', async () => {
     const pollStatus = vi.fn(() => Promise.resolve('pending' as TempPreviewStatus));
-    const { result, update } = setup({ active: true, waiting: true, intervalMs: 1000, maxRetries: 2 }, pollStatus);
+    const { result, update } = setup(
+      { active: true, waiting: true, intervalMs: 1000, maxRetries: 2 },
+      pollStatus
+    );
     await advanceOne(1000);
     await advanceOne(1000);
     expect(pollStatus).toHaveBeenCalledTimes(2); // 达上限
