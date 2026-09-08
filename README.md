@@ -180,6 +180,9 @@ cd K                                               # 仓库目录名按 GitHub �
 npm run install:all
 ```
 
+> `npm install` 会自动安装 husky pre-commit 钩子（lint-staged + Prettier）：
+> 提交前自动格式化暂存文件，与 CI 的 `format:check` 保持一致，避免提交后 CI 报格式错误。
+
 ### 2. 配置环境变量
 
 ```bash
