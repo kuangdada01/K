@@ -18,7 +18,8 @@ import { safeDeleteFile } from '../../lib/file';
 import { postTextSchema } from '@k/shared/schemas';
 import { extractTags } from '@k/shared';
 import { enqueueVideoTranscode } from '../../lib/video/queue';
-import { generateVideoCover } from '../../lib/video/transcode';
+import { generateVideoCover, isPlayableVideoStream } from '../../lib/video/transcode';
+import { probeVideoStream } from '../../lib/video/probe';
 import multer from 'multer';
 import { createUploader, timestampFilename } from '../../lib/upload';
 import * as postRepo from '../../repositories/post.repo';
@@ -247,6 +248,49 @@ router.post(
     registerChunkUpload(name, req.user!.id);
 
     res.status(201).json({ url: `/uploads/temp/${name}` });
+  })
+);
+
+/**
+ * GET /api/posts/video-temp/status - 查询临时视频转码状态（发布前预览轮询）
+ *
+ * 认证: 必须；属主校验与 DELETE /video-temp 一致。
+ * 查询参数: url=/uploads/temp/xxx.mp4
+ *
+ * 转码完成判据 = 文件内容已是可播规格（H.264 且 level/分辨率在硬件解码
+ * 能力内；ensurePlayableVideo 成功后原地替换，队列不跟踪单文件状态，直接
+ * 探测流规格最可靠）。4K H.264（level 5.x）同样判为未完成——多数移动端
+ * 浏览器/WebView 硬件解码器解不了，需降级转码到 1080p：
+ * - done:    已是可播 H.264 → 客户端可加载预览
+ * - encoding: 排队中/转码中（或转码失败保留原文件，客户端轮询超时兜底）
+ * - missing:  文件不存在（上传未完成或已被 TTL 清理）
+ * ffprobe 探测失败（异常文件/ffprobe 缺失）保守视为 encoding，不误报 done。
+ */
+router.get(
+  '/video-temp/status',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const url = typeof req.query.url === 'string' ? req.query.url.trim() : '';
+    const name = path.basename(url);
+    if (!TEMP_VIDEO_NAME_RE.test(name)) {
+      throw new AppError(400, '无效的视频引用');
+    }
+    // 属主校验（与 DELETE /video-temp 一致）：暴露文件是否转码完成属隐私信息
+    const owner = getChunkOwner(name);
+    if (owner && owner.userId !== req.user!.id) {
+      throw new AppError(403, '无权查看该临时视频');
+    }
+    const filePath = path.join(PATHS.uploadsTemp, name);
+    if (!fs.existsSync(filePath)) {
+      res.json({ status: 'missing' });
+      return;
+    }
+    const info = await probeVideoStream(filePath);
+    // 动态状态接口必须禁缓存：Express 默认 ETag 会让浏览器把首次响应缓存起来，
+    // 后续轮询命中 304（body 为空，axios data=undefined），客户端永远读不到
+    // "done"——转码完成后自动显示失效，只能手动点重试
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ status: isPlayableVideoStream(info) ? 'done' : 'encoding' });
   })
 );
 

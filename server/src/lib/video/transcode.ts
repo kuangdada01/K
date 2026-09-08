@@ -24,12 +24,34 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { env } from '../../config';
 import { logger } from '../logger';
-import { probeVideoCodec } from './probe';
+import { probeVideoStream, type VideoStreamInfo } from './probe';
 
 const execFileAsync = promisify(execFile);
 
 /** ffmpeg 路径（可通过环境变量覆盖，默认从 PATH 查找） */
 const FFMPEG = env.FFMPEG_PATH || 'ffmpeg';
+
+/**
+ * 判断视频流是否为"浏览器/移动端通用可播"：
+ * 仅 H.264 且规格在主流硬件解码能力内的才直接可播，否则需要转码。
+ *
+ * 判据（h264 之外一律需转码；h264 还需同时满足）：
+ * - level <= 42（4.2）：覆盖 1080p60、任意竖屏 1080x1920 等主流规格；
+ *   4K30 为 5.1、4K60 为 5.2，超出一众手机/网页硬件解码器能力（Edge 等
+ *   直接解码失败，表现为"转码完成也不显示"）
+ * - 长边 <= 2048：兜底 level 缺失/异常标记的文件（如 2560x1080 带鱼屏）
+ * 探测失败/字段缺失时保守判定为需转码？——不：保持原语义（探测失败不转码，
+ * 由客户端发布路径与播放器错误处理兜底），仅能确认的规格参与判断。
+ */
+export function isPlayableVideoStream(info: VideoStreamInfo | null): boolean {
+  if (!info || info.codec !== 'h264') return false;
+  const level = info.level;
+  if (level !== null && level > 42) return false;
+  const w = info.width;
+  const h = info.height;
+  if (w !== null && h !== null && Math.max(w, h) > 2048) return false;
+  return true;
+}
 
 /**
  * 确保视频为浏览器通用格式（H.264 + AAC 的 mp4），输出分辨率封顶 1080p
@@ -43,9 +65,13 @@ export async function ensurePlayableVideo(filePath: string, originalName: string
   if (!fs.existsSync(filePath)) return originalName;
 
   const ext = path.extname(originalName).toLowerCase();
-  const codec = await probeVideoCodec(filePath);
-  // 无法探测（如服务器未安装 ffprobe）或已是 H.264 mp4，保持原样
-  if (codec === null || (codec === 'h264' && ext === '.mp4')) return originalName;
+  const info = await probeVideoStream(filePath);
+  // 无法探测（如服务器未安装 ffprobe）保持原样；已是可播规格（H.264 且
+  // level/分辨率在硬件解码能力内）的 mp4 也保持原样——
+  // 4K H.264（level 5.x）与 HEVC 一样需要降级转码：多数移动端浏览器/
+  // WebView 的硬件解码器解不了 4K H.264，此前"h264 直接跳过"导致
+  // 这类视频转码状态显示完成却永远无法预览
+  if (info === null || (ext === '.mp4' && isPlayableVideoStream(info))) return originalName;
 
   // ============================================================
   // 原地替换说明（原「非 .mp4 输入改名 finalName + unlinkSync 原文件」分支已删除）：
