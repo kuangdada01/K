@@ -25,6 +25,7 @@ import type { ChangeEvent, Dispatch, SetStateAction } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { showToast } from '../components/ui/Toast';
 import { fileToPreviewUrl } from '../utils';
+import { uploadTempVideo, deleteTempVideo } from '../api/posts';
 
 /** 媒体条目最小形状：url 必须；CreatePost 条目 {url,file}，EditPost 条目 {url,isNew,file?} */
 export interface MediaDraftItem {
@@ -50,6 +51,12 @@ export interface UseMediaDraftResult<T extends { url: string }> {
   videoFile: File | null;
   videoPreview: string | null;
   setVideoPreview: Dispatch<SetStateAction<string | null>>;
+  /** 后台已上传的临时视频（/uploads/temp/xxx.mp4）；blob 预览失败时切换用，发布时直接复用 */
+  tempVideoUrl: string | null;
+  /** 临时视频是否正在后台上传（仅浏览器环境；原生 App blob 预览正常，不触发） */
+  tempVideoUploading: boolean;
+  /** 等待后台上传结束（无上传返回已 resolve；失败返回 null），发布复用 temp 前调用 */
+  waitForTempVideoUpload: () => Promise<{ url: string } | null>;
   videoCoverFile: File | null;
   setVideoCoverFile: Dispatch<SetStateAction<File | null>>;
   videoCoverPreview: string | null;
@@ -81,10 +88,21 @@ export function useMediaDraft<T extends { url: string }>(
   const [images, setImages] = useState<T[]>([]);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoPreview, setVideoPreview] = useState<string | null>(null);
+  const [tempVideoUrl, setTempVideoUrl] = useState<string | null>(null);
+  const [tempVideoUploading, setTempVideoUploading] = useState(false);
   const [videoCoverFile, setVideoCoverFile] = useState<File | null>(null);
   const [videoCoverPreview, setVideoCoverPreview] = useState<string | null>(null);
   const [coverTime, setCoverTime] = useState(0);
   const [videoError, setVideoError] = useState(false);
+
+  // 后台临时上传的 promise 与结果镜像 ref：发布/清理时读取最新值
+  const pendingTempUploadRef = useRef<Promise<{ url: string } | null> | null>(null);
+  const tempVideoUrlRef = useRef<string | null>(null);
+  // 临时上传代数：移除/放弃视频时 +1，使在途上传落地结果被丢弃（防复活状态）
+  const tempGenRef = useRef(0);
+  useEffect(() => {
+    tempVideoUrlRef.current = tempVideoUrl;
+  }, [tempVideoUrl]);
 
   // 统一的图片项构造与删除谓词（按调用方语义注入；默认 CreatePost 语义）
   const buildItem: (url: string, file: File) => T =
@@ -201,6 +219,34 @@ export function useMediaDraft<T extends { url: string }>(
       setVideoCoverPreview(null);
       setCoverTime(0);
       setVideoError(false);
+      // 移动端浏览器（Edge 等）对 blob: 视频解码有兼容问题（文件选择器给的
+      // 底层流不可 seek，mp4 元数据读取失败）：选择后立即后台上传一份到
+      // /uploads/temp（服务端专为此设计的 HTTP Range 预览通道），blob 预览
+      // 失败时切换到 HTTP URL 播放；发布时直接复用该文件，不产生额外流量。
+      // 原生 App WebView 对 blob: 解码正常，跳过上传避免多花流量与大文件内存压力。
+      if (!Capacitor.isNativePlatform()) {
+        const gen = tempGenRef.current;
+        const fd = new FormData();
+        fd.append('video', file);
+        const p = uploadTempVideo(fd)
+          .then((r) => {
+            // 代数不匹配（已移除/放弃）：丢弃落地结果，服务端 24h TTL 兜底清理
+            if (tempGenRef.current !== gen) return null;
+            // 服务端返回相对路径 /uploads/temp/xxx.mp4（发布 video_url 复用）
+            if (r?.url) setTempVideoUrl(r.url);
+            return r?.url ? r : null;
+          })
+          .catch((err) => {
+            // 上传失败静默降级：保留 blob 预览，发布走整文件上传（原路径）
+            console.warn('临时视频上传失败，预览回退 blob', err);
+            return null;
+          });
+        pendingTempUploadRef.current = p;
+        setTempVideoUploading(true);
+        void p.finally(() => {
+          if (tempGenRef.current === gen) setTempVideoUploading(false);
+        });
+      }
       onVideoSelected?.(); // 自动跳转到封面编辑（对应原 setStep(2)）
     } catch (err) {
       console.error('视频预览创建失败', err);
@@ -215,6 +261,19 @@ export function useMediaDraft<T extends { url: string }>(
     }
   };
 
+  /** 释放临时视频（放弃/移除/发布结束时清理服务端文件；服务端 24h TTL 兜底） */
+  const cleanupTempVideo = () => {
+    tempGenRef.current += 1; // 使在途上传的落地结果失效，防止状态复活
+    const url = tempVideoUrlRef.current;
+    tempVideoUrlRef.current = null;
+    pendingTempUploadRef.current = null;
+    setTempVideoUrl(null);
+    setTempVideoUploading(false);
+    if (url) {
+      deleteTempVideo(url).catch(() => {});
+    }
+  };
+
   const handleRemoveVideo = () => {
     try {
       if (videoPreview) URL.revokeObjectURL(videoPreview);
@@ -222,6 +281,7 @@ export function useMediaDraft<T extends { url: string }>(
     try {
       if (videoCoverPreview) URL.revokeObjectURL(videoCoverPreview);
     } catch {}
+    cleanupTempVideo();
     setVideoFile(null);
     setVideoPreview(null);
     setVideoCoverFile(null);
@@ -260,9 +320,20 @@ export function useMediaDraft<T extends { url: string }>(
           } catch {}
         }
       });
+      // 卸载兜底：删除遗留的临时视频（如直接刷新页面未走放弃流程；服务端 24h TTL 双保险）
+      const url = tempVideoUrlRef.current;
+      tempVideoUrlRef.current = null;
+      if (url) {
+        deleteTempVideo(url).catch(() => {});
+      }
     };
     // 卸载兜底：仅挂载/卸载各执行一次，经 ref 读最新值
   }, []);
+
+  const waitForTempVideoUpload = () => {
+    if (tempVideoUrlRef.current) return Promise.resolve({ url: tempVideoUrlRef.current });
+    return pendingTempUploadRef.current ?? Promise.resolve(null);
+  };
 
   return {
     images,
@@ -270,6 +341,9 @@ export function useMediaDraft<T extends { url: string }>(
     videoFile,
     videoPreview,
     setVideoPreview,
+    tempVideoUrl,
+    tempVideoUploading,
+    waitForTempVideoUpload,
     videoCoverFile,
     setVideoCoverFile,
     videoCoverPreview,

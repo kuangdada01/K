@@ -211,6 +211,44 @@ export function deleteTempVideo(url: string): Promise<unknown> {
   return api.delete('/posts/video-temp', { data: { url } }).then((r) => r.data);
 }
 
+/** 查询临时视频转码状态（done=已是 H.264 可播放；encoding=排队/转码中；missing=文件不存在）
+ * 轮询接口：请求显式 no-cache，防止浏览器把状态响应当静态资源缓存
+ * （服务端已发 Cache-Control: no-store，此处双保险） */
+export function getTempVideoStatus(url: string): Promise<{ status: 'done' | 'encoding' | 'missing' }> {
+  return api
+    .get('/posts/video-temp/status', {
+      params: { url },
+      headers: { 'Cache-Control': 'no-cache' },
+    })
+    .then((r) => r.data);
+}
+
+/**
+ * 用已上传的临时视频发布（POST /posts/video 的 video_url 分支）：
+ * 预览通道上传过的文件由服务端直接移动到正式目录并转码，不二次上传。
+ * 与 createVideoPost 相同的 native/web 双通道。
+ */
+export async function createVideoPostFromTempUrl(
+  videoUrl: string,
+  coverFile: File | null,
+  description: string,
+  closeComments: boolean,
+  pinned: boolean
+): Promise<Post> {
+  const fd = new FormData();
+  fd.append('video_url', videoUrl);
+  if (coverFile) fd.append('cover', coverFile);
+  fd.append('description', description);
+  if (closeComments) fd.append('close_comments', '1');
+  if (pinned) fd.append('pinned', '1');
+  if (Capacitor.isNativePlatform()) {
+    return nativeFetchUpload<Post>('/posts/video', fd, 'POST');
+  }
+  return api
+    .post('/posts/video', fd, { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 0 })
+    .then((r) => r.data);
+}
+
 /** 编辑帖子（multipart，新增图片可能达9×10MB，同样禁用超时避免误报失败） */
 export function updatePost(postId: number, formData: FormData): Promise<Post> {
   if (Capacitor.isNativePlatform()) {

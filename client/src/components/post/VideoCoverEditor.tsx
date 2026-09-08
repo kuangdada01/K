@@ -24,8 +24,16 @@ interface VideoCoverEditorProps {
   coverInputRef: RefObject<HTMLInputElement | null>;
   onVideoLoaded: () => void;
   onVideoError: () => void;
+  /** 解码器确认可播放（canplay）：解除解码看门狗 + 复位自动重试计数 */
+  onPreviewReady: () => void;
   onCoverTimeChange: (e: ChangeEvent<HTMLInputElement>) => void;
   onCoverFileSelect: (e: ChangeEvent<HTMLInputElement>) => void;
+  /** 重试计数：并入 video key 强制重新挂载（blob 重建 / HTTP temp 通道重试） */
+  previewReloadKey?: number;
+  /** 预览等待中（临时视频上传/服务端转码未完成）：展示"完成后自动显示"提示 */
+  previewSwitching?: boolean;
+  /** 是否显示"重试预览"按钮（等待上传/转码期间隐藏，避免用户误以为需要手动干预） */
+  showRetryButton?: boolean;
   onRetryPreview: () => void;
   onBack: () => void;
   onNext: () => void;
@@ -47,8 +55,12 @@ export default function VideoCoverEditor({
   coverInputRef,
   onVideoLoaded,
   onVideoError,
+  onPreviewReady,
   onCoverTimeChange,
   onCoverFileSelect,
+  previewReloadKey = 0,
+  previewSwitching = false,
+  showRetryButton = true,
   onRetryPreview,
   onBack,
   onNext,
@@ -73,7 +85,7 @@ export default function VideoCoverEditor({
             <div className={styles.coverPreview}>
               {videoPreview && !videoError ? (
                 <video
-                  key={videoPreview}
+                  key={`${videoPreview}|${previewReloadKey}`}
                   ref={videoRef}
                   src={videoPreview}
                   onLoadedMetadata={() => {
@@ -88,6 +100,8 @@ export default function VideoCoverEditor({
                     try {
                       videoRef.current?.pause();
                     } catch {}
+                    // canplay = 解码器真正就绪：解除看门狗并复位自动重试计数
+                    onPreviewReady();
                   }}
                   onError={onVideoError}
                   className={styles.coverVideo}
@@ -123,29 +137,41 @@ export default function VideoCoverEditor({
                       </div>
                       {videoError ? (
                         <div style={{ fontSize: 12, color: '#ffb74d' }}>
-                          该视频无法预览（常见于 iPhone HEVC/MOV 或 WebView 解码限制）
-                          <br />
-                          可直接点“下一步”或手动上传封面，发布后服务端自动转码
+                          {previewSwitching ? (
+                            <>
+                              视频转码中（约需 1 分钟内），完成后自动显示预览，请稍候…
+                              <br />
+                              也可直接点“下一步”或手动上传封面，发布后服务端自动转码
+                            </>
+                          ) : (
+                            <>
+                              该视频无法预览（常见于 iPhone HEVC/MOV 或 WebView 解码限制）
+                              <br />
+                              可直接点“下一步”或手动上传封面，发布后服务端自动转码
+                            </>
+                          )}
                         </div>
                       ) : (
                         <div style={{ fontSize: 12, opacity: 0.8 }}>
                           预览加载中…（若持续黑屏请点“下一步”手动上传封面）
                         </div>
                       )}
-                      <button
-                        onClick={onRetryPreview}
-                        style={{
-                          marginTop: 8,
-                          padding: '6px 12px',
-                          background: 'var(--accent)',
-                          color: 'var(--on-accent)',
-                          border: 'none',
-                          borderRadius: 6,
-                          fontSize: 12,
-                        }}
-                      >
-                        重试预览
-                      </button>
+                      {showRetryButton && (
+                        <button
+                          onClick={onRetryPreview}
+                          style={{
+                            marginTop: 8,
+                            padding: '6px 12px',
+                            background: 'var(--accent)',
+                            color: 'var(--on-accent)',
+                            border: 'none',
+                            borderRadius: 6,
+                            fontSize: 12,
+                          }}
+                        >
+                          重试预览
+                        </button>
+                      )}
                     </>
                   ) : (
                     '无预览'

@@ -191,6 +191,9 @@ export function useVideoCoverCapture({
         }, 300);
         return;
       }
+      // 注：metadata 成功 + videoWidth 非 0 不代表可播放——Edge 等对超规格
+      // H.264 会「容器解析成功但解码挂起」（黑屏无事件）。可播放信号统一
+      // 以 canplay 为准（CreatePost 的 onPreviewReady），此处只做截帧准备。
       setVideoError(false);
       // 仅在视频可解码且非超大文件时自动截帧；超大文件跳过以防 OOM（不留日志），依赖服务端兜底
       const isLarge = (videoFile?.size || 0) > 150 * 1024 * 1024;
