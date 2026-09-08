@@ -8,6 +8,8 @@
   align-items: center;
   justify-content: center;
   animation: pcFadeIn 0.2s ease;
+  /* 滚动链隔离：内部滚动容器触底时不再带动背后页面滚动（移动端观感） */
+  overscroll-behavior: contain;
 }
 
 .overlay.closing {
@@ -124,6 +126,10 @@
   width: 100%;
   max-width: 450px;
   overflow: hidden;
+  /* 高度必须由内容自撑：作为 gridWrapper 的 flex 子项时若可收缩，
+     网格盒会被压扁（行重叠、底部裁切），且外层无法滚动——
+     移动端矮视口下图片网格将不可达 */
+  flex-shrink: 0;
 }
 
 .gridItem {
@@ -385,12 +391,12 @@
 
   .dialog {
     width: 100%;
-    height: 100vh; /* fallback for older browsers without dvh support */
-    height: 100dvh; /* 动态视口高度：100vh 在移动浏览器（URL栏可见时）和
-                       Android WebView 上偏大，底部对齐后标题栏会被浏览器
-                       URL 栏/状态栏遮挡，改用 100dvh 与可视区严格等高 */
-    max-height: 100vh;
-    max-height: 100dvh;
+    /* 全屏保证：不用 vh/dvh 单位。.overlay 是 position:fixed; inset:0，
+       Chrome 安卓（地址栏可见）等环境下 fixed 容器高度与 dvh 不一致，
+       底部对齐后顶部会露出页面。height:100% 相对 overlay 解析，
+       overlay 与 dialog 永远同高 → 任何浏览器/地址栏状态下都严丝合缝全屏 */
+    height: 100%;
+    max-height: none;
     border-radius: 0;
   }
 
@@ -426,6 +432,12 @@
 
   .gridDeleteBtn {
     opacity: 1;
+  }
+
+  /* 移动端矮视口：网格超出时在 gridWrapper 内滚动（内容由 flex-shrink:0 自撑） */
+  .gridWrapper {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
   .editLayout {

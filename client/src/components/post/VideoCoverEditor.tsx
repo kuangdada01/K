@@ -189,7 +189,7 @@ export default function VideoCoverEditor({
                 style={{ width: '100%' }}
               >
                 <ImagePlus size={18} />
-                从电脑选择
+                从本机选择
               </button>
               {videoCoverPreview && (
                 <img src={videoCoverPreview} alt="封面预览" className={styles.coverImage} />

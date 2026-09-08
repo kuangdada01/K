@@ -179,6 +179,8 @@
     width: 100%;
     height: auto;
     max-height: 50vh;
+    /* 预览区固定不压缩：让右侧面板独占剩余高度滚动（见 .coverRight） */
+    flex-shrink: 0;
   }
 
   .coverPreview {
@@ -190,6 +192,9 @@
     border-left: none;
     border-top: 1px solid var(--border-color);
     padding: 16px;
-    flex-shrink: 0;
+    /* 移动端改为占满剩余高度并内部滚动：原先 flex-shrink:0 只按内容撑高，
+       超出时被 .coverLayout(overflow:hidden) 整段裁掉，无法滚动查看 */
+    flex: 1;
+    min-height: 0;
   }
 }
