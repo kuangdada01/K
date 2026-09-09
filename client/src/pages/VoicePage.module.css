@@ -328,8 +328,8 @@
   gap: 16px;
   padding: 10px 18px;
   background: var(--bg-frosted);
-  backdrop-filter: blur(18px) saturate(180%);
   -webkit-backdrop-filter: blur(18px) saturate(180%);
+  backdrop-filter: blur(18px) saturate(180%);
   border: 1px solid var(--border-color);
   border-radius: 999px;
   box-shadow: var(--shadow-dropdown, 0 8px 24px rgba(0, 0, 0, 0.12));
@@ -929,20 +929,33 @@
     display: none;
   }
 
-  /* 左右内边距 10px，纯图标时按钮为 36x36 正圆（六个控件在小屏才放得下） */
+  /* 左右内边距 10px，纯图标时按钮为 36x36 正圆（六个控件在小屏才放得下）。
+     显式固定宽高 + border-radius:50% 确保正圆（基础规则 padding 垂直 10px +
+     图标行高使按钮呈 36x40 椭圆，移动端必须钉死尺寸） */
   .micBtn,
   .noiseBtn,
   .shareBtn,
   .recBtn {
     flex-shrink: 0;
-    padding-left: 10px;
-    padding-right: 10px;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    justify-content: center;
+    border-radius: 50%;
   }
 
   /* 空闲态录制图标只有 14px，补足为与其他按钮一致的正圆 */
   .recBtn {
     justify-content: center;
     min-width: 36px;
+  }
+
+  /* 录制中：红点 + 计时（如 00:00）需要宽度，退化为胶囊（高度仍 36，
+     圆角保持 999px 视觉自然）；未录制时仍为正圆 */
+  .recBtn.recActive {
+    width: auto;
+    padding: 0 14px;
+    border-radius: 999px;
   }
 
   .volumeGroup {
