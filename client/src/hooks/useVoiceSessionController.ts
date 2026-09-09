@@ -95,6 +95,15 @@ export function useVoiceSessionController(
     setShareStats(null);
   }, []);
 
+  // chatActions 是调用方（VoiceContext）每渲染新建的函数，直接进依赖数组会让
+  // join/leave 引用每次渲染都变化 → 下方 disconnect effect（[user, leave]）在
+  // 每次渲染后重跑，未登录访客（user=null）join 后会被立即 leave() 踢出房间。
+  // 收进 ref（effect 内同步最新值），join/leave 运行期读最新值即可（依赖数组保持稳定）。
+  const chatActionsRef = useRef(chatActions);
+  useEffect(() => {
+    chatActionsRef.current = chatActions;
+  }, [chatActions]);
+
   const join = useCallback(
     (roomId: number, roomName?: string) => {
       if (sessionRef.current) return;
@@ -147,9 +156,9 @@ export function useVoiceSessionController(
           onShareStats: (stats) => setShareStats(stats),
           onShareQualityChange: (q) => setShareQualityState(q),
           // 文字聊天：实时消息按 id 去重追加（防与服务端历史拉取竞态重复）
-          onChatMessage: (message) => chatActions().onChatMessage(message),
+          onChatMessage: (message) => chatActionsRef.current().onChatMessage(message),
           // 房间聊天被创建者/管理员清空：本地同步清空（游标保留，后续只追新）
-          onChatCleared: () => chatActions().onChatCleared(),
+          onChatCleared: () => chatActionsRef.current().onChatCleared(),
         }
       );
       sessionRef.current = session;
@@ -161,11 +170,11 @@ export function useVoiceSessionController(
         if (sessionRef.current === session) sessionRef.current = null;
         clearSavedRoom();
         resetState();
-        chatActions().reset();
+        chatActionsRef.current().reset();
         showToast('无法启动语音，请检查浏览器是否支持麦克风');
       });
     },
-    [user, clearSavedRoom, resetState, chatActions]
+    [user, clearSavedRoom, resetState]
   );
 
   const leave = useCallback(() => {
@@ -173,8 +182,8 @@ export function useVoiceSessionController(
     sessionRef.current = null;
     clearSavedRoom();
     resetState();
-    chatActions().reset();
-  }, [clearSavedRoom, resetState, chatActions]);
+    chatActionsRef.current().reset();
+  }, [clearSavedRoom, resetState]);
 
   // 登出/登录过期：断开语音
   useEffect(() => {
