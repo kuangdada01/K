@@ -68,12 +68,22 @@ export function useSwipeCarousel(
     [trackRef]
   );
 
+  /** 单张图片实际渲染宽度：轨道首子元素 rect 宽（flex:0 0 100% 下等于轨道内容宽）。
+   *  ★ 不能用 viewport clientWidth：clientWidth 取整，flex 布局下图片宽度可能是
+   *  小数（如 95vw=373.34px），偏移按取整宽度计算会逐页累积偏差露出下一张边缘。 */
+  const getSlideWidth = useCallback(() => {
+    const track = trackRef.current;
+    const first = track?.firstElementChild;
+    const w = first ? first.getBoundingClientRect().width : track?.getBoundingClientRect().width;
+    return w && w > 0 ? w : 0;
+  }, [trackRef]);
+
   // 落位动画：CSS transition（合成器执行，帧率满格）
   const animateTrackTo = useCallback(
     (index: number) => {
       const track = trackRef.current;
       if (!track) return;
-      const width = viewportRef.current?.clientWidth || 0;
+      const width = getSlideWidth() || viewportRef.current?.clientWidth || 0;
       const target = width * index;
       if (Math.abs(offsetRef.current - target) < 1) return;
       if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
@@ -84,7 +94,7 @@ export function useSwipeCarousel(
         if (trackRef.current) trackRef.current.style.transition = 'none';
       }, 460);
     },
-    [trackRef, viewportRef]
+    [trackRef, viewportRef, getSlideWidth]
   );
 
   // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）——

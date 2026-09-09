@@ -33,15 +33,25 @@ export interface TransformCarouselApi {
   setSettled: (index: number) => void;
   /** 直接写轨道偏移（无动画） */
   setOffset: (x: number) => void;
-  /** 落位动画到 index（width = 当前视口宽度） */
+  /**
+   * 单张图片的实际渲染宽度（轨道首子元素的 rect 宽）。
+   * ★ 不能用 viewport.clientWidth 代替：clientWidth 取整，而 flex 布局下
+   * 图片宽度可能是小数（如 95vw=373.34px），偏移按取整宽度计算会逐页累积
+   * 偏差，右边缘露出下一张图片（用户反馈"全屏后右边缘显示下一张"的根因）。
+   */
+  getSlideWidth: () => number;
+  /** 落位动画到 index（width = 单张图片实际宽度，传 getSlideWidth()） */
   animateTrackTo: (index: number, width: number) => void;
-  /** 绑定 pointer/touch 手势；返回解绑函数（viewport/track 缺失时为空操作） */
+  /** 绑定 pointer/touch 手势；返回解绑函数（viewport/track 缺失时为空操作）
+   *  isZoomed: 可选——返回 true 时手势完全失效（放大态平移交给缩放 Hook，
+   *  防止单指拖动被当成翻页） */
   attachGesture: (
     viewport: HTMLDivElement | null,
     track: HTMLDivElement | null,
     imageCount: number,
     onMove: (index: number) => void,
-    onSettled?: (index: number) => void
+    onSettled?: (index: number) => void,
+    isZoomed?: () => boolean
   ) => () => void;
 }
 
@@ -73,6 +83,15 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
     settledRef.current = index;
   }, []);
 
+  /** 单张图片实际渲染宽度：轨道首子元素 rect 宽（flex:0 0 100% 下等于轨道内容宽）。
+   *  退化用 viewport clientWidth（取整），仅在轨道/首子元素缺失时兜底。 */
+  const getSlideWidth = useCallback(() => {
+    const track = trackRef.current;
+    const first = track?.firstElementChild;
+    const w = first ? first.getBoundingClientRect().width : track?.getBoundingClientRect().width;
+    return w && w > 0 ? w : 0;
+  }, [trackRef]);
+
   /** 轨道落位动画：CSS transition（合成器执行，帧率满格） */
   const animateTrackTo = useCallback(
     (index: number, width: number) => {
@@ -99,7 +118,8 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
       track: HTMLDivElement | null,
       imageCount: number,
       onMove: (index: number) => void,
-      onSettled?: (index: number) => void
+      onSettled?: (index: number) => void,
+      isZoomed?: () => boolean
     ) => {
       if (!viewport || !track) return () => {};
       let startX = 0;
@@ -112,6 +132,20 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
 
       const down = (e: PointerEvent) => {
         if (e.pointerType === 'mouse' && e.button !== 0) return;
+        // 放大态：轮播手势失效（平移由缩放 Hook 接管）
+        if (isZoomed?.()) return;
+        // 已有拖拽进行中再落一指（捏合起始）：取消拖拽，交还缩放 Hook 处理。
+        // 否则松手时 dx 会把捏合误判成翻页；同时把半途的轨道落回吸附基准，
+        // 防止停在两图之间露出下一张的边缘
+        if (active) {
+          active = false;
+          if (moveHandler) {
+            viewport.removeEventListener('touchmove', moveHandler);
+            moveHandler = null;
+          }
+          animateTrackTo(startIndex, getSlideWidth() || viewport.clientWidth || 1);
+          return;
+        }
         // 动画中途再次触摸：取消 transition，从当前位置继续跟手，无缝衔接
         track.style.transition = 'none';
         clearTimers();
@@ -155,11 +189,20 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
           viewport.removeEventListener('touchmove', moveHandler);
           moveHandler = null;
         }
+        // 放大态：松手不翻页（缩放 Hook 负责后续）；但若此前已在跟手滑动
+        // （先单指拖动再落第二指捏合），轨道停在半途，需落回起点吸附基准
+        if (isZoomed?.()) {
+          animateTrackTo(startIndex, getSlideWidth() || viewport.clientWidth || 1);
+          return;
+        }
         const dx = offsetRef.current - startOffset; // 正向 = 手指左滑（offset 增大）= 下一张
-        const width = viewport.clientWidth || 1;
+        // 翻页阈值按视口宽度判定（手指位移的感知基准）；
+        // 落位偏移必须按图片实际渲染宽度（clientWidth 取整会导致逐页偏差露边）
+        const thresholdW = viewport.clientWidth || 1;
+        const slideW = getSlideWidth() || thresholdW;
         const total = imageCount;
         let target = startIndex;
-        if (Math.abs(dx) > width * 0.12 || e.pointerType === 'mouse') {
+        if (Math.abs(dx) > thresholdW * 0.12 || e.pointerType === 'mouse') {
           // 拖动超过 ~1/8 屏 → 翻一页（最多一页，绝不过 2 张）
           if (dx > 0) target = Math.min(total - 1, startIndex + 1);
           else if (dx < 0) target = Math.max(0, startIndex - 1);
@@ -170,7 +213,7 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
         settledRef.current = target;
         if (onSettled) onSettled(target);
         onMove(target);
-        animateTrackTo(target, width);
+        animateTrackTo(target, slideW);
       };
 
       viewport.addEventListener('pointerdown', down);
@@ -183,7 +226,7 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
         if (moveHandler) viewport.removeEventListener('touchmove', moveHandler);
       };
     },
-    [setOffset, animateTrackTo, clearTimers]
+    [setOffset, animateTrackTo, clearTimers, getSlideWidth]
   );
 
   // 卸载时清理 transition 定时器（原 PostMedia 的卸载清理 effect）
@@ -193,7 +236,15 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
 
   // 稳定返回对象：消费方把它放进 effect 依赖不会造成每渲染重订阅
   return useMemo(
-    () => ({ offsetRef, settledRef, setSettled, setOffset, animateTrackTo, attachGesture }),
-    [setSettled, setOffset, animateTrackTo, attachGesture]
+    () => ({
+      offsetRef,
+      settledRef,
+      setSettled,
+      setOffset,
+      getSlideWidth,
+      animateTrackTo,
+      attachGesture,
+    }),
+    [setSettled, setOffset, getSlideWidth, animateTrackTo, attachGesture]
   );
 }
