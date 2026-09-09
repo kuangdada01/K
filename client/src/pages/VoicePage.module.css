@@ -499,6 +499,11 @@
 .recTime {
   font-variant-numeric: tabular-nums;
   line-height: 16px;
+  /* 固定 5 字符槽位（00:00→99:59 同为 5 位，等宽数字下宽度恒定），
+     避免计时数字变化带动录制按钮/控制栏布局抖动；
+     100:01 起多一位数字才会自然变宽一次（无人录到 1000 分钟，无需更多档位） */
+  min-width: 5ch;
+  text-align: center;
 }
 
 @keyframes recPulse {
