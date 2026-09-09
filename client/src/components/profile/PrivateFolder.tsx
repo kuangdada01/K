@@ -6,9 +6,10 @@
  * 数据与行为回调由 Profile 提供）。
  */
 
-import { RefObject } from 'react';
+import { RefObject, useEffect, useRef } from 'react';
 import { X, ImagePlus, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useAuthMediaUrl } from '../../hooks/useAuthMediaUrl';
+import { useImagePinchZoom } from '../../hooks/useImagePinchZoom';
 import media from '../post/PostMedia.module.css';
 import styles from './PrivateFolder.module.css';
 
@@ -72,6 +73,28 @@ export default function PrivateFolder({
   const handleZoomNext = () => {
     setPrivateZoomIndex((prev) => (prev !== null ? (prev + 1) % allImages.length : null));
   };
+
+  // 私密图片全屏：双指缩放/平移 + 双击放大/单击关闭（1x–4x）
+  const zoomOverlayRef = useRef<HTMLDivElement>(null);
+  const pinchZoom = useImagePinchZoom();
+  const zoomVisible = privateZoomIndex !== null;
+  useEffect(() => {
+    if (!zoomVisible) return;
+    // 重新打开时复位上次会话的缩放状态（组件常驻，scaleRef 会残留）
+    pinchZoom.reset();
+    const detach = pinchZoom.attach(
+      zoomOverlayRef.current,
+      () => {
+        const overlay = zoomOverlayRef.current;
+        if (!overlay) return null;
+        const img = overlay.querySelector('img');
+        return img instanceof HTMLImageElement ? img : null;
+      },
+      { onSingleTap: onZoomClose }
+    );
+    return detach;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoomVisible]);
 
   return (
     <>
@@ -168,7 +191,7 @@ export default function PrivateFolder({
           const current = allImages[privateZoomIndex];
           if (!current) return null;
           return (
-            <div className={media.zoomOverlay} onClick={onZoomClose}>
+            <div ref={zoomOverlayRef} className={media.zoomOverlay} onClick={onZoomClose}>
               <button className={media.close} onClick={onZoomClose} aria-label="关闭预览">
                 <X size={28} />
               </button>

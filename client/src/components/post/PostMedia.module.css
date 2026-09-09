@@ -162,6 +162,8 @@
   align-items: center;
   justify-content: center;
   z-index: 400;
+  /* 全屏看图：禁原生手势（滚动/页面缩放），平移/缩放全交给 JS（useImagePinchZoom） */
+  touch-action: none;
 }
 
 .zoomContent {
@@ -201,6 +203,8 @@
   height: 100%;
   object-fit: contain;
   cursor: zoom-out;
+  /* 双指缩放 transform-origin 中心（useImagePinchZoom 以元素中心为原点计算平移） */
+  transform-origin: center;
   /* 防 WebView 合成残影：每张图独立合成层 */
   backface-visibility: hidden;
   -webkit-backface-visibility: hidden;

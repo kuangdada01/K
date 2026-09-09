@@ -8,6 +8,8 @@
   align-items: center;
   justify-content: center;
   z-index: 500;
+  /* 全屏看图：禁原生手势（滚动/页面缩放），平移/缩放全交给 JS（useImagePinchZoom） */
+  touch-action: none;
   animation: chatZoomFadeIn 0.2s ease;
 }
 
@@ -39,6 +41,8 @@
   max-height: 90vh;
   object-fit: contain;
   border-radius: 8px;
+  /* 双指缩放 transform-origin 中心（useImagePinchZoom 以元素中心为原点计算平移） */
+  transform-origin: center;
   animation: chatZoomScaleIn 0.2s ease;
 }
 
