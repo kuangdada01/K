@@ -95,7 +95,7 @@ echo CLIENT_DEPLOY_DONE
 
     print("\n=== [验证] ===")
     checks = [
-        ("首页可访问", "curl -s -o /dev/null -w 'page(%{http_code}) ' http://127.0.0.1/; curl -s -o /dev/null -w 'health(%{http_code})' http://127.0.0.1:3000/api/health", lambda o: "page(200)" in o and "health(200)" in o),
+        ("首页可访问", "curl -skL -o /dev/null -w 'page(%{http_code}) ' http://127.0.0.1/; curl -s -o /dev/null -w 'health(%{http_code})' http://127.0.0.1:3000/api/health", lambda o: "page(200)" in o and "health(200)" in o),
         ("新 index.html 时间戳", "stat -c '%y' /var/www/k/client/dist/index.html", None),
         ("新 CSS 含 statsBar 类", "grep -l 'statsBar' /var/www/k/client/dist/assets/*.css 2>/dev/null | head -1", lambda o: o.strip() != ""),
         ("APK 仍在 dist/apk", "ls -la /var/www/k/client/dist/apk/ 2>/dev/null | grep -c apk", lambda o: o.strip() != "0"),
