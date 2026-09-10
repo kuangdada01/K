@@ -16,6 +16,7 @@ import type { Post } from '../../types';
 import { resolveMediaUrl } from '../../utils';
 import { useTransformCarousel } from '../../hooks/useTransformCarousel';
 import { useImagePinchZoom } from '../../hooks/useImagePinchZoom';
+import { useCancelableClose } from '../../hooks/useCancelableClose';
 import styles from './PostMedia.module.css';
 
 interface PostMediaProps {
@@ -53,6 +54,11 @@ export default function PostMedia({
   const zoomCarousel = useTransformCarousel(zoomTrackRef);
   // 全屏图片双指缩放/平移（1x–4x）：放大态下轮播翻页手势让位（isZoomed）
   const pinchZoom = useImagePinchZoom();
+  // 单击关闭两阶段编排：轻点后延迟 ~110ms 播关闭动画（双击窗口内的第二下
+  // 到达前不播淡出，双击缩放不闪烁；视觉响应仍远快于此前的 300ms 干等），
+  // 双击窗口内第二次轻点可撤销并转双击缩放（见 useImagePinchZoom 的
+  // onSingleTap / onSingleTapCancelled）
+  const { closing, requestClose, cancelClose } = useCancelableClose(() => setZoomed(false));
 
   // 全屏滑动时主轮播同步跟随（退出全屏无追回动画）
   const syncMainCarousel = (index: number) => {
@@ -97,7 +103,8 @@ export default function PostMedia({
   // 绑定到当前显示的图片元素（track 内 index 位置的 img）。
   // zoomed 条件渲染后挂载；放大态下轮播翻页已让位（见 attachGesture isZoomed）。
   // 进入全屏/切换图片时复位缩放（防上次会话残留放大态）。
-  // onSingleTap：触摸轻点（非双击）延迟关闭全屏——双击由 hook 内部判定缩放；
+  // onSingleTap：触摸轻点启动关闭（淡出延迟 ~110ms，双击可撤销）；
+  // onSingleTapCancelled：窗口内第二次轻点撤销关闭并转双击缩放。
   // 桌面鼠标单击仍走 zoomImage 的 onClick（触摸 click 已被 hook 吞掉不冲突）
   useEffect(() => {
     if (!zoomed || !zoomScrollRef.current) return;
@@ -109,7 +116,8 @@ export default function PostMedia({
         return track ? (track.children[currentImageIndex] as HTMLElement | null) : null;
       },
       {
-        onSingleTap: () => setZoomed(false),
+        onSingleTap: requestClose,
+        onSingleTapCancelled: cancelClose,
       }
     );
     return detach;
@@ -274,17 +282,17 @@ export default function PostMedia({
 
       {zoomed && (
         <div
-          className={styles.zoomOverlay}
+          className={`${styles.zoomOverlay}${closing ? ` ${styles.closing}` : ''}`}
           onClick={(e) => {
             e.stopPropagation();
-            setZoomed(false);
+            requestClose();
           }}
         >
           <button
             className={styles.close}
             onClick={(e) => {
               e.stopPropagation();
-              setZoomed(false);
+              requestClose();
             }}
             aria-label="关闭缩放"
           >
@@ -313,7 +321,7 @@ export default function PostMedia({
                     className={styles.zoomImage}
                     onClick={(e) => {
                       e.stopPropagation();
-                      setZoomed(false);
+                      requestClose();
                     }}
                   />
                 ))}

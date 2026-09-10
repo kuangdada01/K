@@ -277,9 +277,7 @@ export default function Messages() {
         )}
       </div>
 
-      {menu.zoomImage && (
-        <ChatZoomOverlay zoomImage={menu.zoomImage} zoomClosing={menu.zoomClosing} onClose={menu.closeZoom} />
-      )}
+      {menu.zoomImage && <ChatZoomOverlay zoomImage={menu.zoomImage} onClose={menu.closeZoom} />}
 
       {menu.contextMenu && (
         <ChatContextMenu

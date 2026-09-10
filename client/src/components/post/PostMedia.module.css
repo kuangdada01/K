@@ -164,6 +164,14 @@
   z-index: 400;
   /* 全屏看图：禁原生手势（滚动/页面缩放），平移/缩放全交给 JS（useImagePinchZoom） */
   touch-action: none;
+  /* 单击关闭：closing 时 0.15s 淡出（动画延迟 ~110ms 启动，见 useCancelableClose——
+     双击窗口内第二次轻点到达前不播淡出，双击缩放不闪烁；
+     transition 只挂在 closing 上：撤销关闭时瞬间回弹，不播反向淡出） */
+}
+
+.zoomOverlay.closing {
+  opacity: 0;
+  transition: opacity 0.15s ease;
 }
 
 .zoomContent {

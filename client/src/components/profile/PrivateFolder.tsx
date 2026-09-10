@@ -10,6 +10,7 @@ import { RefObject, useEffect, useRef } from 'react';
 import { X, ImagePlus, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useAuthMediaUrl } from '../../hooks/useAuthMediaUrl';
 import { useImagePinchZoom } from '../../hooks/useImagePinchZoom';
+import { useCancelableClose } from '../../hooks/useCancelableClose';
 import media from '../post/PostMedia.module.css';
 import styles from './PrivateFolder.module.css';
 
@@ -74,10 +75,13 @@ export default function PrivateFolder({
     setPrivateZoomIndex((prev) => (prev !== null ? (prev + 1) % allImages.length : null));
   };
 
-  // 私密图片全屏：双指缩放/平移 + 双击放大/单击关闭（1x–4x）
+  // 私密图片全屏：双指缩放/平移 + 双击放大/单击关闭（1x–4x）。
+  // 单击关闭两阶段编排：轻点后延迟 ~110ms 播淡出（双击窗口内的第二下到达前
+  // 不播动画，双击缩放不闪烁），双击窗口内可撤销转缩放
   const zoomOverlayRef = useRef<HTMLDivElement>(null);
   const pinchZoom = useImagePinchZoom();
   const zoomVisible = privateZoomIndex !== null;
+  const { closing, requestClose, cancelClose } = useCancelableClose(onZoomClose);
   useEffect(() => {
     if (!zoomVisible) return;
     // 重新打开时复位上次会话的缩放状态（组件常驻，scaleRef 会残留）
@@ -90,7 +94,7 @@ export default function PrivateFolder({
         const img = overlay.querySelector('img');
         return img instanceof HTMLImageElement ? img : null;
       },
-      { onSingleTap: onZoomClose }
+      { onSingleTap: requestClose, onSingleTapCancelled: cancelClose }
     );
     return detach;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -191,8 +195,12 @@ export default function PrivateFolder({
           const current = allImages[privateZoomIndex];
           if (!current) return null;
           return (
-            <div ref={zoomOverlayRef} className={media.zoomOverlay} onClick={onZoomClose}>
-              <button className={media.close} onClick={onZoomClose} aria-label="关闭预览">
+            <div
+              ref={zoomOverlayRef}
+              className={`${media.zoomOverlay}${closing ? ` ${media.closing}` : ''}`}
+              onClick={requestClose}
+            >
+              <button className={media.close} onClick={requestClose} aria-label="关闭预览">
                 <X size={28} />
               </button>
               <div className={media.zoomContent}>
@@ -214,7 +222,7 @@ export default function PrivateFolder({
                   className={media.zoomImage}
                   onClick={(e) => {
                     e.stopPropagation();
-                    onZoomClose();
+                    requestClose();
                   }}
                 />
                 {allImages.length > 1 && (

@@ -3,7 +3,9 @@
  * 上下文菜单 + 图片缩放 Hook（features/messages/hooks）
  * ============================================================
  * 自 Messages.tsx 拆出：长按（500ms）/右键触发上下文菜单、
- * 点击/滚动关闭菜单、图片缩放 overlay 的 200ms 关闭动画。
+ * 点击/滚动关闭菜单。图片缩放 overlay 的关闭动画由
+ * ChatZoomOverlay 内部编排（useCancelableClose），此处只负责
+ * 卸载时机（zoomImage 置 null）。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -13,7 +15,6 @@ import type { Message } from '../../../types';
 export function useContextMenu(userId: number | undefined) {
   const [contextMenu, setContextMenu] = useState<ChatContextMenuData | null>(null);
   const [zoomImage, setZoomImage] = useState<string | null>(null);
-  const [zoomClosing, setZoomClosing] = useState(false);
   // 长按触发（移动端）
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -74,13 +75,8 @@ export function useContextMenu(userId: number | undefined) {
     [userId]
   );
 
-  const closeZoom = useCallback(() => {
-    setZoomClosing(true);
-    setTimeout(() => {
-      setZoomImage(null);
-      setZoomClosing(false);
-    }, 200);
-  }, []);
+  // 图片缩放 overlay 关闭动画播完后的最终卸载（动画编排在 ChatZoomOverlay 内部）
+  const closeZoom = useCallback(() => setZoomImage(null), []);
 
   const closeMenu = useCallback(() => setContextMenu(null), []);
 
@@ -88,7 +84,6 @@ export function useContextMenu(userId: number | undefined) {
     contextMenu,
     zoomImage,
     setZoomImage,
-    zoomClosing,
     closeZoom,
     closeMenu,
     handleTouchStart,

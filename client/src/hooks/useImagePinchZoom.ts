@@ -7,6 +7,12 @@
  * - 双指捏合缩放（1x–4x，围绕捏合中点跟手缩放）
  * - 放大后单指拖动平移（边缘钳制，不露黑边）
  * - 缩回 1x 自动复位 transform，横向翻页交还轮播
+ * - 单击关闭：轻点**立即**回调 onSingleTap，关闭流程随即启动——不再干等
+ *   双击窗口（播关闭动画的时机由消费方编排，见 useCancelableClose 的延迟策略）；
+ *   若双击窗口内又来一次轻点构成双击，先回调 onSingleTapCancelled 让组件
+ *   撤销已启动的关闭，再执行双击缩放
+ * - 双击缩放带 180ms transform 缓动（合成器执行，不瞬跳突兀）；
+ *   动画期间新触摸先取消 transition 并吸附到目标倍率再跟手
  * - 手势结束后 350ms 内吞掉随后的 click（防误触关闭全屏）
  * - 手势期间视口 touch-action 临时置 none（防原生垂直滚动/页面缩放抢手势）
  *
@@ -35,8 +41,9 @@ export const TAP_MOVE_CANCEL_PX = 12;
 /** 双击放大目标倍率（超过 MAX_ZOOM 会被钳制） */
 export const DOUBLE_TAP_SCALE = 2.5;
 
-/** 单点关闭延迟（ms）：等待双击窗口，避免单击误关 */
-export const SINGLE_TAP_DELAY_MS = DOUBLE_TAP_MS;
+/** 双击缩放动画时长（ms）：transform transition（合成器执行），
+ *  瞬时跳变在双击缩放下显得突兀 */
+export const DOUBLE_TAP_ZOOM_MS = 180;
 
 export interface ImagePinchZoomApi {
   /** 当前缩放倍数（ref 直读，供外部判断是否放大态） */
@@ -48,14 +55,17 @@ export interface ImagePinchZoomApi {
   /**
    * 绑定手势到视口（手势捕获 + click 吞并）与图片元素（transform 目标）。
    * getImage 惰性取当前图片元素（图片异步加载/索引变化时仍正确）。
-   * opts.onSingleTap：触摸轻点（未构成双击）时回调——组件用它延迟关闭全屏
+   * opts.onSingleTap：触摸轻点（未构成双击）时**立即**回调——组件随即启动关闭
+   * 流程（播动画的时机由消费方编排，不等待双击窗口）；
+   * opts.onSingleTapCancelled：该轻点在双击窗口内被第二次轻点构成双击时回调——
+   * 组件撤销已启动的关闭流程，双击缩放由 hook 执行。
    * （桌面鼠标点击仍走元素自身 onClick，不经此回调）。
    * 返回解绑函数；viewport 为空时为 noop。
    */
   attach: (
     viewport: HTMLElement | null,
     getImage: () => HTMLElement | null,
-    opts?: { onSingleTap?: () => void }
+    opts?: { onSingleTap?: () => void; onSingleTapCancelled?: () => void }
   ) => () => void;
 }
 
@@ -126,7 +136,7 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
     (
       viewport: HTMLElement | null,
       getImage: () => HTMLElement | null,
-      opts?: { onSingleTap?: () => void }
+      opts?: { onSingleTap?: () => void; onSingleTapCancelled?: () => void }
     ) => {
       if (!viewport) return () => {};
 
@@ -151,7 +161,11 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
       // —— 双击/单击判定状态 ——
       let tapCandidate: { x: number; y: number } | null = null;
       let lastTap: { x: number; y: number; t: number } | null = null;
+      // 单击关闭是否已启动并处于双击窗口内（窗口过后由 singleTapTimer 复位）
+      let closePending = false;
       let singleTapTimer: ReturnType<typeof setTimeout> | null = null;
+      // 双击缩放 transition 的清理定时器（动画期间新触摸先吸附到目标再跟手）
+      let zoomAnimTimer: ReturnType<typeof setTimeout> | null = null;
       // 最近一次 touchend 时间：吞掉触摸产生的 click（双击窗口内防误关）
       let lastTouchEndAt = 0;
 
@@ -177,7 +191,9 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
         viewport.style.touchAction = 'none';
       };
 
-      /** 双击：未放大 → 以轻点为中心放大；已放大 → 缩回 1x */
+      /** 双击：未放大 → 以轻点为中心放大；已放大 → 缩回 1x。
+       *  带 DOUBLE_TAP_ZOOM_MS 缓动（transform transition，合成器执行）——
+       *  瞬时跳变显得突兀；动画期间新触摸在 touchStart 取消 transition 吸附到目标 */
       const handleDoubleTap = (x: number, y: number) => {
         const img = getImage();
         if (!img) return;
@@ -209,12 +225,29 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
         txRef.current = clamped.tx;
         tyRef.current = clamped.ty;
         lastGestureAtRef.current = Date.now();
+        if (zoomAnimTimer) {
+          clearTimeout(zoomAnimTimer);
+          zoomAnimTimer = null;
+        }
+        img.style.transition = `transform ${DOUBLE_TAP_ZOOM_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`;
         apply();
+        zoomAnimTimer = setTimeout(() => {
+          zoomAnimTimer = null;
+          img.style.transition = '';
+        }, DOUBLE_TAP_ZOOM_MS + 50);
       };
 
       const touchStart = (e: TouchEvent) => {
         const img = getImage();
         if (!img) return;
+        // 双击缩放动画进行中：取消 transition 并吸附到目标倍率，
+        // 新手势（捏合/平移/翻页）从目标状态跟手，不残留动画
+        if (zoomAnimTimer) {
+          clearTimeout(zoomAnimTimer);
+          zoomAnimTimer = null;
+          img.style.transition = '';
+          apply();
+        }
         if (e.touches.length >= 2) {
           const t0 = e.touches[0]!;
           const t1 = e.touches[1]!;
@@ -324,23 +357,34 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
           const { x, y } = tapCandidate;
           tapCandidate = null;
           if (lastTap && Date.now() - lastTap.t <= DOUBLE_TAP_MS) {
-            // 双击：取消待执行的单击关闭，缩放/复位，吞掉随后 click
+            // 双击：先撤销单击已启动的关闭（如有），再缩放/复位，吞掉随后 click
             if (singleTapTimer) {
               clearTimeout(singleTapTimer);
               singleTapTimer = null;
+            }
+            if (closePending) {
+              closePending = false;
+              opts?.onSingleTapCancelled?.();
             }
             lastTap = null;
             lastGestureAtRef.current = Date.now();
             handleDoubleTap(x, y);
           } else {
             lastTap = { x, y, t: Date.now() };
-            // 单击：延迟执行（等待双击窗口），期间第二次轻点会取消
-            if (singleTapTimer) clearTimeout(singleTapTimer);
-            singleTapTimer = setTimeout(() => {
-              singleTapTimer = null;
-              lastTap = null;
+            if (!closePending) {
+              // 单击：立即回调启动关闭流程（不再干等双击窗口）。关闭动画是否
+              // 延迟播放由消费方编排（useCancelableClose 默认延迟 ~110ms——
+              // 双击窗口内的第二次轻点会走上面的双击分支：先 onSingleTapCancelled
+              // 撤销关闭，再执行双击缩放，期间不播淡出不闪烁）。窗口过后置回
+              // closePending=false，允许下一次轻点重新走单击关闭。
+              closePending = true;
               opts?.onSingleTap?.();
-            }, SINGLE_TAP_DELAY_MS);
+              singleTapTimer = setTimeout(() => {
+                singleTapTimer = null;
+                lastTap = null;
+                closePending = false;
+              }, DOUBLE_TAP_MS);
+            }
           }
         }
       };
@@ -348,6 +392,12 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
       // 触摸被系统取消（来电/系统手势接管等）：清理状态，绝不触发单击关闭
       const touchCancel = () => {
         lastTouchEndAt = Date.now();
+        if (zoomAnimTimer) {
+          clearTimeout(zoomAnimTimer);
+          zoomAnimTimer = null;
+        }
+        const img = getImage();
+        if (img) img.style.transition = '';
         pinch = null;
         pan = null;
         tapCandidate = null;
@@ -355,12 +405,13 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
           clearTimeout(singleTapTimer);
           singleTapTimer = null;
         }
+        closePending = false;
         apply();
       };
 
       // 手势结束后浏览器可能补发 click（松手即关闭全屏），capture 阶段吞掉；
-      // 触摸轻点后的 click 也在双击窗口内吞掉（防第一次轻点的 click 提前关闭，
-      // 关闭统一走 onSingleTap 延迟回调）；但按钮等交互元素始终放行
+      // 触摸轻点后的 click 也在双击窗口内吞掉（防轻点合成 click 重复触发关闭，
+      // 关闭统一走 onSingleTap 立即回调）；但按钮等交互元素始终放行
       const clickCapture = (e: Event) => {
         const target = e.target as HTMLElement | null;
         if (target?.closest('button, a, input, select, textarea, [role="button"]')) return;
@@ -388,6 +439,11 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
           clearTimeout(singleTapTimer);
           singleTapTimer = null;
         }
+        if (zoomAnimTimer) {
+          clearTimeout(zoomAnimTimer);
+          zoomAnimTimer = null;
+        }
+        closePending = false;
         pinch = null;
         pan = null;
         tapCandidate = null;

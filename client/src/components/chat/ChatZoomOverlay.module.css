@@ -14,7 +14,7 @@
 }
 
 .overlay.closing {
-  animation: chatZoomFadeOut 0.2s ease forwards;
+  animation: chatZoomFadeOut 0.15s ease forwards;
 }
 
 .close {
@@ -47,7 +47,7 @@
 }
 
 .image.closing {
-  animation: chatZoomScaleOut 0.2s ease forwards;
+  animation: chatZoomScaleOut 0.15s ease forwards;
 }
 
 @keyframes chatZoomFadeIn {
