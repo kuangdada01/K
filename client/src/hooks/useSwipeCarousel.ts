@@ -11,26 +11,29 @@
  * - 单一 transitionTimerRef（新动画/手势开始时清理旧定时器），
  *   而非 useTransformCarousel 的定时器数组（PostMedia 原行为，保留）。
  *
- * 行为不变量（与 PostCard 原实现一致）：
+ * 行为不变量（分页器语义，详见 hooks/carouselGesture）：
  * - touchmove 直接写 translate3d（合成器线程，60fps 丝滑）；
- * - 松手 CSS transition 落位：整页 420ms / 回弹 260ms，cubic-bezier(0.32, 0.72, 0, 1)，
- *   时长 +60ms 后移除（参数与判定见 hooks/carouselGesture，与 useTransformCarousel 同源）；
+ * - 松手 CSS transition 落位，时长按剩余距离自适应（260~520ms），
+ *   cubic-bezier(0.32, 0.72, 0, 1)（起步柔和、长尾缓停）；
+ * - 落点 = 「当前位置 + 松手速度 × PROJECTION_MS」取最近页（一次最多翻一页）：
+ *   慢慢拖过半屏才翻页，快速轻甩即使位移很小也翻页；
+ * - 越界（第一张继续右拖 / 最后一张继续左拖）按橡皮筋阻尼跟手，松手弹回；
+ * - 落位动画中途再次落指：读回当前计算偏移继续跟手，不跳到动画终点；
  * - 首次位移判定方向（横向主导才接管，+2px 余量），纵向主导交还浏览器滚动；
- * - 拖动超过视口宽 ~1/8（0.12）翻一页，**快速甩动**（速度 ≥ 0.75px/ms 且位移
- *   ≥ 32px）即使不足 1/8 也翻一页（一次最多一页），否则回弹起点；
  * - touchmove 以 { passive: false } 绑定以禁掉原生惯性滚动；
- * - pointercancel（系统接管手势）一律回弹吸附基准，绝不翻页；
+ * - pointercancel（系统接管手势）一律回弹本手势起点，绝不翻页；
  * - 轨道位移基准：offset = index * 容器宽度。
  * ============================================================
  */
 
 import { useCallback, useEffect, useMemo, useRef, RefObject } from 'react';
 import {
+  clampOffsetWithRubberBand,
   createVelocityTracker,
-  decidePageFlip,
+  offsetFromMatrix,
+  resolveTargetIndex,
   settleDurationMs,
   SLIDE_EASING,
-  SLIDE_SETTLE_MS,
 } from './carouselGesture';
 
 export interface SwipeCarouselApi {
@@ -43,7 +46,7 @@ export interface SwipeCarouselApi {
   /** 直接写轨道偏移（无动画） */
   setTrackOffset: (offset: number) => void;
   /** 落位动画到 index（宽度取自 viewportRef 当前 clientWidth）。
-   *  durationMs 缺省为整页落位时长；回弹传更短的 settleDurationMs(false)。 */
+   *  durationMs 缺省按剩余距离自适应（settleDurationMs）。 */
   animateTrackTo: (index: number, durationMs?: number) => void;
   /** 绑定 pointer/touch 手势；返回解绑函数（viewport/track 缺失时为空操作） */
   attachGesture: (
@@ -89,21 +92,24 @@ export function useSwipeCarousel(
     return w && w > 0 ? w : 0;
   }, [trackRef]);
 
-  // 落位动画：CSS transition（合成器执行，帧率满格）
+  // 落位动画：CSS transition（合成器执行，帧率满格）。
+  // 时长按剩余距离自适应（近的快、远的稍慢），避免固定时长的机械感。
   const animateTrackTo = useCallback(
-    (index: number, durationMs = SLIDE_SETTLE_MS) => {
+    (index: number, durationMs?: number) => {
       const track = trackRef.current;
       if (!track) return;
       const width = getSlideWidth() || viewportRef.current?.clientWidth || 0;
       const target = width * index;
-      if (Math.abs(offsetRef.current - target) < 1) return;
+      const distance = target - offsetRef.current;
+      if (Math.abs(distance) < 1) return;
+      const ms = durationMs ?? settleDurationMs(distance);
       if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
-      track.style.transition = `transform ${durationMs}ms ${SLIDE_EASING}`;
+      track.style.transition = `transform ${ms}ms ${SLIDE_EASING}`;
       track.style.transform = `translate3d(${-target}px, 0, 0)`;
       offsetRef.current = target;
       transitionTimerRef.current = setTimeout(() => {
         if (trackRef.current) trackRef.current.style.transition = 'none';
-      }, durationMs + 60);
+      }, ms + 60);
     },
     [trackRef, viewportRef, getSlideWidth]
   );
@@ -111,6 +117,8 @@ export function useSwipeCarousel(
   // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）——
   // transform 轨道驱动：touchmove 直接写 translate3d（合成器线程，不触发 layout，
   // 60fps 丝滑）；松手用 CSS transition（同样走合成器）落位。
+  // 落点由「位置 + 速度投影」共同决定（分页器语义，见 carouselGesture），
+  // 越界拖动带橡皮筋阻尼，动画中途落指从「当前肉眼所见位置」继续跟手。
   // 轨道位移基准：offset = index * 容器宽度。
   const attachGesture = useCallback(
     (
@@ -128,17 +136,27 @@ export function useSwipeCarousel(
       let active = false;
       let horizontal = false; // 是否已判定为横向手势（横向主导才接管滚动）
       let moveHandler: ((e: TouchEvent) => void) | null = null;
-      // 松手速度采样（快速甩动判定用）；每次手势起点清空，避免上一手势残留
+      // 松手速度采样（速度投影落点用）；每次手势起点清空，避免上一手势残留
       const velocity = createVelocityTracker();
+
+      /** 轨道偏移的合法区间：0（第一张）→ (count-1) * 单页宽（最后一张） */
+      const offsetRange = (width: number) => [0, Math.max(0, (imageCount - 1) * width)] as const;
 
       const down = (e: PointerEvent) => {
         if (e.pointerType === 'mouse' && e.button !== 0) return;
         onInteract(); // 手动触摸后停止自动轮播
-        // 动画中途再次触摸：取消 transition，从当前位置继续跟手
-        track.style.transition = 'none';
+        // 落位动画进行中再次落指：先读回「当前肉眼所见」的偏移，再取消 transition
+        // 并把同一位置写回，这样轨道不会瞬间跳到动画终点（原实现会跳一下）。
+        // 必须在置 transition:none 之前读计算值——取消过渡会让计算值立刻变成目标值。
+        const visual = offsetFromMatrix(getComputedStyle(track).transform);
         if (transitionTimerRef.current) {
           clearTimeout(transitionTimerRef.current);
           transitionTimerRef.current = null;
+        }
+        track.style.transition = 'none';
+        if (visual !== null) {
+          offsetRef.current = visual;
+          track.style.transform = `translate3d(${-visual}px, 0, 0)`;
         }
         active = true;
         horizontal = false;
@@ -170,7 +188,11 @@ export function useSwipeCarousel(
           }
           te.preventDefault();
           velocity.sample(touch.clientX, performance.now());
-          setTrackOffset(startOffset - dx);
+          const width = getSlideWidth() || viewportRef.current?.clientWidth || 1;
+          const [min, max] = offsetRange(width);
+          // 越界部分按橡皮筋压缩：拖到头还有阻尼位移，松手弹回（iOS 手感），
+          // 而不是硬顶住不动
+          setTrackOffset(clampOffsetWithRubberBand(startOffset - dx, min, max));
         };
         // passive:false 才能 preventDefault 禁掉原生惯性滚动
         viewport.addEventListener('touchmove', moveHandler, { passive: false });
@@ -185,29 +207,28 @@ export function useSwipeCarousel(
           viewport.removeEventListener('touchmove', moveHandler);
           moveHandler = null;
         }
-        const dx = offsetRef.current - startOffset; // 正向 = 手指左滑（offset 增大）= 下一张
-        const width = viewportRef.current?.clientWidth || 1;
+        const width = getSlideWidth() || viewportRef.current?.clientWidth || 1;
         if (!allowFlip) {
-          animateTrackTo(startIndex, settleDurationMs(false));
+          // 系统取消手势：回弹到本手势起点（不做速度投影，避免用假的抬手坐标算速度）
+          animateTrackTo(startIndex);
           return;
         }
         // 速度取「松手事件」为最后一个样本：最后一次 touchmove 与 pointerup 之间
         // 可能已隔了几十毫秒，只用 touchmove 会低估甩动速度
         velocity.sample(e.clientX, performance.now());
-        const dir = decidePageFlip({
-          dx,
-          viewportWidth: width,
+        // 位置 + 速度投影决定落点（分页器语义；一次手势最多翻一页）
+        const target = resolveTargetIndex({
+          offset: offsetRef.current,
           velocity: velocity.velocity(),
+          slideWidth: width,
+          startIndex,
+          count: imageCount,
           // PostCard 原行为：鼠标与触摸同判（鼠标不享受「任意位移即翻页」）
           alwaysFlip: false,
         });
-        // 一次手势最多翻一页（绝不过 2 张）
-        let target = startIndex;
-        if (dir > 0) target = Math.min(imageCount - 1, startIndex + 1);
-        else if (dir < 0) target = Math.max(0, startIndex - 1);
         settledRef.current = target;
         onIndexChange(target);
-        animateTrackTo(target, settleDurationMs(target !== startIndex));
+        animateTrackTo(target);
       };
 
       const up = (e: PointerEvent) => finish(e, true);
@@ -223,7 +244,7 @@ export function useSwipeCarousel(
         if (moveHandler) viewport.removeEventListener('touchmove', moveHandler);
       };
     },
-    [setTrackOffset, animateTrackTo, viewportRef]
+    [setTrackOffset, animateTrackTo, viewportRef, getSlideWidth]
   );
 
   // 卸载时清理 transition 定时器（原 PostCard 的卸载清理 effect）

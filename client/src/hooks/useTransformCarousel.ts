@@ -8,13 +8,14 @@
  * animateTrackTo 按实例返回，替代原先用 setOffset === setMainOffset
  * 函数身份比较判别轨道的脆弱写法。
  *
- * 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）：
+ * 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页；
+ * 且苹果相册是「一次手势翻一张」的分页器语义，不是可自由滑行的滚动视图）：
  * - touchmove 直接写 translate3d（合成器线程，60fps 丝滑）；
- * - 松手用 CSS transition 落位：整页 420ms / 回弹 260ms，cubic-bezier(0.32, 0.72, 0, 1)，
- *   时长 +60ms 后移除 transition（参数与判定见 hooks/carouselGesture）；
+ * - 松手用 CSS transition 落位，时长按剩余距离自适应（260~520ms），
+ *   cubic-bezier(0.32, 0.72, 0, 1)（参数与判定见 hooks/carouselGesture）；
+ * - 落点 = 「当前位置 + 松手速度 × PROJECTION_MS」取最近页（一次最多翻一页）；
+ * - 越界按橡皮筋阻尼跟手，松手弹回；落位动画中途落指从当前计算偏移继续跟手；
  * - 首次位移判定方向：横向主导才接管（+2px 余量），纵向主导交还浏览器滚动；
- * - 拖动超过视口宽度 ~1/8（0.12）翻一页，**快速甩动**（速度 ≥ 0.75px/ms 且位移
- *   ≥ 32px）即使不足 1/8 也翻一页（一次最多一页），否则回弹起点；
  * - mouse 指针任意位移即翻页（up 判定含 e.pointerType === 'mouse'）——原行为保留。
  *
  * 说明：原实现两轨道共用一份 transTimersRef（两轨道动画在时间上互斥，
@@ -25,11 +26,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, RefObject } from 'react';
 import {
+  clampOffsetWithRubberBand,
   createVelocityTracker,
-  decidePageFlip,
+  offsetFromMatrix,
+  resolveTargetIndex,
   settleDurationMs,
   SLIDE_EASING,
-  SLIDE_SETTLE_MS,
 } from './carouselGesture';
 
 export interface TransformCarouselApi {
@@ -101,26 +103,31 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
     return w && w > 0 ? w : 0;
   }, [trackRef]);
 
-  /** 轨道落位动画：CSS transition（合成器执行，帧率满格） */
+  /** 轨道落位动画：CSS transition（合成器执行，帧率满格）。
+   *  时长按剩余距离自适应（近的快、远的稍慢），避免固定时长的机械感。 */
   const animateTrackTo = useCallback(
-    (index: number, width: number, durationMs = SLIDE_SETTLE_MS) => {
+    (index: number, width: number, durationMs?: number) => {
       const track = trackRef.current;
       if (!track) return;
       const target = width * index;
-      if (Math.abs(offsetRef.current - target) < 1) return;
-      track.style.transition = `transform ${durationMs}ms ${SLIDE_EASING}`;
+      const distance = target - offsetRef.current;
+      if (Math.abs(distance) < 1) return;
+      const ms = durationMs ?? settleDurationMs(distance);
+      track.style.transition = `transform ${ms}ms ${SLIDE_EASING}`;
       setOffset(target);
       const t = setTimeout(() => {
         if (track) track.style.transition = 'none';
-      }, durationMs + 60);
+      }, ms + 60);
       timersRef.current.push(t);
     },
     [trackRef, setOffset]
   );
 
-  // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）——
+  // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页；
+  //    且苹果相册是「一次手势翻一张」的分页器语义而非自由滑行的滚动视图）——
   // transform 轨道驱动：touchmove 直接写 translate3d（合成器线程，60fps 丝滑）；
-  // 松手用 CSS transition 落位。纵向主导的手势交还浏览器滚动页面。
+  // 松手用 CSS transition 落位，落点由位置 + 速度投影决定；越界带橡皮筋阻尼。
+  // 纵向主导的手势交还浏览器滚动页面。
   const attachGesture = useCallback(
     (
       viewport: HTMLDivElement | null,
@@ -138,8 +145,11 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
       let active = false;
       let horizontal = false; // 是否已判定为横向手势（横向主导才接管滚动）
       let moveHandler: ((e: TouchEvent) => void) | null = null;
-      // 松手速度采样（快速甩动判定用）；每次手势起点清空，避免上一手势残留
+      // 松手速度采样（速度投影落点用）；每次手势起点清空，避免上一手势残留
       const velocity = createVelocityTracker();
+
+      /** 轨道偏移的合法区间：0（第一张）→ (count-1) * 单页宽（最后一张） */
+      const offsetRange = (width: number) => [0, Math.max(0, (imageCount - 1) * width)] as const;
 
       const down = (e: PointerEvent) => {
         if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -157,9 +167,16 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
           animateTrackTo(startIndex, getSlideWidth() || viewport.clientWidth || 1);
           return;
         }
-        // 动画中途再次触摸：取消 transition，从当前位置继续跟手，无缝衔接
-        track.style.transition = 'none';
+        // 落位动画进行中再次落指：先读回「当前肉眼所见」的偏移，再取消 transition
+        // 并把同一位置写回，轨道不会瞬间跳到动画终点（原实现会跳一下）。
+        // 必须在置 transition:none 之前读计算值——取消过渡会让计算值立刻变成目标值。
+        const visual = offsetFromMatrix(getComputedStyle(track).transform);
         clearTimers();
+        track.style.transition = 'none';
+        if (visual !== null) {
+          offsetRef.current = visual;
+          setOffset(visual);
+        }
         active = true;
         horizontal = false;
         startX = e.clientX;
@@ -190,7 +207,11 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
           }
           te.preventDefault();
           velocity.sample(touch.clientX, performance.now());
-          setOffset(startOffset - dx);
+          const width = getSlideWidth() || viewport.clientWidth || 1;
+          const [min, max] = offsetRange(width);
+          // 越界部分按橡皮筋压缩：拖到头还有阻尼位移，松手弹回（iOS 手感），
+          // 而不是硬顶住不动
+          setOffset(clampOffsetWithRubberBand(startOffset - dx, min, max));
         };
         // passive:false 才能 preventDefault 禁掉原生惯性滚动
         viewport.addEventListener('touchmove', moveHandler, { passive: false });
@@ -212,33 +233,29 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
           animateTrackTo(startIndex, getSlideWidth() || viewport.clientWidth || 1);
           return;
         }
-        const dx = offsetRef.current - startOffset; // 正向 = 手指左滑（offset 增大）= 下一张
-        // 翻页阈值按视口宽度判定（手指位移的感知基准）；
         // 落位偏移必须按图片实际渲染宽度（clientWidth 取整会导致逐页偏差露边）
-        const thresholdW = viewport.clientWidth || 1;
-        const slideW = getSlideWidth() || thresholdW;
-        const total = imageCount;
+        const slideW = getSlideWidth() || viewport.clientWidth || 1;
         if (!allowFlip) {
-          animateTrackTo(startIndex, slideW, settleDurationMs(false));
+          // 系统取消手势：回弹到本手势起点（不做速度投影，避免用假的抬手坐标算速度）
+          animateTrackTo(startIndex, slideW);
           return;
         }
         // 速度取「松手事件」为最后一个样本：最后一次 touchmove 与 pointerup 之间
         // 可能已隔了几十毫秒，只用 touchmove 会低估甩动速度
         velocity.sample(e.clientX, performance.now());
-        const dir = decidePageFlip({
-          dx,
-          viewportWidth: thresholdW,
+        // 位置 + 速度投影决定落点（分页器语义；一次手势最多翻一页）
+        const target = resolveTargetIndex({
+          offset: offsetRef.current,
           velocity: velocity.velocity(),
+          slideWidth: slideW,
+          startIndex,
+          count: imageCount,
           alwaysFlip: e.pointerType === 'mouse',
         });
-        // 一次手势最多翻一页（绝不过 2 张）
-        let target = startIndex;
-        if (dir > 0) target = Math.min(total - 1, startIndex + 1);
-        else if (dir < 0) target = Math.max(0, startIndex - 1);
         settledRef.current = target;
         if (onSettled) onSettled(target);
         onMove(target);
-        animateTrackTo(target, slideW, settleDurationMs(target !== startIndex));
+        animateTrackTo(target, slideW);
       };
 
       const up = (e: PointerEvent) => finish(e, true);
