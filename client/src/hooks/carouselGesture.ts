@@ -20,24 +20,29 @@
 /** 翻页位移阈值：拖动超过视口宽的 ~1/8 才翻页（与历史行为一致） */
 export const PAGE_FLIP_THRESHOLD_RATIO = 0.12;
 
-/** 快速甩动判定：松手速度下限（px/ms，350 px/s）。
- *  低于此速度且位移不足 1/8 屏 → 回弹原地（轻点/微动不会误翻页） */
-export const FLING_VELOCITY_PX_PER_MS = 0.35;
+/** 快速甩动判定：松手速度下限（px/ms，750 px/s）。
+ *  低于此速度且位移不足 1/8 屏 → 回弹原地。
+ *  别调太松：0.35px/ms（350px/s）时一次随手小幅快滑就会整页翻走，
+ *  手感「太快、太跳」（用户反馈「滑动太快了」即指此）。 */
+export const FLING_VELOCITY_PX_PER_MS = 0.75;
 
-/** 甩动翻页的最小位移（px）：再快也要真的划过一点，
- *  防止「按下即抬起」的抖动被判成甩动 */
-export const FLING_MIN_DISTANCE_PX = 10;
+/** 甩动翻页的最小位移（px）：再快也要真的划过一段距离才翻页。
+ *  10px 太松（按下时的手抖就能凑够），提高到 32px 让「甩」成为明确意图 */
+export const FLING_MIN_DISTANCE_PX = 32;
 
-/** 整页落位动画时长（ms）：400ms 在移动端偏拖沓（手指已停、画面还在走），
- *  300ms 与原曲线搭配最接近原生相册的跟手节奏 */
-export const SLIDE_SETTLE_MS = 300;
+/** 整页落位动画时长（ms）。
+ *  300ms 偏「抢」（手指刚停、画面已到站，反而显得跳），
+ *  420ms 接近原生相册的翻页节奏：跟手结束 → 平稳滑到位 */
+export const SLIDE_SETTLE_MS = 420;
 
 /** 微动回弹时长（ms）：位移不足一页时画面只是回到原位，
- *  用整页的时长会显得「慢半拍」，给更短的 200ms */
-export const SLIDE_REBOUND_MS = 200;
+ *  用整页的时长会显得「慢半拍」，给更短的 260ms */
+export const SLIDE_REBOUND_MS = 260;
 
-/** 落位曲线：快出缓收（合成器执行，不触发 layout） */
-export const SLIDE_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)';
+/** 落位曲线：起步柔和 → 中段推进 → 长尾缓停（合成器执行，不触发 layout）。
+ *  原 easeOutQuint（cubic-bezier(0.22,1,0.36,1)）前 20% 时间吃掉约 60% 位移，
+ *  配合短时长就是「嗖一下到站」，是「太快/太生硬」的主要来源 */
+export const SLIDE_EASING = 'cubic-bezier(0.32, 0.72, 0, 1)';
 
 /** 速度采样窗口（ms）：取窗口内首末样本求平均，抗单帧抖动 */
 export const VELOCITY_WINDOW_MS = 90;
@@ -81,7 +86,8 @@ export function createVelocityTracker(windowMs = VELOCITY_WINDOW_MS): VelocityTr
  * 翻页需要满足以下任一（一次手势最多翻一页由调用方钳制）：
  * - 位移超过视口宽 PAGE_FLIP_THRESHOLD_RATIO；
  * - 快速甩动：速度 ≥ FLING_VELOCITY_PX_PER_MS 且位移 ≥ FLING_MIN_DISTANCE_PX
- *   （手指快甩时位移常常不足 1/8 屏，只按位移判定会「甩不动」）；
+ *   （手指快甩时位移常常不足 1/8 屏，只按位移判定会「甩不动」；
+ *    两个阈值都取得较严，避免小幅快滑把整页甩走）；
  * - mouse 指针：任意位移即翻页（历史行为，桌面端无需甩动语义）。
  */
 export function decidePageFlip(opts: {

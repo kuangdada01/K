@@ -12,6 +12,7 @@ import {
   FLING_MIN_DISTANCE_PX,
   FLING_VELOCITY_PX_PER_MS,
   PAGE_FLIP_THRESHOLD_RATIO,
+  SLIDE_EASING,
   SLIDE_REBOUND_MS,
   SLIDE_SETTLE_MS,
   VELOCITY_WINDOW_MS,
@@ -34,9 +35,17 @@ describe('decidePageFlip', () => {
     expect(decidePageFlip({ dx: 20, viewportWidth: W, velocity: 0.1 })).toBe(0);
   });
 
-  it('快速甩动：位移不足 1/8 但也翻页（只要划过一点）', () => {
-    expect(decidePageFlip({ dx: 20, viewportWidth: W, velocity: FLING_VELOCITY_PX_PER_MS })).toBe(1);
-    expect(decidePageFlip({ dx: -20, viewportWidth: W, velocity: -FLING_VELOCITY_PX_PER_MS })).toBe(-1);
+  it('快速甩动：位移不足 1/8 但满足甩动阈值也翻页', () => {
+    const dx = FLING_MIN_DISTANCE_PX + 4;
+    expect(decidePageFlip({ dx, viewportWidth: W, velocity: FLING_VELOCITY_PX_PER_MS })).toBe(1);
+    expect(decidePageFlip({ dx: -dx, viewportWidth: W, velocity: -FLING_VELOCITY_PX_PER_MS })).toBe(-1);
+  });
+
+  it('小幅快滑不再整页翻走（用户反馈「滑动太快」的根因）', () => {
+    // 20px 位移 + 0.5px/ms（500px/s）：随手的快滑，应回弹而不是翻页
+    expect(decidePageFlip({ dx: 20, viewportWidth: W, velocity: 0.5 })).toBe(0);
+    // 速度达标但位移只有 20px（< 32px 门槛）也不翻页
+    expect(decidePageFlip({ dx: 20, viewportWidth: W, velocity: FLING_VELOCITY_PX_PER_MS })).toBe(0);
   });
 
   it('速度够但位移太小（按下即抬起）→ 不翻页，防误触', () => {
@@ -119,7 +128,14 @@ describe('settleDurationMs', () => {
     expect(settleDurationMs(true)).toBe(SLIDE_SETTLE_MS);
     expect(settleDurationMs(false)).toBe(SLIDE_REBOUND_MS);
     expect(SLIDE_REBOUND_MS).toBeLessThan(SLIDE_SETTLE_MS);
-    // 均短于历史值 400ms（左右滑动速率优化）
-    expect(SLIDE_SETTLE_MS).toBeLessThan(400);
+  });
+
+  it('落位时长回到「稳」而不是「抢」：300~550ms 区间（420ms 实测最接近原生相册）', () => {
+    expect(SLIDE_SETTLE_MS).toBeGreaterThanOrEqual(300);
+    expect(SLIDE_SETTLE_MS).toBeLessThanOrEqual(550);
+  });
+
+  it('落位曲线不再是「前 20% 时间吃掉大半位移」的 easeOutQuint', () => {
+    expect(SLIDE_EASING).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
   });
 });

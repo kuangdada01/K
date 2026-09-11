@@ -13,11 +13,11 @@
  *
  * 行为不变量（与 PostCard 原实现一致）：
  * - touchmove 直接写 translate3d（合成器线程，60fps 丝滑）；
- * - 松手 CSS transition 落位：整页 300ms / 回弹 200ms，cubic-bezier(0.22, 1, 0.36, 1)，
+ * - 松手 CSS transition 落位：整页 420ms / 回弹 260ms，cubic-bezier(0.32, 0.72, 0, 1)，
  *   时长 +60ms 后移除（参数与判定见 hooks/carouselGesture，与 useTransformCarousel 同源）；
  * - 首次位移判定方向（横向主导才接管，+2px 余量），纵向主导交还浏览器滚动；
- * - 拖动超过视口宽 ~1/8（0.12）翻一页，**快速甩动**（速度 ≥ 0.35px/ms 且位移
- *   ≥ 10px）即使不足 1/8 也翻一页（一次最多一页），否则回弹起点；
+ * - 拖动超过视口宽 ~1/8（0.12）翻一页，**快速甩动**（速度 ≥ 0.75px/ms 且位移
+ *   ≥ 32px）即使不足 1/8 也翻一页（一次最多一页），否则回弹起点；
  * - touchmove 以 { passive: false } 绑定以禁掉原生惯性滚动；
  * - pointercancel（系统接管手势）一律回弹吸附基准，绝不翻页；
  * - 轨道位移基准：offset = index * 容器宽度。

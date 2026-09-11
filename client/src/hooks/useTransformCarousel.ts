@@ -10,11 +10,11 @@
  *
  * 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）：
  * - touchmove 直接写 translate3d（合成器线程，60fps 丝滑）；
- * - 松手用 CSS transition 落位：整页 300ms / 回弹 200ms，cubic-bezier(0.22, 1, 0.36, 1)，
+ * - 松手用 CSS transition 落位：整页 420ms / 回弹 260ms，cubic-bezier(0.32, 0.72, 0, 1)，
  *   时长 +60ms 后移除 transition（参数与判定见 hooks/carouselGesture）；
  * - 首次位移判定方向：横向主导才接管（+2px 余量），纵向主导交还浏览器滚动；
- * - 拖动超过视口宽度 ~1/8（0.12）翻一页，**快速甩动**（速度 ≥ 0.35px/ms 且位移
- *   ≥ 10px）即使不足 1/8 也翻一页（一次最多一页），否则回弹起点；
+ * - 拖动超过视口宽度 ~1/8（0.12）翻一页，**快速甩动**（速度 ≥ 0.75px/ms 且位移
+ *   ≥ 32px）即使不足 1/8 也翻一页（一次最多一页），否则回弹起点；
  * - mouse 指针任意位移即翻页（up 判定含 e.pointerType === 'mouse'）——原行为保留。
  *
  * 说明：原实现两轨道共用一份 transTimersRef（两轨道动画在时间上互斥，

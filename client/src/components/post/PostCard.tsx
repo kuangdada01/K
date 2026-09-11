@@ -76,8 +76,20 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   // 用户手动触摸/滑动过轮播图后停止自动轮播（移动端无 hover，isPaused 恒 false，
-  // 此前手动切图 3 秒后会被自动轮播切走——"抢权限"；触摸过一次即不再自动播）
-  const [userInteracted, setUserInteracted] = useState(false);
+  // 此前手动切图 3 秒后会被自动轮播切走——"抢权限"；触摸过一次即不再自动播）。
+  // ★ 用 ref 而非 state：触摸起点 setState 会立刻触发一次整卡 re-render，
+  //   恰好落在手指刚按下、最需要跟手的那一帧上（滑动"第一下"卡顿的来源）。
+  //   改为 ref + 就地清掉定时器：行为等价（不再自动播），但不产生渲染。
+  const userInteractedRef = useRef(false);
+  const autoPlayTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** 手势起点调用：标记已交互并同步停掉自动轮播（不触发渲染） */
+  const stopAutoPlay = useCallback(() => {
+    userInteractedRef.current = true;
+    if (autoPlayTimerRef.current) {
+      clearInterval(autoPlayTimerRef.current);
+      autoPlayTimerRef.current = null;
+    }
+  }, []);
   const cardRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // transform 轨道：GPU 合成器驱动，60fps 丝滑（scrollLeft 走主线程会掉帧）
@@ -96,14 +108,18 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   const images = useMemo(() => parsePostImages(post), [post]);
 
   // Auto-play carousel: 部分可见且未悬停暂停时每 3 秒推进一张；
-  // 用户手动触摸/滑动过后（userInteracted）不再自动播
+  // 用户手动触摸/滑动过后（userInteractedRef）不再自动播
   useEffect(() => {
-    if (images.length <= 1 || isPaused || userInteracted || !isPartiallyVisible) return;
+    if (images.length <= 1 || isPaused || userInteractedRef.current || !isPartiallyVisible) return;
     const timer = setInterval(() => {
       setCurrentImageIndex((prev) => (prev + 1) % images.length);
     }, 3000);
-    return () => clearInterval(timer);
-  }, [images.length, isPaused, userInteracted, isPartiallyVisible]);
+    autoPlayTimerRef.current = timer;
+    return () => {
+      clearInterval(timer);
+      autoPlayTimerRef.current = null;
+    };
+  }, [images.length, isPaused, isPartiallyVisible]);
 
   // 视频：帖子完全可见后稍作延迟再加载播放（快速划过不触发）。
   // 布局由封面图撑起（.videoPoster），视频作为绝对定位覆盖层淡入——
@@ -204,11 +220,11 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
       viewport,
       track,
       images.length,
-      () => setUserInteracted(true), // 手动触摸后停止自动轮播
+      stopAutoPlay, // 手动触摸后停止自动轮播（不触发渲染，见 stopAutoPlay 注释）
       (target) => setCurrentImageIndex(target)
     );
     return detach;
-  }, [images, swipeCarousel]);
+  }, [images, swipeCarousel, stopAutoPlay]);
 
   // —— 关注切换 / 分享：自 handleFollow / handleShare 拆出至
   // useFollowToggle / useShareLink（行为不变）——
