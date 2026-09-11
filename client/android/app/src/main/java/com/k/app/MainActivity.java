@@ -8,6 +8,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.view.Display;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
@@ -52,6 +53,8 @@ public class MainActivity extends BridgeActivity {
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
         Log.d(TAG, ">>> onCreate START");
         super.onCreate(savedInstanceState);
+
+        applyHighRefreshRate();
 
         try {
             WebView webView = getBridge().getWebView();
@@ -123,6 +126,68 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    /**
+     * 高刷新率（90/120Hz）适配 —— WebView 的 vsync 跟随窗口刷新率。
+     *
+     * Android 默认不保证把窗口放到高刷模式：窗口停在 60Hz 时，页面再怎么优化也只有
+     * 60fps 的观感（用户反馈「120Hz 手机左右滑动还是掉帧」的根因之一）。
+     * 这里按 API 可用性逐级声明（都只是「偏好」，系统仍可按过热/省电/OEM 策略回落，
+     * 因此失败静默、绝不影响启动）：
+     * 1. preferredDisplayModeId（API 23+）：在同分辨率的 Display.Mode 里挑刷新率最高的
+     *    一个直接指定。只在同分辨率里挑——换分辨率会让 WebView 重新布局；
+     * 2. preferredRefreshRate（API 21+）：部分机型不看 displayModeId，只认这个刷新率偏好；
+     * 3. Android 15+（API 35）：setFrameRateBoostOnTouchEnabled —— 触摸即拉满刷新率。
+     *
+     * 说明：Window.setFrameRate(float,int) 是 @hide（非公开 SDK，编译不过），
+     * Surface.setFrameRate 需要自己持有 Surface（WebView 的 Surface 归 Chromium 管），
+     * 因此都用上面窗口级的公开 API。
+     */
+    @SuppressWarnings("deprecation")
+    private void applyHighRefreshRate() {
+        try {
+            Window window = getWindow();
+            Display display =
+                Build.VERSION.SDK_INT >= 30
+                    ? getDisplay()
+                    : window.getWindowManager().getDefaultDisplay();
+            if (display == null) return;
+            Display.Mode current = display.getMode();
+            if (current == null) return;
+
+            int bestModeId = current.getModeId();
+            float bestRate = current.getRefreshRate();
+            for (Display.Mode mode : display.getSupportedModes()) {
+                boolean sameSize =
+                    mode.getPhysicalWidth() == current.getPhysicalWidth()
+                        && mode.getPhysicalHeight() == current.getPhysicalHeight();
+                if (sameSize && mode.getRefreshRate() > bestRate + 0.01f) {
+                    bestRate = mode.getRefreshRate();
+                    bestModeId = mode.getModeId();
+                }
+            }
+
+            WindowManager.LayoutParams attrs = window.getAttributes();
+            boolean changed = false;
+            if (bestModeId != current.getModeId() && attrs.preferredDisplayModeId != bestModeId) {
+                attrs.preferredDisplayModeId = bestModeId;
+                changed = true;
+            }
+            if (bestRate > 60.5f && attrs.preferredRefreshRate != bestRate) {
+                attrs.preferredRefreshRate = bestRate;
+                changed = true;
+            }
+            if (changed) window.setAttributes(attrs);
+
+            if (Build.VERSION.SDK_INT >= 35) {
+                window.setFrameRateBoostOnTouchEnabled(true);
+            }
+            Log.d(TAG, "  high refresh: mode=" + bestModeId + " rate=" + bestRate
+                + " (was mode=" + current.getModeId() + " rate=" + current.getRefreshRate() + ")");
+        } catch (Throwable t) {
+            Log.w(TAG, "applyHighRefreshRate failed", t);
+        }
+    }
+
     /** 当前 App 版本号（versionCode） */
     private int getAppVersionCode() {
         try {
@@ -163,6 +228,8 @@ public class MainActivity extends BridgeActivity {
     public void onResume() {
         super.onResume();
         Log.d(TAG, ">>> onResume: re-applying theme");
+        // 回前台重新声明高刷偏好：部分机型在切后台/省电后会退回 60Hz 模式
+        applyHighRefreshRate();
         try {
             WebView webView = getBridge().getWebView();
             applyThemeFromStorage(webView);
