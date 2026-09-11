@@ -13,7 +13,7 @@
   "scripts": {
     "dev": "concurrently -n shared,server,client -c yellow,blue,green \"npm run dev --prefix shared\" \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
     "build": "npm run build --prefix shared && npm run build --prefix server && npm run build --prefix client",
-    "typecheck": "npm run typecheck --prefix shared && npm run typecheck --prefix server && npm run typecheck --prefix client && tsc --noEmit -p tsconfig.e2e.json",
+    "typecheck": "npm run build --prefix shared && npm run typecheck --prefix shared && npm run typecheck --prefix server && npm run typecheck --prefix client && tsc --noEmit -p tsconfig.e2e.json",
     "lint": "npm run lint --prefix shared && npm run lint --prefix server && npm run lint --prefix client",
     "test": "npm test --prefix server && npm test --prefix client",
     "e2e": "playwright test",
@@ -31,6 +31,7 @@
     "prettier": "^3.6.2"
   },
   "//": "npm 只承认根 package.json 的 overrides（写在 workspace 包里会被静默忽略）。qs 经 express 5 的 body-parser 传递引入，这里钉在已修复版本上防旧版原型污染。",
+  "//typecheck": "typecheck 前必须先 build shared：server/client/e2e 是通过 node_modules/@k/shared 的 package.json（types → dist/*.d.ts）解析的，dist 不存在就报 TS2307。此前本地能过只是因为本地残留着旧 dist——CI（干净环境、且 typecheck 排在 build 之前）会直接失败。",
   "overrides": {
     "qs": "6.16.0"
   },

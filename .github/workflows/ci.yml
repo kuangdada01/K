@@ -14,9 +14,9 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -32,6 +32,9 @@ jobs:
       # 独立于 build：server 的 build 走 tsconfig.json（不含 test/），
       # 因此测试文件与 e2e 规格的类型错误不会被 build 捕获。
       # typecheck 额外覆盖 server/test、e2e/、playwright.config.ts。
+      # 注意：该脚本会**先 build shared** —— server/client/e2e 都经
+      # node_modules/@k/shared 的 package.json（types → dist/*.d.ts）解析依赖，
+      # 干净环境下 dist 不存在会直接 TS2307（CI 曾因此失败，本地被残留 dist 掩盖）。
       - name: 类型检查（含测试与 e2e，build 不覆盖）
         run: npm run typecheck
 
@@ -57,7 +60,7 @@ jobs:
 
       - name: 上传 e2e 失败产物（截图/报告，仅失败时）
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: |
@@ -71,9 +74,9 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
