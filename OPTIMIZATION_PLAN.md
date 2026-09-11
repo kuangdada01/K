@@ -2244,3 +2244,77 @@ voice      0px  (maxΔ0)          0px  (maxΔ0)               信号/噪声=1.00
 （`170ba913…`）、远端临时文件已清理；本地打开快照复核 `integrity=ok`、
 `migrations=26`、`users/posts/voice_rooms=9/34/2`、`owner_token` 列在 —— 是**可用**的备份，
 不只是字节相同。快照落在 `server/k.db.prod-backup-<ts>.db`（被 `.gitignore` 的 `server/k.db*` 覆盖）。
+
+---
+
+## 18. CI 与仓库一致性的收尾（2026-09-11 下午）
+
+第 17 章之后又暴露出三类问题，都属于「本地看着没问题、CI/协作时才炸」的同一类。
+本章按发生顺序记录，含根因、证据与最终状态。
+
+### 18.1 CI 三轮失败与修复
+
+| 现象 | 根因 | 修法 | 证据 |
+| ---- | ---- | ---- | ---- |
+| `TS2307: Cannot find module '@k/shared'`（新增的 typecheck 步骤） | server/client/e2e 都经 `node_modules/@k/shared` 的 `package.json → dist/*.d.ts` 解析依赖，而 CI 的 typecheck **排在 build 之前**；本地能过只因残留着上一轮的 `shared/dist` | 根 `typecheck` 脚本先 `npm run build --prefix shared`（自给自足，本地也不再被残留产物掩盖） | 删掉 `shared/dist` 后**本地复现出与 CI 完全相同的报错**；改后从干净状态通过并自动生成产物 |
+| Node 20 弃用告警（`actions/checkout@v4`、`setup-node@v4`、`upload-artifact@v4`） | 这些 action 指向 node20，被强制跑在 node24 | 三个 action 升到 v7（用法都是标准输入，无破坏性 API 变更） | 升级后告警消失，只剩 10 条 `no-explicit-any`（`server/test/**` 的既定豁免） |
+| E2E 在 Linux 上 `SqliteError: no such table: verification_codes`（只走 UI 的用例全过） | 重置测试库的代码写在 `playwright.config.ts` **顶层**，而该文件会被**每个 worker 进程**再次求值 —— worker 在 webServer 启动**之后**才起来。Linux 上 `rm` 能成功 unlink 服务端正持有的库文件（服务端继续写已删除的 inode，规格却用同一路径新建了一张**空库**）；Windows 上 `rm` 因文件占用失败，所以本地从未暴露 | 抽出 `e2e/reset-tmp.mjs`，挂在 webServer 命令前（`node e2e/reset-tmp.mjs && node server/dist/index.js`）：**只跑一次、且只在服务端启动之前** | 本地按 CI 条件（无 `.env`）跑 10/10；CI 上 E2E 步骤转绿 |
+
+### 18.2 行尾策略收归仓库（`.gitattributes`）
+
+**问题**：机器上的 `core.autocrlf=true`（Git for Windows 安装默认，来自系统 gitconfig）声明「工作区用 CRLF」，
+而 `.prettierrc.json` 的 `endOfLine: "lf"` 声明「写出来是 LF」——两套权威互相矛盾，
+于是「谁最后碰过文件谁说了算」：工作区实测 **507 CRLF / 460 LF / 2 个混合**，
+并出现 `git status` 报 modified 而 `git diff` 为空、内容哈希与索引**完全相同**的幻影修改
+（CRLF↔LF 改变文件字节数，git 的 stat 缓存据此误判）。仓库内容一直是对的（索引里 969 个文本文件都是 LF）。
+
+**修法**：`.gitattributes`（版本化，属性**优先于任何人的 `core.autocrlf`**）：
+`* text=auto eol=lf`；`*.bat/*.cmd text eol=crlf`（cmd.exe 对纯 LF 批处理的标签/goto/多行块有兼容问题）；
+常见二进制显式 `binary` 避免被误判后转换。配套：官方配方重新归一化工作区
+（`git rm --cached -r . && git reset --hard`）→ 507 CRLF → **0**、混合行尾 → **0**；
+CI 增加「仓库内不得出现 CRLF」守卫；README 写明策略与旧工作区的一次性命令。
+
+**验证**：`git check-attr eol -- README.md` → `lf`（个人 `autocrlf=true` 仍在，但不再起作用）；
+`git add --renormalize .` **没有任何文件需要改**（说明问题只存在于工作区）；
+构建产物哈希**没变**（`index-DevxUuZN.js` 前后一致），印证这批改动是纯形式层面的。
+
+### 18.3 `dotenv override` 在 test 场景让位（本地 e2e 修复）
+
+`153922e` 把 dotenv 改成 `override: true`（意图正确：发版后新 `.env` 不再被 PM2 残留旧值遮蔽），
+但它同时让 `.env` 压过了**进程环境**，包括 e2e harness 注入的 `PORT`/`DB_PATH`/`UPLOADS_DIR`：
+
+- 服务端起在 `.env` 的 3000，而 Playwright 等的是 3200 → `Timed out waiting 180000ms from config.webServer`；
+- 更糟的是 `DB_PATH` 被盖掉 → e2e 的写路径会写进**真实 `server/k.db`**（CI 无 `.env`，所以只有本地中招）。
+
+**修法**：`override: process.env.NODE_ENV !== 'test'` —— 生产/开发仍是 `.env` 说了算，只有 e2e 让位。
+**验证**：本地不挪 `.env` 直接 `npm run e2e` **10/10**（此前必超时）；且跑完真实 `server/k.db`
+时间戳**停在昨天**、只有 `e2e/.tmp/k-e2e.db` 被更新 —— 隔离确实生效。
+
+### 18.4 部署与线上一致性（哈希级核验）
+
+前置：`.env` 逐键比对 **15/15 一致**、数据库快照 `.deploy-backup/db-20260911-160858.db`。
+部署（`deploy.ps1`，SSH 私钥免密）→ **`DEPLOY_VERIFY PASS`**。部署后核验：
+
+- 迁移 26、数据 `9/34/2` 未变；health 直连/nginx 均 200；PM2 online、unstable restarts 0；
+  重启后 error/warn/5xx 均为 0（error 日志最后写入仍是 8-31）；回滚点 `.deploy-backup/20260911-161049/`。
+- **线上客户端 `index-DevxUuZN.js` 与本地构建同名**；服务端 `dist/config.js`、`dist/index.js` 的
+  **sha256 与本地逐字节一致** —— 仓库与生产完全同步。
+- 发现：生产在 14:59 已被自行部署过一次（0.2.38 上线、APK 到位），所以本次部署对线上是**等价刷新**
+  （客户端产物哈希前后不变，服务端仅多一行 test 例外，而生产 `NODE_ENV=production` 行为不变）。
+
+### 18.5 本轮全量排查清单（结论：只剩文档级遗漏 + 既有环境项）
+
+排查过的面（逐项留证）：工作区是否干净 ✅ / 全树凭据扫描（11 类模式）✅ 0 命中 /
+是否误入库 `.env`、密钥库、DB、APK ✅ 无 / 临时与调试残留 ✅ 无 / 新增文件是否有孤儿 ✅ 无 /
+README 数字声明（38 文件 353 用例、33 文件 242 用例、26 个迁移、e2e 10 条）✅ 与实际一致 /
+`.env.example` 是否覆盖 `envSchema` 全部 21 个键 ✅ 覆盖 / 是否有绕过 schema 直读 `process.env` ✅ 无 /
+`.gitignore` 对 `.env*` 变体的覆盖 ✅ 覆盖（`.env.example` 刻意入库）/
+本地分支与远端引用 ✅ 干净 / 全量门禁（format·typecheck·lint·build·242+353 用例·e2e 10/10）✅ 全绿。
+
+**查出的遗漏（已在本章修掉）**：README 的「故障定位」表没有收录新增的手势模块
+（`carouselGesture` / `useSwipeCarousel` / `useTransformCarousel`），排查时会找不到入口 —— 已补一行。
+
+**仍未做（都是既有、需你或环境配合）**：
+`deploy.ps1` 每次部署都会重传同一个 APK（无新 APK 时应明确跳过，省 15MB）；
+Dockerfile 运行时实测（本机无 Docker）；访客 id 多实例化（需 Redis）；
+真机回归（低端安卓/弱网/麦克风指示灯）；管理端用户列表的服务端搜索与分页（UI 受阻）。

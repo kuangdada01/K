@@ -165,24 +165,25 @@ client/src/music/MusicEngine.ts       # 音乐播放引擎（audio 元素生命�
 
 ### 故障定位
 
-| 现象                                 | 定位文件                                                                          |
-| ------------------------------------ | --------------------------------------------------------------------------------- |
-| 共享画面缺失/断线后舞台不关/双共享者 | `voice/share/screenShareController.ts`                                            |
-| 共享画面糊/卡/CPU 占用高（编码侧）   | `voice/share/senderTuning.ts`（H.264 偏好/码率/缩放/降级）                        |
-| 进不了房/断线不重连/被 4002 踢       | `voice/signaling/wsSignaling.ts`                                                  |
-| 被 4004 拒（同 IP 连接过多）         | `server/src/voice/ip-connections.ts`（每 IP 闸门）                                |
-| 听不到/无声/说话指示不亮             | `voice/audio/audioGraph.ts`                                                       |
-| 画面或声音偶发缺失/协商失败          | `voice/mesh/meshManager.ts` + `meshPeer.ts`                                       |
-| 聊天消息重复/丢消息/翻页错           | `hooks/useVoiceChatStore.ts`                                                      |
-| 朗读不播/高亮错乱                    | `hooks/useChatTTS.ts`                                                             |
-| 房间列表/控制栏/成员卡片             | `pages/voice/*`                                                                   |
-| 音乐不切歌/播放当前曲目无声          | `music/MusicEngine.ts`                                                            |
-| 全屏/沉浸/小窗异常                   | `useFullscreenImmersive.ts` / `useCanvasVideoRenderer.ts`                         |
-| 房主操作被 403（清聊天/删房）        | `server/src/routes/voice.ts`（`X-Voice-Owner-Token` 归属令牌判定）                |
-| 未读角标不一致/请求量翻倍            | `client/src/state/inboxStore.ts`（会话+通知单一事实来源、单飞请求、引用计数轮询） |
-| 弱网偶发失败（是否该重试）           | `client/src/api/retry.ts`（只 GET/HEAD + 无响应/502-504；超时/取消/写操作不重试） |
-| 列表「少了行」或徽标数字偏小         | `server/src/lib/listLimits.ts`（硬上限 500 + `has_more`；未读数走独立 COUNT）     |
-| 崩溃白屏                             | `client/src/components/ErrorBoundary.tsx`（+ `main.tsx` 的 `onUncaughtError`）    |
+| 现象                                 | 定位文件                                                                                                             |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| 共享画面缺失/断线后舞台不关/双共享者 | `voice/share/screenShareController.ts`                                                                               |
+| 共享画面糊/卡/CPU 占用高（编码侧）   | `voice/share/senderTuning.ts`（H.264 偏好/码率/缩放/降级）                                                           |
+| 进不了房/断线不重连/被 4002 踢       | `voice/signaling/wsSignaling.ts`                                                                                     |
+| 被 4004 拒（同 IP 连接过多）         | `server/src/voice/ip-connections.ts`（每 IP 闸门）                                                                   |
+| 听不到/无声/说话指示不亮             | `voice/audio/audioGraph.ts`                                                                                          |
+| 画面或声音偶发缺失/协商失败          | `voice/mesh/meshManager.ts` + `meshPeer.ts`                                                                          |
+| 聊天消息重复/丢消息/翻页错           | `hooks/useVoiceChatStore.ts`                                                                                         |
+| 朗读不播/高亮错乱                    | `hooks/useChatTTS.ts`                                                                                                |
+| 房间列表/控制栏/成员卡片             | `pages/voice/*`                                                                                                      |
+| 音乐不切歌/播放当前曲目无声          | `music/MusicEngine.ts`                                                                                               |
+| 全屏/沉浸/小窗异常                   | `useFullscreenImmersive.ts` / `useCanvasVideoRenderer.ts`                                                            |
+| 看图双击缩放/左右滑动不跟手或闪屏    | `hooks/carouselGesture.ts`（手势判定纯函数）+ `hooks/useSwipeCarousel.ts`、`useTransformCarousel.ts`（两套切换实现） |
+| 房主操作被 403（清聊天/删房）        | `server/src/routes/voice.ts`（`X-Voice-Owner-Token` 归属令牌判定）                                                   |
+| 未读角标不一致/请求量翻倍            | `client/src/state/inboxStore.ts`（会话+通知单一事实来源、单飞请求、引用计数轮询）                                    |
+| 弱网偶发失败（是否该重试）           | `client/src/api/retry.ts`（只 GET/HEAD + 无响应/502-504；超时/取消/写操作不重试）                                    |
+| 列表「少了行」或徽标数字偏小         | `server/src/lib/listLimits.ts`（硬上限 500 + `has_more`；未读数走独立 COUNT）                                        |
+| 崩溃白屏                             | `client/src/components/ErrorBoundary.tsx`（+ `main.tsx` 的 `onUncaughtError`）                                       |
 
 排查套路：现象归类 → 跑对应模块单测（`npx vitest run src/voice/<模块>`）→ 看注入回调边界（`ScreenShareSink`/`MeshManagerOptions`/`AudioGraphOptions`）。网页端与 APK 是同一份 Web 代码，能网页复现的问题优先浏览器 DevTools 定位。
 
