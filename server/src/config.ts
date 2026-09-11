@@ -7,7 +7,14 @@
  *   path.join(__dirname, '..', '..', ...) 拼接（src/dist 路径差异是已知坑）
  *
  * 注意: 本模块自身会先加载 .env（import 顺序无关），index.ts 中的
- * dotenv.config() 保留仅为双保险（dotenv 默认不覆盖已存在的变量）。
+ * dotenv.config() 保留仅为双保险。
+ *
+ * ★ override: true —— .env 必须是生产配置的唯一事实来源。
+ * PM2 守护进程会沿用「上次 start 时」的进程环境：发版时新 .env 虽然已同步到
+ * 服务器，但进程环境里残留着旧值（APP_VERSION/APP_APK_URL、SMTP_*、JWT_SECRET…），
+ * 而 dotenv 默认**不覆盖已存在变量**，于是更新后的 .env 被静默忽略
+ * （曾导致 /api/app/version 一直返回上一版，App 内更新提示不触发）。
+ * 未在 .env 中出现的键（如由 ecosystem.config.js 注入的 NODE_ENV）不受影响。
  */
 
 import path from 'path';
@@ -16,7 +23,7 @@ import { z } from 'zod';
 
 // 必须在任何 process.env 读取之前执行：ESM/CJS 的 import 提升会先求值依赖模块，
 // 若依赖 index.ts 里的 dotenv.config()，这里读到的是未加载 .env 的空环境
-dotenv.config({ path: path.join(__dirname, '..', '..', '.env') });
+dotenv.config({ path: path.join(__dirname, '..', '..', '.env'), override: true });
 
 /** 环境变量 schema（宽松默认值；JWT_SECRET 无默认值——未配置一律拒绝启动，防止生产用公开的 dev 密钥） */
 const envSchema = z.object({

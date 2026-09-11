@@ -11,8 +11,10 @@
 import dotenv from 'dotenv';
 import path from 'path';
 
-// 加载 .env 文件（从项目根目录）
-dotenv.config({ path: path.join(__dirname, '..', '..', '.env') });
+// 加载 .env 文件（从项目根目录）。
+// override: true —— .env 为准，压掉 PM2 进程环境里残留的上一版旧值
+// （dotenv 默认不覆盖已存在变量，否则发版后新 .env 会被静默忽略；详见 config.ts）
+dotenv.config({ path: path.join(__dirname, '..', '..', '.env'), override: true });
 
 import { env } from './config';
 import { createApp } from './app';
