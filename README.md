@@ -2,7 +2,7 @@
 
 一个全栈社交媒体平台，支持 Web 端与 Android 客户端。
 
-功能覆盖：图文/视频帖子、嵌套评论、点赞收藏转发、私信聊天（图片/引用/已读）、关注关系、实时通知（SSE）、公告、管理后台、电子书阅读、音乐播放器、亮暗主题。
+功能覆盖：图文/视频帖子、嵌套评论、点赞收藏转发、私信聊天（图片/引用/已读）、关注关系、实时通知（SSE）、公告、管理后台、电子书阅读、音乐播放器、亮暗主题、**多人语音房间**（Mesh 音频/屏幕共享/全房间录制/房内聊天/共享统计）。
 
 ---
 
@@ -19,7 +19,7 @@
 - **CSS Modules + 设计令牌** — 组件级样式隔离，亮/暗双主题
 - **Lucide React** — 图标库
 - **Capacitor 8** — Android 原生打包（Gradle 9.1 + AGP 8.13，支持 Java 25 构建）
-- **Vitest + Testing Library** — 单元测试（`15 文件 149 用例`：语音域各子模块、hooks 乐观更新/回滚、SSE 票据连接/退避重连/单例分发、评论树、事件总线等）
+- **Vitest + Testing Library** — 单元测试（`37 文件 330 用例`：语音域各子模块、hooks 乐观更新/回滚、SSE/WS 一次性票据连接、退避重连、单例分发、评论树、错误边界、聊天行/图片清洗纯函数、事件总线、共享收件箱 store（轮询合并/未读合并）、幂等读重试策略、测试基建（原型打桩还原）等）
 
 ### 后端（server）
 
@@ -34,7 +34,7 @@
 - **pino** — 结构化日志
 - **nodemailer** — 邮箱验证码
 - **优雅停机** — SIGTERM 后断开 WS/SSE、等存量请求收尾（10 秒兜底），PM2 reload 无断崖
-- **Vitest** — 单元测试（`server/test`，17 文件 101 用例；全部注入 `:memory:` 库，真实 k.db 零接触）
+- **Vitest** — 单元测试（`server/test`，33 文件 242 用例；全部注入 `:memory:` 库并执行全部迁移，真实 k.db 零接触）
 
 ### 共享（shared）
 
@@ -46,7 +46,7 @@
 - **ESLint + Prettier + EditorConfig** — 代码规范（Prettier 已纳入 CI 门禁；`npm run format` 修格式、`format:check` 检查）
 - **GitHub Actions CI** — push 自动执行 `install → prettier → build → lint → vitest（双端）→ Playwright e2e`，另有并行 Docker job 验证镜像构建 + 容器健康检查冒烟；e2e 失败自动上传报告产物；同分支新推送自动取消在跑的旧 CI（省排队与额度）
 - **Dockerfile** — 一键容器化（非 root 运行 + 健康检查 + 数据目录预建，数据库文件走挂载或 DB_PATH；运行阶段按 workspace 装 shared/server 生产依赖（`npm ci --omit=dev -w shared -w server`），client 为纯静态产物不装依赖）
-- **Playwright** — E2E 测试（`e2e/`：smoke 只读公开流程 + b1b2 回归 + write-path 真实写路径——注册→登录→发帖→点赞→评论，跑在 DB_PATH 指向的独立测试库上）
+- **Playwright** — E2E 测试（`e2e/`，10 条：smoke 只读公开流程 + b1b2 回归 + scroll 移动端滚动 + write-path 真实写路径——注册→登录→发帖→点赞→评论 + p0-regressions 的 P0 缺陷浏览器级回归（授权弹窗期间退房后麦克风必须关闭），跑在 DB_PATH 指向的独立测试库上；**每轮重置测试库与上传目录**，选择器用 `data-testid`（不依赖 CSS Modules 哈希类名），等待均为有界轮询（无固定 sleep）；默认不复用外部 3200 服务，需要时显式 `E2E_REUSE=1`）
 
 ---
 
@@ -62,10 +62,10 @@ k/
 │       └── types.ts             # z.infer 导出类型
 ├── client/                      # 前端
 │   ├── src/
-│   │   ├── api/                 # 类型化 API 模块（http.ts 实例/posts/friends/voice）
+│   │   ├── api/                 # 类型化 API 模块（http.ts 实例/posts/friends/voice/retry.ts 幂等读重试策略）
 │   │   ├── components/          # 可复用组件
 │   │   │   ├── ui/              # 基础件（Avatar/Toast/ConfirmDialog/EmptyState/VolumeSlider）
-│   │   │   ├── post/            # PostCard/PostDetail/PostMedia/PostDescriptionPanel
+│   │   │   ├── post/            # PostCard/PostDetail/PostDetailComments/PostMedia/PostDescriptionPanel
 │   │   │   ├── chat/            # ChatWindow/MessageBubble/ConversationSidebar...
 │   │   │   ├── profile/         # ProfileHeader/ProfilePostGrid/PrivateFolder
 │   │   │   ├── auth/            # LoginForm/RegisterForm/ForgotForm
@@ -73,12 +73,12 @@ k/
 │   │   │   └── icons/           # 图标组件
 │   │   ├── context/             # Auth/Theme/Music/Event/Voice 五个 Context（业务事件走 mitt）
 │   │   ├── features/            # 业务域内聚（messages：私信 hooks/组件）
-│   │   ├── hooks/               # usePostsFeed/useLikePost/useFollowUser/useSse + 语音域 hook...
+│   │   ├── hooks/               # usePostsFeed/useLikePost/useFollowUser/useSse/useInbox + 语音域 hook...
 │   │   ├── layouts/             # MainLayout
 │   │   ├── lib/                 # 纯函数（scroll/comments/parsePostImages）
 │   │   ├── pages/               # 页面级组件（Home/Explore/Profile/Admin/Books/voice/...）
 │   │   ├── router/              # AppRoutes/ProtectedRoute
-│   │   ├── state/               # queryClient、mitt 事件总线、交互缓存
+│   │   ├── state/               # queryClient、mitt 事件总线、交互缓存、inboxStore（会话+通知共享状态：单飞请求/引用计数轮询/未读合并）
 │   │   ├── voice/               # 语音域（见「语音域架构与维护」）：VoiceSession 门面 + share/signaling/audio/mesh 子模块 + recorder/rnnoise
 │   │   ├── music/               # MusicEngine（audio 元素生命周期/播放列表/ended 自切歌）
 │   │   └── styles/              # global.css + tokens（其余已模块化）
@@ -90,26 +90,27 @@ k/
 │   │   ├── index.ts             # 仅 bootstrap
 │   │   ├── app.ts               # 组装 express 应用（helmet/pino/静态资源/SPA 回退）
 │   │   ├── config.ts            # zod 校验环境变量 + PATHS 路径常量
-│   │   ├── db/                  # connection（含预编译语句缓存）/schema/migrations（24 个版本化迁移）
+│   │   ├── db/                  # connection（含预编译语句缓存）/schema/migrations（26 个版本化迁移）
 │   │   ├── middleware/          # auth / error / cors（validate 为顶层工厂）
 │   │   ├── repositories/        # 全部 SQL 收敛（强类型行，src 零 any）
 │   │   ├── services/            # 业务编排（post.service / userDeletion.service）
 │   │   ├── serializers/         # 响应装配（posts/messages）
 │   │   ├── routes/              # auth/posts/messages/friends/admin/books/music/events...
-│   │   ├── voice/               # 语音信令 hub + WS 消息处理（messageHandlers）
-│   │   ├── lib/                 # jwt/file/image/upload/heicPool/chunkUploadRegistry/logger + video/ 子目录
+│   │   ├── voice/               # 语音信令 hub + WS 消息处理（messageHandlers）+ ip-connections（每 IP 并发上限）
+│   │   ├── lib/                 # jwt/file/image/upload/heicPool/chunkUploadRegistry/oneTimeTicket/listLimits（列表硬上限）/admin-bootstrap/logger + video/ 子目录
 │   │   ├── mailer.ts / sse.ts / validate.ts   # 邮件 / SSE 推送 / 校验中间件工厂
 │   │   └── types.ts             # 全局类型
-│   ├── test/                    # Vitest 单元测试（:memory: SQLite）
+│   ├── test/                    # Vitest 单元测试（:memory: SQLite；helpers/memdb 统一走迁移，每 worker 独立上传目录）
 │   ├── uploads/                 # 用户上传文件（images/avatars/temp，不入库）
 │   └── package.json
-├── e2e/                         # Playwright 测试（smoke + b1b2 回归 + write-path 写路径）
+├── e2e/                         # Playwright 测试（smoke + b1b2 回归 + scroll + write-path + p0-regressions）
 ├── .github/workflows/ci.yml     # CI
 ├── Dockerfile
-├── deploy.ps1                   # 完整部署脚本（本地构建/打包；传输走 SFTP：deploy-sftp.py）
-├── deploy-interactive.ps1       # 部署交互包装：依次输入服务器 IP 与 SSH 密码后调用 deploy.ps1
-├── deploy-sftp.py               # 完整部署传输/远端部署后端（SFTP，paramiko）
-├── deploy-client-lite.py        # 仅 client 变更时的轻量部署（dist+public，自动备份）
+├── OPTIMIZATION_PLAN.md         # 优化与加固的执行记录（问题清单 → 改动 → 逐项验证数据；含撤回/不做的决定）
+├── deploy.ps1                   # 完整部署脚本（本地构建/打包；传输走 SFTP：deploy-sftp.py；SSH 私钥优先）
+├── deploy-interactive.ps1       # 部署交互包装（无密钥时才提示输入密码；有密钥直接免密部署）
+├── deploy-sftp.py               # 完整部署传输/远端部署后端（SFTP，paramiko；密钥优先，主机密钥严格校验）
+├── deploy-client-lite.py        # 仅 client 变更时的轻量部署（dist+public，自动备份；同样密钥优先）
 └── package.json                 # 根目录统一脚本
 ```
 
@@ -125,13 +126,27 @@ k/
 client/src/voice/
 ├── VoiceSession.ts                    # 门面：组合子模块，公共 API 签名不变
 ├── share/screenShareController.ts     # 屏幕共享状态机（发送/接收端 + 断线重连对账）
-├── signaling/wsSignaling.ts           # 信令 WS 传输（自动重连/终止关闭码）
+├── share/senderTuning.ts              # 发送端参数调优（H.264 偏好/码率/缩放/降级），纯函数可单测
+├── signaling/wsSignaling.ts           # 信令 WS 传输（一次性票据/自动重连/终止关闭码）
 ├── audio/audioGraph.ts                # WebAudio 图（本地链/播放总线/说话检测/resume 兜底）
 ├── mesh/meshManager.ts + meshPeer.ts  # WebRTC Mesh（完美协商/ICE 重启/对端生命周期）
 ├── sdp.ts / denoiser.ts / prefs.ts    # SDP 加工 / RNNoise 降噪 / 偏好持久化
 ├── qualityMonitor.ts                  # 语音质量评估（自报语义）
 └── recording/ + recorder/             # 全房间混音录制（PCM→MP3 结算）
 ```
+
+服务端接入约束（`server/src/voice/`）：
+
+| 闸门                                 | 值                      | 含义                                                                                      |
+| ------------------------------------ | ----------------------- | ----------------------------------------------------------------------------------------- |
+| `VOICE_MAX_ROOM_SIZE`                | 10                      | 单个房间人数上限（Mesh 音频路数的合理上限）                                               |
+| `MAX_VOICE_GUEST_CONNECTIONS_PER_IP` | 10                      | 同一 IP 的**访客**连接上限 = 房间上限：一个 IP 最多占满一个房间的访客席位，刷不出多个房间 |
+| `MAX_VOICE_CONNECTIONS_PER_IP`       | 24                      | 同一 IP 的语音连接**总数**上限（含已登录），兜底限制裸 socket 刷量                        |
+| 信令凭证                             | 一次性票据（30s，单次） | 登录用户先 `POST /api/voice/ticket` 换票，JWT 不进 URL；`?token=` 保留兼容旧客户端        |
+| 终止关闭码                           | 4001/4002/4003/4004     | 鉴权失败 / 同账号被顶 / 房间已删 / 同 IP 连接过多（均为终止码，客户端不再重连）           |
+
+> 超过每 IP 上限时服务端以 **4004** 关闭并回一条明确错误；被拒的连接在**消耗任何凭证之前**就返回，
+> 因此不会消耗一次性票据、也不会分配访客 id。
 
 UI 与状态层：
 
@@ -145,23 +160,30 @@ client/src/music/MusicEngine.ts       # 音乐播放引擎（audio 元素生命�
 
 ### 故障定位
 
-| 现象                                 | 定位文件                                                  |
-| ------------------------------------ | --------------------------------------------------------- |
-| 共享画面缺失/断线后舞台不关/双共享者 | `voice/share/screenShareController.ts`                    |
-| 进不了房/断线不重连/被 4002 踢       | `voice/signaling/wsSignaling.ts`                          |
-| 听不到/无声/说话指示不亮             | `voice/audio/audioGraph.ts`                               |
-| 画面或声音偶发缺失/协商失败          | `voice/mesh/meshManager.ts` + `meshPeer.ts`               |
-| 聊天消息重复/丢消息/翻页错           | `hooks/useVoiceChatStore.ts`                              |
-| 朗读不播/高亮错乱                    | `hooks/useChatTTS.ts`                                     |
-| 房间列表/控制栏/成员卡片             | `pages/voice/*`                                           |
-| 音乐不切歌/播放当前曲目无声          | `music/MusicEngine.ts`                                    |
-| 全屏/沉浸/小窗异常                   | `useFullscreenImmersive.ts` / `useCanvasVideoRenderer.ts` |
+| 现象                                 | 定位文件                                                                          |
+| ------------------------------------ | --------------------------------------------------------------------------------- |
+| 共享画面缺失/断线后舞台不关/双共享者 | `voice/share/screenShareController.ts`                                            |
+| 共享画面糊/卡/CPU 占用高（编码侧）   | `voice/share/senderTuning.ts`（H.264 偏好/码率/缩放/降级）                        |
+| 进不了房/断线不重连/被 4002 踢       | `voice/signaling/wsSignaling.ts`                                                  |
+| 被 4004 拒（同 IP 连接过多）         | `server/src/voice/ip-connections.ts`（每 IP 闸门）                                |
+| 听不到/无声/说话指示不亮             | `voice/audio/audioGraph.ts`                                                       |
+| 画面或声音偶发缺失/协商失败          | `voice/mesh/meshManager.ts` + `meshPeer.ts`                                       |
+| 聊天消息重复/丢消息/翻页错           | `hooks/useVoiceChatStore.ts`                                                      |
+| 朗读不播/高亮错乱                    | `hooks/useChatTTS.ts`                                                             |
+| 房间列表/控制栏/成员卡片             | `pages/voice/*`                                                                   |
+| 音乐不切歌/播放当前曲目无声          | `music/MusicEngine.ts`                                                            |
+| 全屏/沉浸/小窗异常                   | `useFullscreenImmersive.ts` / `useCanvasVideoRenderer.ts`                         |
+| 房主操作被 403（清聊天/删房）        | `server/src/routes/voice.ts`（`X-Voice-Owner-Token` 归属令牌判定）                |
+| 未读角标不一致/请求量翻倍            | `client/src/state/inboxStore.ts`（会话+通知单一事实来源、单飞请求、引用计数轮询） |
+| 弱网偶发失败（是否该重试）           | `client/src/api/retry.ts`（只 GET/HEAD + 无响应/502-504；超时/取消/写操作不重试） |
+| 列表「少了行」或徽标数字偏小         | `server/src/lib/listLimits.ts`（硬上限 500 + `has_more`；未读数走独立 COUNT）     |
+| 崩溃白屏                             | `client/src/components/ErrorBoundary.tsx`（+ `main.tsx` 的 `onUncaughtError`）    |
 
 排查套路：现象归类 → 跑对应模块单测（`npx vitest run src/voice/<模块>`）→ 看注入回调边界（`ScreenShareSink`/`MeshManagerOptions`/`AudioGraphOptions`）。网页端与 APK 是同一份 Web 代码，能网页复现的问题优先浏览器 DevTools 定位。
 
-### 单测覆盖（client 149 / server 101）
+### 单测覆盖（client 330 / server 242）
 
-语音域重点：screenShareController 29、meshManager 16、audioGraph 15、wsSignaling 12、MusicEngine 10、useChatTTS 8、useVoiceChatStore 8；服务端 17 文件 101 用例（全部注入 `:memory:` 库）。
+语音域重点：screenShareController 29、wsSignaling 21、meshManager 16、audioGraph 16、senderTuning 11、MusicEngine 10、useChatTTS 8、useVoiceChatStore 8；服务端 33 文件 242 用例（全部注入 `:memory:` 库并执行全部迁移）。客户端 37 文件 330 用例，另有 10 条 Playwright e2e。
 
 ---
 
@@ -201,8 +223,13 @@ PORT=3000
 # JWT 密钥（生产环境必须修改）
 JWT_SECRET=your-secret-key-here
 
-# 管理员邮箱（注册该邮箱后自动成为管理员）
+# 管理员邮箱（**仅在与下一行配合时才会提权**）
 ADMIN_EMAIL=your-email@example.com
+
+# 一次性提权开关：只有取值为 1/true/yes/on 时，启动才把 ADMIN_EMAIL 对应账号提升为管理员。
+# 不设置即不提权——否则「ADMIN_EMAIL 写错」会变成「谁注册该邮箱谁就是管理员」。
+# 需要重新引导管理员时临时打开、启动一次、再关掉。
+# ADMIN_BOOTSTRAP=1
 
 # CORS 白名单（逗号分隔，生产环境包含你的前端域名）
 ALLOWED_ORIGINS=http://localhost:5173,https://your-domain.com
@@ -231,12 +258,17 @@ npm run dev
 ### 4. 测试
 
 ```bash
-npm run lint         # ESLint（三个包）
+npm run lint         # ESLint（三个包）；客户端为 --max-warnings 0（0 告警基线，新增告警直接失败）
 npm test             # Vitest 单元测试（服务端 + 客户端串行执行）
 npm run test:client  # 客户端 Vitest 单元测试
-npm run e2e          # Playwright 冒烟测试（自动构建并在 3200 端口启动）
+npm run e2e          # Playwright e2e（10 条；自动构建并在 3200 端口启动，测试库/上传目录每轮重置）
 npm run format:check # Prettier 格式检查（CI 同款门禁；修复用 npm run format）
+npm run typecheck    # 三包 + e2e 的 TypeScript 检查（CI 门禁）
 ```
+
+> 服务端的 `lint` 保留 55 条 `@typescript-eslint/no-explicit-any` 告警，全部位于 `server/test/**`
+> 且是刻意豁免（WS/mock 桩大量使用 `as any`）；客户端为 0 告警基线，因此对客户端启用
+> `--max-warnings 0` 防止新增告警无声积累。
 
 ### 5. 构建生产版本
 
@@ -285,41 +317,75 @@ docker run -p 3000:3000 \
 ### 传统部署（当前生产方式）
 
 - 脚本：`deploy.ps1`（本地构建/打包）+ `deploy-sftp.py`（SFTP 传输与远端部署，替代不可靠的 pscp/plink）。
-- 调用（推荐，交互输入）：`pwsh -NoProfile -ExecutionPolicy Bypass -File deploy-interactive.ps1`——弹窗依次输入**服务器 IP 与 SSH 密码**（IP 不内置默认值，公开仓库不暴露生产地址），密码掩码显示、不落盘、不进历史。
-- 调用（免交互）：`pwsh -ExecutionPolicy Bypass -File deploy.ps1 -SERVER <IP> -PASSWORD <密码>`（密码经环境变量传给 SFTP 后端，但仍会留在本机 shell 历史/进程命令行，推荐优先用上面的交互方式）。
-- 首次部署新服务器：`deploy-sftp.py` 默认校验本机 `~/.ssh/known_hosts` 中的主机指纹（防中间人截获密码），未知主机会被拒绝；确认网络可信后可加 `--trust-host` 豁免一次，或先 `ssh-keyscan -p <端口> <IP> >> ~/.ssh/known_hosts`。
+- **认证：SSH 私钥优先**。默认取本机 `~/.ssh/k_deploy_ed25519`（存在即免密，无需任何参数）；也可用 `-KEY <私钥路径>` 指定，或用环境变量 `DEPLOY_KEY`。
+  - 免交互（推荐）：`pwsh -ExecutionPolicy Bypass -File deploy.ps1 -SERVER <IP>`
+  - 交互式（无密钥时回退为输入密码）：`pwsh -NoProfile -ExecutionPolicy Bypass -File deploy-interactive.ps1`
+  - 口令回退：`-PASSWORD <密码>`（密码经环境变量传给后端，但仍可能留在 shell 历史/进程命令行；**生产已关闭 SSH 口令登录，此路仅对仍开着口令登录的机器有效**）
+- 首次部署新服务器：`deploy-sftp.py` 默认校验本机 `~/.ssh/known_hosts` 中的主机指纹（防中间人），未知主机会被拒绝；确认网络可信后可加 `--trust-host` 豁免一次，或先 `ssh-keyscan -p <端口> <IP> >> ~/.ssh/known_hosts`。
 - **必须用 PowerShell 7（`pwsh`）**：`deploy.ps1` 等脚本含 UTF-8 无 BOM 中文内容，Windows 自带的 PowerShell 5.1（`powershell`）按 GBK 解码会报语法错误（如意外的标记 `)`）。
 - 目标目录 `/var/www/k`；PM2 进程 `k-server`；nginx 站点 `sites-enabled/k`（默认站反向代理到 `127.0.0.1:3000`）；共享包链接 `server/node_modules/@k/shared`。
-- 流程：`npm run build` → 打包 dist/books/.env（**不含 uploads**，防覆盖生产用户数据）→ SFTP 上传 → 远端**清空三个 dist 后解压**（防旧产物残留被 Node 文件优先解析）、清旧 `server/node_modules`、**根目录 `npm install --omit=dev`**（npm workspaces 按根 lockfile 装齐 shared/server）、重建 `@k/shared` 链接、`pm2 delete`+`start`+`save` → 新版 APK 单独上传（大小核验，保留最近 5 个、清理更旧）→ 部署后自动校验（首页/health 200、dist 时间戳、node_modules 无外链、nginx root 仅指向 `/var/www/k`）。
+- 远端流程（`deploy-sftp.py`，7 步）：`npm run build` → 打包 dist/books/.env（**不含 uploads**，防覆盖生产用户数据）→ SFTP 上传 → ① 解压到**同分区 staging**（不触碰现行产物）→ ② **完整性预检**（缺 `server/dist/index.js` / `client/dist/index.html` / `shared/dist/index.js` 等即中止）→ ③ 旧 `dist` `mv` 进 `.deploy-backup/<时间戳>`、新 `dist` `mv` 就位（两次 rename，无「目录不存在」中间态）→ ④ 同步 `.env`/清单/ecosystem/books/public → ⑤ 运行环境检查（node/ffmpeg/pm2）→ ⑥ **`npm ci --omit=dev`**（按 lockfile 确定性安装）+ 重建 `@k/shared` 链接 → ⑦ **`pm2 startOrReload --update-env`** + `pm2 save`（复用同一条目，避免 `delete+start` 的真空期）→ 新版 APK 单独上传（大小核验，保留最近 5 个）→ 部署后自动核验：首页/health 200、**首页引用的每个 `/assets/*.js|css` 都断言 200**（抓「HTML 是新的、资源是旧的」）、dist 时间戳、node_modules 无外链、nginx root 仅指向 `/var/www/k`。
+- **回滚**：备份目录即上一版完整产物，`mv` 回去 + `pm2 restart k-server`（脚本末尾会打印本次的确切命令）。备份保留最近 3 份。**数据库不需要跟着回滚**——迁移只做「加列」这类前向兼容改动，旧代码可读新库（已用真实回滚演练验证：回滚/前滚各约 0.5 秒的重启窗口）。
+- **数据库快照**：`.workbuddy/tmp/db-backup.py`（远端 `db.backup()` 一致性备份 → `integrity_check` → SFTP 下载 → sha256 比对，认证同样密钥优先），落到 `server/k.db.prod-backup-<时间戳>.db`。
+- **生产 SSH 已关闭口令登录**（`/etc/ssh/sshd_config.d/00-hardening.conf`，只允许密钥）；需要恢复口令登录时删掉该 drop-in 并 `systemctl reload ssh`。
 - PM2 重启时服务端执行优雅停机（SIGTERM → 断开语音 WS 与 SSE、等存量请求收尾，10 秒兜底强退），重启窗口比瞬时 kill 稍长属正常现象。
+- `/api/health` 带数据库探针（`SELECT 1`），数据库不可用时返回 **503**（不泄露内部错误），可直接用于负载均衡摘除。
 
 #### 轻量部署（仅前端变更时，推荐）
 
 - 只改了 `client/`（如 CSS/组件）时无需整包重发：`deploy-client-lite.py` 只上传 `client/dist` + `client/public`。
-- 用法：打包 `cd client && tar -czf /tmp/k-client-only.tar.gz dist public`，然后 `DEPLOY_PASSWORD=... python deploy-client-lite.py --server <IP> --package <tar.gz>`。
+- 用法：打包 `cd client && tar -czf /tmp/k-client-only.tar.gz dist public`，然后 `python deploy-client-lite.py --server <IP> --package <tar.gz>`（认证同样密钥优先：默认 `~/.ssh/k_deploy_ed25519`，或设 `DEPLOY_KEY`）。
 - 远端自动将当前 `dist` 备份为 `dist.bak-时间戳`（保留最近 3 份）再解压覆盖，并校验首页/health 与产物落地。
 - 注意：Windows 下 Python 需用真实路径（不认 Git Bash 的 `/tmp` 虚拟路径）；脚本依赖 paramiko，建议用系统 Python 运行。
 
 ---
 
+## 安全与可靠性要点
+
+这些是「读代码看不出来、但改错了会出事故」的机制，逐条写明位置与边界。
+
+| 机制                     | 位置                                               | 边界与理由                                                                                                                                                                                                                    |
+| ------------------------ | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 语音房归属**令牌**       | `server/src/routes/voice.ts` + 迁移 026            | 访客房主判定用创建时签发的令牌（`X-Voice-Owner-Token`，时间安全比较），**不再用 IP**——否则同 NAT 下能删别人的房、换网就丢自己的房。令牌只在创建响应里下发一次，`toVoiceRoom()` 出口统一剥离；存量 NULL 令牌的房回落到 IP 判定 |
+| 每 IP 语音连接上限       | `server/src/voice/ip-connections.ts`               | 访客 10 / 总数 24；超限以 **4004** 关闭且**在消耗任何凭证之前**返回（不浪费一次性票据、不分配访客 id）                                                                                                                        |
+| 无分页列表**硬上限**     | `server/src/lib/listLimits.ts`                     | 收藏/转发/粉丝/关注/公告/评论/管理端列表上限 500 行 + `has_more`（**只增不改**：数组形状与既有字段不变）。此前无 LIMIT，一个万级收藏会同步物化全部行并停摆事件循环                                                            |
+| 公告未读数               | `server/src/routes/announcements.ts`               | 走**独立 COUNT**，不从（可能被截断的）列表推导——否则徽标数字会偏小                                                                                                                                                            |
+| 管理员提权**一次性开关** | `server/src/lib/admin-bootstrap.ts`                | 只有 `ADMIN_BOOTSTRAP=1/true/yes/on` 才按 `ADMIN_EMAIL` 提权，否则只打提示日志。避免「写进 .env 就等于长期授权」                                                                                                              |
+| Token **滑动续期**       | `server/src/lib/jwt.ts` + `client/src/api/http.ts` | 签发超过阈值时经响应头 `X-Refreshed-Token` 回一张新 token，一直在用的用户不会在 7 天到点时被登出；彻底沉默的会话照常过期                                                                                                      |
+| 语音/SSE 一次性票据      | `server/src/lib/oneTimeTicket.ts`                  | 30 秒有效、单次消费，JWT 不进 URL（避免进反代 access log）；票据一次性 ⇒ EventSource 原生重连不可用，客户端改为指数退避手动重连                                                                                               |
+| 幂等读**单次重试**       | `client/src/api/retry.ts`                          | 只重试 GET/HEAD 且只针对「连不上」与 502/503/504；**超时、已取消、写操作、后台轮询都不重试**（`kRetry: false`）。React Query 侧保持 `retry: false`，避免两层重试相乘                                                          |
+| 收件箱**单一事实来源**   | `client/src/state/inboxStore.ts`                   | 会话+通知一份状态：单飞请求（SSE 同步分发给多个消费方只打一次）、引用计数轮询（消息页 10s / 其他页面 30s）、未读合并。此前 Sidebar 与消息页各拉一套，角标会出现「列表已清、侧边栏回弹」                                       |
+| 崩溃兜底                 | `client/src/components/ErrorBoundary.tsx`          | 子树异常显示兜底而不是白屏；`main.tsx` 另接 `onUncaughtError`                                                                                                                                                                 |
+| 上传与临时视频配额       | `server/src/lib/chunkUploadRegistry.ts`            | 每用户临时视频字节配额 + 并发槽位；429 入队失败时当场回收文件与会话登记                                                                                                                                                       |
+| ffmpeg 并发闸门          | `server/src/lib/video/ffmpegGate.ts`               | 转码与截帧共用一个进程级上限，防并发 ffmpeg 打满 CPU                                                                                                                                                                          |
+
+> 上述改动都有对应的回归测试（见 `server/test` / `client/src/**/*.test.ts`），
+> 其中 P0 级缺陷（麦克风驻留、乐观更新在途闸门）另有浏览器级 e2e 与**反向验证**
+> （把修复拆掉确认用例真会失败）。完整过程、撤回项与测量数据见 `OPTIMIZATION_PLAN.md`。
+
+---
+
 ## API 概览
 
-| 路径                 | 说明                                                            |
-| -------------------- | --------------------------------------------------------------- |
-| `/api/auth`          | 注册（邮箱验证码）、登录、忘记密码、当前用户                    |
-| `/api/posts`         | 帖子 CRUD、点赞/评论/收藏/转发/分享、视频与临时视频上传         |
-| `/api/users`         | 用户资料、头像、私密图片                                        |
-| `/api/messages`      | 私信会话列表、消息收发、清除/撤回                               |
-| `/api/friends`       | 关注/取关、粉丝列表、搜索、推荐、状态                           |
-| `/api/notifications` | 评论/回复通知、已读                                             |
-| `/api/admin`         | 管理后台（用户/帖子/公告管理）                                  |
-| `/api/announcements` | 公告列表、定向推送、已读                                        |
-| `/api/books`         | 电子书列表/详情/章节                                            |
-| `/api/music`         | 音乐列表                                                        |
-| `/api/events`        | SSE 实时事件流（私信/通知/公告）                                |
-| `/api/voice`         | 语音房间（创建/加入、WebSocket 信令 `/api/voice/ws`）           |
-| `/api/app/version`   | App 更新检测（配置 `APP_VERSION`/`APP_APK_URL` 后返回最新版本） |
-| `/api/health`        | 健康检查                                                        |
+| 路径                 | 说明                                                                                       |
+| -------------------- | ------------------------------------------------------------------------------------------ |
+| `/api/auth`          | 注册（邮箱验证码）、登录、忘记密码、当前用户                                               |
+| `/api/posts`         | 帖子 CRUD、点赞/评论/收藏/转发/分享、视频与临时视频上传                                    |
+| `/api/users`         | 用户资料、头像、私密图片                                                                   |
+| `/api/messages`      | 私信会话列表、消息收发、清除/撤回                                                          |
+| `/api/friends`       | 关注/取关、粉丝列表、搜索、推荐、状态                                                      |
+| `/api/notifications` | 评论/回复通知、已读                                                                        |
+| `/api/admin`         | 管理后台（用户/帖子/公告管理）                                                             |
+| `/api/announcements` | 公告列表、定向推送、已读                                                                   |
+| `/api/books`         | 电子书列表/详情/章节                                                                       |
+| `/api/music`         | 音乐列表                                                                                   |
+| `/api/events`        | SSE 实时事件流（私信/通知/公告）                                                           |
+| `/api/voice`         | 语音房间（创建/加入、WebSocket 信令 `/api/voice/ws`；房主操作用 `X-Voice-Owner-Token` 头） |
+| `/api/app/version`   | App 更新检测（配置 `APP_VERSION`/`APP_APK_URL` 后返回最新版本）                            |
+| `/api/health`        | 健康检查（含 `SELECT 1` 数据库探针，失败返回 503）                                         |
+
+> 契约备注：列表类接口超出硬上限时会带 `has_more: true` 并截断（见「安全与可靠性要点」）；
+> 响应头 `X-Refreshed-Token` 出现时客户端应落盘为新 token（滑动续期）。
 
 ---
 
