@@ -3,11 +3,16 @@
  * 管理后台 · 用户管理 Tab (AdminUsersTab) —— 展示层
  * ============================================================
  * 状态与数据逻辑全部由 AdminPage（状态编排）持有并经 props 注入；
- * 本组件只负责用户列表/搜索框/封禁与改密弹窗的渲染。
+ * 本组件只负责用户列表/搜索框/分页/封禁与改密弹窗的渲染。
+ *
+ * 搜索**不再本地过滤**：关键词经 props 回传给 AdminPage，由服务端
+ * （/api/admin/users?q=）过滤。本地过滤的问题不是慢，而是**搜不到**——
+ * 老实现只拿到上限内的前 N 个用户，超出的用户在搜索框里根本不存在，
+ * 于是也封禁/改密/删除不了。
  * ============================================================
  */
 
-import { Search, Trash2, Key, Ban, CircleCheck } from 'lucide-react';
+import { Search, Trash2, Key, Ban, CircleCheck, ChevronLeft, ChevronRight } from 'lucide-react';
 import styles from '../AdminPage.module.css';
 import type { AdminUser } from './types';
 
@@ -15,6 +20,10 @@ export interface AdminUsersTabProps {
   users: AdminUser[];
   userSearch: string;
   setUserSearch: (v: string) => void;
+  /** 当前页码（从 1 开始）与服务端给出的总页数 */
+  userPage: number;
+  setUserPage: (updater: (p: number) => number) => void;
+  userTotalPages: number;
   /** 行级封禁状态判定（逻辑在 AdminPage，与历史实现一致） */
   isBanned: (u: AdminUser) => boolean;
   onDelete: (u: AdminUser) => void;
@@ -33,6 +42,9 @@ export default function AdminUsersTab({
   users,
   userSearch,
   setUserSearch,
+  userPage,
+  setUserPage,
+  userTotalPages,
   isBanned,
   onDelete,
   onUnban,
@@ -45,13 +57,6 @@ export default function AdminUsersTab({
   setNewPw,
   onChangePw,
 }: AdminUsersTabProps) {
-  const filteredUsers = users.filter(
-    (u) =>
-      u.username.toLowerCase().includes(userSearch.toLowerCase()) ||
-      u.email.toLowerCase().includes(userSearch.toLowerCase()) ||
-      String(u.id).includes(userSearch)
-  );
-
   return (
     <>
       <div>
@@ -60,6 +65,7 @@ export default function AdminUsersTab({
             <Search size={16} />
             <input
               name="search-users"
+              data-testid="admin-user-search"
               placeholder="搜索用户名或邮箱"
               value={userSearch}
               onChange={(e) => setUserSearch(e.target.value)}
@@ -67,7 +73,7 @@ export default function AdminUsersTab({
           </div>
         </div>
         <div className={styles.tableWrapper}>
-          <table className={styles.table}>
+          <table className={styles.table} data-testid="admin-users-table">
             <thead>
               <tr>
                 <th>ID</th>
@@ -79,7 +85,18 @@ export default function AdminUsersTab({
               </tr>
             </thead>
             <tbody>
-              {filteredUsers.map((u) => (
+              {users.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={6}
+                    data-testid="admin-users-empty"
+                    style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: 24 }}
+                  >
+                    {userSearch.trim() ? '没有匹配的用户' : '暂无用户'}
+                  </td>
+                </tr>
+              )}
+              {users.map((u) => (
                 <tr key={u.id}>
                   <td>{u.id}</td>
                   <td>{u.username}</td>
@@ -134,6 +151,29 @@ export default function AdminUsersTab({
             </tbody>
           </table>
         </div>
+        {userTotalPages > 1 && (
+          <div className={styles.pagination}>
+            <button
+              data-testid="admin-users-prev"
+              disabled={userPage <= 1}
+              onClick={() => setUserPage((p) => p - 1)}
+              title="上一页"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            <span data-testid="admin-users-page">
+              {userPage} / {userTotalPages}
+            </span>
+            <button
+              data-testid="admin-users-next"
+              disabled={userPage >= userTotalPages}
+              onClick={() => setUserPage((p) => p + 1)}
+              title="下一页"
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Password change modal */}

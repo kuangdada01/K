@@ -14,6 +14,12 @@
  *   发送公告后 invalidateQueries 触发列表重取（等价原 loadAnnouncements）
  * - 目标用户搜索下拉保持原实现（防抖 + 选中跳过标记 + 序号守卫）
  *
+ * 用户管理 tab 的搜索与分页**已改为服务端**（此前是「取回上限内的列表 +
+ * 本地过滤」：超过上限的用户搜不到，因此也封禁/改密/删除不了）——
+ * query key 为 ['admin','users',page,q]，q 走 300ms 防抖，翻页/改词保留旧页显示。
+ * 老客户端（不带 page 参数的已安装 APK）仍拿老的 `{users, has_more}` 形状，
+ * 服务端两种形状并存，见 routes/admin/users.routes.ts。
+ *
  * 状态与数据逻辑全部集中在本组件；三个 tab 的视图拆分到
  * AdminUsersTab / AdminPostsTab / AdminAnnouncementsTab（展示层）。
  * ============================================================
@@ -34,13 +40,26 @@ import AdminUsersTab from './AdminUsersTab';
 import AdminPostsTab from './AdminPostsTab';
 import AdminAnnouncementsTab, { AnnSearchResult } from './AdminAnnouncementsTab';
 import type { AdminUser, AdminPost, AdminAnnouncement } from './types';
+import {
+  ADMIN_USERS_PAGE_SIZE,
+  patchUserInPage,
+  removeUserFromPage,
+  type AdminUsersPage,
+} from './usersPaging';
 import styles from '../AdminPage.module.css';
 
 type Tab = 'users' | 'posts' | 'announcements';
 
-/** 用户列表查询（users tab 展开时拉取，缓存常驻） */
-function loadAdminUsers() {
-  return api.get('/admin/users').then((res) => res.data.users as AdminUser[]);
+/** 用户列表查询（服务端分页 + 服务端搜索；key 含 page/q，翻页/改词即取）
+ *  limit 显式带上：本地算页数用的是同一个常量，不能让服务端默认值改动后两边不一致 */
+function loadAdminUsers(page: number, q: string) {
+  return api
+    .get('/admin/users', { params: { page, limit: ADMIN_USERS_PAGE_SIZE, q: q.trim() || undefined } })
+    .then((res) => ({
+      users: res.data.users as AdminUser[],
+      total: res.data.total as number,
+      totalPages: res.data.totalPages as number,
+    }));
 }
 
 /** 帖子列表查询（key 含分页：翻页即取，keepPreviousData 保持旧页显示） */
@@ -60,8 +79,16 @@ export default function AdminPage() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<Tab>('users');
 
-  // Users state（搜索为本地过滤，见 AdminUsersTab）
+  // Users state（搜索走服务端：输入即回到第 1 页，防抖后发请求）
   const [userSearch, setUserSearch] = useState('');
+  const [userPage, setUserPage] = useState(1);
+  const debouncedUserSearch = useDebouncedValue(userSearch, 300);
+
+  /** 输入搜索词 → 立刻回到第 1 页（否则会停在旧页码上搜索，结果看起来是空的） */
+  const handleUserSearch = (value: string) => {
+    setUserSearch(value);
+    setUserPage(1);
+  };
 
   // Posts state
   const [postPage, setPostPage] = useState(1);
@@ -97,15 +124,18 @@ export default function AdminPage() {
 
   // ---- 三 tab 列表数据（§4.2：useQuery 取代手写 effect + 序号守卫）----
   const usersQuery = useQuery({
-    queryKey: ['admin', 'users'],
+    queryKey: ['admin', 'users', userPage, debouncedUserSearch],
     queryFn: () =>
-      loadAdminUsers().catch((err) => {
+      loadAdminUsers(userPage, debouncedUserSearch).catch((err) => {
         showToast(getApiErrorMessage(err, '用户列表加载失败'));
         throw err;
       }),
     enabled: tab === 'users',
+    // 翻页/改搜索词时先显示旧列表（与帖子管理一致），避免整块表格闪烁
+    placeholderData: keepPreviousData,
   });
-  const users = usersQuery.data ?? [];
+  const users = usersQuery.data?.users ?? [];
+  const userTotalPages = usersQuery.data?.totalPages ?? 0;
 
   const postsQuery = useQuery({
     queryKey: ['admin', 'posts', postPage],
@@ -136,8 +166,8 @@ export default function AdminPage() {
     setConfirmAction(() => async () => {
       try {
         await api.delete(`/admin/users/${u.id}`);
-        queryClient.setQueryData<AdminUser[]>(['admin', 'users'], (prev) =>
-          (prev ?? []).filter((x) => x.id !== u.id)
+        queryClient.setQueryData<AdminUsersPage>(['admin', 'users', userPage, debouncedUserSearch], (prev) =>
+          prev ? removeUserFromPage(prev, u.id) : prev
         );
         showToast('用户已删除');
       } catch {
@@ -153,12 +183,9 @@ export default function AdminPage() {
     if (!banTarget) return;
     try {
       await api.post(`/admin/users/${banTarget.id}/ban`, { days });
-      queryClient.setQueryData<AdminUser[]>(['admin', 'users'], (prev) =>
-        (prev ?? []).map((x) =>
-          x.id === banTarget.id
-            ? { ...x, banned_until: new Date(Date.now() + days * 86400000).toISOString() }
-            : x
-        )
+      const bannedUntil = new Date(Date.now() + days * 86400000).toISOString();
+      queryClient.setQueryData<AdminUsersPage>(['admin', 'users', userPage, debouncedUserSearch], (prev) =>
+        prev ? patchUserInPage(prev, banTarget.id, { banned_until: bannedUntil }) : prev
       );
       showToast(`已封禁 ${banTarget.username}`);
       setBanTarget(null);
@@ -170,8 +197,8 @@ export default function AdminPage() {
   const handleUnban = async (u: AdminUser) => {
     try {
       await api.post(`/admin/users/${u.id}/unban`);
-      queryClient.setQueryData<AdminUser[]>(['admin', 'users'], (prev) =>
-        (prev ?? []).map((x) => (x.id === u.id ? { ...x, banned_until: null } : x))
+      queryClient.setQueryData<AdminUsersPage>(['admin', 'users', userPage, debouncedUserSearch], (prev) =>
+        prev ? patchUserInPage(prev, u.id, { banned_until: null }) : prev
       );
       showToast(`已解封 ${u.username}`);
     } catch {
@@ -353,7 +380,10 @@ export default function AdminPage() {
           <AdminUsersTab
             users={users}
             userSearch={userSearch}
-            setUserSearch={setUserSearch}
+            setUserSearch={handleUserSearch}
+            userPage={userPage}
+            setUserPage={setUserPage}
+            userTotalPages={userTotalPages}
             isBanned={isBanned}
             onDelete={handleDeleteUser}
             onUnban={handleUnban}

@@ -26,8 +26,9 @@ export interface AdminUserRow {
  * 此前无 LIMIT，且每行带一个相关 `COUNT(*)`；客户端还会把整个列表渲染进 DOM
  * 并在本地做搜索过滤 —— 用户量上去后是「一次请求 + 一次渲染」双向失控。
  *
- * ⚠️ 代价：客户端的搜索是**本地过滤**，因此超过上限的用户搜不到也管不了。
- * 真正的解法是服务端搜索 + 分页（属于 UI 契约变更），已记入待办。
+ * ⚠️ 这是**老客户端**（不带 `page` 参数，如已安装的 APK）仍在用的形状：
+ * 服务端搜索 + 分页见 listUsersPage，新客户端走那条路。
+ * 保留本函数的理由是「只增不改」—— 换形状会让老客户端的本地搜索直接失效。
  */
 export function listUsers(cap: number = HARD_LIST_CAP): { rows: AdminUserRow[]; has_more: boolean } {
   const raw = stmt(
@@ -38,6 +39,57 @@ export function listUsers(cap: number = HARD_LIST_CAP): { rows: AdminUserRow[]; 
   `
   ).all(probeLimit(cap)) as AdminUserRow[];
   return capRows(raw, cap);
+}
+
+/**
+ * 用户列表的服务端搜索条件：用户名/邮箱模糊 + ID 子串。
+ *
+ * 语义刻意与客户端**原来的本地过滤**对齐（`username`/`email` 的 `includes`、
+ * `String(id)` 的 `includes`），这样改成服务端搜索后搜索结果不会变少也不会变多。
+ * LIKE 通配符统一经 escapeLike 转义（否则用户名里的 `%`/`_` 会变成通配符，
+ * 搜 `a_b` 会命中 `axb`；同类问题此前在 searchUsers 上修过）。
+ */
+function userSearchWhere(q: string): { sql: string; params: string[] } {
+  const keyword = q.trim();
+  if (!keyword) return { sql: '', params: [] };
+  const like = `%${escapeLike(keyword)}%`;
+  return {
+    sql:
+      "WHERE (u.username LIKE ? ESCAPE '\\' OR u.email LIKE ? ESCAPE '\\'" +
+      " OR CAST(u.id AS TEXT) LIKE ? ESCAPE '\\')",
+    params: [like, like, like],
+  };
+}
+
+/** 用户总数（带搜索条件时只统计命中的行，用于算总页数） */
+export function countUsers(q = ''): number {
+  const { sql, params } = userSearchWhere(q);
+  return count(`SELECT COUNT(*) as count FROM users u ${sql}`, ...params);
+}
+
+/**
+ * 用户列表（服务端搜索 + 分页）。
+ *
+ * 为什么必须服务端做：老实现一次物化最多 HARD_LIST_CAP 行、每行还带一个相关
+ * `COUNT(*)`，且**整个列表要进 DOM**；用户量上去后「超过上限的用户搜不到、
+ * 也管不了」（封禁/改密/删除都点不到）。分页把单次代价固定成 `limit` 行，
+ * 搜索交给 SQL 的 WHERE，命中多少都能翻到。
+ */
+export function listUsersPage(input: { q?: string; page: number; limit: number }): {
+  rows: AdminUserRow[];
+  total: number;
+} {
+  const { q = '', page, limit } = input;
+  const { sql, params } = userSearchWhere(q);
+  const total = countUsers(q);
+  const rows = stmt(
+    `
+    SELECT u.id, u.username, u.email, u.avatar, u.bio, u.role, u.banned_until, u.created_at,
+      (SELECT COUNT(*) FROM posts WHERE user_id = u.id) as post_count
+    FROM users u ${sql} ORDER BY u.id ASC LIMIT ? OFFSET ?
+  `
+  ).all(...params, limit, (page - 1) * limit) as AdminUserRow[];
+  return { rows, total };
 }
 
 /** 搜索用户（按用户名或ID，最多10条，用于公告指定用户等场景） */

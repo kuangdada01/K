@@ -4,8 +4,8 @@
  * ============================================================
  *
  * API 端点:
- * - GET    /api/admin/users              - 获取所有用户列表
- * - GET    /api/admin/users/search?q=    - 搜索用户
+ * - GET    /api/admin/users              - 用户列表（服务端搜索 + 分页；不带 page/q 时保持老的「上限 + 本地过滤」形状）
+ * - GET    /api/admin/users/search?q=    - 搜索用户（公告指定目标用，最多10条）
  * - DELETE /api/admin/users/:id          - 删除用户（级联删除，编排在 userDeletion.service）
  * - PUT    /api/admin/users/:id/password - 重置用户密码
  * - POST   /api/admin/users/:id/ban     - 封禁用户（1天/1周/1月/1年）
@@ -18,23 +18,56 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { asyncHandler, AppError } from '../../middleware/error';
 import { validateBody } from '../../validate';
-import { adminResetPasswordSchema, adminBanSchema } from '@k/shared/schemas';
+import {
+  adminResetPasswordSchema,
+  adminBanSchema,
+  pageQuerySchema,
+  limitQuerySchema,
+  searchQuerySchema,
+} from '@k/shared/schemas';
 import * as adminRepo from '../../repositories/admin.repo';
 import { deleteUser } from '../../services/userDeletion.service';
 
 const router = Router();
 
 /**
- * GET /api/admin/users - 获取所有用户列表
+ * GET /api/admin/users - 获取用户列表
  *
- * 返回所有用户信息，包含每个用户的帖子数量
+ * 查询参数:
+ * - page: 页码（带此参数即进入**服务端分页 + 服务端搜索**模式，默认1）
+ * - limit: 每页数量（默认20，上限50）
+ * - q: 搜索关键词（用户名/邮箱模糊 + ID 子串；空则不过滤）
+ *
+ * 两种形状（**只增不改**）：
+ * - 不带 `page`/`q`：老客户端（已安装的 APK）走原来的 `{ users, has_more }`
+ *   —— 上限 HARD_LIST_CAP 行 + 客户端本地过滤，行为与改动前逐字一致；
+ * - 带 `page` 或 `q`：`{ users, total, page, limit, totalPages, has_more }`，
+ *   单次只物化 `limit` 行，搜索交给 SQL —— 用户再多也能搜到、能翻到。
  */
 router.get(
   '/users',
-  asyncHandler(async (_req: Request, res: Response) => {
-    // 硬上限 HARD_LIST_CAP 行（此前无 LIMIT；客户端会在本地过滤这份列表）
-    const { rows: users, has_more } = adminRepo.listUsers();
-    res.json({ users, has_more });
+  asyncHandler(async (req: Request, res: Response) => {
+    const q = searchQuerySchema.parse(req.query.q);
+
+    // 老路径：既没要分页也没搜索 → 保持历史响应形状（老客户端本地搜索依赖它）
+    if (req.query.page === undefined && !q) {
+      const { rows: users, has_more } = adminRepo.listUsers();
+      res.json({ users, has_more });
+      return;
+    }
+
+    const page = pageQuerySchema.parse(req.query.page);
+    const limit = limitQuerySchema.parse(req.query.limit);
+    const { rows: users, total } = adminRepo.listUsersPage({ q, page, limit });
+
+    res.json({
+      users,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      has_more: page * limit < total,
+    });
   })
 );
 
