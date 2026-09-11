@@ -44,6 +44,11 @@
 
 - 三包结构（shared / server / client），根目录统一脚本
 - **ESLint + Prettier + EditorConfig** — 代码规范（Prettier 已纳入 CI 门禁；`npm run format` 修格式、`format:check` 检查）
+- **行尾策略由仓库决定** — `.gitattributes` 里 `* text=auto eol=lf`（`*.bat`/`*.cmd` 钉 CRLF），
+  **优先于各机的 `core.autocrlf`**：文本文件进仓库与检出到工作区一律 LF，Prettier 的
+  `endOfLine: lf` 因此不会再和 Windows 的 `autocrlf=true` 打架（那会产生「git 报 modified
+  而 `git diff` 为空」的幻影修改）。CI 有守卫禁止仓库内出现 CRLF。
+  **已克隆的旧工作区需一次性归一化**（工作区要干净）：`git rm --cached -r . && git reset --hard`
 - **GitHub Actions CI** — push 自动执行 `install → prettier → build → lint → vitest（双端）→ Playwright e2e`，另有并行 Docker job 验证镜像构建 + 容器健康检查冒烟；e2e 失败自动上传报告产物；同分支新推送自动取消在跑的旧 CI（省排队与额度）
 - **Dockerfile** — 一键容器化（非 root 运行 + 健康检查 + 数据目录预建，数据库文件走挂载或 DB_PATH；运行阶段按 workspace 装 shared/server 生产依赖（`npm ci --omit=dev -w shared -w server`），client 为纯静态产物不装依赖）
 - **Playwright** — E2E 测试（`e2e/`，10 条：smoke 只读公开流程 + b1b2 回归 + scroll 移动端滚动 + write-path 真实写路径——注册→登录→发帖→点赞→评论 + p0-regressions 的 P0 缺陷浏览器级回归（授权弹窗期间退房后麦克风必须关闭），跑在 DB_PATH 指向的独立测试库上；**每轮重置测试库与上传目录**，选择器用 `data-testid`（不依赖 CSS Modules 哈希类名），等待均为有界轮询（无固定 sleep）；默认不复用外部 3200 服务，需要时显式 `E2E_REUSE=1`）

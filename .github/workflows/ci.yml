@@ -16,6 +16,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # 行尾策略由仓库里的 .gitattributes 决定（`* text=auto eol=lf`；*.bat/*.cmd 钉 CRLF）。
+      # 这道守卫拦「仓库里混进 CRLF」：属性漏掉的类型、或有人绕过归一化提交。
+      - name: 行尾检查（仓库内不得出现 CRLF）
+        run: |
+          bad=$(git ls-files --eol | awk '$1 == "i/crlf" { print $4 }')
+          if [ -n "$bad" ]; then
+            echo "::error::以下文件在仓库里是 CRLF，应为 LF（*.bat/*.cmd 除外）："
+            echo "$bad"
+            exit 1
+          fi
+          echo "行尾检查通过：仓库内无 CRLF 文本文件"
+
       - uses: actions/setup-node@v7
         with:
           node-version: 22
