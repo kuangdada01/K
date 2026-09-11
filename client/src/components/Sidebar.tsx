@@ -9,6 +9,9 @@
  * - 公开导航: 首页、搜索、图书（无需登录）
  * - 需登录导航: 消息、分享、公告、主页、管理（管理员）
  * - 未读消息徽章 / 未读公告徽章（仅登录用户，30秒轮询 + SSE）
+ *   消息角标与消息页共用 `state/inboxStore` 的单份数据（4.3）：
+ *   两个消费方只有一个轮询定时器（消息页 10s、其他页面 30s），
+ *   SSE 一次事件也只打一次请求
  * - 底部用户 Chip：点击头像打开二级菜单（个人主页 / 主题 / 退出登录）
  * - 移动端自动变为底部导航栏（CSS媒体查询，含头像入口）
  * ============================================================
@@ -30,89 +33,80 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useEvent } from '../context/EventContext';
 import { useVoiceInRoom } from '../context/VoiceContext';
+import { loadCreatePost } from '../router/composerChunks';
 import { events } from '../state/events';
+import { refreshInbox, selectUnreadTotal } from '../state/inboxStore';
+import { useInbox } from '../hooks/useInbox';
 import { useSse } from '../hooks/useSse';
 import { saveHomeScrollPosition, getScrollTarget } from '../lib/scroll';
 import api from '../api/http';
 import AvatarMenu from './AvatarMenu';
 import styles from './Sidebar.module.css';
 
+/** 非消息页时的轮询间隔（消息页由 useConversations 拉到 10s，取最小） */
+const SIDEBAR_POLL_MS = 30000;
+
 export default function Sidebar() {
-  const [unreadCount, setUnreadCount] = useState(0);
   const [announcementCount, setAnnouncementCount] = useState(0);
   const location = useLocation();
   const { user } = useAuth();
   const { openCreate } = useEvent();
   const inRoom = useVoiceInRoom();
 
-  // 乐观更新追踪：记录服务器尚未确认的已读条数
-  const pendingReads = useRef(0);
-  const lastServerTotal = useRef(0);
+  // 消息角标：与消息页**同源**（会话未读 + 未读通知），不再自己算一套
+  const inbox = useInbox(SIDEBAR_POLL_MS);
+  const unreadCount = selectUnreadTotal(inbox);
 
-  const loadUnread = useCallback(async () => {
+  /** 预取发布弹层（懒加载 chunk）。失败静默：真正点开时 lazy 会再取一次 */
+  const prefetchCreatePost = useCallback(() => {
+    void loadCreatePost().catch(() => {});
+  }, []);
+
+  /** 公告未读数（只有侧边栏消费，30s 轮询 + announcement SSE 兜底） */
+  const refreshAnnouncements = useCallback(async () => {
     if (!user) return;
     try {
-      const [notifRes, convRes, annRes] = await Promise.all([
-        api.get('/notifications'),
-        api.get('/messages/conversations'),
-        api.get('/announcements').catch(() => ({ data: { unread_count: 0 } })),
-      ]);
-      const notifCount = notifRes.data.unread_count || 0;
-      const msgCount = (convRes.data.conversations || []).reduce(
-        (sum: number, c: { unread_count?: number }) => sum + (c.unread_count || 0),
-        0
-      );
-      const serverTotal = notifCount + msgCount;
-
-      // 服务器确认了部分已读（总量下降）→ 减少 pending
-      if (serverTotal < lastServerTotal.current) {
-        pendingReads.current = Math.max(0, pendingReads.current - (lastServerTotal.current - serverTotal));
-      }
-      lastServerTotal.current = serverTotal;
-
-      // 用服务器值减去未确认的已读数，防止乐观更新的角标被旧数据覆盖
-      setUnreadCount(Math.max(0, serverTotal - pendingReads.current));
-      setAnnouncementCount(annRes.data.unread_count || 0);
+      // 后台轮询：失败不重试（30s 后自然再问；见 api/retry.ts）
+      const res = await api.get('/announcements', { kRetry: false });
+      setAnnouncementCount(res.data.unread_count || 0);
     } catch {}
   }, [user]);
 
-  // 定时轮询 (30秒) - 仅登录用户（SSE 失败时的兜底）
+  // 公告定时轮询 (30秒) - 仅登录用户（SSE 失败时的兜底）
   useEffect(() => {
     if (!user) return;
-    loadUnread();
-    const interval = setInterval(loadUnread, 30000);
-    return () => clearInterval(interval);
-  }, [loadUnread, user]);
+    // 首帧后拉一次：经 setTimeout 宏任务触发，避开 react-hooks/set-state-in-effect
+    // （与 useChatActions 同一处理方式）。真正的首屏渲染不依赖这个值。
+    const kickoff = setTimeout(refreshAnnouncements, 0);
+    const interval = setInterval(refreshAnnouncements, SIDEBAR_POLL_MS);
+    return () => {
+      clearTimeout(kickoff);
+      clearInterval(interval);
+    };
+  }, [refreshAnnouncements, user]);
 
-  // SSE 实时推送：新消息/通知/公告到达时立即刷新角标
+  // SSE 实时推送：新消息/通知 → 刷新共享收件箱；新公告 → 刷新公告角标
   useSse(user?.id, (type) => {
-    if (type === 'message' || type === 'notification' || type === 'announcement') {
-      loadUnread();
+    if (type === 'announcement') {
+      refreshAnnouncements();
+    } else if (type === 'message' || type === 'notification') {
+      void refreshInbox();
     }
   });
 
-  // 已读事件（mitt 总线）：立即乐观更新角标 + 后台确认
-  // 历史语义：notif 每条已读 -1，msg 按实际条数扣减，公告直接刷新
+  // 已读事件（mitt 总线）：乐观部分已由 store 的动作完成（消息清除未读 /
+  // 通知标已读），这里只负责让服务器值尽快对上（单飞请求会与消息页的合并）
   useEffect(() => {
-    const handler = (payload: { source: 'notif' | 'msg' | 'ann'; count?: number }) => {
+    const handler = (payload: { source: 'notif' | 'msg' | 'ann' }) => {
       if (!user) return;
-      if (payload.source === 'msg') {
-        const delta = payload.count ?? 1;
-        if (delta > 0) {
-          pendingReads.current += delta;
-          setUnreadCount((prevCount) => Math.max(0, prevCount - delta));
-        }
-      } else if (payload.source === 'notif') {
-        pendingReads.current += 1;
-        setUnreadCount((prevCount) => Math.max(0, prevCount - 1));
-      }
-      loadUnread();
+      if (payload.source === 'ann') refreshAnnouncements();
+      else void refreshInbox();
     };
     events.on('badge:changed', handler);
     return () => {
       events.off('badge:changed', handler);
     };
-  }, [user, loadUnread]);
+  }, [user, refreshAnnouncements]);
 
   const isActive = (path: string) => {
     if (path === '/') return location.pathname === '/';
@@ -173,7 +167,15 @@ export default function Sidebar() {
           </Link>
         )}
         {user && (
-          <button className={styles.item} onClick={openCreate}>
+          <button
+            className={styles.item}
+            onClick={openCreate}
+            // 发布弹层是懒加载的（P1-7）：在「想点」的瞬间就把 chunk 拉回来，
+            // 把首次打开多出的那一次网络往返藏进 hover→点击之间
+            onMouseEnter={prefetchCreatePost}
+            onFocus={prefetchCreatePost}
+            onTouchStart={prefetchCreatePost}
+          >
             <span className={styles.itemIcon}>
               <PlusSquare size={22} />
             </span>

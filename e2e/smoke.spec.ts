@@ -48,15 +48,14 @@ test('探索页搜索', async ({ page }) => {
 
 test('受保护路由未登录时重定向首页', async ({ page }) => {
   await page.goto('/profile/1');
-  // ProtectedRoute 将未登录用户重定向到首页（侧边导航可见）
+  // ★ 关键断言是 **URL 回到首页**：此前只断「侧边栏可见 + 有『图书』」，
+  //   而侧边栏在任何页面都存在 —— 重定向一旦坏掉（`/profile/1` 正常渲染），
+  //   这条用例照样是绿的，等于没验。用 poll 做有界等待，不靠固定 sleep。
+  await expect.poll(() => new URL(page.url()).pathname).toBe('/');
   await expect(page.locator('nav').first()).toBeVisible();
   await expect(page.locator('body')).toContainText('图书');
 });
 
-test('未登录互动弹出登录窗口', async ({ page }) => {
-  await page.goto('/');
-  const likeBtn = page.locator('button[aria-label="点赞"]').first();
-  if ((await likeBtn.count()) === 0) return; // 无帖子时跳过
-  await likeBtn.click();
-  await expect(page.locator('input[placeholder="邮箱"]').first()).toBeVisible();
-});
+// 「未登录点赞 → 弹登录窗」不在这里：本文件是**只读公开流程**，而 e2e 库每轮重置，
+// 无帖时那条断言只能跳过/空过（等于假绿）。它已移到 write-path.spec.ts ——
+// 那里同一个文件先创建了帖子，数据是确定的，可以硬断言。

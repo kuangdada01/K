@@ -3,7 +3,8 @@
 deploy.ps1 的 SFTP 传输后端（替代 pscp/plink，本机网络下 PuTTY 传输不可靠）
 用法（由 deploy.ps1 调用）：
     python deploy-sftp.py --server <IP> --package <本地 tar.gz 路径> [--apk <本地 APK> --apk-name <版本化文件名>]
-密码经环境变量 DEPLOY_PASSWORD 传入（不在命令行暴露）。
+密码经环境变量 DEPLOY_PASSWORD 传入（不在命令行暴露）；**优先使用 SSH 私钥**
+（DEPLOY_KEY 指向私钥，默认 ~/.ssh/k_deploy_ed25519）—— 口令只作为回退。
 流程：SFTP 上传 /tmp/k-deploy.tar.gz → 远端解压/重链 @k/shared/装依赖/PM2 换名 → 上传新版 APK → 保留最近5个/清除旧版 → 验证。
 --apk/:apk-name 可选：给定时，部署包部署完成后会用 SFTP 单独上传新版 APK 到
     $REMOTE_DIR/client/dist/apk/<apk-name>（大小核验），并在该目录保留最近 5 个版本、清除更旧的。
@@ -29,9 +30,17 @@ def main():
                          "连上后建议把指纹存入本机 known_hosts")
     a = ap.parse_args()
     want_apk = bool(a.apk and a.apk_name)
+    # 认证优先级：密钥 > 口令。
+    # 密钥是首选：口令一旦泄露就能登录 root，而密钥不会出现在命令行/环境变量/历史里。
+    # DEPLOY_KEY 可指向指定私钥；未设置时尝试 ~/.ssh/k_deploy_ed25519。
+    key_path = os.environ.get("DEPLOY_KEY", "").strip() or os.path.expanduser("~/.ssh/k_deploy_ed25519")
     pwd = os.environ.get("DEPLOY_PASSWORD", "").strip()
-    if not pwd:
-        print("[FAIL] 缺少 DEPLOY_PASSWORD 环境变量", file=sys.stderr)
+    use_key = os.path.exists(key_path)
+    if not use_key and not pwd:
+        print(
+            f"[FAIL] 既没有私钥（{key_path}）也没有 DEPLOY_PASSWORD 环境变量",
+            file=sys.stderr,
+        )
         return 2
 
     import paramiko
@@ -41,14 +50,28 @@ def main():
         print("[警告] --trust-host 已启用：本次连接不校验服务器指纹")
         c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     else:
-        # 默认严格：只接受本机 known_hosts 里已有的指纹，防止 DNS/ARP 劫持截获 root 密码
+        # 默认严格：只接受本机 known_hosts 里已有的指纹，防止 DNS/ARP 劫持截获凭据
         c.load_system_host_keys()
         known_hosts = os.path.expanduser("~/.ssh/known_hosts")
         if os.path.exists(known_hosts):
             c.load_host_keys(known_hosts)
         c.set_missing_host_key_policy(paramiko.RejectPolicy())
     try:
-        c.connect(a.server, a.port, a.user, pwd, timeout=30)
+        if use_key:
+            print(f"[认证] 使用私钥 {key_path}")
+            c.connect(
+                a.server,
+                a.port,
+                a.user,
+                key_filename=key_path,
+                # 不通融：只认这把钥匙，避免回落到 agent 里别的身份
+                look_for_keys=False,
+                allow_agent=False,
+                timeout=30,
+            )
+        else:
+            print("[认证] 使用口令（DEPLOY_PASSWORD）")
+            c.connect(a.server, a.port, a.user, pwd, timeout=30)
     except paramiko.SSHException as e:
         print(f"[FAIL] 主机密钥校验失败（{e}）。", file=sys.stderr)
         print("首次连接该服务器可加 --trust-host；确认后建议执行：", file=sys.stderr)
@@ -74,52 +97,117 @@ def main():
 
     # ---------- 远端执行 ----------
     print("\n=== [SFTP] 远端部署 ===")
+    # 原子化说明（原实现直接 `rm -rf 三个 dist` 后再解压，解压一旦失败
+    # ——包损坏/磁盘满——现行产物已经没了，站点直接 500 且无法回退）：
+    #   1. 先解压到同分区的 $D/.deploy-staging，解压失败时现行产物分毫未动
+    #   2. 完整性预检（关键文件齐全）后才进入替换阶段
+    #   3. 旧 dist 改名进 .deploy-backup/<时间戳>，新 dist 改名就位
+    #      —— 两次都是同分区 rename，瞬间完成且没有"目录不存在"的中间态
+    #   4. 备份目录即上一版完整产物，可直接改名回滚（脚本末尾打印回滚命令）
+    # 注意：本字符串是 Python f-string，shell 里不要出现裸的 { }，需要时用 {{{{ }}}}
     script = rf"""set -e
 D={REMOTE_DIR}
+TS=$(date +%Y%m%d-%H%M%S)
+STAGE=$D/.deploy-staging
+BK=$D/.deploy-backup/$TS
+
 echo '--- 创建部署目录 ---'
 mkdir -p $D
-cd $D
-echo '--- 清空旧产物（tar 解压不删文件：旧 dist 残留会造成 require 文件优先
-        于目录解析到过期代码，曾致管理页 500） ---'
-rm -rf $D/server/dist $D/client/dist $D/shared/dist
-echo '--- 解压部署包 ---'
-tar -xzf /tmp/k-deploy.tar.gz
-rm /tmp/k-deploy.tar.gz
-echo '--- 检查 Node.js ---'
+
+echo '--- [1/7] 解压到 staging（不触碰现行产物） ---'
+rm -rf $STAGE
+mkdir -p $STAGE
+tar -xzf /tmp/k-deploy.tar.gz -C $STAGE
+
+echo '--- [2/7] 部署包完整性预检 ---'
+for f in server/dist/index.js client/dist/index.html shared/dist/index.js package.json server/package.json client/public; do
+    if [ ! -e "$STAGE/$f" ]; then
+        echo "[FAIL] 部署包缺少 $f，已中止（现行产物未改动）"
+        exit 1
+    fi
+done
+if [ ! -f $STAGE/.env ]; then
+    echo '[警告] 部署包内无 .env，沿用远端现有配置'
+fi
+
+echo '--- [3/7] 切换产物（旧 dist 改名为备份，新 dist 改名就位） ---'
+mkdir -p $BK
+for p in server client shared; do
+    if [ -d "$D/$p/dist" ]; then
+        mkdir -p "$BK/$p"
+        mv "$D/$p/dist" "$BK/$p/dist"
+    fi
+    mv "$STAGE/$p/dist" "$D/$p/dist"
+done
+echo "  备份目录: $BK"
+
+echo '--- [4/7] 同步非 dist 内容（.env / 清单 / ecosystem / books / client/public） ---'
+for item in .env package.json package-lock.json server/package.json server/ecosystem.config.js shared/package.json; do
+    if [ -e "$STAGE/$item" ]; then
+        cp -a "$STAGE/$item" "$D/$item"
+    fi
+done
+if [ -d $STAGE/server/books ]; then
+    rm -rf $D/server/books
+    cp -a $STAGE/server/books $D/server/books
+fi
+if [ -d $STAGE/client/public ]; then
+    rm -rf $D/client/public
+    cp -a $STAGE/client/public $D/client/public
+fi
+rm -rf $STAGE
+
+echo '--- [5/7] 运行环境检查（Node / ffmpeg / PM2） ---'
 if ! command -v node &> /dev/null; then
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y nodejs
 fi
 node -v
-echo '--- 检查 ffmpeg ---'
 if ! command -v ffmpeg &> /dev/null; then
     apt-get update -qq
     apt-get install -y ffmpeg
 fi
 ffmpeg -version | head -1
-echo '--- 检查 PM2 ---'
 if ! command -v pm2 &> /dev/null; then
     npm install -g pm2
 fi
-echo '--- 清理旧布局依赖（workspaces 迁移后依赖统一装根 node_modules；
-        旧 server/node_modules 若残留会先于根被 Node 解析，遮蔽新依赖） ---'
+
+echo '--- [6/7] 安装依赖（npm ci --omit=dev：按 lockfile 确定性安装） ---'
+echo '    清理旧布局依赖（workspaces 迁移后依赖统一装根 node_modules；
+        旧 server/node_modules 若残留会先于根被 Node 解析，遮蔽新依赖）'
 rm -rf $D/server/node_modules
-echo '--- 安装依赖（workspaces 根安装：npm 按根 lockfile 解析全部 workspace） ---'
-cd $D && npm install --omit=dev
-echo '--- 重建 @k/shared 链接（npm install 会整理 workspace 链接，装完后补建：
+cd $D
+if [ -f $D/package-lock.json ]; then
+    npm ci --omit=dev --no-audit --no-fund
+else
+    echo '[警告] 缺少 package-lock.json，回退为 npm install（非确定性安装）'
+    npm install --omit=dev --no-audit --no-fund
+fi
+echo '--- 重建 @k/shared 链接（npm ci 会整理 workspace 链接，装完后补建：
         根 node_modules/@k/shared 由 npm 管理；server/node_modules/@k/shared
         双保险覆盖，防解析落到旧/悬空路径） ---'
 mkdir -p $D/server/node_modules/@k
 ln -sfn $D/shared $D/server/node_modules/@k/shared
 readlink -f $D/server/node_modules/@k/shared
-echo '--- PM2 换名/重启 ---'
-pm2 delete k-server 2>/dev/null || true
-# ecosystem.config.js 在 server/ 子目录（deploy.ps1 打包时复制到 $tmpDir/server/）
-pm2 start $D/server/ecosystem.config.js
+
+echo '--- [7/7] PM2 重启（startOrReload：已有进程则 reload，不存在则 start） ---'
+# 原实现 delete + start 会让服务在两步之间存在明确真空期，且进程一度从 PM2
+# 列表中消失；startOrReload 复用同一条目，窗口更短、pm2 save 状态也更稳。
+pm2 startOrReload $D/server/ecosystem.config.js --update-env
 pm2 save
 pm2 startup 2>/dev/null || true
 echo '--- PM2 状态 ---'
 pm2 describe k-server | grep -E 'status|script path|exec cwd|uptime'
+
+echo '--- 备份保留最近 3 份（更旧的回滚点清理） ---'
+cd $D/.deploy-backup 2>/dev/null && ls -1dt */ 2>/dev/null | tail -n +4 | while read -r old; do
+    echo "  清理旧备份 $old"
+    rm -rf "$old"
+done
+cd $D
+
+echo "ROLLBACK_HINT 如需回滚本次部署："
+echo "  mv $BK/server/dist $D/server/dist && mv $BK/client/dist $D/client/dist && mv $BK/shared/dist $D/shared/dist && pm2 restart k-server"
 echo DEPLOY_SCRIPT_DONE
 """
     chan = c.get_transport().open_session()
@@ -216,10 +304,32 @@ echo APK_PRUNE_DONE
 
     # ---------- 部署后验证 ----------
     print("\n=== [SFTP] 部署后验证 ===")
+
+    def assets_all_ok(out: str) -> bool:
+        """首页引用的每个 /assets/*.js|css 都必须 200。
+
+        只看首页 HTTP 200 是不够的：产物没切换成功、或只更新了一半时，
+        HTML 是新的而带哈希的静态资源仍是旧的（或根本不存在），
+        浏览器拿到的是白屏/报错，而探针会全部通过。
+        """
+        lines = [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
+        assets = [ln for ln in lines if "/assets/" in ln]
+        if not assets:
+            return False  # 一个资源都没抓到：首页结构异常或产物缺失
+        return all(ln.startswith("200 ") for ln in assets)
+
     checks = [
         # 全站 HTTPS 后 nginx 对 http://127.0.0.1/ 返回 301，页面检查需跟随重定向
         # （-k 忽略自指 IP 的证书不匹配，-L 跟随 301 到 https）
         ("首页/健康", "curl -skL -o /dev/null -w 'page(%{http_code}) ' http://127.0.0.1/; curl -s -o /dev/null -w 'health(%{http_code})' http://127.0.0.1:3000/api/health", lambda o: "page(200)" in o and "health(200)" in o),
+        # 健康检查现在带数据库探针（routes/meta.ts），503 说明数据面不可用
+        ("数据库探针（/api/health 需为 200 而非 503）",
+            "curl -s http://127.0.0.1:3000/api/health",
+            lambda o: '"status":"ok"' in o.replace(" ", "")),
+        ("首页引用的静态产物全部 200（防「HTML 是新的、资源是旧的」）",
+            "curl -skL http://127.0.0.1/ | grep -oE '/assets/[A-Za-z0-9_.-]+\\.(js|css)' | sort -u | "
+            "while read -r a; do printf '%s %s\\n' \"$(curl -skL -o /dev/null -w '%{http_code}' \"http://127.0.0.1$a\")\" \"$a\"; done",
+            assets_all_ok),
         ("dist 时间戳已更新", "stat -c '%y' "+REMOTE_DIR+"/server/dist/index.js", None),
         ("@k/shared 链接（server 或根 node_modules 任一解析到 shared）",
             "readlink -f "+REMOTE_DIR+"/server/node_modules/@k/shared 2>/dev/null; readlink -f "+REMOTE_DIR+"/node_modules/@k/shared 2>/dev/null",
@@ -244,6 +354,9 @@ echo APK_PRUNE_DONE
             print(f"[FAIL] {title}")
     c.close()
     print("\n[DEPLOY_VERIFY] " + ("PASS" if all_ok else "FAIL"))
+    if not all_ok:
+        print("[提示] 本次已自动备份旧产物到 "+REMOTE_DIR+"/.deploy-backup/<时间戳>；")
+        print("       回滚命令已在上方 ROLLBACK_HINT 中打印。")
     return 0 if all_ok else 1
 
 if __name__ == "__main__":

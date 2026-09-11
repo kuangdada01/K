@@ -11,6 +11,7 @@
 
 import { getDb, stmt } from '../db/connection';
 import { count, escapeLike, uid } from '../db/helpers';
+import { HARD_LIST_CAP, capRows, probeLimit } from '../lib/listLimits';
 import { AppError } from '../middleware/error';
 
 // ============================================================
@@ -92,7 +93,7 @@ export function listPosts(
   userId?: number
 ): { posts: PostWithUser[]; total: number } {
   const total = count('SELECT COUNT(*) as count FROM posts');
-  const posts = stmt(`${POST_FEED_SELECT} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`).all(
+  const posts = stmt(`${POST_FEED_SELECT} ORDER BY p.created_at DESC, p.id DESC LIMIT ? OFFSET ?`).all(
     uid(userId),
     uid(userId),
     uid(userId),
@@ -120,7 +121,7 @@ export function searchPosts(
         ${POST_FEED_SELECT}
         JOIN post_tags pt ON pt.post_id = p.id
         WHERE pt.tag = ?
-        ORDER BY p.created_at DESC
+        ORDER BY p.created_at DESC, p.id DESC
         LIMIT ? OFFSET ?
       `
     ).all(uid(userId), uid(userId), uid(userId), tag, limit, (page - 1) * limit) as PostWithUser[];
@@ -135,7 +136,7 @@ export function searchPosts(
     likePattern
   );
   const posts = stmt(
-    `${POST_FEED_SELECT} WHERE p.title LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\' ORDER BY p.created_at DESC LIMIT ? OFFSET ?`
+    `${POST_FEED_SELECT} WHERE p.title LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\' ORDER BY p.created_at DESC, p.id DESC LIMIT ? OFFSET ?`
   ).all(
     uid(userId),
     uid(userId),
@@ -174,7 +175,7 @@ export function listUserPosts(
     FROM posts p
     JOIN users u ON p.user_id = u.id
     WHERE p.user_id = ?
-    ORDER BY p.pinned DESC, p.created_at DESC
+    ORDER BY p.pinned DESC, p.created_at DESC, p.id DESC
     LIMIT ? OFFSET ?
   `
   ).all(targetUserId, limit, (page - 1) * limit) as PostWithUser[];
@@ -182,8 +183,18 @@ export function listUserPosts(
 }
 
 /** 当前用户收藏的帖子（按收藏时间倒序；登录状态列: liked + bookmarked=1） */
-export function listBookmarkedPosts(userId: number): PostWithUser[] {
-  return stmt(
+/**
+ * 当前用户收藏的帖子（按收藏时间倒序）。
+ *
+ * 硬上限见 HARD_LIST_CAP：此前无 LIMIT，收藏多的账号一次请求会把全部行连同
+ * 每行的 2 个 COUNT(*) + 1 个 EXISTS 一起跑完（同步 SQLite，期间事件循环停摆）。
+ * 多取一行用于精确判断 `has_more`。
+ */
+export function listBookmarkedPosts(
+  userId: number,
+  cap: number = HARD_LIST_CAP
+): { rows: PostWithUser[]; has_more: boolean } {
+  const raw = stmt(
     `
     SELECT p.*, u.username, u.avatar,
       (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
@@ -194,14 +205,19 @@ export function listBookmarkedPosts(userId: number): PostWithUser[] {
     JOIN posts p ON b.post_id = p.id
     JOIN users u ON p.user_id = u.id
     WHERE b.user_id = ?
-    ORDER BY b.created_at DESC
+    ORDER BY b.created_at DESC, b.post_id DESC
+    LIMIT ?
   `
-  ).all(userId, userId) as PostWithUser[];
+  ).all(userId, userId, probeLimit(cap)) as PostWithUser[];
+  return capRows(raw, cap);
 }
 
-/** 当前用户转发的帖子（按转发时间倒序；登录状态列: liked + reposted=1） */
-export function listRepostedPosts(userId: number): PostWithUser[] {
-  return stmt(
+/** 当前用户转发的帖子（按转发时间倒序；登录状态列: liked + reposted=1；硬上限同收藏） */
+export function listRepostedPosts(
+  userId: number,
+  cap: number = HARD_LIST_CAP
+): { rows: PostWithUser[]; has_more: boolean } {
+  const raw = stmt(
     `
     SELECT p.*, u.username, u.avatar,
       (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
@@ -212,9 +228,11 @@ export function listRepostedPosts(userId: number): PostWithUser[] {
     JOIN posts p ON r.post_id = p.id
     JOIN users u ON p.user_id = u.id
     WHERE r.user_id = ?
-    ORDER BY r.created_at DESC
+    ORDER BY r.created_at DESC, r.post_id DESC
+    LIMIT ?
   `
-  ).all(userId, userId) as PostWithUser[];
+  ).all(userId, userId, probeLimit(cap)) as PostWithUser[];
+  return capRows(raw, cap);
 }
 
 // ============================================================
@@ -258,6 +276,32 @@ export function createVideoPost(input: {
     input.videoCover
   );
   return getCreatedPost(Number(result.lastInsertRowid))!;
+}
+
+/**
+ * 创建视频帖子并在**同一事务**内写入话题。
+ *
+ * 此前路由分两步调用（createVideoPost + syncPostTags，后者自带独立事务）：
+ * 两步之间失败会留下「帖子已建但话题缺失」，而路由此时已经把视频/封面文件
+ * 移入正式目录，回滚文件又得先知道帖子建没建 —— 把两步合成一个事务后，
+ * 失败即整条回滚，路由可以无条件按「未创建」回删媒体文件。
+ */
+export function createVideoPostWithTags(
+  input: {
+    userId: number;
+    videoUrl: string;
+    videoCover: string | null;
+    description: string;
+    closeComments: number;
+    pinned: number;
+  },
+  tags: string[]
+): PostWithUser {
+  return getDb().transaction(() => {
+    const post = createVideoPost(input);
+    syncPostTags(post.id, tags);
+    return post;
+  })();
 }
 
 /** 创建响应形状（计数为 0，无登录状态列——与原路由一致） */

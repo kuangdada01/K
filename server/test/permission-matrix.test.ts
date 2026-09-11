@@ -17,11 +17,12 @@ import type { AddressInfo } from 'net';
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
-import { createSchema } from '../src/db/schema';
+import { createMemoryDb } from './helpers/memdb';
 import { setDbForTests, resetDbForTests } from '../src/db/connection';
 import { createApp } from '../src/app';
 import { generateToken } from '../src/middleware/auth';
 import { PATHS } from '../src/config';
+import { TEMP_VIDEO_NAME_RE, getChunkOwner } from '../src/lib/chunkUploadRegistry';
 
 let db: InstanceType<typeof Database>;
 let server: http.Server;
@@ -32,9 +33,7 @@ let userBToken = '';
 let postAId = 0;
 
 beforeAll(async () => {
-  db = new Database(':memory:');
-  db.pragma('foreign_keys = ON');
-  createSchema(db);
+  db = createMemoryDb();
   setDbForTests(db);
 
   const insertUser = db.prepare(
@@ -75,7 +74,9 @@ async function api(method: string, p: string, token?: string, body?: unknown) {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    // 条件展开而非 body: undefined —— exactOptionalPropertyTypes 下
+    // RequestInit.body 不接受显式的 undefined
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
   return { status: res.status, data: await res.json().catch(() => null) };
 }
@@ -177,7 +178,11 @@ describe('临时视频属主（防删除/冒用他人草稿）', () => {
     const delByOwner = await api('DELETE', '/api/posts/video-temp', userAToken, { url });
     expect(delByOwner.status).toBe(200);
     expect(delByOwner.data).toEqual({ ok: true });
-    expect(name).toBeTruthy();
+    // 断言「确实删掉了东西」而不只是回了 200：文件形状是服务端生成的临时视频名，
+    // 且落盘文件与分片会话都应被回收（此前的 expect(name).toBeTruthy() 近乎空断言）
+    expect(name).toMatch(TEMP_VIDEO_NAME_RE);
+    expect(fs.existsSync(path.join(PATHS.uploadsTemp, name))).toBe(false);
+    expect(getChunkOwner(name)).toBeUndefined();
   });
 });
 
@@ -196,5 +201,34 @@ describe('reset-password 防邮箱枚举', () => {
     expect(unregistered.status).toBe(400);
     expect(registered.status).toBe(400);
     expect(unregistered.data).toEqual(registered.data);
+  });
+});
+
+describe('评论点赞对不存在评论的处理', () => {
+  it('点赞不存在的评论返回 404 而非 500（外键约束不再泄漏为服务器错误）', async () => {
+    const like = await api('POST', '/api/posts/comments/999999/like', userAToken);
+    expect(like.status).toBe(404);
+    expect(like.data).toEqual({ error: '评论不存在' });
+
+    const unlike = await api('DELETE', '/api/posts/comments/999999/like', userAToken);
+    expect(unlike.status).toBe(404);
+  });
+
+  it('点赞真实存在的评论仍返回 200 与正确计数', async () => {
+    const inserted = db
+      .prepare("INSERT INTO comments (post_id, user_id, content) VALUES (?, ?, 'hi')")
+      .run(
+        postAId,
+        Number((db.prepare('SELECT id FROM users WHERE username = ?').get('owner-a') as { id: number }).id)
+      );
+    const commentId = Number(inserted.lastInsertRowid);
+
+    const like = await api('POST', `/api/posts/comments/${commentId}/like`, userBToken);
+    expect(like.status).toBe(200);
+    expect(like.data).toEqual({ liked: true, like_count: 1 });
+
+    const unlike = await api('DELETE', `/api/posts/comments/${commentId}/like`, userBToken);
+    expect(unlike.status).toBe(200);
+    expect(unlike.data).toEqual({ liked: false, like_count: 0 });
   });
 });

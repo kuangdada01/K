@@ -12,7 +12,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'http';
 import Database from 'better-sqlite3';
 import { WebSocket } from 'ws';
-import { createSchema } from '../src/db/schema';
+import { createMemoryDb } from './helpers/memdb';
 import { setDbForTests, resetDbForTests } from '../src/db/connection';
 import * as voiceRepo from '../src/repositories/voice.repo';
 import { generateToken } from '../src/middleware/auth';
@@ -32,9 +32,7 @@ let bobId = 0;
 let carolId = 0;
 
 beforeAll(async () => {
-  db = new Database(':memory:');
-  db.pragma('foreign_keys = ON');
-  createSchema(db);
+  db = createMemoryDb();
   setDbForTests(db);
 
   const insertUser = db.prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')");
@@ -113,7 +111,7 @@ describe('voiceRepo 房间 CRUD', () => {
 
     const rooms = voiceRepo.listRooms();
     expect(rooms).toHaveLength(1);
-    expect(rooms[0].creator_avatar).toBeNull();
+    expect(rooms[0]!.creator_avatar).toBeNull();
 
     // 对外 VO：creator_name → creator_username，内部列 creator_ip 不泄露
     const vo = voiceRepo.toVoiceRoom(voiceRepo.getRoomById(room.id)!);
@@ -143,6 +141,103 @@ describe('创建者房间数计数（创建频控依据）', () => {
   });
 });
 
+describe('createRoomWithinLimit（上限校验与插入同事务）', () => {
+  /** 造一个「干净」的创建者，不受本文件其他用例已建房的影响 */
+  function freshUser(name: string): number {
+    return Number(
+      db
+        .prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')")
+        .run(name, `${name}@limit.test`).lastInsertRowid
+    );
+  }
+
+  it('上限内正常创建；达到上限后返回 null 且不再插入行', () => {
+    const uid = freshUser('limit-a');
+    const LIMIT = 3;
+
+    for (let i = 0; i < LIMIT; i++) {
+      const room = voiceRepo.createRoomWithinLimit({
+        creatorId: uid,
+        name: `房${i}`,
+        description: '',
+        limit: LIMIT,
+        creatorName: 'limit-a',
+      });
+      expect(room).not.toBeNull();
+    }
+    expect(voiceRepo.countRoomsByCreatorId(uid)).toBe(LIMIT);
+
+    // 第 LIMIT+1 次：拒绝，且计数不变（说明确实没有插入）
+    const denied = voiceRepo.createRoomWithinLimit({
+      creatorId: uid,
+      name: '超额房',
+      description: '',
+      limit: LIMIT,
+      creatorName: 'limit-a',
+    });
+    expect(denied).toBeNull();
+    expect(voiceRepo.countRoomsByCreatorId(uid)).toBe(LIMIT);
+  });
+
+  it('访客按 IP 锚点计数，与登录用户互不影响', () => {
+    const ipA = '198.51.100.201';
+    const ipB = '198.51.100.202';
+    const LIMIT = 2;
+
+    for (let i = 0; i < LIMIT; i++) {
+      expect(
+        voiceRepo.createRoomWithinLimit({
+          creatorId: 0,
+          name: `访客房${i}`,
+          description: '',
+          limit: LIMIT,
+          creatorName: '未登录',
+          creatorIp: ipA,
+        })
+      ).not.toBeNull();
+    }
+    // ipA 到顶
+    expect(
+      voiceRepo.createRoomWithinLimit({
+        creatorId: 0,
+        name: '超额',
+        description: '',
+        limit: LIMIT,
+        creatorName: '未登录',
+        creatorIp: ipA,
+      })
+    ).toBeNull();
+    // ipB 不受影响
+    expect(
+      voiceRepo.createRoomWithinLimit({
+        creatorId: 0,
+        name: '另一 IP',
+        description: '',
+        limit: LIMIT,
+        creatorName: '未登录',
+        creatorIp: ipB,
+      })
+    ).not.toBeNull();
+  });
+
+  it('连续 6 次创建（模拟连点/并发）不会越过上限', () => {
+    const uid = freshUser('limit-b');
+    const LIMIT = 5;
+    const results = Array.from({ length: 6 }, (_, i) =>
+      voiceRepo.createRoomWithinLimit({
+        creatorId: uid,
+        name: `连点${i}`,
+        description: '',
+        limit: LIMIT,
+        creatorName: 'limit-b',
+      })
+    );
+    expect(results.filter((r) => r !== null)).toHaveLength(LIMIT);
+    expect(results.filter((r) => r === null)).toHaveLength(1);
+    expect(voiceRepo.countRoomsByCreatorId(uid)).toBe(LIMIT);
+  });
+});
+
 describe('WS 信令全链路', () => {
   it('join → joined / peer-joined，signal 定向中转，mute 广播，leave → peer-left', async () => {
     const room = voiceRepo.createRoom(aliceId, '测试房', '', { creatorName: 'alice' });
@@ -158,7 +253,7 @@ describe('WS 信令全链路', () => {
     send(bob, { type: 'join', roomId: room.id });
     const bobJoined = await bobJoinedP;
     expect(bobJoined.participants).toHaveLength(1);
-    expect(bobJoined.participants[0].username).toBe('alice');
+    expect(bobJoined.participants[0]!.username).toBe('alice');
     const peerJoined = await alicePeerJoinedP;
     expect(peerJoined.participant.username).toBe('bob');
 

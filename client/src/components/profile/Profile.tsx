@@ -24,6 +24,7 @@ import { postsFeedKey, updatePostsFeed } from '../../hooks/usePostsFeed';
 import api from '../../api/http';
 import { getApiErrorMessage } from '../../api/http';
 import { Post } from '../../types';
+import { MAX_IMAGE_BYTES, toMB } from '@k/shared';
 import { useAuth } from '../../context/AuthContext';
 import { useFollow } from '../../state/cache';
 import { useFollowUser } from '../../hooks/useFollowUser';
@@ -33,6 +34,7 @@ import { showToast } from '../ui/Toast';
 import { useProfileData } from '../../hooks/useProfileData';
 import { useProfileEventsSync } from '../../hooks/useProfileEventsSync';
 import { usePrivateFolder } from '../../hooks/usePrivateFolder';
+import { cleanEditImages } from '../../lib/parsePostImages';
 import ConfirmDialog from '../ui/ConfirmDialog';
 import PostDetail from '../post/PostDetail';
 import FollowersModal from './FollowersModal';
@@ -169,10 +171,9 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // 检查头像大小 (10MB)
-    const maxSize = 10 * 1024 * 1024;
-    if (file.size > maxSize) {
-      showToast('头像超过10MB限制');
+    // 检查头像大小（上限见 @k/shared MAX_IMAGE_BYTES）
+    if (file.size > MAX_IMAGE_BYTES) {
+      showToast(`头像超过${toMB(MAX_IMAGE_BYTES)}MB限制`);
       e.target.value = '';
       return;
     }
@@ -216,10 +217,8 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
   const handleEditPost = (post: Post, e: React.MouseEvent) => {
     e.stopPropagation();
     // 视频帖子 withImages 会产出 ['[]'] 脏数据，需过滤；图文帖子才保留 images
-    const cleanImages = post.video_url
-      ? []
-      : post.images?.filter((u) => u !== '[]' && u !== '["[]"]') ||
-        [post.image_url].filter((u) => u !== '[]' && u !== '["[]"]');
+    // （与详情页同一份逻辑，见 lib/parsePostImages.cleanEditImages）
+    const cleanImages = cleanEditImages(post);
     openEdit({
       id: post.id,
       description: post.description || '',

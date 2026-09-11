@@ -7,7 +7,7 @@
 
 import path from 'path';
 import fs from 'fs';
-import { SERVER_ROOT } from '../config';
+import { UPLOADS_ROOT } from '../config';
 import { logger } from './logger';
 
 /**
@@ -48,13 +48,13 @@ export function deletePostMediaFiles(post: {
 export function safeDeleteFile(fileUrl: string, allowedSubdir: string = 'uploads'): boolean {
   try {
     // 构建完整路径（去掉开头的 /，否则 path.join 会当作绝对路径）
-    // 基准目录固定为 server 根（PATHS 基于 __dirname，tsx 开发与 dist 编译产物行为一致）
+    // 基准目录为上传根 UPLOADS_ROOT（默认即 server 根，测试可经 UPLOADS_DIR 隔离）
     const relativeUrl = fileUrl.startsWith('/') ? fileUrl.slice(1) : fileUrl;
-    const fullPath = path.join(SERVER_ROOT, relativeUrl);
+    const fullPath = path.join(UPLOADS_ROOT, relativeUrl);
 
     // 规范化路径，防止 ../ 遍历
     const normalizedPath = path.normalize(fullPath);
-    const uploadsDir = path.join(SERVER_ROOT, allowedSubdir);
+    const uploadsDir = path.join(UPLOADS_ROOT, allowedSubdir);
 
     // 验证路径是否在允许的目录内（追加分隔符，防止 uploads-evil 这类兄弟目录撞前缀）
     if (!normalizedPath.startsWith(uploadsDir + path.sep) && normalizedPath !== uploadsDir) {
@@ -82,7 +82,7 @@ export function safeDeleteFile(fileUrl: string, allowedSubdir: string = 'uploads
  * 首段目录必须是 uploads 或 uploads_private 才允许删除。
  */
 export function safeDeleteUpload(absPath: string): boolean {
-  const rel = path.relative(SERVER_ROOT, absPath).split(path.sep).join('/');
+  const rel = path.relative(UPLOADS_ROOT, absPath).split(path.sep).join('/');
   const top = rel.split('/')[0];
   if (top !== 'uploads' && top !== 'uploads_private') {
     logger.warn(`Path traversal attempt blocked: ${absPath}`);

@@ -60,7 +60,7 @@ export default function MediaPickerStep({
 
   const renderGrid = () => {
     return (
-      <div className={composer.gridWrapper}>
+      <div className={composer.gridWrapper} data-testid="media-grid">
         <div className={composer.grid}>
           {images.map((img, i) => (
             <div
@@ -71,6 +71,7 @@ export default function MediaPickerStep({
               className={[composer.gridItem, i === dragIndex ? composer.dragging || '' : '']
                 .filter(Boolean)
                 .join(' ')}
+              data-testid="media-grid-item"
               onPointerDown={(e) => dragHandlers.onPointerDown(e, i)}
             >
               <img
@@ -96,7 +97,11 @@ export default function MediaPickerStep({
             </div>
           ))}
           {images.length < 9 && (
-            <div className={composer.gridAdd} onClick={() => fileInputRef.current?.click()}>
+            <div
+              className={composer.gridAdd}
+              data-testid="media-grid-add"
+              onClick={() => fileInputRef.current?.click()}
+            >
               <ImagePlus size={28} />
             </div>
           )}
@@ -112,7 +117,10 @@ export default function MediaPickerStep({
       onPointerUp={dragHandlers.onPointerUp}
       onPointerCancel={dragHandlers.onPointerCancel}
     >
-      <div className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}>
+      <div
+        className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}
+        data-testid="composer-dialog"
+      >
         <div className={composer.overlayHeader}>
           <button className={`${composer.overlayBtn} ${composer.danger}`} data-back onClick={onDiscard}>
             放弃

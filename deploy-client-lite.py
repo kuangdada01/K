@@ -16,9 +16,12 @@ def main():
                     help="跳过主机密钥校验（MITM 风险）。仅首次连接新服务器时使用，"
                          "连上后建议把指纹存入本机 known_hosts")
     a = ap.parse_args()
+    # 与 deploy-sftp.py 同一优先级：密钥 > 口令
+    key_path = os.environ.get("DEPLOY_KEY", "").strip() or os.path.expanduser("~/.ssh/k_deploy_ed25519")
     pwd = os.environ.get("DEPLOY_PASSWORD", "").strip()
-    if not pwd:
-        print("[FAIL] 缺少 DEPLOY_PASSWORD 环境变量", file=sys.stderr)
+    use_key = os.path.exists(key_path)
+    if not use_key and not pwd:
+        print(f"[FAIL] 既没有私钥（{key_path}）也没有 DEPLOY_PASSWORD 环境变量", file=sys.stderr)
         return 2
 
     import paramiko
@@ -36,7 +39,20 @@ def main():
             c.load_host_keys(known_hosts)
         c.set_missing_host_key_policy(paramiko.RejectPolicy())
     try:
-        c.connect(a.server, 22, "root", pwd, timeout=30)
+        if use_key:
+            print(f"[认证] 使用私钥 {key_path}")
+            c.connect(
+                a.server,
+                22,
+                "root",
+                key_filename=key_path,
+                look_for_keys=False,
+                allow_agent=False,
+                timeout=30,
+            )
+        else:
+            print("[认证] 使用口令（DEPLOY_PASSWORD）")
+            c.connect(a.server, 22, "root", pwd, timeout=30)
     except paramiko.SSHException as e:
         print(f"[FAIL] 主机密钥校验失败（{e}）。", file=sys.stderr)
         print("首次连接该服务器可加 --trust-host；确认后建议执行：", file=sys.stderr)

@@ -60,7 +60,7 @@ describe('listPosts / searchPosts', () => {
     insertPost(u, 'other');
     const { posts, total } = postRepo.searchPosts('hello', 1, 20, u);
     expect(total).toBe(1);
-    expect(posts[0].description).toBe('hello world');
+    expect(posts[0]!.description).toBe('hello world');
   });
 });
 
@@ -90,10 +90,27 @@ describe('点赞/收藏/转发/分享', () => {
     postRepo.repostPost(v, p);
     const bm = postRepo.listBookmarkedPosts(v);
     const rp = postRepo.listRepostedPosts(v);
-    expect(bm.length).toBe(1);
-    expect(bm[0].bookmarked).toBe(1);
-    expect(rp.length).toBe(1);
-    expect(rp[0].reposted).toBe(1);
+    expect(bm.rows.length).toBe(1);
+    expect(bm.has_more).toBe(false);
+    expect(bm.rows[0]!.bookmarked).toBe(1);
+    expect(rp.rows.length).toBe(1);
+    expect(rp.has_more).toBe(false);
+    expect(rp.rows[0]!.reposted).toBe(1);
+  });
+
+  it('★ 收藏/转发列表有硬上限：超过 cap 时截断并置 has_more', () => {
+    const u = insertUser('alice');
+    const v = insertUser('bob');
+    // 造 3 条收藏，把 cap 压到 2 验证截断（生产上限是 HARD_LIST_CAP=500）
+    for (let i = 0; i < 3; i++) postRepo.bookmarkPost(v, insertPost(u));
+    const capped = postRepo.listBookmarkedPosts(v, 2);
+    expect(capped.rows.length).toBe(2);
+    expect(capped.has_more).toBe(true);
+
+    // 恰好等于上限时不该误报还有更多（多取一行的判断方式）
+    const exact = postRepo.listBookmarkedPosts(v, 3);
+    expect(exact.rows.length).toBe(3);
+    expect(exact.has_more).toBe(false);
   });
 });
 
@@ -105,8 +122,9 @@ describe('评论', () => {
     const c1 = commentRepo.createComment(u, p, null, '顶层评论');
     commentRepo.createComment(v, p, c1.id, '回复评论');
     const list = commentRepo.listComments(p, u);
-    expect(list.length).toBe(2);
-    const reply = list.find((c) => c.parent_id === c1.id)!;
+    expect(list.rows.length).toBe(2);
+    expect(list.has_more).toBe(false);
+    const reply = list.rows.find((c) => c.parent_id === c1.id)!;
     expect(reply.parent_content).toBe('顶层评论');
     expect(reply.parent_username).toBe('alice');
   });

@@ -8,7 +8,7 @@
  * - 成功/失败 toast 与原实现一致
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useRepost } from '../state/cache';
 import { events } from '../state/events';
@@ -21,11 +21,17 @@ export function useRepostPost(postId: number) {
   const [reposted, setReposted] = useState(false);
   const [repostCount, setRepostCount] = useState(0);
 
+  /** 在途闸门：`toggle` 依赖 [reposted, repostCount]，重渲染前双击会读到同一个旧值
+   *  连发两次请求，导致服务端计数与本地乐观值不一致（详见 useLikePost 同名注释） */
+  const inFlightRef = useRef(false);
+
   const toggle = useCallback(async () => {
     if (!user) {
       openLoginPrompt();
       return;
     }
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     const wasReposted = reposted;
     const prevCount = repostCount;
     const newCount = wasReposted ? prevCount - 1 : prevCount + 1;
@@ -58,6 +64,8 @@ export function useRepostPost(postId: number) {
       // 回滚真值也要广播：此前失败回滚不 emit，经事件总线同步的其他组件停留在错误状态
       events.emit('post:repost', { postId, reposted: wasReposted, repostCount: prevCount });
       showToast('操作失败，请重试');
+    } finally {
+      inFlightRef.current = false;
     }
   }, [reposted, repostCount, user, postId, openLoginPrompt, setRepostedCache]);
 

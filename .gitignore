@@ -19,6 +19,9 @@ server/uploads_private/*
 # Client
 client/dist/
 client/tsconfig.tsbuildinfo
+# Vite 产出的哈希资源曾被误提交进 public/（两份字体共 1.6MB，无任何引用却随每次部署分发）。
+# 带哈希的构建产物只应存在于 dist/，public/ 只放需要保持稳定文件名的资源。
+client/public/*-[A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-]*.woff2
 client/android/.gradle/
 client/android/build/
 client/android/local.properties

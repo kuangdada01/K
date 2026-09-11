@@ -17,7 +17,7 @@
  */
 
 import { Request, Response, NextFunction } from 'express';
-import { verifyLiveToken } from '../lib/jwt';
+import { verifyLiveToken, shouldRefreshToken, renewToken, REFRESHED_TOKEN_HEADER } from '../lib/jwt';
 
 // 兼容导出（历史调用方继续从本模块取 JWT 符号，行为不变）
 export { JWT_SECRET, generateToken, verifyLiveToken } from '../lib/jwt';
@@ -26,6 +26,21 @@ export type { LiveToken } from '../lib/jwt';
 // ============================================================
 // 中间件函数
 // ============================================================
+
+/**
+ * 滑动续期：token 签发超过阈值时，顺带回一张新 token（响应头）。
+ *
+ * 放在中间件而非单个路由：只有覆盖**全部**已认证请求，才能兑现
+ * 「活跃用户不会因为 token 到点被登出」——长开的标签页、后台轮询都会经过这里；
+ * 只挂 `/auth/me` 的话，一个开着页面不动、只靠轮询的活动会话仍会到点失效。
+ *
+ * 客户端（api/http.ts）收到该头后落盘；跨源端（安卓 WebView）依赖
+ * CORS 的 Access-Control-Expose-Headers 才能读到，见 middleware/cors.ts。
+ */
+function maybeRefreshToken(res: Response, live: { iat: number } & Parameters<typeof renewToken>[0]): void {
+  if (!shouldRefreshToken(live.iat)) return;
+  res.setHeader(REFRESHED_TOKEN_HEADER, renewToken(live));
+}
 
 /**
  * 必须认证中间件
@@ -54,6 +69,9 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction):
 
   // role 用数据库实时值（token 内角色仅为签发时快照）
   req.user = { id: live.id, username: live.username, role: live.role };
+
+  // 滑动续期（成功认证后即可下发，与后续 403 封禁判定无关）
+  maybeRefreshToken(res, live);
 
   // 封禁拦截：封禁期间只读（GET/OPTIONS 放行，写操作一律 403）
   if (req.method !== 'GET' && req.method !== 'OPTIONS' && live.role !== 'admin') {

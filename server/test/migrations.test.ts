@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { applyMigrations, ensureMigrationTable } from '../src/db/migrations';
+import { createSchema } from '../src/db/schema';
 
 /** 构造一个仅含 legacy 时间列的旧库 */
 function createLegacyDb(): InstanceType<typeof Database> {
@@ -68,5 +69,29 @@ describe('迁移 timestamps_iso_utc (id 13)', () => {
     applyMigrations(db); // 第二次执行：全部已应用，直接跳过
     const u = db.prepare('SELECT created_at FROM users WHERE id = 1').get() as { created_at: string };
     expect(u.created_at).toBe('2026-08-13T14:29:12.000Z');
+  });
+});
+
+describe('迁移 comments_post_parent_index (id 25)', () => {
+  it('在完整 schema 上创建 (post_id, parent_id) 复合索引', () => {
+    const db = new Database(':memory:');
+    createSchema(db);
+    applyMigrations(db);
+
+    const idx = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?")
+      .get('idx_comments_post_parent') as { name: string } | undefined;
+    expect(idx?.name).toBe('idx_comments_post_parent');
+
+    // 索引列顺序必须是 (post_id, parent_id)：反过来无法服务
+    // WHERE post_id = ? AND parent_id IN (...) 的前缀查找
+    const cols = db.prepare("PRAGMA index_info('idx_comments_post_parent')").all() as {
+      name: string;
+    }[];
+    expect(cols.map((c) => c.name)).toEqual(['post_id', 'parent_id']);
+
+    // 幂等：重复执行不报错
+    applyMigrations(db);
+    db.close();
   });
 });

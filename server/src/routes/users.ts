@@ -25,6 +25,7 @@ import { withImages, imageFileFilter, compressImage } from '../lib/image';
 import { safeDeleteFile } from '../lib/file';
 import { validateBody } from '../validate';
 import { updateProfileSchema, pageQuerySchema, limitQuerySchema } from '@k/shared/schemas';
+import { MAX_IMAGE_BYTES } from '@k/shared';
 import { createAvatarUploader, createUploader, timestampFilename } from '../lib/upload';
 import * as userRepo from '../repositories/user.repo';
 import * as postRepo from '../repositories/post.repo';
@@ -38,13 +39,13 @@ const AVATAR_MAX = 512;
 const uploadAvatar = createAvatarUploader(imageFileFilter);
 
 /**
- * 私密图片上传中间件: 限制10MB，仅允许图片格式
+ * 私密图片上传中间件: 大小上限见 @k/shared（与客户端校验同一个常量），仅允许图片格式
  * 存储在 uploads_private（不在静态服务范围，经 /api/users/me/private-images/:id/file 鉴权下发）
  */
 const uploadPrivate = createUploader({
   dir: PATHS.uploadsPrivate,
   filename: timestampFilename('pv'),
-  maxSize: 10 * 1024 * 1024,
+  maxSize: MAX_IMAGE_BYTES,
   fileFilter: imageFileFilter,
 });
 

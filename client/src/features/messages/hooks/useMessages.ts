@@ -96,7 +96,11 @@ export function useMessages({
     // 拉取 + 轮询：async 函数定义在 effect 内，await 边界可被规则正确识别
     const pollMessages = async () => {
       try {
-        const res = await api.get(`/messages/${partnerId}`, { params: { limit: 50 } });
+        // 5s 轮询：失败不重试（下一个 tick 自然会再问；见 api/retry.ts）
+        const res = await api.get(`/messages/${partnerId}`, {
+          params: { limit: 50 },
+          kRetry: false,
+        });
         if (epoch !== sessionEpochRef.current) return;
         const newMsgs = res.data.messages as Message[];
         hasMoreRef.current = !!res.data.has_more;

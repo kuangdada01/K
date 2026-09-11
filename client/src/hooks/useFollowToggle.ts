@@ -14,7 +14,7 @@
  * ============================================================
  */
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { useFollowUser } from './useFollowUser';
 import { showToast } from '../components/ui/Toast';
@@ -33,9 +33,15 @@ export function useFollowToggle({ userId, isFollowing, setIsFollowing, onSuccess
 } {
   const { requireLogin, follow, unfollow } = useFollowUser();
 
+  /** 在途闸门：`toggle` 依赖 [isFollowing]，重渲染前双击会读到同一个旧值
+   *  连发两次同向请求（详见 useLikePost 同名注释） */
+  const inFlightRef = useRef(false);
+
   const toggle = useCallback(async () => {
     if (!requireLogin()) return;
     if (userId === undefined) return;
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
       if (isFollowing) {
         await unfollow(userId);
@@ -49,6 +55,8 @@ export function useFollowToggle({ userId, isFollowing, setIsFollowing, onSuccess
       onSuccess?.();
     } catch {
       showToast('操作失败');
+    } finally {
+      inFlightRef.current = false;
     }
   }, [requireLogin, userId, isFollowing, unfollow, follow, setIsFollowing, onSuccess]);
 

@@ -67,6 +67,10 @@ export function useVoiceSessionController(
   const [shareStats, setShareStats] = useState<ShareStats | null>(null);
   const sessionRef = useRef<VoiceSession | null>(null);
   const autoJoinTriedRef = useRef(false);
+  /** 当前会话是否以「已登录身份」建立（用于区分登录过期与访客场景） */
+  const authSessionRef = useRef(false);
+  /** 是否刚收到 token 过期事件（auth:expired，仅由 401 拦截器派发；主动登出不算） */
+  const authExpiredRef = useRef(false);
 
   const share = useMemo<VoiceShareState | null>(
     () => (shareUserId === null ? null : { userId: shareUserId, stream: shareStream, audio: shareAudio }),
@@ -120,11 +124,22 @@ export function useVoiceSessionController(
         {
           onStatus: (s) => {
             setStatus(s);
-            if (s === 'ended') clearSavedRoom();
+            if (s === 'ended') {
+              clearSavedRoom();
+              // 会话已终结（被踢/房间被关/信令终止）：必须清掉引用，
+              // 否则 join() 开头的 `if (sessionRef.current) return` 会让重新进房
+              // 变成一个静默空操作 —— 用户点了「加入语音」却什么都没发生。
+              // 仅在引用仍指向本会话时清理，避免误清掉之后新建的会话。
+              if (sessionRef.current === session) sessionRef.current = null;
+            }
           },
           onParticipants: (list) => setParticipants(list),
           onSpeaking: (userId, isSpeaking) => {
             setSpeaking((prev) => {
+              // 值未变时必须返回原引用：React 只按 Object.is 跳过渲染，
+              // 每次新建 Set 会让说话状态翻转时整片消费者跟着重渲染
+              const has = prev.has(userId);
+              if (has === isSpeaking) return prev;
               const next = new Set(prev);
               if (isSpeaking) next.add(userId);
               else next.delete(userId);
@@ -162,6 +177,9 @@ export function useVoiceSessionController(
         }
       );
       sessionRef.current = session;
+      // 记下本会话的身份来源：登录过期后若「已登录会话」还在房间里，
+      // 客户端必须自己退房（WS 建连时 token 还有效，服务端不会主动断开它）
+      authSessionRef.current = !!user;
       setShareQualityState(session.getShareQuality());
       setShareSharpTextState(session.getShareSharpText());
       setShareMuted(session.getShareMuted());
@@ -180,15 +198,51 @@ export function useVoiceSessionController(
   const leave = useCallback(() => {
     sessionRef.current?.leave();
     sessionRef.current = null;
+    authSessionRef.current = false;
     clearSavedRoom();
     resetState();
     chatActionsRef.current().reset();
   }, [clearSavedRoom, resetState]);
 
-  // 登出/登录过期：断开语音
+  // token 过期事件（仅由 api/http.ts 的 401 拦截器派发；主动登出不会派发）。
+  // 只置标记，实际退房交给下面的 [user] effect —— 那里 user 一定已经是 null。
   useEffect(() => {
-    if (!user && sessionRef.current) leave();
+    const handler = () => {
+      authExpiredRef.current = true;
+    };
+    window.addEventListener('auth:expired', handler);
+    return () => window.removeEventListener('auth:expired', handler);
+  }, []);
+
+  // 登出/登录过期：断开语音。
+  //
+  // 这里必须区分两种情况（线上事故根因之一）：
+  // - **登录过期**：语音 WS 在 token 还有效时建连，服务端不会因为 token 过期去断它，
+  //   所以房间成员会一直留在里面；而客户端所有 REST 请求开始 401。
+  //   此前只是静默 leave()，用户完全不知道发生了什么，只知道「突然被踢出房间」，
+  //   随后再点加入还会以**访客**身份进房（同 IP 撞 id → 被自己的另一条连接顶掉）。
+  //   现在明确提示并要求重新登录。
+  // - **主动登出**：用户自己点了退出，不需要额外解释（authExpiredRef 为 false）。
+  // - **访客会话**：本来就没有登录身份，user 为 null 属正常，不退房。
+  useEffect(() => {
+    if (user || !sessionRef.current) return;
+    if (authSessionRef.current && authExpiredRef.current) {
+      showToast('登录已过期，请重新登录后再加入语音');
+    }
+    authExpiredRef.current = false;
+    leave();
   }, [user, leave]);
+
+  // 卸载清理：组件被卸载（路由切换/热更新）时释放麦克风、对等连接与信令连接。
+  // 缺这段清理会让服务端房间成员永久残留 —— 一个「僵尸成员」占着房间名额，
+  // 而客户端早已没有任何连接可以再把它移除（只有下一次同账号连接才会顶掉它）。
+  useEffect(() => {
+    return () => {
+      sessionRef.current?.leave();
+      sessionRef.current = null;
+      authSessionRef.current = false;
+    };
+  }, []);
 
   // 刷新后自动回房（只尝试一次，房间已删/失败会走 error 流程并清理记录）
   useEffect(() => {

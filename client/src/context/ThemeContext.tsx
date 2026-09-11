@@ -14,7 +14,7 @@
  * ============================================================
  */
 
-import { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
 
@@ -159,7 +159,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     return () => mql.removeEventListener('change', handler);
   }, [mode]);
 
-  return <ThemeContext.Provider value={{ mode, resolved, setMode }}>{children}</ThemeContext.Provider>;
+  // value 必须 memo：对象字面量每次渲染都是新引用，会让 useTheme() 消费者
+  // 在 provider 因任何原因重渲染时跟着重渲染（同仓库 EventContext 已是此写法）
+  const value = useMemo(() => ({ mode, resolved, setMode }), [mode, resolved, setMode]);
+
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 
 export function useTheme() {

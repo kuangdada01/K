@@ -15,7 +15,7 @@ import type { AddressInfo } from 'net';
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
-import { createSchema } from '../src/db/schema';
+import { createMemoryDb } from './helpers/memdb';
 import { setDbForTests, resetDbForTests } from '../src/db/connection';
 import { createApp } from '../src/app';
 import { generateToken } from '../src/middleware/auth';
@@ -37,9 +37,7 @@ function makePrivateFile(name: string): string {
 }
 
 beforeAll(async () => {
-  db = new Database(':memory:');
-  db.pragma('foreign_keys = ON');
-  createSchema(db);
+  db = createMemoryDb();
   setDbForTests(db);
 
   const insertUser = db.prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')");

@@ -7,6 +7,7 @@
 
 import api, { ApiError } from './http';
 import { Capacitor } from '@capacitor/core';
+import { UPLOAD_CHUNK_BYTES } from '@k/shared';
 import { getApiBaseUrl } from '../config';
 import type { Post, Comment, PaginatedResponse } from '../types';
 
@@ -149,7 +150,8 @@ export async function createVideoPostChunked(
   pinned: boolean,
   onProgress?: (pct: number) => void
 ): Promise<Post> {
-  const CHUNK_SIZE = 5 * 1024 * 1024;
+  // 分片大小必须与服务端一致（服务端按同一常量换算 MAX_TOTAL_CHUNKS 做校验）
+  const CHUNK_SIZE = UPLOAD_CHUNK_BYTES;
   const totalChunks = Math.ceil(videoFile.size / CHUNK_SIZE);
   // 生成与服务端一致的 temp 文件名（白名单校验）
   const rand = Math.floor(Math.random() * 1_000_000_000);

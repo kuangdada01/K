@@ -37,9 +37,9 @@ router.get(
     const afterIdRaw = parseInt(req.query.after_id as string);
     const limitRaw = parseInt(req.query.limit as string);
     if (!Number.isInteger(afterIdRaw) && !Number.isInteger(limitRaw)) {
-      // 无参保持旧契约：全量返回
-      const comments = commentRepo.listComments(postId, userId);
-      res.json({ comments });
+      // 无参保持旧契约：完整评论树（但有硬上限，见 lib/listLimits）
+      const { rows, has_more } = commentRepo.listComments(postId, userId);
+      res.json({ comments: rows, has_more });
       return;
     }
     const paged = commentRepo.listCommentsPaged(postId, userId, {

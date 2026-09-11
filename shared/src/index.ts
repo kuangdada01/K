@@ -10,5 +10,6 @@
  */
 
 export * from './constants/voice';
+export * from './constants/upload';
 export * from './utils/tag';
 export * from './types';

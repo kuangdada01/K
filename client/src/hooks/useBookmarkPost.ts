@@ -5,7 +5,7 @@
  * PostDetail 收藏逻辑抽取：乐观更新 + 全局缓存同步 + 失败回滚。
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useBookmark } from '../state/cache';
 import { events } from '../state/events';
@@ -17,11 +17,17 @@ export function useBookmarkPost(postId: number) {
   const { setBookmarked: setBookmarkedCache } = useBookmark();
   const [bookmarked, setBookmarked] = useState(false);
 
+  /** 在途闸门：`toggle` 依赖 [bookmarked]，重渲染前双击会读到同一个旧值
+   *  连发两次请求（详见 useLikePost 同名注释） */
+  const inFlightRef = useRef(false);
+
   const toggle = useCallback(async () => {
     if (!user) {
       openLoginPrompt();
       return;
     }
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     const wasBookmarked = bookmarked;
     setBookmarked(!wasBookmarked);
     setBookmarkedCache(postId, !wasBookmarked);
@@ -44,6 +50,8 @@ export function useBookmarkPost(postId: number) {
       setBookmarkedCache(postId, wasBookmarked);
       events.emit('post:bookmark', { postId, bookmarked: wasBookmarked });
       showToast('收藏失败，请重试');
+    } finally {
+      inFlightRef.current = false;
     }
   }, [bookmarked, user, postId, openLoginPrompt, setBookmarkedCache]);
 

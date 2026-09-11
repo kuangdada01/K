@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { useSse } from './useSse';
+import { useSse, __resetSseForTests } from './useSse';
 
 /** 可控的 EventSource 替身：记录实例以便测试中手动派发消息/错误 */
 class MockEventSource {
@@ -47,6 +47,9 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  // 模块级单例（连接/handler/退避链）不靠「用例自己 unmount 成功」来清理：
+  // 用例中途失败时那一步不会执行，残留状态会污染后续用例。
+  __resetSseForTests();
 });
 
 describe('useSse', () => {

@@ -23,6 +23,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, Dispatch, SetStateAction } from 'react';
 import { Capacitor } from '@capacitor/core';
+import { MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, LARGE_VIDEO_BYTES, toMB } from '@k/shared';
 import { showToast } from '../components/ui/Toast';
 import { fileToPreviewUrl } from '../utils';
 import { uploadTempVideo, deleteTempVideo } from '../api/posts';
@@ -129,11 +130,10 @@ export function useMediaDraft<T extends { url: string }>(
     const toAdd = files.slice(0, remaining);
     if (toAdd.length === 0) return;
 
-    // 检查文件大小 (10MB)
-    const maxSize = 10 * 1024 * 1024;
+    // 检查文件大小（上限见 @k/shared MAX_IMAGE_BYTES）
     const validFiles = toAdd.filter((file) => {
-      if (file.size > maxSize) {
-        showToast(`"${file.name}" 超过10MB限制`);
+      if (file.size > MAX_IMAGE_BYTES) {
+        showToast(`"${file.name}" 超过${toMB(MAX_IMAGE_BYTES)}MB限制`);
         return false;
       }
       return true;
@@ -173,18 +173,17 @@ export function useMediaDraft<T extends { url: string }>(
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // 检查视频大小 (300MB)
-    const maxSize = 300 * 1024 * 1024;
-    if (file.size > maxSize) {
+    // 检查视频大小（上限见 @k/shared MAX_VIDEO_BYTES）
+    if (file.size > MAX_VIDEO_BYTES) {
       const sizeMB = (file.size / 1024 / 1024).toFixed(1);
-      showToast(`视频大小 ${sizeMB}MB，超过300MB限制`);
+      showToast(`视频大小 ${sizeMB}MB，超过${toMB(MAX_VIDEO_BYTES)}MB限制`);
       e.target.value = '';
       return;
     }
 
     // Android WebView 提示：大文件仅影响自动截帧，预览仍尝试（metadata 模式不占大内存）
     const isNative = Capacitor.isNativePlatform();
-    if (isNative && file.size > 150 * 1024 * 1024) {
+    if (isNative && file.size > LARGE_VIDEO_BYTES) {
       showToast(`视频较大(${(file.size / 1024 / 1024).toFixed(0)}MB)，将使用分片上传，预览可能较慢`);
     }
 

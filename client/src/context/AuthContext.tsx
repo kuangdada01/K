@@ -16,7 +16,7 @@
  * ============================================================
  */
 
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useMemo, useCallback, ReactNode } from 'react';
 import api from '../api/http';
 import { queryClient } from '../state/queryClient';
 import { clearInteractionCaches, seedFollowedUsers } from '../state/cache';
@@ -55,9 +55,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // 避免 effect 中同步 setState（react-hooks/set-state-in-effect）
   const [loading, setLoading] = useState(() => !!localStorage.getItem('k_token'));
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
-
-  const openLoginPrompt = () => setShowLoginPrompt(true);
-  const closeLoginPrompt = () => setShowLoginPrompt(false);
 
   /** 应用启动时验证 token */
   useEffect(() => {
@@ -106,55 +103,75 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('auth:expired', handler);
   }, []);
 
-  /** 用户登录 */
-  const login = async (email: string, password: string) => {
+  /**
+   * 用户登录
+   * 全部动作都用 useCallback 固定引用：此前它们是每次渲染新建的函数，
+   * 连带 provider value 也是新对象，于是 43 处 useAuth() 消费者在任何一次
+   * provider 渲染（含启动时 loading true→false 那次）都会整树重渲染，
+   * 并且会让下游 useCallback 依赖（如 useLikePost 的 toggle）持续失效。
+   */
+  const login = useCallback(async (email: string, password: string) => {
     const res = await api.post<AuthResponse>('/auth/login', { email, password });
     localStorage.setItem('k_token', res.data.token);
     setToken(res.data.token);
     setUser(res.data.user);
-  };
+  }, []);
 
   /** 用户注册 */
-  const register = async (username: string, email: string, password: string, code: string) => {
+  const register = useCallback(async (username: string, email: string, password: string, code: string) => {
     const res = await api.post<AuthResponse>('/auth/register', { username, email, password, code });
     localStorage.setItem('k_token', res.data.token);
     setToken(res.data.token);
     setUser(res.data.user);
-  };
+  }, []);
 
   /** 用户登出（清除本地状态 + 清空跨账号缓存，B5 修复） */
-  const logout = () => {
+  const logout = useCallback(() => {
     localStorage.removeItem('k_token');
     // 清空全部查询缓存与交互缓存，切换账号后不会残留上一个账号的信息流/点赞/关注状态
     queryClient.removeQueries();
     clearInteractionCaches();
     setToken(null);
     setUser(null);
-  };
+  }, []);
 
   /** 更新用户信息（用于修改资料后同步状态） */
-  const updateUser = (updatedUser: User) => {
+  const updateUser = useCallback((updatedUser: User) => {
     setUser(updatedUser);
-  };
+  }, []);
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        token,
-        loading,
-        login,
-        register,
-        logout,
-        updateUser,
-        showLoginPrompt,
-        openLoginPrompt,
-        closeLoginPrompt,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+  const openLoginPrompt = useCallback(() => setShowLoginPrompt(true), []);
+  const closeLoginPrompt = useCallback(() => setShowLoginPrompt(false), []);
+
+  // value 必须 memo：否则对象字面量每次渲染都是新引用，useMemo/useCallback 下游全部失效
+  const value = useMemo(
+    () => ({
+      user,
+      token,
+      loading,
+      login,
+      register,
+      logout,
+      updateUser,
+      showLoginPrompt,
+      openLoginPrompt,
+      closeLoginPrompt,
+    }),
+    [
+      user,
+      token,
+      loading,
+      login,
+      register,
+      logout,
+      updateUser,
+      showLoginPrompt,
+      openLoginPrompt,
+      closeLoginPrompt,
+    ]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 /**

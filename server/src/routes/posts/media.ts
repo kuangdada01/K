@@ -7,14 +7,14 @@
  * （含「无属主放行」的旧文件兜底）。
  */
 
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { PATHS } from '../../config';
 import { authMiddleware } from '../../middleware/auth';
 import { asyncHandler, AppError } from '../../middleware/error';
 import { compressImage, withImages, IMAGE_EXT_RE, IMAGE_MIME_RE } from '../../lib/image';
-import { safeDeleteFile } from '../../lib/file';
+import { safeDeleteFile, safeDeleteUpload } from '../../lib/file';
 import { postTextSchema } from '@k/shared/schemas';
 import { extractTags } from '@k/shared';
 import { enqueueVideoTranscode } from '../../lib/video/queue';
@@ -29,6 +29,9 @@ import {
   acquireChunkUpload,
   releaseChunkUpload,
   registerChunkUpload,
+  setTempUploadBytes,
+  getTempQuotaRemaining,
+  hasTempUploadSlot,
   TEMP_VIDEO_NAME_RE,
   MAX_TOTAL_CHUNKS,
   MAX_VIDEO_BYTES,
@@ -53,7 +56,7 @@ const VIDEO_EXTS = ['.mp4', '.mov', '.avi', '.webm', '.mkv', '.flv', '.wmv'];
 const videoUpload = createUploader({
   dir: PATHS.uploads,
   filename: timestampFilename('post'),
-  maxSize: 300 * 1024 * 1024,
+  maxSize: MAX_VIDEO_BYTES,
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if (file.fieldname === 'cover') {
@@ -83,7 +86,7 @@ const videoUpload = createUploader({
 const videoTempUpload = createUploader({
   dir: PATHS.uploadsTemp,
   filename: timestampFilename('temp'),
-  maxSize: 300 * 1024 * 1024,
+  maxSize: MAX_VIDEO_BYTES,
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if (
@@ -110,27 +113,55 @@ function normalizeVideoToMp4(dir: string, name: string): string {
   return to;
 }
 
-/** 启动时清理超过 24 小时未发布的临时视频文件（目录不存在则创建——全新环境/CI 无 uploads/temp） */
-(() => {
+/** 临时视频存活上限：未发布的草稿视频在 uploads/temp 最多保留 24 小时 */
+const TEMP_VIDEO_TTL_MS = 24 * 3600 * 1000;
+/** 临时目录清理周期 */
+const TEMP_SWEEP_INTERVAL_MS = 3600 * 1000;
+/** multipart 边界/头部开销的宽裕量（用于 Content-Length 预判用户配额） */
+const MULTIPART_OVERHEAD_BYTES = 64 * 1024;
+
+/**
+ * 清理 uploads/temp 下超过 TTL 的临时视频，并同步回收过期会话登记
+ * （登记不回收会让每用户配额统计残留虚高字节数）。
+ * 返回删除的文件数。
+ */
+export function sweepTempVideos(now: number = Date.now()): number {
+  const tempDir = PATHS.uploadsTemp;
+  let removed = 0;
   try {
-    const tempDir = PATHS.uploadsTemp;
     if (!fs.existsSync(tempDir)) {
+      // 全新环境/CI 无 uploads/temp：建目录后无事可做
       fs.mkdirSync(tempDir, { recursive: true });
-      return;
+      return 0;
     }
-    const cutoff = Date.now() - 24 * 3600 * 1000;
+    const cutoff = now - TEMP_VIDEO_TTL_MS;
     for (const name of fs.readdirSync(tempDir)) {
       const p = path.join(tempDir, name);
       try {
         const st = fs.statSync(p);
-        if (st.isFile() && st.mtimeMs < cutoff) fs.unlinkSync(p);
+        if (st.isFile() && st.mtimeMs < cutoff) {
+          fs.unlinkSync(p);
+          removed++;
+        }
       } catch {
         /* 忽略单个文件错误 */
       }
     }
   } catch {
-    /* 忽略 */
+    /* 忽略目录级错误 */
   }
+  pruneChunkUploads();
+  return removed;
+}
+
+/**
+ * 启动时立即清理一次，此后每小时一次。
+ * 原实现只在模块加载时扫一次——进程不重启就永不回收，未发布的 300MB
+ * 草稿会一直占着磁盘。定时器 unref：不阻止进程退出。
+ */
+(() => {
+  sweepTempVideos();
+  setInterval(() => sweepTempVideos(), TEMP_SWEEP_INTERVAL_MS).unref();
 })();
 
 // 分片上传：原生 App 大文件（>50M）走此接口，避免单次 300M FormData 一次性进内存导致 WebView OOM 闪退
@@ -189,25 +220,54 @@ router.post(
       }
     }
     const tempPath = path.join(PATHS.uploadsTemp, uploadId);
-    // 首片清理旧残留（大小检查前执行，否则重传会被旧残留体积误拒）
+    // 目录缺失则创建（memoryStorage 不像 diskStorage 那样自动建目录）
+    await fs.promises.mkdir(PATHS.uploadsTemp, { recursive: true });
+
+    // 写入分片。'w'（首片）截断旧残留，等价于原「首片删旧文件」；
+    // 'r+'（续片）在文件不存在时抛 ENOENT —— 这正是「会话已被 POST /video 消费、
+    // 临时文件已改名到正式目录」的判定依据：若用 'a'，迟到的分片会凭空重建一个
+    // 残片文件，而那个文件永远不会被发布，只能等 TTL 清理。
+    // 改用文件句柄异步读写：此前的 appendFileSync 每 5MB 阻塞一次事件循环。
+    let size: number;
+    let handle: fs.promises.FileHandle;
     try {
-      // 目录缺失则创建（memoryStorage 不像 diskStorage 那样自动建目录）
-      fs.mkdirSync(PATHS.uploadsTemp, { recursive: true });
-      if (chunkIndex === 0 && fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-      // 累计超出总量上限：拒绝并删除半成品（防改小单片大小绕过 totalChunks 上限）
-      const existing = fs.existsSync(tempPath) ? fs.statSync(tempPath).size : 0;
-      if (existing + chunkFile.buffer.length > MAX_VIDEO_BYTES) {
-        if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath);
-        throw new AppError(400, '视频超过大小限制');
-      }
-      // 续片追加（不存在则创建）
-      fs.appendFileSync(tempPath, chunkFile.buffer);
-      const stat = fs.statSync(tempPath);
-      res.json({ ok: true, received: chunkIndex + 1, totalChunks, size: stat.size });
+      handle = await fs.promises.open(tempPath, chunkIndex === 0 ? 'w' : 'r+');
     } catch (err) {
-      if (err instanceof AppError) throw err;
+      if ((err as { code?: string }).code === 'ENOENT') {
+        throw new AppError(400, '上传会话已失效，请重新上传');
+      }
       throw new AppError(500, '分片写入失败');
     }
+    let overQuota = false;
+    try {
+      const written = chunkIndex === 0 ? 0 : (await handle.stat()).size;
+      // 累计超出总量上限：拒绝（防改小单片大小绕过 totalChunks 上限）
+      if (written + chunkFile.buffer.length > MAX_VIDEO_BYTES) {
+        overQuota = true;
+        size = written;
+      } else {
+        await handle.write(chunkFile.buffer, 0, chunkFile.buffer.length, written);
+        size = (await handle.stat()).size;
+      }
+    } finally {
+      await handle.close();
+    }
+    if (overQuota) {
+      // 半成品直接删除，避免下一次重传被旧残留体积误拒
+      await fs.promises.unlink(tempPath).catch(() => {});
+      releaseChunkUpload(uploadId);
+      throw new AppError(400, '视频超过大小限制');
+    }
+
+    // 写入期间会话可能已被 POST /video 消费（临时文件已改名到正式目录）：
+    // 我们刚重建的这个残片必须删掉，否则留下无属主孤儿
+    if (!getChunkOwner(uploadId)) {
+      await fs.promises.unlink(tempPath).catch(() => {});
+      throw new AppError(400, '上传会话已失效，请重新上传');
+    }
+    // 回填该会话占用的字节数，供每用户临时目录配额统计
+    setTempUploadBytes(uploadId, size);
+    res.json({ ok: true, received: chunkIndex + 1, totalChunks, size });
   })
 );
 
@@ -222,9 +282,34 @@ router.post(
  *
  * 成功响应 (201): { url: '/uploads/temp/xxx.mp4' }
  */
+/**
+ * 临时视频上传前置闸门：在 multer 落盘之前就按 Content-Length 拒绝，
+ * 避免「先写完 300MB 再删」的白白写盘。
+ * - 并发槽位：同一用户同时进行的临时上传数（登记表里的会话数）有上限
+ * - 字节配额：Content-Length 减去 multipart 头部开销后与剩余配额比较
+ * Content-Length 缺失（分块传输）时预判失效，由落盘后的复核兜底。
+ */
+function tempUploadGuard(req: Request, _res: Response, next: NextFunction): void {
+  const userId = req.user!.id;
+  pruneChunkUploads();
+  if (!hasTempUploadSlot(userId)) {
+    throw new AppError(429, '同时进行的临时视频上传过多，请稍后再试');
+  }
+  const declared = Number(req.headers['content-length'] ?? 0);
+  if (
+    Number.isFinite(declared) &&
+    declared > MULTIPART_OVERHEAD_BYTES &&
+    declared - MULTIPART_OVERHEAD_BYTES > getTempQuotaRemaining(userId)
+  ) {
+    throw new AppError(413, '临时视频空间不足，请先发布或放弃已有草稿视频');
+  }
+  next();
+}
+
 router.post(
   '/video-temp',
   authMiddleware,
+  tempUploadGuard,
   videoTempUpload.single('video'),
   asyncHandler(async (req: Request, res: Response) => {
     const videoFile = req.file;
@@ -238,14 +323,28 @@ router.post(
       throw new AppError(400, '视频文件无效或不完整，请重新选择后再发布');
     }
 
+    // 落盘后的配额复核：预判依赖 Content-Length，分块传输时拿不到，这里兜底
+    if (videoFile.size > getTempQuotaRemaining(req.user!.id)) {
+      safeDeleteFile(`/uploads/temp/${videoFile.filename}`, 'uploads');
+      throw new AppError(413, '临时视频空间不足，请先发布或放弃已有草稿视频');
+    }
+
     // 统一改存 .mp4 扩展名，后台串行转码为浏览器通用格式（H.264 mp4）。
     // 不阻塞本次响应：转码完成后同 URL 原地替换内容，预览即可播放；
     // 转码前 HEVC 等格式在部分浏览器可能暂时无法播放。
     const name = normalizeVideoToMp4(PATHS.uploadsTemp, videoFile.filename);
-    enqueueVideoTranscode(path.join(PATHS.uploadsTemp, name), name);
-    // 登记属主：与分片上传同一注册表。否则 DELETE /video-temp 与 POST /video
-    // 只校验文件名格式，任何登录用户可删除/冒用他人的临时草稿视频
-    registerChunkUpload(name, req.user!.id);
+    // 登记属主（并计入该用户的临时目录配额）：与分片上传同一注册表。否则
+    // DELETE /video-temp 与 POST /video 只校验文件名格式，任何登录用户可删除/冒用他人的临时草稿视频
+    registerChunkUpload(name, req.user!.id, videoFile.size);
+    try {
+      enqueueVideoTranscode(path.join(PATHS.uploadsTemp, name), name);
+    } catch (err) {
+      // 队列已满（429）：刚登记并落盘的临时文件必须当场回收，
+      // 否则只能等每小时一次的 TTL 清理，白占磁盘与用户配额
+      safeDeleteFile(`/uploads/temp/${name}`, 'uploads');
+      releaseChunkUpload(name);
+      throw err;
+    }
 
     res.status(201).json({ url: `/uploads/temp/${name}` });
   })
@@ -362,85 +461,109 @@ router.post(
 
     let videoUrl: string;
 
-    if (videoUrlField) {
-      // 使用选择视频时已上传的临时文件，移动到正式目录
-      const name = path.basename(videoUrlField);
-      if (!TEMP_VIDEO_NAME_RE.test(name)) {
-        throw new AppError(400, '无效的视频引用');
-      }
-      // 属主校验：有属主且非本人 → 拒绝（防冒用他人草稿；无属主为重启前的旧文件，放行）
-      const owner = getChunkOwner(name);
-      if (owner && owner.userId !== req.user!.id) {
-        throw new AppError(403, '无权使用该临时视频');
-      }
-      const tempPath = path.join(PATHS.uploadsTemp, name);
-      const finalPath = path.join(PATHS.uploads, name);
-      if (!fs.existsSync(tempPath)) {
-        throw new AppError(400, '视频已失效，请重新选择视频');
-      }
-      fs.renameSync(tempPath, finalPath);
-      // 分片上传会话随文件消费而结束
-      releaseChunkUpload(name);
-      // 兼容旧客户端残留的非 .mp4 临时文件名：统一规范化并入队转码
-      const normalizedName = normalizeVideoToMp4(PATHS.uploads, name);
-      enqueueVideoTranscode(path.join(PATHS.uploads, normalizedName), normalizedName);
-      videoUrl = `/uploads/${normalizedName}`;
-    } else {
-      if (!uploadedVideo) {
-        throw new AppError(400, '请选择视频');
+    /**
+     * 本次请求已移入正式目录（server/uploads）的媒体文件绝对路径。
+     * 视频/封面都是「先落盘、后写库」，两者之间任何一步失败（转码队列满 429、
+     * 封面截帧、DB 写入）都会留下无 DB 引用的孤儿文件 —— 而 24h 清理只覆盖
+     * uploads/temp。统一登记 + 失败回删。
+     */
+    const staged: string[] = [];
+
+    try {
+      if (videoUrlField) {
+        // 使用选择视频时已上传的临时文件，移动到正式目录
+        const name = path.basename(videoUrlField);
+        if (!TEMP_VIDEO_NAME_RE.test(name)) {
+          throw new AppError(400, '无效的视频引用');
+        }
+        // 属主校验：有属主且非本人 → 拒绝（防冒用他人草稿；无属主为重启前的旧文件，放行）
+        const owner = getChunkOwner(name);
+        if (owner && owner.userId !== req.user!.id) {
+          throw new AppError(403, '无权使用该临时视频');
+        }
+        const tempPath = path.join(PATHS.uploadsTemp, name);
+        const finalPath = path.join(PATHS.uploads, name);
+        if (!fs.existsSync(tempPath)) {
+          throw new AppError(400, '视频已失效，请重新选择视频');
+        }
+        fs.renameSync(tempPath, finalPath);
+        // 分片上传会话随文件消费而结束
+        releaseChunkUpload(name);
+        // 兼容旧客户端残留的非 .mp4 临时文件名：统一规范化并入队转码
+        const normalizedName = normalizeVideoToMp4(PATHS.uploads, name);
+        const videoAbs = path.join(PATHS.uploads, normalizedName);
+        staged.push(videoAbs);
+        enqueueVideoTranscode(videoAbs, normalizedName);
+        videoUrl = `/uploads/${normalizedName}`;
+      } else {
+        if (!uploadedVideo) {
+          throw new AppError(400, '请选择视频');
+        }
+
+        // 二次验证视频文件类型（防御性检查，fileFilter 已拦截大部分非法文件）
+        const videoExt = path.extname(uploadedVideo.originalname).toLowerCase();
+        if (!uploadedVideo.mimetype.startsWith('video/') && !VIDEO_EXTS.includes(videoExt)) {
+          // 删除已上传的文件
+          safeDeleteFile(`/uploads/${uploadedVideo.filename}`, 'uploads');
+          throw new AppError(400, '仅支持视频格式文件');
+        }
+
+        // 拒绝过小/被截断的视频文件（如云端文件只上传了文件头）
+        if (uploadedVideo.size < 1024) {
+          safeDeleteFile(`/uploads/${uploadedVideo.filename}`, 'uploads');
+          if (coverFile) safeDeleteFile(`/uploads/${coverFile.filename}`, 'uploads');
+          throw new AppError(400, '视频文件无效或不完整，请重新选择后再发布');
+        }
+
+        // 统一改存 .mp4 扩展名，后台串行转码（发布立即成功，转码完成后原地替换）
+        const normalizedName = normalizeVideoToMp4(PATHS.uploads, uploadedVideo.filename);
+        const videoAbs = path.join(PATHS.uploads, normalizedName);
+        staged.push(videoAbs);
+        enqueueVideoTranscode(videoAbs, normalizedName);
+        videoUrl = `/uploads/${normalizedName}`;
       }
 
-      // 二次验证视频文件类型（防御性检查，fileFilter 已拦截大部分非法文件）
-      const videoExt = path.extname(uploadedVideo.originalname).toLowerCase();
-      if (!uploadedVideo.mimetype.startsWith('video/') && !VIDEO_EXTS.includes(videoExt)) {
-        // 删除已上传的文件
-        safeDeleteFile(`/uploads/${uploadedVideo.filename}`, 'uploads');
-        throw new AppError(400, '仅支持视频格式文件');
+      // 封面：优先用客户端截取的封面图；缺失时服务端自动从视频截帧兜底
+      // （客户端 canvas 截帧可能失败：浏览器解不了 HEVC、同值 seek 不触发 seeked 等）
+      let videoCover: string | null = null;
+      if (coverFile) {
+        const coverPath = await compressImage(path.join(PATHS.uploads, coverFile.filename), {
+          maxWidth: POST_IMAGE_MAX,
+        });
+        staged.push(coverPath);
+        videoCover = `/uploads/${path.basename(coverPath)}`;
+      } else {
+        const videoAbs = path.join(PATHS.uploads, path.basename(videoUrl));
+        const coverAbs = videoAbs.replace(/\.[^.]+$/, '.jpg');
+        const generated = await generateVideoCover(videoAbs, coverAbs);
+        if (generated) {
+          staged.push(generated);
+          videoCover = `/uploads/${path.basename(generated)}`;
+        }
       }
 
-      // 拒绝过小/被截断的视频文件（如云端文件只上传了文件头）
-      if (uploadedVideo.size < 1024) {
-        safeDeleteFile(`/uploads/${uploadedVideo.filename}`, 'uploads');
-        if (coverFile) safeDeleteFile(`/uploads/${coverFile.filename}`, 'uploads');
-        throw new AppError(400, '视频文件无效或不完整，请重新选择后再发布');
-      }
+      const description = parsedText.data.description;
+      const closeComments = req.body.close_comments === '1' ? 1 : 0;
+      const pinned = req.body.pinned === '1' ? 1 : 0;
 
-      // 统一改存 .mp4 扩展名，后台串行转码（发布立即成功，转码完成后原地替换）
-      const normalizedName = normalizeVideoToMp4(PATHS.uploads, uploadedVideo.filename);
-      enqueueVideoTranscode(path.join(PATHS.uploads, normalizedName), normalizedName);
-      videoUrl = `/uploads/${normalizedName}`;
+      // 帖子行与话题在同一事务内写入：失败即整条回滚，下面按「未创建」回删媒体文件
+      const post = postRepo.createVideoPostWithTags(
+        {
+          userId: req.user!.id,
+          videoUrl,
+          videoCover,
+          description,
+          closeComments,
+          pinned,
+        },
+        extractTags(description)
+      );
+
+      res.status(201).json(withImages(post));
+    } catch (err) {
+      for (const absPath of staged) safeDeleteUpload(absPath);
+      throw err;
     }
-
-    // 封面：优先用客户端截取的封面图；缺失时服务端自动从视频截帧兜底
-    // （客户端 canvas 截帧可能失败：浏览器解不了 HEVC、同值 seek 不触发 seeked 等）
-    let videoCover: string | null = null;
-    if (coverFile) {
-      const coverPath = await compressImage(path.join(PATHS.uploads, coverFile.filename), {
-        maxWidth: POST_IMAGE_MAX,
-      });
-      videoCover = `/uploads/${path.basename(coverPath)}`;
-    } else {
-      const videoAbs = path.join(PATHS.uploads, path.basename(videoUrl));
-      const coverAbs = videoAbs.replace(/\.[^.]+$/, '.jpg');
-      const generated = await generateVideoCover(videoAbs, coverAbs);
-      if (generated) videoCover = `/uploads/${path.basename(generated)}`;
-    }
-
-    const description = parsedText.data.description;
-    const closeComments = req.body.close_comments === '1' ? 1 : 0;
-    const pinned = req.body.pinned === '1' ? 1 : 0;
-
-    const post = postRepo.createVideoPost({
-      userId: req.user!.id,
-      videoUrl,
-      videoCover,
-      description,
-      closeComments,
-      pinned,
-    });
-    postRepo.syncPostTags(post.id, extractTags(description));
-
-    res.status(201).json(withImages(post));
   })
 );
 

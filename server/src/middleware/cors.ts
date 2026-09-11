@@ -14,6 +14,7 @@
 
 import { Request, Response, NextFunction } from 'express';
 import { env } from '../config';
+import { REFRESHED_TOKEN_HEADER } from '../lib/jwt';
 
 /**
  * CORS 白名单：来自 ALLOWED_ORIGINS 环境变量（逗号分隔）。
@@ -47,6 +48,9 @@ export function corsMiddleware(req: Request, res: Response, next: NextFunction):
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  // 滑动续期：认证中间件在响应头回一张新 token，跨源端（安卓 WebView / 白名单来源）
+  // 必须由服务端显式暴露该头，浏览器的 fetch/XHR 才允许 JS 读取它。
+  res.setHeader('Access-Control-Expose-Headers', REFRESHED_TOKEN_HEADER);
   if (req.method === 'OPTIONS') {
     res.sendStatus(204);
     return;

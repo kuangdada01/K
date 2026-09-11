@@ -44,7 +44,7 @@ export default function PostDescriptionPanel({
 }: PostDescriptionPanelProps) {
   const descriptionTags = useMemo(() => extractTags(description), [description]);
   return (
-    <div className={panel.editRight}>
+    <div className={panel.editRight} data-testid="edit-right">
       <div className={panel.user}>
         {user?.avatar ? (
           <img src={resolveMediaUrl(user.avatar) || user.avatar} alt="" className={panel.avatar} />
@@ -88,7 +88,7 @@ export default function PostDescriptionPanel({
         </div>
       </div>
       <div className={panel.advanced}>
-        <button className={panel.advancedToggle} onClick={onToggleAdvanced}>
+        <button className={panel.advancedToggle} data-testid="advanced-toggle" onClick={onToggleAdvanced}>
           <span>高级设置</span>
           {showAdvanced ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
         </button>

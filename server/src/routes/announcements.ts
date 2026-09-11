@@ -38,11 +38,13 @@ router.get(
   asyncHandler(async (req: Request, res: Response) => {
     const userId = req.user!.id;
 
-    const announcements = notifRepo.listAnnouncements(userId);
+    // 硬上限 HARD_LIST_CAP 行（此前无 LIMIT），`has_more` 表示被截断
+    const { rows: announcements, has_more } = notifRepo.listAnnouncements(userId);
 
-    // 计算未读数量
-    const unread_count = announcements.filter((a) => !a.is_read).length;
-    res.json({ announcements, unread_count });
+    // 未读数走**独立 COUNT**：列表有硬上限，从列表里过滤推导会让超过上限的用户拿到偏小的错数
+    // （侧边栏徽标就依赖这个值）
+    const unread_count = notifRepo.countUnreadAnnouncements(userId);
+    res.json({ announcements, unread_count, has_more });
   })
 );
 

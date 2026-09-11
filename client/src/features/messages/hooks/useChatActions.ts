@@ -8,8 +8,9 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from 'react';
+import type { MutableRefObject, RefObject } from 'react';
 import api from '../../../api/http';
+import { MAX_IMAGE_BYTES, toMB } from '@k/shared';
 import { showToast } from '../../../components/ui/Toast';
 import bubbleStyles from '../../../components/chat/MessageBubble.module.css';
 import type { Conversation, Message } from '../../../types';
@@ -21,7 +22,8 @@ export interface UseChatActionsOptions {
   chatMessagesRef: RefObject<HTMLDivElement | null>;
   chatInputRef: RefObject<HTMLInputElement | null>;
   imageInputRef: RefObject<HTMLInputElement | null>;
-  setConversations: Dispatch<SetStateAction<Conversation[]>>;
+  /** 会话/通知刷新（共享收件箱 store 的单飞请求，见 state/inboxStore） */
+  refreshConversations: () => Promise<void>;
   onAppend: (m: Message) => void;
   onRemove: (id: number) => void;
   onClearLocal: () => void;
@@ -36,7 +38,7 @@ export function useChatActions({
   chatMessagesRef,
   chatInputRef,
   imageInputRef,
-  setConversations,
+  refreshConversations,
   onAppend,
   onRemove,
   onClearLocal,
@@ -64,8 +66,8 @@ export function useChatActions({
     try {
       await api.delete(`/messages/${selectedPartner.partner_id}`);
       onClearLocal();
-      const res = await api.get('/messages/conversations');
-      setConversations(res.data.conversations);
+      // 走共享 store 的单飞请求（此前这里又直接 GET 了一次会话列表）
+      await refreshConversations();
     } catch {
       showToast('清除失败');
     }
@@ -104,10 +106,9 @@ export function useChatActions({
     const file = e.target.files?.[0];
     if (!file || !selectedPartner || sending) return;
 
-    // 检查图片大小 (10MB)
-    const maxSize = 10 * 1024 * 1024;
-    if (file.size > maxSize) {
-      showToast('图片超过10MB限制');
+    // 检查图片大小（上限见 @k/shared MAX_IMAGE_BYTES）
+    if (file.size > MAX_IMAGE_BYTES) {
+      showToast(`图片超过${toMB(MAX_IMAGE_BYTES)}MB限制`);
       if (imageInputRef.current) imageInputRef.current.value = '';
       return;
     }

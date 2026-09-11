@@ -12,10 +12,16 @@
  */
 
 import axios, { isAxiosError } from 'axios';
+import type { InternalAxiosRequestConfig } from 'axios';
 import { getApiBaseUrl } from '../config';
 import { showToast } from '../components/ui/Toast';
 import { queryClient } from '../state/queryClient';
 import { clearInteractionCaches } from '../state/cache';
+import { storeRefreshedToken } from '../lib/token';
+import { delayBeforeRetry, markRetried, shouldRetryRequest } from './retry';
+
+/** 滑动续期的响应头名（axios 会把响应头键名小写化） */
+const REFRESHED_TOKEN_HEADER = 'x-refreshed-token';
 
 const api = axios.create({
   baseURL: getApiBaseUrl(),
@@ -37,13 +43,25 @@ api.interceptors.request.use((config) => {
 
 /**
  * 响应拦截器
- * 处理 401 未授权错误:
+ *
+ * 成功路径：滑动续期 —— 服务端在 token 签发超过阈值时，用响应头回一张新 token
+ * （见 server/src/lib/jwt.ts 的 shouldRefreshToken）。这里落盘，
+ * 于是一直在用的用户不会在 7 天到点时被登出；彻底沉默的会话仍按原样过期。
+ *
+ * 失败路径，处理 401 未授权错误:
  * - 清除本地 token
  * - 如果之前存在 token（说明 token 过期），派发 auth:expired 事件通知 AuthContext
  * - 如果之前无 token（未登录用户的预期 401），静默 reject
+ *
+ * 失败路径末尾：幂等读请求（GET/HEAD）按 `api/retry.ts` 的策略**最多重放一次**
+ * （只针对「连不上」与 502/503/504；写操作、超时、已取消、后台轮询都不重试）。
  */
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // 服务端下发的续期 token（无该头时是 undefined → 内部直接返回 false）
+    storeRefreshedToken(response.headers[REFRESHED_TOKEN_HEADER]);
+    return response;
+  },
   (error) => {
     // 封禁提示：服务端 403 且带 banned 标记时统一弹提示（各页面 catch 大多静默）
     if (error.response?.status === 403 && error.response?.data?.banned) {
@@ -59,6 +77,17 @@ api.interceptors.response.use(
         window.dispatchEvent(new CustomEvent('auth:expired'));
       }
     }
+
+    const config = error?.config as InternalAxiosRequestConfig | undefined;
+    if (shouldRetryRequest(error, config) && config) {
+      markRetried(config);
+      return delayBeforeRetry(config).then(() => {
+        // 等待期间被取消（组件卸载 / RQ 取消）→ 不再补发
+        if (config.signal?.aborted) return Promise.reject(error);
+        return api.request(config);
+      });
+    }
+
     return Promise.reject(error);
   }
 );

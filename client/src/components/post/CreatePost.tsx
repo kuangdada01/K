@@ -407,7 +407,10 @@ export default function CreatePost() {
   // 步骤 3: 编辑分享
   return (
     <div className={`${composer.overlay}${closing ? ` ${composer.closing}` : ''}`}>
-      <div className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}>
+      <div
+        className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}
+        data-testid="composer-dialog"
+      >
         <div className={composer.overlayHeader}>
           <button className={composer.overlayBtn} data-back onClick={handleBack}>
             后退

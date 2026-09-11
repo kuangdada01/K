@@ -19,6 +19,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, Dispatch, RefObject, SetStateAction } from 'react';
+import { LARGE_VIDEO_BYTES } from '@k/shared';
 import { showToast } from '../components/ui/Toast';
 
 export interface UseVideoCoverCaptureParams {
@@ -57,11 +58,21 @@ export function useVideoCoverCapture({
 
   // P2：seek 超时定时器经 ref 跟踪，组件卸载时清理，避免定时器泄漏
   const seekTimeoutRef = useRef<number | null>(null);
+  /**
+   * P2：解码失败的二次判定定时器（handleVideoLoaded 里延迟 300ms 复核 videoWidth）。
+   * 原实现未跟踪：组件卸载后回调仍会对已分离的 <video> 读 videoWidth，
+   * 并可能触发 setVideoError / extractFrame。
+   */
+  const decodeCheckRef = useRef<number | null>(null);
   useEffect(() => {
     return () => {
       if (seekTimeoutRef.current !== null) {
         window.clearTimeout(seekTimeoutRef.current);
         seekTimeoutRef.current = null;
+      }
+      if (decodeCheckRef.current !== null) {
+        window.clearTimeout(decodeCheckRef.current);
+        decodeCheckRef.current = null;
       }
     };
   }, []);
@@ -179,14 +190,15 @@ export function useVideoCoverCapture({
       setVideoDuration(d);
       // 检测黑屏：若 videoWidth 为 0 说明解码失败（HEVC 在 WebView 不支持），延迟 300ms 再判一次避免竞态
       if (video.videoWidth === 0 || video.videoHeight === 0) {
-        setTimeout(() => {
+        decodeCheckRef.current = window.setTimeout(() => {
+          decodeCheckRef.current = null;
           if (video.videoWidth === 0 || video.videoHeight === 0) {
             console.warn('videoWidth 0，判定为解码失败');
             setVideoError(true);
             showToast('该视频预览不支持（HEVC等），可直接下一步，发布后服务端自动转码');
           } else {
             setVideoError(false);
-            if ((videoFile?.size || 0) <= 150 * 1024 * 1024) extractFrame(0);
+            if ((videoFile?.size || 0) <= LARGE_VIDEO_BYTES) extractFrame(0);
           }
         }, 300);
         return;
@@ -196,7 +208,7 @@ export function useVideoCoverCapture({
       // 以 canplay 为准（CreatePost 的 onPreviewReady），此处只做截帧准备。
       setVideoError(false);
       // 仅在视频可解码且非超大文件时自动截帧；超大文件跳过以防 OOM（不留日志），依赖服务端兜底
-      const isLarge = (videoFile?.size || 0) > 150 * 1024 * 1024;
+      const isLarge = (videoFile?.size || 0) > LARGE_VIDEO_BYTES;
       if (!isLarge) {
         extractFrame(0);
       }

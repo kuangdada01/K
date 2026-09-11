@@ -20,8 +20,11 @@ import { Search } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
 import PostCard from '../components/post/PostCard';
-import PostDetail from '../components/post/PostDetail';
+import { loadPostDetail } from '../router/composerChunks';
 const LazyProfileOverlay = lazy(() => import('../components/profile/ProfileOverlay'));
+// 帖子详情浮层（含评论树）按需加载：首页此前静态引入它，把整块实现算进了首屏 chunk。
+// 信息流卡片 hover/touch 时会预取（见 PostCard），所以正常点开没有额外等待。
+const LazyPostDetail = lazy(loadPostDetail);
 import RecommendCard from '../components/RecommendCard';
 import IcpFooter from '../components/IcpFooter';
 import MusicPlayer from '../components/MusicPlayer';
@@ -281,17 +284,19 @@ export default function HomePage() {
 
               {overlayPostId &&
                 createPortal(
-                  <PostDetail
-                    postId={overlayPostId}
-                    initialImageIndex={overlayImageIndex}
-                    onClose={() => {
-                      setSkipOverlayAnim(false);
-                      handlePostClose();
-                    }}
-                    onLikeChange={handleLikeChange}
-                    onCommentChange={handleCommentChange}
-                    noAnimation={skipOverlayAnim}
-                  />,
+                  <Suspense fallback={null}>
+                    <LazyPostDetail
+                      postId={overlayPostId}
+                      initialImageIndex={overlayImageIndex}
+                      onClose={() => {
+                        setSkipOverlayAnim(false);
+                        handlePostClose();
+                      }}
+                      onLikeChange={handleLikeChange}
+                      onCommentChange={handleCommentChange}
+                      noAnimation={skipOverlayAnim}
+                    />
+                  </Suspense>,
                   document.body
                 )}
 

@@ -6,6 +6,7 @@
 
 import { getDb, stmt } from '../db/connection';
 import { count, escapeLike } from '../db/helpers';
+import { HARD_LIST_CAP, capRows, probeLimit } from '../lib/listLimits';
 
 /** 用户管理行（含帖子数） */
 export interface AdminUserRow {
@@ -20,15 +21,23 @@ export interface AdminUserRow {
   post_count: number;
 }
 
-/** 所有用户列表（含帖子数） */
-export function listUsers(): AdminUserRow[] {
-  return stmt(
+/**
+ * 所有用户列表（含帖子数）。硬上限见 HARD_LIST_CAP：
+ * 此前无 LIMIT，且每行带一个相关 `COUNT(*)`；客户端还会把整个列表渲染进 DOM
+ * 并在本地做搜索过滤 —— 用户量上去后是「一次请求 + 一次渲染」双向失控。
+ *
+ * ⚠️ 代价：客户端的搜索是**本地过滤**，因此超过上限的用户搜不到也管不了。
+ * 真正的解法是服务端搜索 + 分页（属于 UI 契约变更），已记入待办。
+ */
+export function listUsers(cap: number = HARD_LIST_CAP): { rows: AdminUserRow[]; has_more: boolean } {
+  const raw = stmt(
     `
     SELECT u.id, u.username, u.email, u.avatar, u.bio, u.role, u.banned_until, u.created_at,
       (SELECT COUNT(*) FROM posts WHERE user_id = u.id) as post_count
-    FROM users u ORDER BY u.id ASC
+    FROM users u ORDER BY u.id ASC LIMIT ?
   `
-  ).all() as AdminUserRow[];
+  ).all(probeLimit(cap)) as AdminUserRow[];
+  return capRows(raw, cap);
 }
 
 /** 搜索用户（按用户名或ID，最多10条，用于公告指定用户等场景） */
@@ -100,7 +109,7 @@ export function listAllPosts(page: number, limit: number): { posts: AdminPostRow
     `
     SELECT p.*, u.username, u.avatar
     FROM posts p JOIN users u ON p.user_id = u.id
-    ORDER BY p.created_at DESC LIMIT ? OFFSET ?
+    ORDER BY p.created_at DESC, p.id DESC LIMIT ? OFFSET ?
   `
   ).all(limit, (page - 1) * limit) as AdminPostRow[];
   return { posts, total };
@@ -183,16 +192,21 @@ export function createAnnouncement(input: {
   return stmt('SELECT * FROM announcements WHERE id = ?').get(result.lastInsertRowid) as AdminAnnouncementRow;
 }
 
-/** 所有公告列表（含目标用户名） */
-export function listAllAnnouncements(): AdminAnnouncementRow[] {
-  return stmt(
+/** 所有公告列表（含目标用户名）；硬上限见 HARD_LIST_CAP */
+export function listAllAnnouncements(cap: number = HARD_LIST_CAP): {
+  rows: AdminAnnouncementRow[];
+  has_more: boolean;
+} {
+  const raw = stmt(
     `
     SELECT a.*, u.username as target_username
     FROM announcements a
     LEFT JOIN users u ON a.target_user_id = u.id
-    ORDER BY a.created_at DESC
+    ORDER BY a.created_at DESC, a.id DESC
+    LIMIT ?
   `
-  ).all() as AdminAnnouncementRow[];
+  ).all(probeLimit(cap)) as AdminAnnouncementRow[];
+  return capRows(raw, cap);
 }
 
 /** 删除公告 */

@@ -7,6 +7,8 @@
 
 import { getDb, stmt } from '../db/connection';
 import { count, uid } from '../db/helpers';
+import { HARD_COMMENT_CAP, capRows, probeLimit } from '../lib/listLimits';
+import { AppError } from '../middleware/error';
 
 /** 评论行（含作者与父评论信息） */
 export interface CommentRow {
@@ -24,9 +26,16 @@ export interface CommentRow {
   parent_username?: string | null;
 }
 
-/** 帖子详情内嵌的评论列表（无点赞状态，按时间正序） */
-export function listCommentsForPost(postId: number): CommentRow[] {
-  return stmt(
+/**
+ * 帖子详情内嵌的评论列表（无点赞状态，按时间正序）。
+ * 硬上限同 listComments：详情页是**最热**的端点之一，此前无 LIMIT，
+ * 一条千评论的热帖会让这次请求把上千行连同子查询一次跑完（同步 SQLite）。
+ */
+export function listCommentsForPost(
+  postId: number,
+  cap: number = HARD_COMMENT_CAP
+): { rows: CommentRow[]; has_more: boolean } {
+  const raw = stmt(
     `
     SELECT c.*, u.username, u.avatar,
       (SELECT content FROM comments WHERE id = c.parent_id) as parent_content,
@@ -34,14 +43,26 @@ export function listCommentsForPost(postId: number): CommentRow[] {
     FROM comments c
     JOIN users u ON c.user_id = u.id
     WHERE c.post_id = ?
-    ORDER BY c.created_at ASC
+    ORDER BY c.created_at ASC, c.id ASC
+    LIMIT ?
   `
-  ).all(postId) as CommentRow[];
+  ).all(postId, probeLimit(cap)) as CommentRow[];
+  return capRows(raw, cap);
 }
 
-/** 评论列表端点（含当前用户点赞状态，按父评论+时间排序） */
-export function listComments(postId: number, userId?: number): CommentRow[] {
-  return stmt(
+/**
+ * 评论列表端点（含当前用户点赞状态，按父评论+时间排序）。
+ *
+ * 保留「一次返回完整评论树」的既有语义（老客户端依赖），但加**硬上限**：
+ * 每行都带 3 个相关子查询，热帖（上千条评论）一次全量物化会让同步 SQLite
+ * 长时间占住事件循环。多取一行用于精确判断 `has_more`。
+ */
+export function listComments(
+  postId: number,
+  userId?: number,
+  cap: number = HARD_COMMENT_CAP
+): { rows: CommentRow[]; has_more: boolean } {
+  const raw = stmt(
     `
     SELECT c.*, u.username, u.avatar,
       (SELECT COUNT(*) FROM comment_likes WHERE comment_id = c.id) as like_count,
@@ -51,9 +72,11 @@ export function listComments(postId: number, userId?: number): CommentRow[] {
     FROM comments c
     JOIN users u ON c.user_id = u.id
     WHERE c.post_id = ?
-    ORDER BY c.parent_id ASC, c.created_at ASC
+    ORDER BY c.parent_id ASC, c.created_at ASC, c.id ASC
+    LIMIT ?
   `
-  ).all(uid(userId), postId) as CommentRow[];
+  ).all(uid(userId), postId, probeLimit(cap)) as CommentRow[];
+  return capRows(raw, cap);
 }
 
 /**
@@ -180,14 +203,27 @@ export function deleteComment(commentId: number): void {
   })();
 }
 
+/**
+ * 前置校验评论存在，不存在则抛 404（替代外键约束导致的 500）。
+ * comment_likes.comment_id 带 ON DELETE CASCADE 外键，外键强制开启时
+ * 给不存在的评论点赞会抛 SQLITE_CONSTRAINT_FOREIGNKEY → 路由未映射 → 500。
+ * post.repo 的 likePost/unlikePost 已有同样的 requirePost 守卫，此处对齐。
+ */
+function requireComment(commentId: number): void {
+  const exists = stmt('SELECT 1 FROM comments WHERE id = ?').get(commentId);
+  if (!exists) throw new AppError(404, '评论不存在');
+}
+
 /** 点赞评论，返回最新点赞数 */
 export function likeComment(userId: number, commentId: number): number {
+  requireComment(commentId);
   stmt('INSERT OR IGNORE INTO comment_likes (user_id, comment_id) VALUES (?, ?)').run(userId, commentId);
   return countCommentLikes(commentId);
 }
 
 /** 取消评论点赞，返回最新点赞数 */
 export function unlikeComment(userId: number, commentId: number): number {
+  requireComment(commentId);
   stmt('DELETE FROM comment_likes WHERE user_id = ? AND comment_id = ?').run(userId, commentId);
   return countCommentLikes(commentId);
 }

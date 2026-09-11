@@ -44,6 +44,13 @@ const envSchema = z.object({
   APP_UPDATE_NOTES: z.string().optional(),
   // 数据库文件路径覆盖（e2e 测试用独立库文件，避免写入开发/生产 k.db）
   DB_PATH: z.string().optional(),
+  // 上传文件根目录覆盖（测试用独立目录，避免测试向真实 uploads/uploads_private 写文件）。
+  // 未配置时沿用 server 根目录 —— 生产行为完全不变。
+  UPLOADS_DIR: z.string().optional(),
+  // 管理员一次性引导：仅当取值为 1/true/yes/on 时，启动才允许按 ADMIN_EMAIL 提权。
+  // 不设置即**不提权**（历史行为是「配了 ADMIN_EMAIL 就自动提权」，属静默提权路径，
+  // 见 lib/admin-bootstrap.ts 的说明）。
+  ADMIN_BOOTSTRAP: z.string().optional(),
 });
 
 /** 校验并导出环境变量（启动时执行一次） */
@@ -61,18 +68,28 @@ if (env.NODE_ENV === 'production' && env.JWT_SECRET.length < 16) {
 /** server 目录（本文件位于 src/config.ts，'..' 即 server 根；编译到 dist/ 后同理） */
 export const SERVER_ROOT = path.join(__dirname, '..');
 
+/**
+ * 用户上传文件的根目录（其下固定为 uploads/ 与 uploads_private/ 两个子目录）。
+ *
+ * 默认即 server 根 —— 生产与开发行为与历史完全一致。
+ * UPLOADS_DIR 覆盖供测试使用：服务端测试与 e2e 若共用真实 uploads/，
+ * 每次运行都会在 express 对外的媒体目录里留下文件（实测 uploads_private
+ * 已累积 34 个测试孤儿），且并行 worker 互相看到对方的文件导致断言不稳定。
+ */
+export const UPLOADS_ROOT = env.UPLOADS_DIR ? path.resolve(env.UPLOADS_DIR) : SERVER_ROOT;
+
 export const PATHS = {
-  /** 上传文件根目录: server/uploads */
-  uploads: path.join(SERVER_ROOT, 'uploads'),
-  /** 临时视频目录: server/uploads/temp（发布前预览） */
-  uploadsTemp: path.join(SERVER_ROOT, 'uploads', 'temp'),
-  /** 头像目录: server/uploads/avatars */
-  avatars: path.join(SERVER_ROOT, 'uploads', 'avatars'),
+  /** 上传文件根目录: <UPLOADS_ROOT>/uploads */
+  uploads: path.join(UPLOADS_ROOT, 'uploads'),
+  /** 临时视频目录: <UPLOADS_ROOT>/uploads/temp（发布前预览） */
+  uploadsTemp: path.join(UPLOADS_ROOT, 'uploads', 'temp'),
+  /** 头像目录: <UPLOADS_ROOT>/uploads/avatars */
+  avatars: path.join(UPLOADS_ROOT, 'uploads', 'avatars'),
   /**
-   * 私密内容目录: server/uploads_private（私密图片 + 私信图片）
+   * 私密内容目录: <UPLOADS_ROOT>/uploads_private（私密图片 + 私信图片）
    * 不在 /uploads 静态服务范围内，只能通过鉴权接口按归属下发
    */
-  uploadsPrivate: path.join(SERVER_ROOT, 'uploads_private'),
+  uploadsPrivate: path.join(UPLOADS_ROOT, 'uploads_private'),
   /** 图书数据目录: server/books */
   books: path.join(SERVER_ROOT, 'books'),
   /** 数据库文件: server/k.db（可设 DB_PATH 环境变量覆盖，如 e2e 测试指向独立库） */

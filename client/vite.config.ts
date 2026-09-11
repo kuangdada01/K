@@ -13,8 +13,32 @@ function removeCrossorigin() {
   };
 }
 
+/**
+ * 构建产物一律使用 **production 版 React**。
+ *
+ * 为什么需要显式设置：React 的入口是按 `process.env.NODE_ENV === 'production'` 二选一的，
+ * 只要外部把 `NODE_ENV` 设成别的值（最典型的是 `playwright.config.ts` 给 webServer 注入的
+ * `NODE_ENV=test`，而 webServer 命令是「先 build 再跑服务」，于是构建也继承了它），
+ * 打出来的就是 **development 版 React**：
+ * - 体积翻倍（react 分块 223KB → 408KB）；
+ * - `<StrictMode>` 会「挂载 → 卸载 → 再挂载」双调用 effect —— 那是开发期行为，
+ *   线上不会发生，于是 e2e 测到的是**与线上不一致**的运行时语义
+ *   （本次就是它把发帖弹窗的历史记账搅乱，导致 e2e 假失败）。
+ *
+ * `--mode production` 并不足以纠正：Vite 以已存在的 `NODE_ENV` 为准（实测仍出 dev 包），
+ * 所以在 config 里（早于 define 计算）直接改回 production，仅在 build 时生效。
+ */
+function forceProductionReact() {
+  return {
+    name: 'force-production-react',
+    config(_userConfig: unknown, env: { command: string }) {
+      if (env.command === 'build') process.env.NODE_ENV = 'production';
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), removeCrossorigin()],
+  plugins: [forceProductionReact(), react(), removeCrossorigin()],
   base: '/',
   // shared 是 file: 符号链接的 CJS 包（dist/index.js），Vite 默认把链接依赖当源码直出，
   // 浏览器无法执行 require 导致页面崩溃；强制走 esbuild 预构建转为 ESM

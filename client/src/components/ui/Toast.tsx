@@ -12,7 +12,7 @@
  * ============================================================
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import '../../styles/toast.css';
 
 interface ToastItem {
@@ -29,13 +29,17 @@ export function showToast(message: string) {
 
 export default function Toast() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  /** 每条 toast 的自动消失定时器：容器卸载时统一清理，避免卸载后继续 setState */
+  const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
 
   const addToast = useCallback((message: string) => {
     const id = ++toastId;
     setToasts((prev) => [...prev, { id, message }]);
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      timersRef.current.delete(timer);
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 2500);
+    timersRef.current.add(timer);
   }, []);
 
   useEffect(() => {
@@ -44,6 +48,15 @@ export default function Toast() {
       addToastFn = null;
     };
   }, [addToast]);
+
+  // 卸载：清掉所有尚未触发的消失定时器（Set 实例在组件生命周期内恒定）
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
 
   return (
     <div className="toast-container">

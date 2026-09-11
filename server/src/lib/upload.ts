@@ -10,6 +10,7 @@ import multer from 'multer';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { MAX_IMAGE_BYTES } from '@k/shared';
 import { PATHS } from '../config';
 
 /** multer 文件名规则函数 */
@@ -63,12 +64,12 @@ export function createUploader(options: {
   });
 }
 
-/** 预设：头像/私密图片上传（uploads/avatars/ 目录，avatar- 前缀，10MB） */
+/** 预设：头像/私密图片上传（uploads/avatars/ 目录，avatar- 前缀，上限见 @k/shared） */
 export function createAvatarUploader(fileFilter: multer.Options['fileFilter']): multer.Multer {
   return createUploader({
     dir: PATHS.avatars,
     filename: timestampFilename('avatar'),
-    maxSize: 10 * 1024 * 1024,
+    maxSize: MAX_IMAGE_BYTES,
     fileFilter,
   });
 }

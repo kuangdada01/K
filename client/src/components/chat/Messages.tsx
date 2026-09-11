@@ -19,6 +19,7 @@ import api from '../../api/http';
 import { Conversation, Notification } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { events } from '../../state/events';
+import { markNotificationReadLocal } from '../../state/inboxStore';
 import { useSse } from '../../hooks/useSse';
 import ConfirmDialog from '../ui/ConfirmDialog';
 import PostDetail from '../post/PostDetail';
@@ -40,12 +41,9 @@ export default function Messages() {
 
   const {
     conversations,
-    setConversations,
     conversationsRef,
     notifications,
-    setNotifications,
     unreadNotifs,
-    setUnreadNotifs,
     refreshConversations,
     clearLocalUnread,
   } = useConversations();
@@ -132,7 +130,7 @@ export default function Messages() {
     chatMessagesRef,
     chatInputRef,
     imageInputRef,
-    setConversations,
+    refreshConversations,
     onAppend: appendMessage,
     onRemove: removeMessageById,
     onClearLocal: clearMessagesLocal,
@@ -215,9 +213,9 @@ export default function Messages() {
   const handleNotificationClick = (n: Notification) => {
     if (!n.read) {
       api.put(`/notifications/${n.id}/read`).catch(() => {});
-      setNotifications((prev) => prev.map((nn) => (nn.id === n.id ? { ...nn, read: 1 } : nn)));
-      setUnreadNotifs((prev) => Math.max(0, prev - 1));
-      events.emit('badge:changed', { source: 'notif' }); // 通知侧边栏刷新未读数
+      // 乐观已读在共享 store 里完成（与侧边栏角标同源），事件只触发服务器对账
+      markNotificationReadLocal(n.id);
+      events.emit('badge:changed', { source: 'notif' });
     }
     if (n.post_id) {
       window.history.pushState(null, '', window.location.href);

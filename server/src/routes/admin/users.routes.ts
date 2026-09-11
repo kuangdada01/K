@@ -32,8 +32,9 @@ const router = Router();
 router.get(
   '/users',
   asyncHandler(async (_req: Request, res: Response) => {
-    const users = adminRepo.listUsers();
-    res.json({ users });
+    // 硬上限 HARD_LIST_CAP 行（此前无 LIMIT；客户端会在本地过滤这份列表）
+    const { rows: users, has_more } = adminRepo.listUsers();
+    res.json({ users, has_more });
   })
 );
 

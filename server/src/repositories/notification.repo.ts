@@ -6,6 +6,7 @@
 
 import { stmt } from '../db/connection';
 import { count } from '../db/helpers';
+import { HARD_LIST_CAP, capRows, probeLimit } from '../lib/listLimits';
 
 // ============================================================
 // 通知
@@ -35,7 +36,7 @@ export function listNotifications(userId: number): NotificationRow[] {
     WHERE n.user_id = ?
       AND (n.post_id IS NULL OR EXISTS (SELECT 1 FROM posts WHERE id = n.post_id))
       AND (n.comment_id IS NULL OR EXISTS (SELECT 1 FROM comments WHERE id = n.comment_id))
-    ORDER BY n.created_at DESC
+    ORDER BY n.created_at DESC, n.id DESC
     LIMIT 50
   `
   ).all(userId) as NotificationRow[];
@@ -83,9 +84,12 @@ export interface AnnouncementRow {
   is_read: number;
 }
 
-/** 用户可见的公告列表（全局 + 定向），含已读状态 */
-export function listAnnouncements(userId: number): AnnouncementRow[] {
-  return stmt(
+/** 用户可见的公告列表（全局 + 定向），含已读状态；硬上限见 HARD_LIST_CAP */
+export function listAnnouncements(
+  userId: number,
+  cap: number = HARD_LIST_CAP
+): { rows: AnnouncementRow[]; has_more: boolean } {
+  const raw = stmt(
     `
     SELECT a.*, u.username as from_username, u.avatar as from_avatar,
       CASE WHEN ar.id IS NOT NULL THEN 1 ELSE 0 END as is_read
@@ -93,9 +97,30 @@ export function listAnnouncements(userId: number): AnnouncementRow[] {
     JOIN users u ON a.from_user_id = u.id
     LEFT JOIN announcement_reads ar ON ar.announcement_id = a.id AND ar.user_id = ?
     WHERE a.target_user_id IS NULL OR a.target_user_id = ?
-    ORDER BY a.created_at DESC
+    ORDER BY a.created_at DESC, a.id DESC
+    LIMIT ?
   `
-  ).all(userId, userId) as AnnouncementRow[];
+  ).all(userId, userId, probeLimit(cap)) as AnnouncementRow[];
+  return capRows(raw, cap);
+}
+
+/**
+ * 未读公告数（**独立 COUNT**，不要从列表里过滤推导）。
+ *
+ * 列表现在有硬上限（HARD_LIST_CAP）：如果还按「返回的列表里 is_read=0 的条数」
+ * 算未读数，超过上限的用户会得到一个**偏小的错数**（徽标显示不准）。
+ * 计数走单独查询，与列表截断无关。
+ */
+export function countUnreadAnnouncements(userId: number): number {
+  return count(
+    `SELECT COUNT(*) as count FROM announcements a
+     WHERE (a.target_user_id IS NULL OR a.target_user_id = ?)
+       AND NOT EXISTS(
+         SELECT 1 FROM announcement_reads ar WHERE ar.announcement_id = a.id AND ar.user_id = ?
+       )`,
+    userId,
+    userId
+  );
 }
 
 /** 标记公告已读（INSERT OR IGNORE 防重复） */

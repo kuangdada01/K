@@ -61,6 +61,11 @@ export interface VisibleComment {
 /**
  * 构建可见评论扁平列表（先父后回复，递归所有层级）
  * 折叠线程的回复项返回 null（渲染跳过，与原实现一致）
+ *
+ * 复杂度：原实现对每个可见项调用一次 countReplies，而 countReplies 又在每层
+ * 递归里 filter 一遍全量评论 → O(n²)（且每次 PostDetail 渲染都重跑，
+ * 输入框敲一个字就跑一次）。这里改为用同一份 repliesMap 做一次自底向上的
+ * 后代计数，整体 O(n)。countReplies 保留为对外导出的兼容函数（有单测覆盖）。
  */
 export function buildVisibleComments(
   comments: Comment[],
@@ -74,6 +79,19 @@ export function buildVisibleComments(
       repliesMap.set(c.parent_id, list);
     }
   });
+
+  /** 每条评论的后代总数（记忆化，避免重复遍历；递归深度即评论树深度） */
+  const descendantCount = new Map<number, number>();
+  const countDescendants = (id: number): number => {
+    const cached = descendantCount.get(id);
+    if (cached !== undefined) return cached;
+    let total = 0;
+    for (const reply of repliesMap.get(id) || []) {
+      total += 1 + countDescendants(reply.id);
+    }
+    descendantCount.set(id, total);
+    return total;
+  };
 
   const flatList: VisibleComment[] = [];
   const flattenReplies = (parentId: number, isParentCollapsed: boolean): void => {
@@ -111,7 +129,7 @@ export function buildVisibleComments(
     if (item.parentCollapsed) return null;
     return {
       ...item,
-      replyCount: item.hasReplies ? countReplies(comments, item.comment.id) : 0,
+      replyCount: item.hasReplies ? countDescendants(item.comment.id) : 0,
     };
   });
 }

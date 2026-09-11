@@ -13,7 +13,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'http';
 import Database from 'better-sqlite3';
 import { WebSocket } from 'ws';
-import { createSchema } from '../src/db/schema';
+import { createMemoryDb } from './helpers/memdb';
 import { setDbForTests, resetDbForTests } from '../src/db/connection';
 import * as voiceRepo from '../src/repositories/voice.repo';
 import { generateToken } from '../src/middleware/auth';
@@ -29,9 +29,7 @@ let aliceId = 0;
 let bobId = 0;
 
 beforeAll(async () => {
-  db = new Database(':memory:');
-  db.pragma('foreign_keys = ON');
-  createSchema(db);
+  db = createMemoryDb();
   setDbForTests(db);
 
   const insertUser = db.prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')");

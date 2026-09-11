@@ -18,7 +18,7 @@
  * ============================================================
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { follow, listRecommended } from '../api/friends';
 import type { RecommendUser } from '../components/RecommendCard';
 import { events } from '../state/events';
@@ -51,6 +51,35 @@ export function useRecommendFollow({
   const [recommendUsers, setRecommendUsers] = useState<RecommendUser[]>([]);
   const [removingIds, setRemovingIds] = useState<Set<number>>(new Set());
 
+  /**
+   * 移除动画的 400ms 定时器。卸载后触发就是无意义的 setState；而 `follow:changed`
+   * 的订阅依赖 recommendUsers 重订阅，同一用户被连续关注两次还会叠加定时器。
+   * 这里统一登记并在卸载时清理。
+   */
+  const removeTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  useEffect(() => {
+    const timers = removeTimersRef.current;
+    return () => {
+      for (const timer of timers) clearTimeout(timer);
+      timers.clear();
+    };
+  }, []);
+
+  /** 启动一次「400ms 后从推荐列表移除」的动画收尾 */
+  const scheduleRemove = (userId: number) => {
+    setRemovingIds((prev) => new Set(prev).add(userId));
+    const timer = setTimeout(() => {
+      removeTimersRef.current.delete(timer);
+      setRecommendUsers((prev) => prev.filter((item) => item.id !== userId));
+      setRemovingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(userId);
+        return next;
+      });
+    }, 400);
+    removeTimersRef.current.add(timer);
+  };
+
   // Initial load: 推荐关注（游客也可看到，服务端返回随机用户）
   useEffect(() => {
     let cancelled = false;
@@ -68,17 +97,7 @@ export function useRecommendFollow({
   useEffect(() => {
     const handler = (userId: number) => {
       const inList = recommendUsers.some((u) => u.id === userId);
-      if (inList) {
-        setRemovingIds((prev) => new Set(prev).add(userId));
-        setTimeout(() => {
-          setRecommendUsers((prev) => prev.filter((item) => item.id !== userId));
-          setRemovingIds((prev) => {
-            const next = new Set(prev);
-            next.delete(userId);
-            return next;
-          });
-        }, 400);
-      }
+      if (inList) scheduleRemove(userId);
     };
     events.on('follow:changed', handler);
     return () => {
@@ -95,15 +114,7 @@ export function useRecommendFollow({
     try {
       await follow(u.id);
       setFollowStatus(u.id, true);
-      setRemovingIds((prev) => new Set(prev).add(u.id));
-      setTimeout(() => {
-        setRecommendUsers((prev) => prev.filter((item) => item.id !== u.id));
-        setRemovingIds((prev) => {
-          const next = new Set(prev);
-          next.delete(u.id);
-          return next;
-        });
-      }, 400);
+      scheduleRemove(u.id);
       showToast('ヾ(≧▽≦*)o关注成功！');
     } catch {
       showToast('关注失败，请重试');

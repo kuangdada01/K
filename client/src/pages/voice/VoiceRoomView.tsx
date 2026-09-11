@@ -15,13 +15,14 @@
  * ============================================================
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AudioWaveform, Circle, LogOut, Mic, MicOff, MonitorUp, Music, Volume2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useVoice, useVoiceRealtime } from '../../context/VoiceContext';
 import VoiceShareStage from '../../components/VoiceShareStage';
 import MemberCard from '../../components/voice/MemberCard';
 import VolumeSlider from '../../components/ui/VolumeSlider';
+import { isOwnedGuestRoom } from '../../voice/roomOwnership';
 import VoiceChatPanel from './VoiceChatPanel';
 import type { VoiceRoom } from '../../types';
 import { VOICE_MAX_ROOM_SIZE } from '@k/shared';
@@ -39,10 +40,12 @@ export default function VoiceRoomView({ rooms }: { rooms: VoiceRoom[] }) {
 
   const self = voice.participants[0];
   const isSharingSelf = !!voice.share && voice.share.userId === self?.userId;
-  // 当前房间的创建者身份来自轮询的房间列表（isCreator 由服务端按访问者计算，
-  // 访客创建者按 IP 归属；游客/管理员同样可管理）
+  // 当前房间的创建者身份来自轮询的房间列表（登录用户比 creator_id；
+  // 访客房间服务端不再按 IP 声称所有权，改由本地保存的令牌补齐 —— 游客/管理员同样可管理）
   const currentRoom = rooms.find((r) => r.id === voice.activeRoomId) ?? null;
-  const canClearChat = currentRoom !== null && (currentRoom.isCreator === true || user?.role === 'admin');
+  const canClearChat =
+    currentRoom !== null &&
+    (currentRoom.isCreator === true || user?.role === 'admin' || isOwnedGuestRoom(currentRoom.id));
 
   // 录制中每秒刷新已录时长（秒数只在 interval 回调里更新，避免渲染期读时钟）
   useEffect(() => {
@@ -60,6 +63,14 @@ export default function VoiceRoomView({ rooms }: { rooms: VoiceRoom[] }) {
   };
 
   const handleLeave = () => voice.leave();
+
+  // 引用固定，否则 MemberCard 的 memo 会因「每次渲染都是新闭包」而完全失效（P2-7）。
+  // 先取出控制器里那个稳定的 useCallback（依赖数组只放它，不整个 voice 对象）。
+  const setPeerVolume = voice.setPeerVolume;
+  const handlePeerVolume = useCallback(
+    (userId: number, v: number) => setPeerVolume(userId, v),
+    [setPeerVolume]
+  );
 
   return (
     <div className={styles.page}>
@@ -88,7 +99,7 @@ export default function VoiceRoomView({ rooms }: { rooms: VoiceRoom[] }) {
             speaking={realtime.speaking.has(p.userId)}
             isSelf={p.userId === self?.userId}
             quality={realtime.peerQuality[p.userId] ?? 'good'}
-            onVolume={(userId, v) => voice.setPeerVolume(userId, v)}
+            onVolume={handlePeerVolume}
             getVolume={voice.getPeerVolume}
           />
         ))}

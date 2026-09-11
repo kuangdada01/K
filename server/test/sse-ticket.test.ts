@@ -13,7 +13,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import Database from 'better-sqlite3';
-import { createSchema } from '../src/db/schema';
+import { createMemoryDb } from './helpers/memdb';
 import { setDbForTests, resetDbForTests } from '../src/db/connection';
 import { createApp } from '../src/app';
 import { generateToken } from '../src/middleware/auth';
@@ -24,9 +24,7 @@ let base = '';
 let token = '';
 
 beforeAll(async () => {
-  db = new Database(':memory:');
-  db.pragma('foreign_keys = ON');
-  createSchema(db);
+  db = createMemoryDb();
   setDbForTests(db);
 
   const userId = Number(

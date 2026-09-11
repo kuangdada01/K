@@ -20,18 +20,16 @@
  * ============================================================
  */
 
-import { useState, useEffect, useRef, Suspense, lazy } from 'react';
+import { useState, useEffect, useRef, useCallback, Suspense, lazy } from 'react';
 
 import { X, Trash2, ChevronLeft, Pencil } from 'lucide-react';
-import CommentItem from '../CommentItem';
 import PostMedia from './PostMedia';
-import TaggedText from '../TaggedText';
+import PostDetailComments from './PostDetailComments';
 
 const LazyProfileOverlay = lazy(() => import('../profile/ProfileOverlay'));
 import ConfirmDialog from '../ui/ConfirmDialog';
 import { getApiErrorMessage } from '../../api/http';
 import * as postsApi from '../../api/posts';
-import { buildVisibleComments } from '../../lib/comments';
 import { useAuth } from '../../context/AuthContext';
 import { useQueryClient } from '@tanstack/react-query';
 import { postsFeedKey, updatePostsFeed } from '../../hooks/usePostsFeed';
@@ -49,7 +47,7 @@ import { useEvent } from '../../context/EventContext';
 import { events } from '../../state/events';
 import { showToast } from '../ui/Toast';
 import { resolveMediaUrl } from '../../utils';
-import { parsePostImages } from '../../lib/parsePostImages';
+import { parsePostImages, cleanEditImages } from '../../lib/parsePostImages';
 import PostDetailActions from './PostDetailActions';
 import CommentComposer from './CommentComposer';
 import { usePostDetailClose } from './usePostDetailClose';
@@ -267,6 +265,12 @@ export default function PostDetail({
     }
   };
 
+  /** 稳定的评论项回调：原实现在 map 里每条评论各建一个箭头函数，
+   *  连同未 memo 的 CommentItem 一起，让输入评论时每条评论都重渲染 */
+  const handleCommentProfileClick = useCallback((id: number) => {
+    setProfileUserId(id);
+  }, []);
+
   if (loadError) {
     return (
       <div
@@ -333,10 +337,8 @@ export default function PostDetail({
                 onClick={() => {
                   handleClose();
                   setTimeout(() => {
-                    const cleanImages = post.video_url
-                      ? []
-                      : post.images?.filter((u) => u !== '[]' && u !== '["[]"]') ||
-                        [post.image_url].filter((u) => u !== '[]' && u !== '["[]"]');
+                    // 与个人页编辑入口同一份清洗逻辑（lib/parsePostImages.cleanEditImages）
+                    const cleanImages = cleanEditImages(post);
                     openEdit({
                       id: post.id,
                       description: post.description || '',
@@ -395,63 +397,24 @@ export default function PostDetail({
             )}
           </div>
 
-          <div className={styles.comments}>
-            {post.description && (
-              <div className={styles.comment}>
-                {post.avatar ? (
-                  <img src={resolveMediaUrl(post.avatar) || ''} alt="" className={styles.commentAvatar} />
-                ) : (
-                  <div className={styles.commentAvatarPlaceholder}>
-                    {post.username.charAt(0).toUpperCase()}
-                  </div>
-                )}
-                <div>
-                  <div className={styles.commentContent}>
-                    <span className={styles.commentUsername}>{post.username}</span>
-                    <TaggedText text={post.description} />
-                  </div>
-                </div>
-              </div>
-            )}
-            {(() => {
-              return buildVisibleComments(comments, collapsedReplies).map((item) => {
-                if (!item) return null;
-                const { comment, isReply, isCollapsed, hasReplies, replyCount } = item;
-                const activeHighlighted = activeHighlightId === comment.id;
-
-                return (
-                  <CommentItem
-                    key={comment.id}
-                    comment={comment}
-                    isReply={isReply}
-                    isCollapsed={isCollapsed}
-                    hasReplies={hasReplies}
-                    replyCount={replyCount}
-                    activeHighlighted={activeHighlighted}
-                    currentUserId={user?.id}
-                    innerRef={activeHighlighted ? highlightRef : undefined}
-                    onProfileClick={(id) => handleNavigate(`/profile/${id}`)}
-                    onReply={handleReply}
-                    onToggleReplies={toggleReplies}
-                    onLike={handleCommentLike}
-                    onDelete={handleDeleteComment}
-                  />
-                );
-              });
-            })()}
-            {commentHasMore && (
-              <button
-                className={styles.commentsLoadMore}
-                onClick={loadMoreComments}
-                disabled={commentsLoadingMore}
-              >
-                {commentsLoadingMore
-                  ? '加载中…'
-                  : `加载更多评论（已加载 ${comments.length}/${commentTotal}）`}
-              </button>
-            )}
-            <div ref={commentsEndRef} />
-          </div>
+          <PostDetailComments
+            post={post}
+            comments={comments}
+            collapsedReplies={collapsedReplies}
+            commentHasMore={commentHasMore}
+            commentTotal={commentTotal}
+            commentsLoadingMore={commentsLoadingMore}
+            currentUserId={user?.id}
+            activeHighlightId={activeHighlightId}
+            highlightRef={highlightRef}
+            endRef={commentsEndRef}
+            onLoadMore={loadMoreComments}
+            onProfileClick={handleCommentProfileClick}
+            onReply={handleReply}
+            onToggleReplies={toggleReplies}
+            onLike={handleCommentLike}
+            onDelete={handleDeleteComment}
+          />
 
           {/* 底部操作栏 + 评论输入：移动端作为整体吸底 dock，桌面端仅作分组容器 */}
           <div className={styles.bottomDock}>

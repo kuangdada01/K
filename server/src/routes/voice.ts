@@ -23,7 +23,7 @@
 import { Router, Request, Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { verifyLiveToken } from '../lib/jwt';
-import { optionalAuth } from '../middleware/auth';
+import { authMiddleware, optionalAuth } from '../middleware/auth';
 import { AppError, asyncHandler } from '../middleware/error';
 import { validateBody } from '../validate';
 import * as voiceRepo from '../repositories/voice.repo';
@@ -32,6 +32,7 @@ import * as voiceChatRepo from '../repositories/voice-chat.repo';
 import { getSafeUser } from '../repositories/user.repo';
 import * as voiceHub from '../voice/hub';
 import { guestIds } from '../voice/guest-ids';
+import { voiceTickets } from '../voice/tickets';
 import { getClientIp } from '../lib/client-ip';
 import { env } from '../config';
 import { createVoiceRoomSchema } from '@k/shared/schemas';
@@ -83,28 +84,44 @@ function voiceAuth(req: Request, res: Response, next: () => void): void {
 
   // 无 token = 未登录访客：按 IP 分配/复用负数 id（同 IP 10 分钟内保持同一身份）
   const ip = getClientIp(req);
-  const { id } = guestIds.acquire(ip);
-  req.user = { id, username: `未登录-${-id}` };
+  const lease = guestIds.acquire(ip);
+  req.user = { id: lease.id, username: `未登录-${-lease.id}` };
   (req as VoiceAuthRequest).voiceGuestIp = ip;
-  // 请求结束即归还引用计数（release 内部有计数防御，finish/close 双触发重复调用安全）
-  const release = () => guestIds.release(ip);
+  // 请求结束即归还本次租约（lease.release 幂等，finish/close 双触发安全）
+  const release = () => lease.release();
   res.on('finish', release);
   res.on('close', release);
   next();
 }
 
 /**
+ * 取出请求携带的访客房间所有权令牌（`X-Voice-Owner-Token` 请求头）。
+ * 放请求头而不是查询串：与语音 WS 的教训一致 —— URL 会进 nginx access log。
+ */
+function getOwnerToken(req: Request): string | undefined {
+  const raw = req.headers['x-voice-owner-token'];
+  const token = Array.isArray(raw) ? raw[0] : raw;
+  return typeof token === 'string' && token.length > 0 ? token : undefined;
+}
+
+/**
  * 房间所有权判定（删除房间 / 清空聊天记录共用）
  * - 管理员恒有权限
  * - 登录用户：creator_id 匹配本人（正数 id）
- * - 访客：creator_ip 与请求来源 IP 一致（负数 id 无法落库（外键），
- *   且访客 id 会随 guestIds 释放而失效，因此访客所有权以 IP 为唯一准绳；
- *   creator_ip 仅访客建房时写入，登录用户建房为 NULL，判定天然互斥）
+ * - 访客：比对**房间级令牌**（创建时签发、客户端保存）
+ *
+ * 为什么不再用 IP：同一 NAT 后的两个人会互相判定为「创建者」，于是**能删对方的房间**；
+ * 反过来换个网络（切 WiFi/重连拿到新 IP）就丢掉自己的房间。令牌把所有权从
+ * 「网络位置」换成「只有创建者持有的凭证」。
+ *
+ * 存量访客房间（026 迁移前创建，owner_token 为 NULL）回退到旧的 IP 判定 ——
+ * 它们无法回溯补发令牌，回退比「谁都删不掉」更合理。
  */
 function isRoomOwner(req: Request, room: VoiceRoomRow): boolean {
   if (req.user?.role === 'admin') return true;
   if (!req.user) return false;
   if (req.user.id > 0) return room.creator_id === req.user.id;
+  if (room.owner_token) return voiceRepo.matchesOwnerToken(room, getOwnerToken(req));
   return room.creator_ip !== null && room.creator_ip === getClientIp(req);
 }
 
@@ -124,13 +141,38 @@ router.get(
     const rooms = voiceRepo.listRooms().map((row) => {
       const room = voiceRepo.toVoiceRoom(row);
       room.participantCount = occupancy.get(row.id) ?? 0;
-      room.isCreator = req.user
-        ? row.creator_id === req.user.id
-        : row.creator_ip !== null && row.creator_ip === viewerIp;
+      if (req.user) {
+        room.isCreator = row.creator_id === req.user.id;
+      } else if (row.owner_token) {
+        // 有令牌的访客房间：服务端**不再**按 IP 声称所有权（那正是 NAT 互删的成因）。
+        // 真正的判定在删除/清聊天时按令牌做；列表里的这个标记由客户端按本地保存的
+        // 令牌自行补齐（见 client/src/voice/roomOwnership.ts）。
+        room.isCreator = false;
+      } else {
+        // 存量访客房间：保持旧的 IP 判定行为不变
+        room.isCreator = row.creator_ip !== null && row.creator_ip === viewerIp;
+      }
       return room;
     });
     rooms.sort((a, b) => b.participantCount! - a.participantCount! || (b.created_at > a.created_at ? 1 : -1));
     res.json({ rooms });
+  })
+);
+
+/**
+ * POST /api/voice/ticket - 换取一次性语音连接票据
+ *
+ * 认证: 必须（登录用户）。访客不需要票据 —— 他们不带任何凭证直连 WS。
+ *
+ * 为什么需要它：浏览器 WebSocket 无法自定义请求头，JWT 若放进查询串会进
+ * nginx access log 等渠道（SSE 早已改为一次性票据，语音此前没有对齐）。
+ * 票据 30 秒有效、只能用一次，且不跨协议通用（见 lib/oneTimeTicket）。
+ */
+router.post(
+  '/ticket',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    res.json({ ticket: voiceTickets.issue(req.user!.id) });
   })
 );
 
@@ -150,29 +192,31 @@ router.post(
     // 每个创建者（登录用户或访客 IP）同时持有的房间数上限：访客创建不设限的话，
     // 脚本可刷出海量空房间撑爆列表（房间无 TTL 自动清理，靠该上限封顶）
     const MAX_ROOMS_PER_CREATOR = 5;
-    let row: VoiceRoomRow;
-    if (user.id > 0) {
-      if (voiceRepo.countRoomsByCreatorId(user.id) >= MAX_ROOMS_PER_CREATOR) {
-        throw new AppError(429, '你创建的房间太多了，请先删除不需要的房间');
-      }
-      const safe = getSafeUser(user.id);
-      row = voiceRepo.createRoom(user.id, name, description ?? '', {
-        creatorName: safe?.username ?? user.username,
-        creatorAvatar: safe?.avatar ?? null,
-      });
-    } else {
-      const guestIp = (req as VoiceAuthRequest).voiceGuestIp;
-      if (!guestIp) throw new AppError(401, '认证失败');
-      if (voiceRepo.countRoomsByCreatorIp(guestIp) >= MAX_ROOMS_PER_CREATOR) {
-        throw new AppError(429, '你创建的房间太多了，请先删除不需要的房间');
-      }
-      row = voiceRepo.createRoom(user.id, name, description ?? '', {
-        creatorName: user.username,
-        creatorAvatar: null,
-        creatorIp: guestIp,
-      });
+    // 上限校验与插入在同一事务内完成（createRoomWithinLimit）：
+    // 分两步做时，并发创建会各自读到「还没到上限」而双双插入、越过封顶
+    const guestIp = (req as VoiceAuthRequest).voiceGuestIp;
+    if (user.id <= 0 && !guestIp) throw new AppError(401, '认证失败');
+    const safe = user.id > 0 ? getSafeUser(user.id) : undefined;
+
+    const created = voiceRepo.createRoomWithinLimit({
+      creatorId: user.id,
+      name,
+      description: description ?? '',
+      limit: MAX_ROOMS_PER_CREATOR,
+      ...(user.id > 0
+        ? { creatorName: safe?.username ?? user.username, creatorAvatar: safe?.avatar ?? null }
+        : { creatorName: user.username, creatorAvatar: null, creatorIp: guestIp ?? null }),
+    });
+    if (!created) {
+      throw new AppError(429, '你创建的房间太多了，请先删除不需要的房间');
     }
-    res.status(201).json({ room: { ...voiceRepo.toVoiceRoom(row), participantCount: 0 } });
+    const row: VoiceRoomRow = created;
+    res.status(201).json({
+      room: { ...voiceRepo.toVoiceRoom(row), participantCount: 0 },
+      // 访客房间的所有权令牌：**只在创建响应里回这一次**（列表/详情都不下发）。
+      // 客户端保存后在删除/清聊天时经 X-Voice-Owner-Token 带上。
+      ...(row.owner_token ? { ownerToken: row.owner_token } : {}),
+    });
   })
 );
 

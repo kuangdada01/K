@@ -366,4 +366,17 @@ describe('AudioGraph', () => {
     expect(masterGain.disconnects).toBe(1);
     expect(limiter.disconnects).toBe(1);
   });
+
+  it('dispose 之后迟到的 startSpeakingLoop 不复活轮询（会话销毁竞态第二道闸门）', () => {
+    createGraph();
+    g.dispose();
+    expect(g.ctx).toBeNull();
+
+    // 模拟 VoiceSession.join 的续体在 teardown 之后才恢复执行
+    g.startSpeakingLoop();
+
+    vi.advanceTimersByTime(1000);
+    expect(calls).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

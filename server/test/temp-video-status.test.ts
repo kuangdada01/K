@@ -17,7 +17,7 @@ import type { AddressInfo } from 'net';
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
-import { createSchema } from '../src/db/schema';
+import { createMemoryDb } from './helpers/memdb';
 import { setDbForTests, resetDbForTests } from '../src/db/connection';
 import { createApp } from '../src/app';
 import { generateToken } from '../src/middleware/auth';
@@ -48,8 +48,7 @@ async function getStatus(
 
 beforeAll(async () => {
   fs.mkdirSync(path.join(PATHS.uploadsTemp), { recursive: true });
-  db = new Database(':memory:');
-  createSchema(db);
+  db = createMemoryDb();
   setDbForTests(db);
 
   const insertUser = db.prepare(
@@ -67,7 +66,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  server?.close();
+  // 必须 await：其余测试文件都等 close 回调，漏掉可能让 vitest worker 挂住
+  if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
   resetDbForTests();
   const p = path.join(PATHS.uploadsTemp, NAME);
   if (fs.existsSync(p)) fs.unlinkSync(p);

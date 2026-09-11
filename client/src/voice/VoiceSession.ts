@@ -29,11 +29,15 @@ import { RoomRecorder } from './recording/roomRecorder';
 import { QualityMonitor } from './qualityMonitor';
 import { AudioGraph } from './audio/audioGraph';
 import { ScreenShareController, type ScreenShareSink } from './share/screenShareController';
+import {
+  applyShareQualityToSender,
+  applyShareQualityToSenders,
+  preferH264ForSender,
+} from './share/senderTuning';
 import { WsSignaling } from './signaling/wsSignaling';
 import { MeshManager } from './mesh/meshManager';
 import type { PeerEntry } from './mesh/meshPeer';
 import {
-  SHARE_QUALITY_PRESETS,
   type ScreenShareStartResult,
   type ShareQuality,
   type VoiceSelfInfo,
@@ -43,6 +47,7 @@ import {
 } from './types';
 
 // 共享类型与预设收敛在 ./types；这里 re-export 保持既有 import 路径不变
+// （SHARE_QUALITY_PRESETS 的取值逻辑已移到 ./share/senderTuning，本文件只做透出）
 export type {
   VoiceStatus,
   VoiceQualityLevel,
@@ -97,6 +102,10 @@ export class VoiceSession {
         // 房间已被删除（服务端 hub.closeRoom 主动关闭）。若 room-closed 消息弱网丢失，
         // 只能靠关闭码终止——否则会按 3s 间隔无限重连一个已不存在的房间
         this.teardown('room-closed');
+      } else if (code === 4004) {
+        // 同一 IP 的并发语音连接已达上限（P2-29）。必须终止：否则会 3s 一次
+        // 重连一个必然被拒的服务端，自己制造重试风暴
+        this.teardown('too-many-connections');
       }
     },
     onNetworkClose: () => {
@@ -261,6 +270,7 @@ export class VoiceSession {
     } catch {
       /* 用 FALLBACK_ICE_SERVERS */
     }
+    if (this.abortIfDestroyed()) return;
 
     // 创建音频上下文（RNNoise 固定 48 kHz，见 audioGraph.createContext）：
     // AudioContext 需要用户手势后才能出声（点击"加入房间"即手势）；
@@ -287,7 +297,9 @@ export class VoiceSession {
           autoGainControl: !this.musicModeOn,
         },
       });
+      if (this.abortIfDestroyed()) return;
       await this.denoiser.prepare(audioCtx); // worklet 就绪后再接本地链路
+      if (this.abortIfDestroyed()) return;
       if (this.noiseReductionOn && !this.musicModeOn) this.denoiser.init(audioCtx, this.micStream);
       // 本地链路: 麦克风 → 增益(麦克风音量) → 发送轨道；降噪路由按当前开关重接
       this.audio.buildLocalChain(this.micStream, this.micVolume);
@@ -310,9 +322,28 @@ export class VoiceSession {
     // 麦克风权限结果已定（正常开麦 / 听者模式），再广播一次同步准确状态
     this.emitParticipants();
 
+    // 授权/预载期间用户可能已退出（teardown 只执行一次）：此时绝不能再开 WS 或复活轮询
+    if (this.abortIfDestroyed()) return;
+
     this.signaling.open();
     this.audio.startSpeakingLoop();
     this.quality.start();
+  }
+
+  /**
+   * 会话存活断言：teardown 之后再回到 join 的续体（典型场景——麦克风授权弹窗还开着，
+   * 用户已经点了退出）时立即收尾。缺了这道闸门会留下三个后果：
+   * 1. 刚拿到的麦克风轨道没人停，系统麦克风指示灯常亮；
+   * 2. audio.startSpeakingLoop() 在已 dispose 的音频图上复活 100ms 轮询；
+   * 3. quality.start() 同理复活质量轮询。而 teardown 开头就 `if (this.destroyed) return`，
+   *    意味着销毁只发生一次 —— 这两个定时器此后再无人清理。
+   * @returns true 表示会话已销毁，调用方必须立刻 return
+   */
+  private abortIfDestroyed(): boolean {
+    if (!this.destroyed) return false;
+    this.micStream?.getTracks().forEach((t) => t.stop());
+    this.micStream = null;
+    return true;
   }
 
   // ============================================================
@@ -627,32 +658,12 @@ export class VoiceSession {
         streams: [this.share.shareSendVideoStream],
       });
       entry.videoSender = transceiver.sender;
-      this.preferH264ForSender(transceiver);
-      this.applyShareQualityToSender(entry.videoSender);
+      preferH264ForSender(transceiver);
+      applyShareQualityToSender(entry.videoSender, this.share.shareQuality, this.share.shareSharpText);
     }
     const audio = this.share.withShareAudio ? this.share.shareSendAudioStream?.getAudioTracks()[0] : null;
     if (audio && this.share.shareSendAudioStream && !entry.shareAudioSender) {
       entry.shareAudioSender = entry.pc.addTrack(audio, this.share.shareSendAudioStream);
-    }
-  }
-
-  /**
-   * 共享视频优先协商 H.264：默认协商到的 VP8 走 libvpx 软编，
-   * 1080p60 软编 CPU 扛不住（实测只能编 ~32fps，qualityLimitation=none、
-   * 网络零丢包，纯粹编码吞吐瓶颈）。H.264 可命中显卡硬件编码器
-   * （NVIDIA NVENC 等），60fps 轻松跑满；各端 H.264 解码也普遍支持。
-   * 必须在首次视频协商前设置（addTransceiver 之后、offer 之前）。
-   */
-  private preferH264ForSender(transceiver: RTCRtpTransceiver): void {
-    try {
-      const caps = RTCRtpSender.getCapabilities('video');
-      const codecs = caps?.codecs ?? [];
-      const h264 = codecs.filter((c) => c.mimeType.toLowerCase() === 'video/h264');
-      if (h264.length === 0) return; // 无 H264 能力：保持默认（VP8/VP9）
-      const rest = codecs.filter((c) => c.mimeType.toLowerCase() !== 'video/h264');
-      transceiver.setCodecPreferences([...h264, ...rest]);
-    } catch {
-      /* 浏览器不支持编解码偏好则忽略 */
     }
   }
 
@@ -682,34 +693,14 @@ export class VoiceSession {
     return this.share.getShareMuted();
   }
 
-  /** 把当前档位应用到全部视频 sender（码率/分辨率缩放/降级偏好） */
+  /** 把当前档位应用到全部视频 sender（码率/分辨率缩放/降级偏好）。
+   *  实现已移到 ./share/senderTuning（纯函数 + 可单测），这里只负责取当前档位。 */
   private applyShareQuality(): void {
-    for (const entry of this.mesh.peers.values()) {
-      if (entry.videoSender) this.applyShareQualityToSender(entry.videoSender);
-    }
-  }
-
-  private applyShareQualityToSender(sender: RTCRtpSender): void {
-    const preset = SHARE_QUALITY_PRESETS[this.share.shareQuality];
-    try {
-      const params = sender.getParameters();
-      if (!params.encodings || params.encodings.length === 0) params.encodings = [{}];
-      const enc = params.encodings[0]!;
-      enc.maxBitrate = preset.maxBitrate;
-      // 不设 minBitrate：实测 BWE 对屏幕共享采用内容自适应（静态内容自动压低、
-      // 高动态自动爬升），minBitrate 既不生效也无必要，设了反而可能浪费 mesh 上行
-      enc.scaleResolutionDownBy = preset.scale;
-      // 60fps 档优先保帧率；清晰文字模式优先保分辨率（文字不糊比流畅重要）
-      (params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference = this.share
-        .shareSharpText
-        ? 'maintain-resolution'
-        : preset.degradation;
-      sender.setParameters(params).catch(() => {
-        /* 浏览器不支持则忽略 */
-      });
-    } catch {
-      /* 参数不支持：按浏览器默认编码 */
-    }
+    applyShareQualityToSenders(
+      [...this.mesh.peers.values()].map((entry) => entry.videoSender),
+      this.share.shareQuality,
+      this.share.shareSharpText
+    );
   }
 
   /** 远端共享系统声音：独立 audio 元素直连播放（默认静音；不进 WebAudio 音量链与房间录制） */
@@ -809,6 +800,7 @@ export class VoiceSession {
     if (reason === 'room-closed') this.cb.onClosed(detail || '房间已被删除');
     else if (reason === 'replaced') this.cb.onClosed('账号在其他地方进入了语音');
     else if (reason === 'auth') this.cb.onClosed('登录已过期，请重新登录后再加入');
+    else if (reason === 'too-many-connections') this.cb.onClosed('同一网络下的语音连接过多，请稍后再试');
     else if (reason === 'error') this.cb.onError(detail || '加入房间失败');
     else if (reason === 'negotiation') this.cb.onError('语音连接建立失败，请重新加入');
     // leave：静默结束

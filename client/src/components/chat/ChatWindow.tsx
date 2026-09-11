@@ -6,10 +6,10 @@
  * 输入器与空状态（纯展示组件，数据与行为回调由 Messages 提供）
  */
 
-import { RefObject } from 'react';
+import { RefObject, useMemo } from 'react';
 import { ChevronLeft, Trash2, MessageCircle } from 'lucide-react';
 import type { Conversation, Message, User } from '../../types';
-import { parseDbTime } from '../../utils';
+import { buildChatRows } from '../../lib/chatRows';
 import MessageBubble from './MessageBubble';
 import ChatComposer from './ChatComposer';
 import Avatar from '../ui/Avatar';
@@ -60,6 +60,9 @@ export default function ChatWindow({
   onZoomImage,
   onScrollToMessage,
 }: ChatWindowProps) {
+  // 倒序 + 时间分隔符只随消息列表变化重算（此前在渲染体内，输入框每敲一个字都重算一遍）
+  const rows = useMemo(() => buildChatRows(messages), [messages]);
+
   return (
     <>
       <div className={styles.header}>
@@ -80,18 +83,10 @@ export default function ChatWindow({
 
       <div className={styles.messages} ref={chatMessagesRef}>
         {/* column-reverse: 最新消息自然在底部，无需 spacer */}
-        {[...messages].reverse().map((msg, index, reversedMsgs) => {
+        {rows.map(({ msg, showSeparator }) => {
           const isSent = msg.sender_id === user?.id;
           const avatar = isSent ? user?.avatar : selectedPartner.avatar;
           const name = isSent ? user?.username : selectedPartner.username;
-
-          // 相邻消息间隔超过 5 分钟时，插入时间分隔符
-          // reversed: index 0=最新, 比较下一个（更旧的）消息
-          const TIME_GAP_MS = 5 * 60 * 1000;
-          const nextMsg = index < reversedMsgs.length - 1 ? reversedMsgs[index + 1] : null;
-          const showSeparator =
-            !nextMsg ||
-            parseDbTime(msg.created_at).getTime() - parseDbTime(nextMsg.created_at).getTime() > TIME_GAP_MS;
 
           return (
             <MessageBubble

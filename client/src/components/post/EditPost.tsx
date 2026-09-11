@@ -21,7 +21,7 @@ import { ChevronDown, ChevronUp, X, ImagePlus } from 'lucide-react';
 import { extractTags } from '@k/shared';
 import { useImageGridDrag } from '../../hooks/useImageGridDrag';
 import { useMediaDraft } from '../../hooks/useMediaDraft';
-import { parsePostImages } from '../../lib/parsePostImages';
+import { parsePostImages, filterDirtyImages } from '../../lib/parsePostImages';
 import EmojiPicker from '../EmojiPicker';
 import ConfirmDialog from '../ui/ConfirmDialog';
 import { getApiErrorMessage } from '../../api/http';
@@ -86,13 +86,11 @@ export default function EditPost() {
     setPinned(editPost.pinned);
     // 视频帖子：image_url 为 '[]' 时 withImages 会产出 ['[]'] 脏数据，需过滤；直接置空
     // 图片列表经 lib/parsePostImages 解析（优先 images，其次 image_url JSON，最后单元素兜底）；
-    // EditPostData 无 image_url 字段，传空串使兜底路径与旧内联语义一致（parse('') 抛错 → [''] → 被下方过滤）；
-    // parsePostImages 不过滤 '[]'/'["[]"]'，此处补过滤保留原展示行为（构造方已清洗，此为防御）
+    // EditPostData 无 image_url 字段，传空串使兜底路径与旧内联语义一致（parse('') 抛错 → [''] → 被脏值过滤）；
+    // 脏值判定统一走 lib/parsePostImages.filterDirtyImages（P2-24：此前 5 处各写一遍）
     const cleanImages = editPost.videoUrl
       ? []
-      : parsePostImages({ images: editPost.images, image_url: '' }).filter(
-          (url) => url !== '[]' && url !== '["[]"]'
-        );
+      : filterDirtyImages(parsePostImages({ images: editPost.images, image_url: '' }));
     setImages(cleanImages.map((url) => ({ url, isNew: false })));
     setCurrentImageIndex(0);
     // Video posts skip grid step, go directly to edit
@@ -140,7 +138,7 @@ export default function EditPost() {
     pinned !== editPost?.pinned ||
     (!isVideoEdit &&
       (images.some((img) => img.isNew) ||
-        images.length !== (editPost?.images.filter((u) => u !== '[]' && u !== '["[]"]').length || 0)));
+        images.length !== (editPost ? filterDirtyImages(editPost.images).length : 0)));
 
   const handleSubmit = async () => {
     if (submitting || !editPost) return;
@@ -186,7 +184,10 @@ export default function EditPost() {
         onPointerUp={dragHandlers.onPointerUp}
         onPointerCancel={dragHandlers.onPointerCancel}
       >
-        <div className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}>
+        <div
+          className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}
+          data-testid="composer-dialog"
+        >
           <div className={composer.overlayHeader}>
             <button className={`${composer.overlayBtn} ${composer.danger}`} onClick={handleClose}>
               取消
@@ -206,7 +207,7 @@ export default function EditPost() {
             </button>
           </div>
           <div className={composer.overlayBody}>
-            <div className={composer.gridWrapper}>
+            <div className={composer.gridWrapper} data-testid="media-grid">
               <div className={composer.grid}>
                 {displayOrder.map((i) => {
                   const img = images[i];
@@ -220,6 +221,7 @@ export default function EditPost() {
                       className={[composer.gridItem, i === dragIndex ? composer.dragging || '' : '']
                         .filter(Boolean)
                         .join(' ')}
+                      data-testid="media-grid-item"
                       onPointerDown={(e) => dragHandlers.onPointerDown(e, i)}
                     >
                       <img
@@ -278,7 +280,10 @@ export default function EditPost() {
   // Step 2: Edit description
   return (
     <div className={`${composer.overlay}${closing ? ` ${composer.closing}` : ''}`}>
-      <div className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}>
+      <div
+        className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}
+        data-testid="composer-dialog"
+      >
         <div className={composer.overlayHeader}>
           <button
             className={`${composer.overlayBtn} ${composer.danger}`}
@@ -344,7 +349,7 @@ export default function EditPost() {
               )}
             </div>
           </div>
-          <div className={panel.editRight}>
+          <div className={panel.editRight} data-testid="edit-right">
             <div className={panel.user}>
               {user?.avatar ? (
                 <img src={resolveMediaUrl(user.avatar) || user.avatar} alt="" className={panel.avatar} />
@@ -388,7 +393,11 @@ export default function EditPost() {
               </div>
             </div>
             <div className={panel.advanced}>
-              <button className={panel.advancedToggle} onClick={() => setShowAdvanced((v) => !v)}>
+              <button
+                className={panel.advancedToggle}
+                data-testid="advanced-toggle"
+                onClick={() => setShowAdvanced((v) => !v)}
+              >
                 <span>高级设置</span>
                 {showAdvanced ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
               </button>

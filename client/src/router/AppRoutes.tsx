@@ -9,15 +9,15 @@
  * - 非首屏页面懒加载（与拆分前一致；Suspense 由 MainLayout 提供）
  */
 
-import { lazy } from 'react';
+import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useEvent } from '../context/EventContext';
 import { useAndroidBackButton } from '../hooks/useAndroidBackButton';
 import { MainLayout } from '../layouts/MainLayout';
 import { ProtectedRoute } from './ProtectedRoute';
-import CreatePost from '../components/post/CreatePost';
-import EditPost from '../components/post/EditPost';
+import { loadCreatePost, loadEditPost } from './composerChunks';
+import ErrorBoundary from '../components/ErrorBoundary';
 import LoginPrompt from '../components/LoginPrompt';
 import HomePage from '../pages/HomePage';
 
@@ -31,6 +31,38 @@ const BooksPage = lazy(() => import('../pages/BooksPage'));
 const BookDetailPage = lazy(() => import('../pages/BookDetailPage'));
 const BookReaderPage = lazy(() => import('../pages/BookReaderPage'));
 const VoicePage = lazy(() => import('../pages/VoicePage'));
+
+// 发布/编辑弹层同样懒加载（P1-7）：它们是首屏里最大的一块「大多数会话用不到」的代码。
+// 入口按钮会在 hover/focus 时预取（见 composerChunks），所以正常点开没有额外等待。
+const CreatePost = lazy(loadCreatePost);
+const EditPost = lazy(loadEditPost);
+
+/** 弹层崩溃时的兜底：居中提示 + 「关闭」把用户放回页面（而不是白屏 + 丢内容） */
+function ComposerCrashFallback({ title, onClose }: { title: string; onClose: () => void }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', zIndex: 1000 }}>
+      <div style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
+        <div>{title}</div>
+        <button
+          type="button"
+          onClick={onClose}
+          style={{
+            marginTop: 12,
+            padding: '6px 16px',
+            borderRadius: 8,
+            border: '1px solid var(--border-color, rgba(128,128,128,0.35))',
+            background: 'transparent',
+            color: 'inherit',
+            cursor: 'pointer',
+            fontSize: 13,
+          }}
+        >
+          关闭
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function AppRoutes() {
   const { loading, showLoginPrompt, closeLoginPrompt } = useAuth();
@@ -91,10 +123,44 @@ export function AppRoutes() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
 
-      {/* 全局模态框 */}
-      {showLoginPrompt && <LoginPrompt onClose={closeLoginPrompt} />}
-      {showCreate && <CreatePost />}
-      {editPost && <EditPost />}
+      {/* 全局模态框（懒加载：fallback 用 null —— 弹层加载期间不显示任何占位，
+          避免「点开先闪一下 loading」。入口的 hover 预取让这条路径平时不会等待） */}
+      <Suspense fallback={null}>
+        {showLoginPrompt && <LoginPrompt onClose={closeLoginPrompt} />}
+        {/* 弹层各包一层错误边界：发布会话里崩一次不该把整页带走 */}
+        {showCreate && (
+          <ErrorBoundary
+            label="CreatePost"
+            fallback={({ reset }) => (
+              <ComposerCrashFallback
+                title="发布功能出错了"
+                onClose={() => {
+                  reset();
+                  closeCreate();
+                }}
+              />
+            )}
+          >
+            <CreatePost />
+          </ErrorBoundary>
+        )}
+        {editPost && (
+          <ErrorBoundary
+            label="EditPost"
+            fallback={({ reset }) => (
+              <ComposerCrashFallback
+                title="编辑功能出错了"
+                onClose={() => {
+                  reset();
+                  closeEdit();
+                }}
+              />
+            )}
+          >
+            <EditPost />
+          </ErrorBoundary>
+        )}
+      </Suspense>
     </>
   );
 }

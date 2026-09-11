@@ -29,6 +29,15 @@ jobs:
       - name: Prettier 格式检查
         run: npm run format:check
 
+      # 独立于 build：server 的 build 走 tsconfig.json（不含 test/），
+      # 因此测试文件与 e2e 规格的类型错误不会被 build 捕获。
+      # typecheck 额外覆盖 server/test、e2e/、playwright.config.ts。
+      - name: 类型检查（含测试与 e2e，build 不覆盖）
+        run: npm run typecheck
+
+      - name: 生产依赖漏洞扫描
+        run: npm audit --omit=dev --audit-level=high
+
       - name: 构建（shared → server → client）
         run: npm run build
 

@@ -15,7 +15,7 @@ import type { AddressInfo } from 'net';
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
-import { createSchema } from '../src/db/schema';
+import { createMemoryDb } from './helpers/memdb';
 import { setDbForTests, resetDbForTests } from '../src/db/connection';
 import { createApp } from '../src/app';
 import { generateToken } from '../src/middleware/auth';
@@ -27,7 +27,9 @@ let base = '';
 let aliceToken = '';
 let bobToken = '';
 
-/** 本轮测试的分片目标文件（temp- 时间戳-随机数.mp4，落在 gitignore 的 uploads/temp） */
+/** 本轮测试的分片目标文件（temp- 时间戳-随机数.mp4，落在 gitignore 的 uploads/temp）
+ *  as const：元组类型让 ids[6] 这类字面量下标不再被推断为 string | undefined
+ *  （tsconfig 开了 noUncheckedIndexedAccess） */
 const run = Date.now();
 const ids = [
   `temp-${run}-101.mp4`,
@@ -37,12 +39,11 @@ const ids = [
   `temp-${run}-303.mp4`,
   `temp-${run}-304.mp4`,
   `temp-${run}-401.mp4`,
-];
+] as const;
 const CHUNK = Buffer.alloc(1024, 1);
 
 beforeAll(async () => {
-  db = new Database(':memory:');
-  createSchema(db);
+  db = createMemoryDb();
   setDbForTests(db);
 
   const insertUser = db.prepare(
@@ -71,7 +72,12 @@ afterAll(async () => {
 });
 
 /** 发送一个分片（multipart，与客户端切片上传同构） */
-async function sendChunk(token: string, uploadId: string, chunkIndex: number, totalChunks: number) {
+async function sendChunk(
+  token: string,
+  uploadId: string,
+  chunkIndex: number,
+  totalChunks: number
+): Promise<{ status: number; data: { error?: string; size?: number } | null }> {
   const form = new FormData();
   form.set('uploadId', uploadId);
   form.set('chunkIndex', String(chunkIndex));
@@ -82,7 +88,11 @@ async function sendChunk(token: string, uploadId: string, chunkIndex: number, to
     headers: { Authorization: `Bearer ${token}` },
     body: form,
   });
-  return { status: res.status, data: await res.json().catch(() => null) };
+  // res.json() 在 undici 类型里是 unknown，这里按响应契约断言
+  return {
+    status: res.status,
+    data: (await res.json().catch(() => null)) as { error?: string; size?: number } | null,
+  };
 }
 
 function tempPath(id: string): string {
@@ -116,7 +126,7 @@ describe('分片上传会话归属', () => {
   it('无会话直接续片返回 400', async () => {
     const { status, data } = await sendChunk(aliceToken, ids[0], 1, 3);
     expect(status).toBe(400);
-    expect(data.error).toBe('上传会话已失效，请重新上传');
+    expect(data?.error).toBe('上传会话已失效，请重新上传');
   });
 
   it('他人不能抢占进行中的首片，也不能续片', async () => {

@@ -14,13 +14,13 @@
 import { test, expect } from '@playwright/test';
 import { createRequire } from 'module';
 import path from 'path';
+import { DB_PATH } from './db-path';
 
 // 与 write-path.spec.ts 相同：锚定 server/package.json 解析 better-sqlite3
 const require = createRequire(path.resolve('server/package.json'));
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const Database = require('better-sqlite3') as any;
 
-const DB_PATH = path.resolve('e2e/.tmp/k-e2e.db');
 const stamp = Date.now();
 const username = `scroll_${stamp}`;
 const email = `scroll-${stamp}@test.local`;
@@ -42,7 +42,7 @@ function solidPng(width: number, height: number) {
   });
   const crc32 = (buf: Buffer) => {
     let c = 0xffffffff;
-    for (const b of buf) c = crcTable[(c ^ b) & 0xff] ^ (c >>> 8);
+    for (const b of buf) c = crcTable[(c ^ b) & 0xff]! ^ (c >>> 8);
     return (c ^ 0xffffffff) >>> 0;
   };
   const chunk = (type: string, data: Buffer) => {
@@ -87,7 +87,7 @@ const FAKE_MP4 = Buffer.from('000000186674797069736f6d0000000069736f6d69736f6d',
  */
 async function dialogCoversViewport(page: import('@playwright/test').Page) {
   return page.evaluate(() => {
-    const d = document.querySelector('[class*="dialog"]') as HTMLElement | null;
+    const d = document.querySelector('[data-testid="composer-dialog"]') as HTMLElement | null;
     if (!d) return { ok: false, reason: 'dialog missing' };
     const r = d.getBoundingClientRect();
     return {
@@ -98,12 +98,36 @@ async function dialogCoversViewport(page: import('@playwright/test').Page) {
     };
   });
 }
-async function scrollCheck(page: import('@playwright/test').Page, containerCls: string, targetCls: string) {
+/**
+ * 等弹层 scale-in 动画结束再测量。
+ *
+ * 此前是 `waitForTimeout(150)`：动画 0.95 → 1 的缩放会让 `getBoundingClientRect`
+ * 偏小，测出来的覆盖判定就不准 —— 但固定 150ms 在慢机（CI）上不保证够。
+ * 改成有界轮询「transform 已归位」，既快又不会假失败。
+ */
+async function waitDialogSettled(page: import('@playwright/test').Page) {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const d = document.querySelector('[data-testid="composer-dialog"]') as HTMLElement | null;
+          if (!d) return 'missing';
+          const t = getComputedStyle(d).transform;
+          return t === 'none' || t === 'matrix(1, 0, 0, 1, 0, 0)' ? 'settled' : t;
+        }),
+      { timeout: 10_000 }
+    )
+    .toBe('settled');
+}
+
+async function scrollCheck(page: import('@playwright/test').Page, containerId: string, targetId: string) {
   return page.evaluate(
-    ({ containerCls, targetCls }) => {
-      const c = document.querySelector(`[class*="${containerCls}"]`) as HTMLElement | null;
-      const t = document.querySelector(`[class*="${targetCls}"]`) as HTMLElement | null;
-      if (!c || !t) return { ok: false, reason: `${containerCls}/${targetCls} missing` };
+    ({ containerId, targetId }) => {
+      // 用 data-testid 而不是 CSS Modules 类名子串：类名会被哈希，
+      // 名字一改选择器就**静默失配**（返回 missing 的用例看着像产品问题）。
+      const c = document.querySelector(`[data-testid="${containerId}"]`) as HTMLElement | null;
+      const t = document.querySelector(`[data-testid="${targetId}"]`) as HTMLElement | null;
+      if (!c || !t) return { ok: false, reason: `${containerId}/${targetId} missing` };
       const rect = (el: HTMLElement) => {
         const r = el.getBoundingClientRect();
         return { top: +r.top.toFixed(1), bottom: +r.bottom.toFixed(1) };
@@ -128,7 +152,7 @@ async function scrollCheck(page: import('@playwright/test').Page, containerCls: 
       out.overflow = c.scrollHeight > c.clientHeight;
       return out;
     },
-    { containerCls, targetCls }
+    { containerId, targetId }
   );
 }
 
@@ -162,17 +186,20 @@ test('移动端窄视口：发布模态框三步内容均可滚动到底部', as
   await expect(page.getByRole('button', { name: '分享', exact: true }).first()).toBeVisible({
     timeout: 10_000,
   });
-  await page.waitForTimeout(1500); // 等首页重渲染静默，避免 openCreate 事件丢失
-
-  await page.getByRole('button', { name: '分享', exact: true }).first().click();
-  await expect(page.getByText('选择照片/视频')).toBeVisible({ timeout: 10_000 });
+  // 等注册后的重渲染真正稳定再点「分享」：此前是固定 1500ms（注释说「避免 openCreate
+  // 事件丢失」）—— 慢机上不保证够，快机上白等。改成**有界重试直到目标出现**：
+  // 点击本身可能落在一次重渲染上被吞掉，那就再点一次（toPass 会重跑整个块）。
+  await expect(async () => {
+    await page.getByRole('button', { name: '分享', exact: true }).first().click();
+    await expect(page.getByText('选择照片/视频')).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 15_000 });
 
   // ===== 步骤 1：8 图 + 添加格 = 3 行网格；横屏矮视口下必超出（目标：+ 添加格子） =====
   await page.setViewportSize({ width: 568, height: 320 });
   // 移动端弹层必须严丝合缝全屏（不露背景页；Chrome 安卓 dvh 与 fixed 容器
   // 高度不一致曾导致顶部露出页面）。先等 scale-in 动画结束（0.95 缩放会
-  // 让 getBoundingClientRect 偏小），再测量。
-  await page.waitForTimeout(150);
+  // 让 getBoundingClientRect 偏小），再测量 —— 有界轮询，不用固定 sleep。
+  await waitDialogSettled(page);
   let fs = await dialogCoversViewport(page);
   expect(fs.ok, `步骤1视口：弹层应全屏覆盖（${JSON.stringify(fs)}）`).toBe(true);
   const files = Array.from({ length: 8 }, (_, i) => ({
@@ -184,18 +211,18 @@ test('移动端窄视口：发布模态框三步内容均可滚动到底部', as
     .locator('input[type="file"]')
     .first()
     .setInputFiles(files as never);
-  await expect(page.locator('[class*="gridItem"]')).toHaveCount(8);
+  await expect(page.getByTestId('media-grid-item')).toHaveCount(8);
 
-  let m = await scrollCheck(page, 'gridWrapper', 'gridAdd');
-  console.log('[step1 gridWrapper]', JSON.stringify(m));
-  expect(m.ok, 'gridAdd 元素应存在').toBe(true);
+  let m = await scrollCheck(page, 'media-grid', 'media-grid-add');
+  console.log('[step1 media-grid]', JSON.stringify(m));
+  expect(m.ok, 'media-grid-add 元素应存在').toBe(true);
   expect(m.overflow, '步骤1：短视口下网格应超出容器').toBe(true);
-  expect(m.scrolled, '步骤1：gridWrapper 应可滚动').toBe(true);
+  expect(m.scrolled, '步骤1：media-grid 应可滚动').toBe(true);
   expect(m.reachable, '步骤1：添加格子应可通过滚动到达').toBe(true);
 
   // ===== 步骤 2：视频封面（目标：截帧滑块） =====
   await page.setViewportSize({ width: 330, height: 440 });
-  await page.waitForTimeout(150); // 等 scale-in 动画结束再测量
+  await waitDialogSettled(page);
   fs = await dialogCoversViewport(page);
   expect(fs.ok, `步骤2视口：弹层应全屏覆盖（${JSON.stringify(fs)}）`).toBe(true);
   await page
@@ -209,8 +236,8 @@ test('移动端窄视口：发布模态框三步内容均可滚动到底部', as
     mimeType: 'image/png',
     buffer: PNG,
   });
-  await expect(page.locator('[class*="coverImage"]')).toBeVisible();
-  m = await scrollCheck(page, 'coverRight', 'coverSliderRow');
+  await expect(page.getByTestId('cover-preview')).toBeVisible();
+  m = await scrollCheck(page, 'cover-right', 'cover-slider-row');
   console.log('[step2 coverRight]', JSON.stringify(m));
   expect(m.ok, 'coverRight 与滑块行应存在').toBe(true);
   expect(m.overflow, '步骤2：封面面板内容应超出容器').toBe(true);
@@ -220,7 +247,7 @@ test('移动端窄视口：发布模态框三步内容均可滚动到底部', as
   // ===== 步骤 3：编辑分享（目标：高级设置按钮） =====
   await page.getByRole('button', { name: '下一步' }).click();
   await expect(page.getByText('编辑', { exact: true })).toBeVisible({ timeout: 10_000 });
-  m = await scrollCheck(page, 'editRight', 'advancedToggle');
+  m = await scrollCheck(page, 'edit-right', 'advanced-toggle');
   console.log('[step3 editRight]', JSON.stringify(m));
   expect(m.ok, 'editRight 与高级设置按钮应存在').toBe(true);
   expect(m.overflow, '步骤3：编辑栏内容应超出容器').toBe(true);

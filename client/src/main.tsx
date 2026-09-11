@@ -6,6 +6,7 @@
  * - 使用 StrictMode 启用严格模式检查
  * - 挂载 App 组件到 DOM #root 元素
  * - 引入全局样式
+ * - onUncaughtError：兜底记录「连错误边界都没接住」的异常
  * ============================================================
  */
 
@@ -25,7 +26,15 @@ if (Capacitor.isNativePlatform()) {
 // 导致聊天区高度异常。修复方案见 global.css 移动端滚动架构区块。
 
 // 挂载 React 应用到 DOM
-createRoot(document.getElementById('root')!).render(
+//
+// onUncaughtError：错误边界（components/ErrorBoundary）只接得住渲染期异常，
+// 事件处理器/异步回调里的异常不会走到边界 —— 此前这类错误在 React 19 里
+// 只会静默进控制台，线上无人知晓。这里显式记录一条，便于排查。
+createRoot(document.getElementById('root')!, {
+  onUncaughtError: (error, errorInfo) => {
+    console.error('[K] 未捕获的渲染异常', error, errorInfo.componentStack);
+  },
+}).render(
   <StrictMode>
     <App />
   </StrictMode>

@@ -148,8 +148,9 @@ router.get(
     const targetId = parseInt(req.params.id as string);
     const userId = req.user!.id;
 
-    const followers = friendRepo.listFollowers(targetId, userId);
-    res.json({ users: followers });
+    // 硬上限 HARD_LIST_CAP 行（此前无 LIMIT，大账号的粉丝列表会全量物化并占住事件循环）
+    const { rows: followers, has_more } = friendRepo.listFollowers(targetId, userId);
+    res.json({ users: followers, has_more });
   })
 );
 
@@ -167,8 +168,9 @@ router.get(
     const targetId = parseInt(req.params.id as string);
     const userId = req.user!.id;
 
-    const following = friendRepo.listFollowing(targetId, userId);
-    res.json({ users: following });
+    // 硬上限同上
+    const { rows: following, has_more } = friendRepo.listFollowing(targetId, userId);
+    res.json({ users: following, has_more });
   })
 );
 

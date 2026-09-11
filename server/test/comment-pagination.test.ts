@@ -12,7 +12,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import Database from 'better-sqlite3';
-import { createSchema } from '../src/db/schema';
+import { createMemoryDb } from './helpers/memdb';
 import { setDbForTests, resetDbForTests } from '../src/db/connection';
 import { createApp } from '../src/app';
 import { generateToken } from '../src/middleware/auth';
@@ -27,9 +27,7 @@ const TOP_COUNT = 12;
 const REPLY_COUNT = 3;
 
 beforeAll(async () => {
-  db = new Database(':memory:');
-  db.pragma('foreign_keys = ON');
-  createSchema(db);
+  db = createMemoryDb();
   setDbForTests(db);
 
   const insertUser = db.prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')");
@@ -68,12 +66,33 @@ afterAll(async () => {
   db.close();
 });
 
-async function api(method: string, p: string, token?: string) {
+/** 本测试用到的评论行字段（服务端还返回更多列，此处只声明被断言的） */
+interface CommentLike {
+  id: number;
+  parent_id: number | null;
+  parent_content?: string;
+  content?: string;
+}
+
+/** 评论分页响应里被断言的字段（详情端点与评论端点的并集） */
+interface CommentPageResponse {
+  comments: CommentLike[];
+  comments_total?: number;
+  comments_has_more?: boolean;
+  has_more?: boolean;
+}
+
+async function api(
+  method: string,
+  p: string,
+  token?: string
+): Promise<{ status: number; data: CommentPageResponse }> {
   const res = await fetch(`${base}${p}`, {
     method,
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
-  return { status: res.status, data: await res.json().catch(() => null) };
+  // res.json() 在 undici 类型里是 unknown，这里按响应契约断言（缺失字段由用例自身断言兜底）
+  return { status: res.status, data: (await res.json().catch(() => null)) as CommentPageResponse };
 }
 
 describe('评论分页（向后兼容）', () => {
@@ -87,7 +106,7 @@ describe('评论分页（向后兼容）', () => {
     expect(res.data.comments_total).toBe(TOP_COUNT + REPLY_COUNT);
     expect(res.data.comments_has_more).toBe(true);
     // 回复随顶级携带，且带父评论信息
-    expect(replies[0].parent_content).toBe('顶级评论1');
+    expect(replies[0]!.parent_content).toBe('顶级评论1');
   });
 
   it('after_id 游标续拉到末页，has_more 收敛为 false', async () => {
@@ -95,7 +114,7 @@ describe('评论分页（向后兼容）', () => {
     const firstPageTops = page1.data.comments.filter(
       (c: { parent_id: number | null }) => c.parent_id === null
     );
-    const cursor = firstPageTops[firstPageTops.length - 1].id;
+    const cursor = firstPageTops[firstPageTops.length - 1]!.id;
 
     const page2 = await api('GET', `/api/posts/${postId}/comments?after_id=${cursor}&limit=5`, tokenB);
     expect(page2.status).toBe(200);
@@ -107,21 +126,22 @@ describe('评论分页（向后兼容）', () => {
     const page2Last = page2.data.comments
       .filter((c: { parent_id: number | null }) => c.parent_id === null)
       .slice(-1)[0];
-    const page3 = await api('GET', `/api/posts/${postId}/comments?after_id=${page2Last.id}&limit=5`, tokenB);
+    const page3 = await api('GET', `/api/posts/${postId}/comments?after_id=${page2Last!.id}&limit=5`, tokenB);
     expect(page3.data.comments.filter((c: { parent_id: number | null }) => c.parent_id === null).length).toBe(
       2
     );
     expect(page3.data.has_more).toBe(false);
   });
 
-  it('无参数调用保持旧契约：详情与评论端点均全量返回', async () => {
+  it('无参数调用保持旧契约：详情与评论端点均全量返回（未超硬上限时 has_more 为 false）', async () => {
     const detail = await api('GET', `/api/posts/${postId}`, tokenA);
     expect(detail.data.comments.length).toBe(TOP_COUNT + REPLY_COUNT);
-    expect(detail.data.comments_has_more).toBeUndefined();
+    // 硬上限引入后的新增字段：未截断时为 false（数组与既有字段形状不变，老客户端只增不改）
+    expect(detail.data.comments_has_more).toBe(false);
 
     const comments = await api('GET', `/api/posts/${postId}/comments`, tokenB);
     expect(comments.data.comments.length).toBe(TOP_COUNT + REPLY_COUNT);
-    expect(comments.data.has_more).toBeUndefined();
+    expect(comments.data.has_more).toBe(false);
   });
 
   it('非法 comment_limit 回落全量而不是崩溃', async () => {

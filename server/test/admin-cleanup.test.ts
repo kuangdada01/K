@@ -15,7 +15,7 @@ import type { AddressInfo } from 'net';
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
-import { createSchema } from '../src/db/schema';
+import { createMemoryDb } from './helpers/memdb';
 import { setDbForTests, resetDbForTests } from '../src/db/connection';
 import { createApp } from '../src/app';
 import { generateToken } from '../src/middleware/auth';
@@ -38,10 +38,7 @@ function makeFile(dir: string, name: string): string {
 }
 
 beforeAll(async () => {
-  db = new Database(':memory:');
-  // 与生产一致：foreign_keys = ON（级联删除依赖外键）
-  db.pragma('foreign_keys = ON');
-  createSchema(db);
+  db = createMemoryDb();
   setDbForTests(db);
 
   const insertUser = db.prepare(

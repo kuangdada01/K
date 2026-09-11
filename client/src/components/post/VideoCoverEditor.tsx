@@ -70,7 +70,10 @@ export default function VideoCoverEditor({
 }: VideoCoverEditorProps) {
   return (
     <div className={`${composer.overlay}${closing ? ` ${composer.closing}` : ''}`}>
-      <div className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}>
+      <div
+        className={`${composer.dialog}${closing ? ` ${composer.closing}` : ''}`}
+        data-testid="composer-dialog"
+      >
         <div className={composer.overlayHeader}>
           <button className={composer.overlayBtn} data-back onClick={onBack}>
             后退
@@ -180,7 +183,7 @@ export default function VideoCoverEditor({
               )}
             </div>
           </div>
-          <div className={styles.coverRight}>
+          <div className={styles.coverRight} data-testid="cover-right">
             <div className={styles.coverSection}>
               <div className={styles.coverSectionTitle}>上传封面图片</div>
               <button
@@ -192,7 +195,12 @@ export default function VideoCoverEditor({
                 从本机选择
               </button>
               {videoCoverPreview && (
-                <img src={videoCoverPreview} alt="封面预览" className={styles.coverImage} />
+                <img
+                  src={videoCoverPreview}
+                  alt="封面预览"
+                  className={styles.coverImage}
+                  data-testid="cover-preview"
+                />
               )}
               <input
                 ref={coverInputRef}
@@ -205,7 +213,7 @@ export default function VideoCoverEditor({
             <div className={styles.coverSection}>
               <div className={styles.coverSectionTitle}>或从视频截取</div>
               <canvas ref={canvasRef} style={{ display: 'none' }} />
-              <div className={styles.coverSliderRow}>
+              <div className={styles.coverSliderRow} data-testid="cover-slider-row">
                 <input
                   type="range"
                   min="0"

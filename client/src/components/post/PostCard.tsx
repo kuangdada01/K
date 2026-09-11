@@ -14,7 +14,7 @@
  * ============================================================
  */
 
-import { useState, useEffect, useRef, useMemo, memo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MessageCircle, Share2, Repeat2 } from 'lucide-react';
 import RepostCheck from '../icons/RepostCheck';
@@ -35,6 +35,7 @@ import { useHeartFill } from '../../hooks/useHeartFill';
 import { events } from '../../state/events';
 import { formatRelativeTime, resolveMediaUrl } from '../../utils';
 import { parsePostImages } from '../../lib/parsePostImages';
+import { loadPostDetail } from '../../router/composerChunks';
 import Avatar from '../ui/Avatar';
 import TaggedText from '../TaggedText';
 import styles from './PostCard.module.css';
@@ -178,6 +179,11 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   // 直接操作 SVG DOM，绕过 React 渲染（自 useHeartFill 拆出，行为不变）
   useHeartFill(heartRef, liked);
 
+  /** 预取帖子详情浮层（懒加载 chunk）。引用固定，避免破坏 PostCard 的 memo */
+  const prefetchPostDetail = useCallback(() => {
+    void loadPostDetail().catch(() => {});
+  }, []);
+
   // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）——
   // transform 轨道驱动：touchmove 直接写 translate3d（合成器线程，不触发 layout，
   // 60fps 丝滑）；松手用 CSS transition（同样走合成器）落位。
@@ -225,7 +231,14 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   });
 
   return (
-    <div className={styles.card} ref={cardRef}>
+    <div
+      className={styles.card}
+      ref={cardRef}
+      // 帖子详情浮层是懒加载的：在「想点」的瞬间预取 chunk，
+      // 把首次打开多出的那次网络往返藏进 hover/按下→点击之间（无视觉变化）
+      onMouseEnter={prefetchPostDetail}
+      onTouchStart={prefetchPostDetail}
+    >
       <div className={styles.header}>
         <div
           onClick={() =>

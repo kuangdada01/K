@@ -145,4 +145,67 @@ describe('useLikePost', () => {
     expect(result.current.liked).toBe(true);
     expect(result.current.likeCount).toBe(11);
   });
+
+  it('在途双击只发一次请求，计数不会 +2', async () => {
+    // 请求挂起，模拟慢网络下的连点
+    let resolveLike!: (v: unknown) => void;
+    mocks.likePost.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveLike = resolve;
+        })
+    );
+    const onToggle = vi.fn();
+    const { result } = setup({ liked: false, likeCount: 10 }, { onToggle });
+
+    // 两次点击必须发生在同一个 act（即同一批渲染之前），才会共用同一个闭包 ——
+    // 这正是真实双击的时序：第二次点击读到的 liked/likeCount 还是旧值。
+    // 若拆成两个 act，中间的重渲染会换掉 toggle 引用，测不出这个 bug。
+    const staleToggle = result.current.toggle;
+    let first!: Promise<void>;
+    let second!: Promise<void>;
+    act(() => {
+      first = staleToggle();
+      second = staleToggle();
+    });
+
+    expect(mocks.likePost).toHaveBeenCalledTimes(1);
+    expect(mocks.unlikePost).not.toHaveBeenCalled();
+    expect(result.current.likeCount).toBe(11);
+
+    await act(async () => {
+      resolveLike({ liked: true, like_count: 11 });
+      await Promise.all([first, second]);
+    });
+    // 回调与事件只应在真正发出的那次请求成功后触发一次
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(result.current.likeCount).toBe(11);
+  });
+
+  it('请求结束后闸门复位：可以再次切换', async () => {
+    const { result } = setup({ liked: false, likeCount: 0 });
+    await act(async () => {
+      await result.current.toggle();
+    });
+    expect(mocks.likePost).toHaveBeenCalledTimes(1);
+    // 第二次（此时 liked 已为 true）应发出取消点赞请求
+    await act(async () => {
+      await result.current.toggle();
+    });
+    expect(mocks.unlikePost).toHaveBeenCalledTimes(1);
+  });
+
+  it('在途请求失败后闸门也复位，重试可用', async () => {
+    mocks.likePost.mockRejectedValueOnce(new Error('network'));
+    const { result } = setup({ liked: false, likeCount: 10 });
+    await act(async () => {
+      await result.current.toggle();
+    });
+    expect(result.current.liked).toBe(false); // 已回滚
+
+    await act(async () => {
+      await result.current.toggle();
+    });
+    expect(mocks.likePost).toHaveBeenCalledTimes(2);
+  });
 });

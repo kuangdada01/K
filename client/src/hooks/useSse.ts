@@ -134,3 +134,17 @@ export function useSse(userId: number | null | undefined, onEvent: SseEventHandl
     };
   }, [userId]);
 }
+
+/**
+ * 仅供测试：关闭连接并清空模块级单例状态。
+ *
+ * 为什么需要：单例状态（`es` / `wantedUserId` / `handlers` / 退避链）是模块级的，
+ * 此前只靠每个用例末尾的 `unmount()` 清理 —— 用例**中途失败**时清理不会执行，
+ * 残留的连接与 handler 会污染后续用例，表现成「莫名其妙的下一个用例失败」。
+ * 测试的 `afterEach` 里调用它，就不会依赖「用例自己收尾成功」。
+ */
+export function __resetSseForTests(): void {
+  closeConnection();
+  handlers.clear();
+  retryDelay = 1000;
+}

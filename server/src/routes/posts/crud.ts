@@ -12,6 +12,7 @@ import { authMiddleware, optionalAuth } from '../../middleware/auth';
 import { asyncHandler, AppError } from '../../middleware/error';
 import { withImages, imageFileFilter } from '../../lib/image';
 import { pageQuerySchema, limitQuerySchema } from '@k/shared/schemas';
+import { MAX_IMAGE_BYTES } from '@k/shared';
 import { createUploader, timestampFilename } from '../../lib/upload';
 import * as postRepo from '../../repositories/post.repo';
 import * as commentRepo from '../../repositories/comment.repo';
@@ -19,11 +20,11 @@ import * as postService from '../../services/post.service';
 
 const router = Router();
 
-/** 帖子图片上传中间件: 限制10MB，仅允许 jpg/png/gif/webp */
+/** 帖子图片上传中间件: 大小上限见 @k/shared（与客户端校验同一个常量），仅允许 jpg/png/gif/webp */
 const imageUpload = createUploader({
   dir: PATHS.uploads,
   filename: timestampFilename('post'),
-  maxSize: 10 * 1024 * 1024,
+  maxSize: MAX_IMAGE_BYTES,
   fileFilter: imageFileFilter,
 });
 
@@ -104,15 +105,17 @@ router.get(
  * GET /api/posts/bookmarks/me - 获取当前用户收藏的帖子列表
  *
  * 认证: 必须
- * 返回用户收藏的所有帖子（按收藏时间倒序）
+ * 返回收藏的帖子（按收藏时间倒序）。**硬上限** HARD_LIST_CAP 行：
+ * 此前无 LIMIT，收藏多的账号一次请求会让同步 SQLite 长时间占住事件循环。
+ * 响应新增 `has_more`（数组字段与形状不变，老客户端只增不改）。
  */
 router.get(
   '/bookmarks/me',
   authMiddleware,
   asyncHandler(async (req: Request, res: Response) => {
     const userId = req.user!.id;
-    const posts = postRepo.listBookmarkedPosts(userId);
-    res.json({ posts: posts.map(withImages) });
+    const { rows, has_more } = postRepo.listBookmarkedPosts(userId);
+    res.json({ posts: rows.map(withImages), has_more });
   })
 );
 
@@ -120,15 +123,15 @@ router.get(
  * GET /api/posts/reposts/me - 获取当前用户转发的帖子列表
  *
  * 认证: 必须
- * 返回用户转发的所有帖子（按转发时间倒序）
+ * 返回转发的帖子（按转发时间倒序）。硬上限与 `has_more` 同上。
  */
 router.get(
   '/reposts/me',
   authMiddleware,
   asyncHandler(async (req: Request, res: Response) => {
     const userId = req.user!.id;
-    const posts = postRepo.listRepostedPosts(userId);
-    res.json({ posts: posts.map(withImages) });
+    const { rows, has_more } = postRepo.listRepostedPosts(userId);
+    res.json({ posts: rows.map(withImages), has_more });
   })
 );
 
@@ -160,8 +163,9 @@ router.get(
     //   客户端用 /posts/:id/comments?after_id= 续拉
     const commentLimitRaw = parseInt(req.query.comment_limit as string);
     if (!Number.isInteger(commentLimitRaw)) {
-      const comments = commentRepo.listCommentsForPost(postId);
-      res.json({ post: withImages(post), comments });
+      // 全量返回（旧客户端契约不变），但有硬上限；超限时多一个 comments_has_more
+      const { rows: comments, has_more } = commentRepo.listCommentsForPost(postId);
+      res.json({ post: withImages(post), comments, comments_has_more: has_more });
       return;
     }
     // §5.1 修复: 允许客户端请求 0 条顶级评论（原 `|| 10` 会把 0 吞成默认 10）

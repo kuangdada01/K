@@ -9,11 +9,13 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "typecheck": "tsc -b",
     "preview": "vite preview",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "test:watch": "vitest"
   },
+  "//": "注意：@capacitor/camera 与 @capacitor/filesystem 在 client/src 里没有任何引用（仅经原生工程注册）。移除它们需要重新构建并验证 APK，故暂留。",
   "dependencies": {
     "@breezystack/lamejs": "^1.2.7",
     "@capacitor/android": "^8.4.0",

@@ -10,7 +10,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import Database from 'better-sqlite3';
-import { createSchema } from '../src/db/schema';
+import { createMemoryDb } from './helpers/memdb';
 import { setDbForTests, resetDbForTests } from '../src/db/connection';
 import * as postRepo from '../src/repositories/post.repo';
 import { extractTags } from '@k/shared';
@@ -18,9 +18,7 @@ import { extractTags } from '@k/shared';
 let db: InstanceType<typeof Database>;
 
 beforeAll(() => {
-  db = new Database(':memory:');
-  db.pragma('foreign_keys = ON');
-  createSchema(db);
+  db = createMemoryDb();
   setDbForTests(db);
 
   const insertUser = db.prepare("INSERT INTO users (username, email, password_hash) VALUES (?, ?, 'x')");
@@ -87,7 +85,7 @@ describe('post_tags 同步与搜索', () => {
 
     const { posts, total } = postRepo.searchPosts('', 1, 20, undefined, '徒步');
     expect(total).toBe(1);
-    expect(posts[0].description).toContain('#徒步');
+    expect(posts[0]!.description).toContain('#徒步');
   });
 
   it('tag 精确匹配：#周末 不命中 #周末愉快', () => {

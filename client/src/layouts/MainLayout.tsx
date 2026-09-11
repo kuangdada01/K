@@ -11,6 +11,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import MusicPlayer from '../components/MusicPlayer';
 import { useVoiceInRoom } from '../context/VoiceContext';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 function PageLoading() {
   return (
@@ -74,9 +75,13 @@ export function MainLayout() {
     >
       <Sidebar />
       <main className="main-content">
-        <Suspense fallback={<PageLoading />}>
-          <Outlet />
-        </Suspense>
+        {/* 错误边界放在这里（而不是包住整个 Routes）：页面崩了只剩兜底 UI，
+            但侧边栏/导航仍然可用 —— 用户可以切走而不是面对整页白屏（P1-6） */}
+        <ErrorBoundary label="page">
+          <Suspense fallback={<PageLoading />}>
+            <Outlet />
+          </Suspense>
+        </ErrorBoundary>
       </main>
       {isHome && <MusicPlayer />}
     </div>

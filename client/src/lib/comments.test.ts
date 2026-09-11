@@ -92,4 +92,54 @@ describe('buildVisibleComments', () => {
     expect(visible[4]!.isCollapsed).toBe(true);
     expect(visible[5]).toBeNull(); // 折叠的顶级评论，回复不进入可见列表
   });
+
+  it('replyCount 与 countReplies 语义一致（深度/分叉树全量对照）', () => {
+    // 深链 c1 ← r1 ← rr1 ← rrr1 与分叉 c3 ← {31, 32 ← 321}
+    const tree: Comment[] = [
+      makeComment({ id: 1, parent_id: null }),
+      makeComment({ id: 11, parent_id: 1 }),
+      makeComment({ id: 111, parent_id: 11 }),
+      makeComment({ id: 1111, parent_id: 111 }),
+      makeComment({ id: 3, parent_id: null }),
+      makeComment({ id: 31, parent_id: 3 }),
+      makeComment({ id: 32, parent_id: 3 }),
+      makeComment({ id: 321, parent_id: 32 }),
+    ];
+    const byId = new Map(
+      buildVisibleComments(tree, new Set())
+        .filter((v) => v !== null)
+        .map((v) => [v.comment.id, v])
+    );
+    for (const c of tree) {
+      const expected = countReplies(tree, c.id);
+      // 有回复的项才带计数；无回复的项恒为 0
+      expect(byId.get(c.id)!.replyCount).toBe(c === tree[0] || expected > 0 ? expected : 0);
+    }
+    // 明确的关键值：后代是「全部层级」而非仅直接子级
+    expect(byId.get(1)!.replyCount).toBe(3);
+    expect(byId.get(11)!.replyCount).toBe(2);
+    expect(byId.get(111)!.replyCount).toBe(1);
+    expect(byId.get(3)!.replyCount).toBe(3);
+    expect(byId.get(32)!.replyCount).toBe(1);
+    expect(byId.get(321)!.replyCount).toBe(0);
+  });
+
+  it('大规模输入不退化：800 条评论的构建耗时受控（原 O(n²) 实现会显著放大）', () => {
+    // 10 个顶级评论，每个挂 79 条直接回复 —— 总 800 条
+    const big: Comment[] = [];
+    for (let t = 1; t <= 10; t++) {
+      big.push(makeComment({ id: t, parent_id: null }));
+      for (let r = 1; r <= 79; r++) {
+        big.push(makeComment({ id: t * 1000 + r, parent_id: t }));
+      }
+    }
+    const started = performance.now();
+    const visible = buildVisibleComments(big, new Set());
+    const elapsed = performance.now() - started;
+
+    expect(visible.length).toBe(800);
+    // 阈值放得很宽（CI 慢机也不误报），只用于拦住回到 O(n²) 的退化：
+    // 800 条在 O(n²) 下是 ~64 万次 filter，通常 >100ms
+    expect(elapsed).toBeLessThan(150);
+  });
 });

@@ -7,6 +7,7 @@
  * ============================================================
  */
 
+import { memo } from 'react';
 import { Heart, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 import { Comment } from '../types';
 import { formatAbsoluteTime, resolveMediaUrl } from '../utils';
@@ -28,7 +29,7 @@ interface CommentItemProps {
   onDelete: (commentId: number) => void;
 }
 
-export default function CommentItem({
+export default memo(function CommentItem({
   comment,
   isReply,
   isCollapsed,
@@ -112,4 +113,4 @@ export default function CommentItem({
       </div>
     </div>
   );
-}
+});

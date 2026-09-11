@@ -58,6 +58,9 @@ export class AudioGraph {
   private masterLimiter: DynamicsCompressorNode | null = null;
   private speakTimer: number | null = null;
   private selfSpeaking = false;
+  /** 会话已销毁（dispose 置位）。AudioGraph 实例随 VoiceSession 一次性使用，
+   *  此标志用于拦住 dispose 之后才到达的迟到调用（如授权弹窗期间用户已退出）。 */
+  private disposed = false;
   /** 远端说话状态（上轮轮询快照；翻转才回调，对端离开经 forgetPeer 清掉） */
   private peerSpeaking = new Map<number, boolean>();
   private resumeHandler: (() => void) | null = null;
@@ -202,6 +205,9 @@ export class AudioGraph {
 
   /** 说话检测轮询（100ms）：自己（静音/听者不显示）+ 各远端（静音门 + RMS 阈值）翻转才回调 */
   startSpeakingLoop(): void {
+    // dispose 之后的迟到调用（会话已销毁）：直接忽略。若放行会在已关闭的图上
+    // 复活一个永不清理的轮询——teardown 只执行一次，dispose 不会再来第二次。
+    if (this.disposed) return;
     this.speakTimer = window.setInterval(() => {
       // 自己
       const selfNow =
@@ -255,6 +261,7 @@ export class AudioGraph {
 
   /** 会话销毁：清理说话轮询/resume 监听/节点/上下文 */
   dispose(): void {
+    this.disposed = true;
     this.detachResumeHandler();
     if (this.speakTimer) {
       clearInterval(this.speakTimer);

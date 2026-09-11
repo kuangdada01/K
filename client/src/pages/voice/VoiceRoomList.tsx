@@ -21,6 +21,7 @@ import { createVoiceRoom, deleteVoiceRoom } from '../../api/voice';
 import { showToast } from '../../components/ui/Toast';
 import { getApiErrorMessage } from '../../api/http';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import { saveRoomOwnerToken, forgetRoomOwnerToken, isOwnedGuestRoom } from '../../voice/roomOwnership';
 import type { VoiceRoom } from '../../types';
 import { VOICE_MAX_ROOM_SIZE } from '@k/shared';
 import styles from '../VoicePage.module.css';
@@ -53,6 +54,8 @@ export default function VoiceRoomList({
     try {
       // 未登录用户也可以创建房间（服务端以访客身份分配创建者归属）
       const res = await createVoiceRoom(name, newDesc.trim() || undefined);
+      // 访客建房会拿到所有权令牌：必须本地保存，否则之后删不掉自己的房间
+      saveRoomOwnerToken(res.room.id, res.ownerToken);
       setCreating(false);
       setNewName('');
       setNewDesc('');
@@ -67,6 +70,8 @@ export default function VoiceRoomList({
     if (!deletingRoom) return;
     try {
       await deleteVoiceRoom(deletingRoom.id);
+      // 房间没了，本地令牌一并清掉（避免长期堆积）
+      forgetRoomOwnerToken(deletingRoom.id);
       showToast('房间已删除');
     } catch (e) {
       showToast(getApiErrorMessage(e, '删除失败'));
@@ -104,8 +109,10 @@ export default function VoiceRoomList({
           {rooms.map((room) => {
             const count = room.participantCount ?? 0;
             const active = count > 0;
-            // 删除权限：房间创建者（含访客创建者，isCreator 由服务端按访问者计算）或管理员
-            const canDelete = room.isCreator === true || user?.role === 'admin';
+            // 删除权限：房间创建者（含访客创建者）或管理员。
+            // 访客房间：服务端不再按 IP 声称所有权（那正是 NAT 互删的成因），
+            // 这里用**本地保存的令牌**补齐「这是我建的房」
+            const canDelete = room.isCreator === true || user?.role === 'admin' || isOwnedGuestRoom(room.id);
             return (
               <div key={room.id} className={`${styles.roomCard} ${active ? styles.roomActive : ''}`}>
                 <div className={styles.roomIcon}>

@@ -58,6 +58,12 @@ export function useChatTTS({ liveMessage, participants, inRoom }: UseChatTTSOpti
   const currentUtterRef = useRef<SpeechSynthesisUtterance | null>(null);
   /** 已朗读过的消息 id：防止打开开关瞬间补读开关前的最后一条实时消息 */
   const lastReadMsgIdRef = useRef<number | null>(null);
+  /**
+   * 「下一个宏任务再 speak」的定时器。原实现丢弃了 id：stopTTS（退出房间/卸载）
+   * 之后这个待触发的回调仍可能跑一次 speechSynthesis.speak —— 浏览器若在清理
+   * 之前先跑了宏任务，用户会听到已经离开的房间里的消息。
+   */
+  const speakDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 可用语音缓存（getVoices 异步就绪，voiceschanged 事件刷新） */
   const voicesRef = useRef<{ zh: SpeechSynthesisVoice | null; en: SpeechSynthesisVoice | null }>({
     zh: null,
@@ -67,6 +73,11 @@ export function useChatTTS({ liveMessage, participants, inRoom }: UseChatTTSOpti
   /** 停止朗读（打断当前 + 清状态；令牌置空使旧 utterance 的迟到回调失效） */
   const stopTTS = useCallback(() => {
     if (!ttsSupported) return;
+    // 取消尚未触发的延迟播放（否则退出房间后仍可能出声一次）
+    if (speakDelayRef.current !== null) {
+      clearTimeout(speakDelayRef.current);
+      speakDelayRef.current = null;
+    }
     window.speechSynthesis.cancel();
     speakingRef.current = false;
     currentUtterRef.current = null;
@@ -99,7 +110,9 @@ export function useChatTTS({ liveMessage, participants, inRoom }: UseChatTTSOpti
       currentUtterRef.current = utter;
       // Chrome 在 cancel 后立即 speak 可能静默失败（crbug 已知问题），
       // 延迟到下一个宏任务再播，避开 cancel 的内部异步清理窗口
-      setTimeout(() => {
+      if (speakDelayRef.current !== null) clearTimeout(speakDelayRef.current);
+      speakDelayRef.current = setTimeout(() => {
+        speakDelayRef.current = null;
         // 期间被更新的消息打断（令牌已换）则不播这条
         if (currentUtterRef.current === utter) synth.speak(utter);
       }, 0);

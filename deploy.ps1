@@ -2,13 +2,18 @@
 # 传输由 deploy-sftp.py（paramiko / SFTP）完成：上传 + 远端部署 + 部署后核验，任一步失败即退出非 0。
 #
 # 用法：
-#   直接运行（交互式，弹提示框输入服务器与密码）：
+#   直接运行（推荐，默认用 SSH 私钥免密部署）：
+#     .\deploy.ps1 -SERVER <IP>
+#   或交互式（弹提示框输入服务器与密码）：
 #     .\deploy.ps1
-#   或传参（CI/无人值守）：
+#   或传口令（CI/无人值守；服务器关闭口令登录后此路不通）：
 #     .\deploy.ps1 -SERVER <IP> -PASSWORD <ssh密码>
+#   指定私钥：
+#     .\deploy.ps1 -SERVER <IP> -KEY C:\path\to\id_ed25519
 param(
     [string]$SERVER = "",
-    [string]$PASSWORD = ""
+    [string]$PASSWORD = "",
+    [string]$KEY = ""
 )
 $USER = "root"
 # 部署目标目录
@@ -17,11 +22,24 @@ $REMOTE_DIR = "/var/www/k"
 # deploy-sftp.py 所在路径（与 deploy.ps1 同目录）
 $SFTP_BACKEND = Join-Path $PSScriptRoot "deploy-sftp.py"
 
+# 认证：**私钥优先**。默认取本机专用部署密钥；存在即免密，
+# 密码只在没有私钥时才要求（口令登录一旦在服务器上关闭，这条回退自然失效）。
+if (-not $KEY) {
+    $KEY = Join-Path $env:USERPROFILE ".ssh\k_deploy_ed25519"
+}
+$useKey = Test-Path $KEY
+if ($useKey) {
+    $env:DEPLOY_KEY = $KEY
+    Write-Host "认证方式: SSH 私钥 ($KEY)" -ForegroundColor Green
+} else {
+    Write-Host "未找到私钥 $KEY，回退为口令认证" -ForegroundColor Yellow
+}
+
 # 未传参时交互式输入（弹提示框；密码掩码显示，不落在命令行/历史记录里）
 if (-not $SERVER) {
     $SERVER = Read-Host "请输入服务器 IP 地址"
 }
-if (-not $PASSWORD) {
+if (-not $useKey -and -not $PASSWORD) {
     $secure = Read-Host "请输入 SSH 密码（掩码输入）" -AsSecureString
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     $PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
@@ -95,7 +113,15 @@ if ($APK_LOCAL -and $APK_NAME) {
 Copy-Item -Recurse "client\public" "$tmpDir\client\public"
 
 # 复制根目录配置（package-lock.json 为 workspaces 单一 lockfile，远端根安装依赖用）
+# 注意：.env 会整体覆盖远端现有配置——若曾直接在服务器上改过环境变量，
+# 下次部署会被本地 .env 悄悄改回去。本地 .env 必须是生产配置的唯一事实来源。
+if (-not (Test-Path ".env")) {
+    Write-Host "  [警告] 未找到本地 .env：远端将沿用现有配置（首次部署必须提供）" -ForegroundColor Yellow
+}
 Copy-Item ".env" "$tmpDir\"
+if (-not (Test-Path "package-lock.json")) {
+    Write-Host "  [警告] 未找到 package-lock.json：远端将回退为 npm install（非确定性安装）" -ForegroundColor Yellow
+}
 Copy-Item "package.json" "$tmpDir\"
 Copy-Item "package-lock.json" "$tmpDir\" -ErrorAction SilentlyContinue
 
@@ -125,7 +151,9 @@ Write-Host "  部署包大小: $([math]::Round($pkgSize, 1)) MB ✓" -Foreground
 Write-Host "`n[4/6] SFTP 上传与远端部署..." -ForegroundColor Green
 Write-Host "  传输后端: $SFTP_BACKEND" -ForegroundColor Yellow
 
-$env:DEPLOY_PASSWORD = $PASSWORD
+if ($PASSWORD) {
+    $env:DEPLOY_PASSWORD = $PASSWORD
+}
 # 用数组 + splat 调用 native 命令，避免字符串变量被当作单个参数传给 argparse
 $sftpArgs = @("--server", $SERVER, "--package", $pkgPath)
 # 有新 APK 时传给 SFTP 后端做单独上传 + 保留5个/清理旧版

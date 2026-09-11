@@ -10,43 +10,30 @@
  */
 
 import { Router, Request, Response } from 'express';
-import crypto from 'crypto';
 import { subscribe } from '../sse';
 import { authMiddleware, verifyLiveToken } from '../middleware/auth';
+import { createOneTimeTicketStore } from '../lib/oneTimeTicket';
 
 const router = Router();
 
-/** 一次性连接票据：ticket → { userId, expires }（内存态，重启即失效） */
-const tickets = new Map<string, { userId: number; expires: number }>();
-/** 票据有效期：客户端拿到票据后立即发起 SSE，30s 足够覆盖慢网络 */
-const TICKET_TTL_MS = 30_000;
-
-function purgeExpiredTickets(): void {
-  const now = Date.now();
-  for (const [k, v] of tickets) {
-    if (v.expires < now) tickets.delete(k);
-  }
-}
+/** 一次性连接票据（内存态，重启即失效；语义见 lib/oneTimeTicket） */
+const tickets = createOneTimeTicketStore();
 
 /** 换取一次性 SSE 连接票据（Bearer 认证） */
 router.post('/ticket', authMiddleware, (req: Request, res: Response) => {
-  purgeExpiredTickets();
-  const ticket = crypto.randomBytes(24).toString('hex');
-  tickets.set(ticket, { userId: req.user!.id, expires: Date.now() + TICKET_TTL_MS });
-  res.json({ ticket });
+  res.json({ ticket: tickets.issue(req.user!.id) });
 });
 
 router.get('/', (req: Request, res: Response) => {
   // 首选路径：一次性票据（读后即删，防重放）
   const ticket = typeof req.query.ticket === 'string' ? req.query.ticket : '';
   if (ticket) {
-    const entry = tickets.get(ticket);
-    tickets.delete(ticket);
-    if (!entry || entry.expires < Date.now()) {
+    const userId = tickets.consume(ticket);
+    if (userId === undefined) {
       res.status(401).json({ error: '票据无效或已过期' });
       return;
     }
-    subscribe(entry.userId, res);
+    subscribe(userId, res);
     return;
   }
 

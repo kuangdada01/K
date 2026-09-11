@@ -16,6 +16,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useVoice } from '../context/VoiceContext';
 import { listVoiceRooms } from '../api/voice';
+import { pruneRoomOwnerTokens } from '../voice/roomOwnership';
 import { showToast } from '../components/ui/Toast';
 import VoiceRoomList from './voice/VoiceRoomList';
 import VoiceRoomView from './voice/VoiceRoomView';
@@ -28,20 +29,30 @@ export default function VoicePage() {
   const [rooms, setRooms] = useState<VoiceRoom[]>([]);
   const [loading, setLoading] = useState(true);
 
+  /**
+   * 落地房间列表，并顺带裁剪本地「访客房间所有权令牌」表。
+   * 房间列表每次轮询都会回来 —— 借它清理已消失房间的令牌，
+   * 这样即便某次删除请求失败，本地也不会无限堆积令牌。
+   */
+  const applyRooms = useCallback((list: VoiceRoom[]) => {
+    setRooms(list);
+    pruneRoomOwnerTokens(list.map((r) => r.id));
+  }, []);
+
   const refreshRooms = useCallback(() => {
     listVoiceRooms()
-      .then((res) => setRooms(res.rooms || []))
+      .then((res) => applyRooms(res.rooms || []))
       .catch(() => {
         /* 静默失败，保留下次刷新 */
       });
-  }, []);
+  }, [applyRooms]);
 
   useEffect(() => {
     listVoiceRooms()
-      .then((res) => setRooms(res.rooms || []))
+      .then((res) => applyRooms(res.rooms || []))
       .catch(() => setRooms([]))
       .finally(() => setLoading(false));
-  }, []);
+  }, [applyRooms]);
 
   // 进房期间轮询房间列表（人数徽标实时化）；会话结束后刷新一次
   useEffect(() => {

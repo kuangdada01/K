@@ -25,6 +25,7 @@ import { promisify } from 'util';
 import { env } from '../../config';
 import { logger } from '../logger';
 import { probeVideoStream, type VideoStreamInfo } from './probe';
+import { withFfmpegSlot } from './ffmpegGate';
 
 const execFileAsync = promisify(execFile);
 
@@ -116,7 +117,8 @@ export async function ensurePlayableVideo(filePath: string, originalName: string
   const args = process.platform === 'linux' ? ['-n', '19', FFMPEG, ...ffmpegArgs] : ffmpegArgs;
 
   try {
-    await execFileAsync(cmd, args, { timeout: 30 * 60 * 1000 });
+    // 进程级闸门：与封面截帧共用槽位，保证全局 ffmpeg 进程数有界
+    await withFfmpegSlot(() => execFileAsync(cmd, args, { timeout: 30 * 60 * 1000 }));
     // 原地替换原文件：先删旧文件再改名（与历史行为一致，避免目标已存在时改名失败）
     fs.unlinkSync(filePath);
     fs.renameSync(actualOut, filePath);
@@ -161,7 +163,9 @@ export async function generateVideoCover(filePath: string, outPath: string): Pro
       ];
       const cmd = process.platform === 'linux' ? 'nice' : FFMPEG;
       const args = process.platform === 'linux' ? ['-n', '19', FFMPEG, ...ffmpegArgs] : ffmpegArgs;
-      await execFileAsync(cmd, args, { timeout: 5000 });
+      // 进程级闸门：本函数在请求处理器内直接调用（不在 queue.ts 的串行链上），
+      // 不经闸门就会与转码叠加成「1 转码 + N 截帧」把 CPU 打满
+      await withFfmpegSlot(() => execFileAsync(cmd, args, { timeout: 5000 }));
       if (fs.existsSync(outPath)) return outPath;
     } catch {
       /* 该时间点无帧则尝试下一档 */

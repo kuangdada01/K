@@ -28,6 +28,7 @@ import { asyncHandler, AppError } from '../middleware/error';
 import { imageFileFilter } from '../lib/image';
 import { validateBody } from '../validate';
 import { sendMessageSchema } from '@k/shared/schemas';
+import { MAX_IMAGE_BYTES } from '@k/shared';
 import { createUploader, messageFilename } from '../lib/upload';
 import * as messageRepo from '../repositories/message.repo';
 import { getSafeUser } from '../repositories/user.repo';
@@ -37,14 +38,14 @@ import * as messageService from '../services/message.service';
 const router = Router();
 
 /**
- * 消息图片上传中间件: 限制10MB，仅允许图片
+ * 消息图片上传中间件: 大小上限见 @k/shared（与客户端校验同一个常量），仅允许图片
  * 存储在 uploads_private（不在静态服务范围，经 /api/messages/:id/media 鉴权下发）
  * DB 中 image_url 只存文件名
  */
 const upload = createUploader({
   dir: PATHS.uploadsPrivate,
   filename: messageFilename,
-  maxSize: 10 * 1024 * 1024,
+  maxSize: MAX_IMAGE_BYTES,
   fileFilter: imageFileFilter,
 });
 

@@ -27,6 +27,13 @@ const router = Router();
 /** 书籍根目录: server/books */
 const BOOKS_DIR = PATHS.books;
 
+/**
+ * 单章在线预览的大小上限（8MB）。
+ * 章节文本远超此值说明不是正常阅读内容；该端点是公开的且不受写限流约束，
+ * 若不设上限，一个异常大文件就能长时间占住事件循环。
+ */
+const MAX_CHAPTER_BYTES = 8 * 1024 * 1024;
+
 /** book.json 元数据形状（字段均为可选，读取时给默认值） */
 interface BookMeta {
   title?: string;
@@ -231,7 +238,7 @@ router.get('/:bookId', (req: Request, res: Response) => {
 });
 
 /** GET /api/books/:bookId/content - 章节内容 (query: file=相对路径) */
-router.get('/:bookId/content', (req: Request, res: Response) => {
+router.get('/:bookId/content', async (req: Request, res: Response) => {
   const bookId = req.params.bookId as string;
   const relPath = req.query.file as string | undefined;
   if (!relPath) {
@@ -249,7 +256,14 @@ router.get('/:bookId/content', (req: Request, res: Response) => {
       res.download(abs, path.basename(abs));
       return;
     }
-    const content = fs.readFileSync(abs, 'utf-8');
+    // 大小护栏 + 异步读：此前是无上限的 readFileSync，一个超大章节文件会把
+    // 事件循环整个卡住（该端点是公开的、不受写限流约束）。
+    const stat = fs.statSync(abs);
+    if (stat.size > MAX_CHAPTER_BYTES) {
+      res.status(413).json({ error: '章节内容过大，无法在线预览' });
+      return;
+    }
+    const content = await fs.promises.readFile(abs, 'utf-8');
     res.type('text/plain; charset=utf-8').send(content);
   } catch (err) {
     logger.error({ err }, 'Error reading chapter');

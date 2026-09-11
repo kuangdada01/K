@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { PATHS, SERVER_ROOT } from '../../config';
+import { PATHS, UPLOADS_ROOT } from '../../config';
 import { tableExists } from './helpers';
 import type { Migration } from './helpers';
 
@@ -15,7 +15,7 @@ const migration: Migration = {
 
     const moveToPrivate = (oldUrl: string): string => {
       const name = path.basename(oldUrl);
-      const from = path.join(SERVER_ROOT, oldUrl.replace(/^\//, ''));
+      const from = path.join(UPLOADS_ROOT, oldUrl.replace(/^\//, ''));
       const to = path.join(PATHS.uploadsPrivate, name);
       try {
         if (fs.existsSync(from)) fs.renameSync(from, to);

@@ -6,6 +6,7 @@
 
 import { stmt } from '../db/connection';
 import { count, escapeLike } from '../db/helpers';
+import { HARD_LIST_CAP, capRows, probeLimit } from '../lib/listLimits';
 
 export interface FriendUserRow {
   id: number;
@@ -57,32 +58,44 @@ function countFollowers(targetId: number): number {
   return count('SELECT COUNT(*) as count FROM friends WHERE friend_id = ?', targetId);
 }
 
-/** 粉丝列表（谁关注了 target） */
-export function listFollowers(targetId: number, viewerId: number): FriendUserRow[] {
-  return stmt(
+/** 粉丝列表（谁关注了 target）；硬上限见 HARD_LIST_CAP，`has_more` 表示被截断 */
+export function listFollowers(
+  targetId: number,
+  viewerId: number,
+  cap: number = HARD_LIST_CAP
+): { rows: FriendUserRow[]; has_more: boolean } {
+  const raw = stmt(
     `
     SELECT u.id, u.username, u.avatar, u.bio,
       EXISTS(SELECT 1 FROM friends WHERE user_id = ? AND friend_id = u.id) as is_following
     FROM friends f
     JOIN users u ON u.id = f.user_id
     WHERE f.friend_id = ?
-    ORDER BY u.username ASC
+    ORDER BY u.username ASC, u.id ASC
+    LIMIT ?
   `
-  ).all(viewerId, targetId) as FriendUserRow[];
+  ).all(viewerId, targetId, probeLimit(cap)) as FriendUserRow[];
+  return capRows(raw, cap);
 }
 
-/** 关注列表（target 关注了谁） */
-export function listFollowing(targetId: number, viewerId: number): FriendUserRow[] {
-  return stmt(
+/** 关注列表（target 关注了谁）；硬上限同上 */
+export function listFollowing(
+  targetId: number,
+  viewerId: number,
+  cap: number = HARD_LIST_CAP
+): { rows: FriendUserRow[]; has_more: boolean } {
+  const raw = stmt(
     `
     SELECT u.id, u.username, u.avatar, u.bio,
       EXISTS(SELECT 1 FROM friends WHERE user_id = ? AND friend_id = u.id) as is_following
     FROM friends f
     JOIN users u ON u.id = f.friend_id
     WHERE f.user_id = ?
-    ORDER BY u.username ASC
+    ORDER BY u.username ASC, u.id ASC
+    LIMIT ?
   `
-  ).all(viewerId, targetId) as FriendUserRow[];
+  ).all(viewerId, targetId, probeLimit(cap)) as FriendUserRow[];
+  return capRows(raw, cap);
 }
 
 /** 随机推荐（登录用户排除已关注，游客纯随机；最多5条） */

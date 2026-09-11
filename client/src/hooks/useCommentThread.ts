@@ -18,7 +18,7 @@
  * 重置（prev 值模式）随 state 移入本 hook，与组件/数据层其他渲染期重置同一时刻生效。
  */
 
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import { isAxiosError } from 'axios';
 
@@ -116,7 +116,7 @@ export function useCommentThread({
   };
 
   /** 向上续拉下一页评论：游标 = 已加载的最后一条顶级评论 id */
-  const loadMoreComments = async () => {
+  const loadMoreComments = useCallback(async () => {
     if (commentsLoadingMore || !commentHasMore) return;
     const tops = comments.filter((c) => !c.parent_id);
     const lastTop = tops[tops.length - 1];
@@ -135,11 +135,94 @@ export function useCommentThread({
     } finally {
       setCommentsLoadingMore(false);
     }
-  };
+  }, [
+    commentsLoadingMore,
+    commentHasMore,
+    comments,
+    commentTotal,
+    postId,
+    setComments,
+    setCommentHasMore,
+    setCommentTotal,
+  ]);
 
-  const handleDeleteComment = (commentId: number) => {
+  /**
+   * 传给 CommentItem 的四个回调全部 useCallback 固定引用。
+   *
+   * 为什么必须做：CommentItem 已经是 memo 组件（见 CommentItem.tsx），但 memo 只做
+   * 浅比较 —— 这四个回调此前是每次渲染新建的函数，于是「在评论框里敲一个字」
+   * （newComment 变化 → PostDetail 重渲染）会让**每一条**评论都重渲染，
+   * memo 形同虚设。依赖都是真实用到的值，不含 ref 技巧，行为与原来逐字一致。
+   */
+  const handleDeleteComment = useCallback((commentId: number) => {
     setDeleteTargetId(commentId);
-  };
+  }, []);
+
+  const toggleReplies = useCallback(
+    (commentId: number) => {
+      setCollapsedReplies((prev) => {
+        const next = new Set(prev);
+        if (next.has(commentId)) {
+          next.delete(commentId);
+        } else {
+          next.add(commentId);
+        }
+        return next;
+      });
+    },
+    [setCollapsedReplies]
+  );
+
+  /** 回复入口（原 CommentItem onReply 内联逻辑）：未登录弹登录、否则进入回复态并聚焦输入框 */
+  const handleReply = useCallback(
+    (comment: Comment) => {
+      if (!userId) {
+        openLoginPrompt();
+        return;
+      }
+      setReplyingTo({ id: comment.id, username: comment.username });
+      commentInputRef.current?.focus();
+    },
+    [userId, openLoginPrompt]
+  );
+
+  const handleCommentLike = useCallback(
+    async (commentId: number) => {
+      if (!userId) {
+        openLoginPrompt();
+        return;
+      }
+      const comment = comments.find((c) => c.id === commentId);
+      if (!comment) return;
+
+      const wasLiked = !!comment.liked;
+      const prevCount = comment.like_count;
+
+      setComments((prev) =>
+        prev.map((c) =>
+          c.id === commentId
+            ? { ...c, liked: wasLiked ? 0 : 1, like_count: wasLiked ? prevCount - 1 : prevCount + 1 }
+            : c
+        )
+      );
+
+      try {
+        if (wasLiked) {
+          await postsApi.unlikeComment(commentId);
+        } else {
+          await postsApi.likeComment(commentId);
+        }
+      } catch {
+        setComments((prev) =>
+          prev.map((c) => (c.id === commentId ? { ...c, liked: wasLiked ? 1 : 0, like_count: prevCount } : c))
+        );
+        showToast('操作失败，请重试');
+      }
+    },
+    // 依赖 comments：评论增删后回调需要看到最新列表。敲字（newComment）不影响它，
+    // 所以评论列表在输入过程中保持稳定。
+    [userId, openLoginPrompt, comments, setComments]
+  );
 
   const confirmDeleteComment = async () => {
     if (deleteTargetId === null) return;
@@ -157,61 +240,6 @@ export function useCommentThread({
       showToast(getApiErrorMessage(err, '删除评论失败，请重试'));
     }
     setDeleteTargetId(null);
-  };
-
-  const handleCommentLike = async (commentId: number) => {
-    if (!userId) {
-      openLoginPrompt();
-      return;
-    }
-    const comment = comments.find((c) => c.id === commentId);
-    if (!comment) return;
-
-    const wasLiked = !!comment.liked;
-    const prevCount = comment.like_count;
-
-    setComments((prev) =>
-      prev.map((c) =>
-        c.id === commentId
-          ? { ...c, liked: wasLiked ? 0 : 1, like_count: wasLiked ? prevCount - 1 : prevCount + 1 }
-          : c
-      )
-    );
-
-    try {
-      if (wasLiked) {
-        await postsApi.unlikeComment(commentId);
-      } else {
-        await postsApi.likeComment(commentId);
-      }
-    } catch {
-      setComments((prev) =>
-        prev.map((c) => (c.id === commentId ? { ...c, liked: wasLiked ? 1 : 0, like_count: prevCount } : c))
-      );
-      showToast('操作失败，请重试');
-    }
-  };
-
-  const toggleReplies = (commentId: number) => {
-    setCollapsedReplies((prev) => {
-      const next = new Set(prev);
-      if (next.has(commentId)) {
-        next.delete(commentId);
-      } else {
-        next.add(commentId);
-      }
-      return next;
-    });
-  };
-
-  /** 回复入口（原 CommentItem onReply 内联逻辑）：未登录弹登录、否则进入回复态并聚焦输入框 */
-  const handleReply = (comment: Comment) => {
-    if (!userId) {
-      openLoginPrompt();
-      return;
-    }
-    setReplyingTo({ id: comment.id, username: comment.username });
-    commentInputRef.current?.focus();
   };
 
   return {

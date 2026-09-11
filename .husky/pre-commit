@@ -1,1 +1,5 @@
-npx lint-staged
+# --max-arg-length：lint-staged 把所有暂存文件路径一次传给 prettier，
+# 大提交（上百个文件）会撞 Windows 的**命令行长度上限**而让整个钩子失败。
+# 注意这个值是「估算目标」，lint-staged 实际分出来的块约为它的 2 倍，
+# 而 cmd.exe 的上限是 ~8191 字符（不是 32KB），故取 2000 留足余量。
+npx lint-staged --max-arg-length 2000

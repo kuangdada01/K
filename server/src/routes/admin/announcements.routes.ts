@@ -61,8 +61,9 @@ router.post(
 router.get(
   '/announcements',
   asyncHandler(async (_req: Request, res: Response) => {
-    const announcements = adminRepo.listAllAnnouncements();
-    res.json({ announcements });
+    // 硬上限 HARD_LIST_CAP 行
+    const { rows: announcements, has_more } = adminRepo.listAllAnnouncements();
+    res.json({ announcements, has_more });
   })
 );
 

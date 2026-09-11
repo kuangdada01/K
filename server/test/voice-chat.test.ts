@@ -19,7 +19,7 @@ import http from 'http';
 import type { AddressInfo } from 'net';
 import Database from 'better-sqlite3';
 import { WebSocket } from 'ws';
-import { createSchema } from '../src/db/schema';
+import { createMemoryDb } from './helpers/memdb';
 import { setDbForTests, resetDbForTests } from '../src/db/connection';
 import { createApp } from '../src/app';
 import { attachVoiceWs } from '../src/voice/ws';
@@ -39,10 +39,10 @@ let adminToken = '';
 const clients: WebSocket[] = [];
 
 beforeAll(async () => {
-  db = new Database(':memory:');
-  // 注意：与生产一致不开启 foreign_keys（voice_rooms.creator_id 允许负数=访客，
-  // 房间删除时聊天记录由 deleteRoom 手动级联清理）
-  createSchema(db);
+  // createMemoryDb：与生产一致开 foreign_keys、并执行全部迁移
+  // （迁移 024 已删除 voice_rooms.creator_id 的外键约束——访客房的负数 creator_id
+  //  正是靠这个迁移才成立的；此前本文件只 createSchema、不跑迁移，看不到该变更）
+  db = createMemoryDb();
   setDbForTests(db);
 
   const insertUser = db.prepare(
@@ -75,15 +75,17 @@ afterAll(async () => {
 async function api(
   method: string,
   path: string,
-  opts: { token?: string; body?: unknown } = {}
+  opts: { token?: string; body?: unknown; headers?: Record<string, string> } = {}
 ): Promise<{ status: number; data: any }> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...(opts.headers ?? {}) };
   if (opts.token) headers['Authorization'] = `Bearer ${opts.token}`;
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   const res = await fetch(`${base}${path}`, {
     method,
     headers,
-    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    // 条件展开而非 body: undefined —— exactOptionalPropertyTypes 下
+    // RequestInit.body 不接受显式的 undefined
+    ...(opts.body !== undefined ? { body: JSON.stringify(opts.body) } : {}),
   });
   const text = await res.text();
   let data: any = null;
@@ -99,8 +101,8 @@ async function api(
 function connect(token?: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const url = token
-      ? `ws://127.0.0.1:${server.address()!.port}/api/voice/ws?token=${token}`
-      : `ws://127.0.0.1:${server.address()!.port}/api/voice/ws`;
+      ? `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/voice/ws?token=${token}`
+      : `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/voice/ws`;
     const ws = new WebSocket(url);
     (ws as any).__msgs = [];
     ws.on('message', (raw) => {
@@ -266,26 +268,31 @@ describe('WS 文字聊天协议', () => {
 });
 
 describe('REST 聊天历史与清空权限', () => {
-  it('访客可创建房间；列表 isCreator 按访问者计算且不泄露 creator_ip', async () => {
+  it('访客可创建房间；列表 isCreator 不再按 IP 声称（P2-25 令牌化）且不泄露 creator_ip', async () => {
     const created = await api('POST', '/api/voice/rooms', {
       body: { name: '访客房主房', description: '测试' },
     });
     expect(created.status).toBe(201);
     const roomId = created.data.room.id;
-    expect(JSON.stringify(created)).not.toContain('creator_ip');
+    expect(JSON.stringify(created.data.room)).not.toContain('creator_ip');
+    expect(JSON.stringify(created.data.room)).not.toContain('owner_token');
+    // 访客建房会签发所有权令牌（只在创建响应里回一次）
+    expect(created.data.ownerToken).toMatch(/^[0-9a-f]{48}$/);
 
-    // 访客视角（同一 IP）：isCreator = true
+    // 访客视角（同一 IP）：**不再**按 IP 声称 isCreator —— 那正是「同 NAT 互删」的成因。
+    // 客户端用本地保存的令牌自行判定（见 client/src/voice/roomOwnership.ts）
     const guestList = await api('GET', '/api/voice/rooms');
     const gRoom = guestList.data.rooms.find((r: any) => r.id === roomId);
-    expect(gRoom.isCreator).toBe(true);
+    expect(gRoom.isCreator).toBe(false);
     expect(gRoom.creator_ip).toBeUndefined();
+    expect(gRoom.owner_token).toBeUndefined();
 
-    // 登录用户视角：isCreator = false
+    // 登录用户视角：同样 false
     const aliceList = await api('GET', '/api/voice/rooms', { token: aliceToken });
     const aRoom = aliceList.data.rooms.find((r: any) => r.id === roomId);
     expect(aRoom.isCreator).toBe(false);
 
-    // 登录用户创建的房间：本人 true、访客 false
+    // 登录用户创建的房间：本人 true、访客 false（这条契约不变）
     const created2 = await api('POST', '/api/voice/rooms', { token: aliceToken, body: { name: '艾丽丝房' } });
     const aliceView = (await api('GET', '/api/voice/rooms', { token: aliceToken })).data.rooms.find(
       (r: any) => r.id === created2.data.room.id
@@ -413,22 +420,38 @@ describe('REST 聊天历史与清空权限', () => {
     expect(badToken.status).toBe(401);
   });
 
-  it('访客房主按 IP 锚点可清空；其他归属的访客 403', async () => {
+  it('访客房主凭令牌可清空；别人（含同 IP）不带令牌 403（P2-25）', async () => {
     // 模拟"别的 IP"创建的访客房（测试环境所有请求都来自 127.0.0.1）
     const foreign = voiceRepo.createRoom(-999, '他人访客房', '', {
       creatorName: '未登录-999',
       creatorIp: '203.0.113.9',
     });
+    // 该房间是 026 迁移后创建的（带令牌），因此即使 IP 匹配也必须有令牌
     const denied = await api('DELETE', `/api/voice/rooms/${foreign.id}/messages`);
     expect(denied.status).toBe(403);
     expect(denied.data.error).toContain('只有房间创建者或管理员');
 
-    // 本机 IP 归属的访客房主可清空
+    // 同 IP 建房：不带令牌同样 403（这正是修复点 —— 从前同 IP 就能清别人的房间）
     const mine = await api('POST', '/api/voice/rooms', { body: { name: '本机访客房' } });
     const roomId = mine.data.room.id;
-    const ok = await api('DELETE', `/api/voice/rooms/${roomId}/messages`);
+    const ownerToken = mine.data.ownerToken as string;
+    expect(ownerToken).toMatch(/^[0-9a-f]{48}$/);
+    expect((await api('DELETE', `/api/voice/rooms/${roomId}/messages`)).status).toBe(403);
+
+    // 带上自己的令牌 → 正常清空
+    const ok = await api('DELETE', `/api/voice/rooms/${roomId}/messages`, {
+      headers: { 'X-Voice-Owner-Token': ownerToken },
+    });
     expect(ok.status).toBe(200);
     expect(ok.data.success).toBe(true);
+
+    // 存量访客房间（无令牌）仍按 IP 回退，行为不倒退
+    const legacy = voiceRepo.createRoom(0, '旧访客房', '', {
+      creatorName: '未登录-1',
+      creatorIp: '127.0.0.1',
+    });
+    db.prepare('UPDATE voice_rooms SET owner_token = NULL WHERE id = ?').run(legacy.id);
+    expect((await api('DELETE', `/api/voice/rooms/${legacy.id}/messages`)).status).toBe(200);
   });
 
   it('删除房间级联删除其聊天记录', async () => {

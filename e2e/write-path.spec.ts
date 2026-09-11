@@ -14,8 +14,10 @@
  */
 
 import { test, expect } from '@playwright/test';
+import type { Request } from '@playwright/test';
 import { createRequire } from 'module';
 import path from 'path';
+import { DB_PATH } from './db-path';
 
 // 锚定 server/package.json 解析 better-sqlite3（根目录 node_modules 无此原生依赖；
 // 以 CJS require 加载，规避 Playwright TS 转译对 import.meta 的限制）
@@ -23,7 +25,6 @@ const require = createRequire(path.resolve('server/package.json'));
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- 测试进程借用 server 的原生依赖
 const Database = require('better-sqlite3') as any;
 
-const DB_PATH = path.resolve('e2e/.tmp/k-e2e.db');
 const stamp = Date.now();
 const username = `e2e_${stamp}`;
 const email = `e2e-${stamp}@test.local`;
@@ -64,13 +65,15 @@ test('注册 → 登录态 → 发帖 → 点赞 → 评论 全链路', async ({
   // 注册成功自动登录 → 侧边栏出现「分享」（发帖入口仅登录可见）
   const shareBtn = page.getByRole('button', { name: '分享' }).first();
   await expect(shareBtn).toBeVisible({ timeout: 10_000 });
-  // 注册后首页仍在重渲染（信息流/推荐位/SSE 接入），立即点击会丢失 openCreate：
-  // 等页面静默片刻再点（探针验证：延迟后点击模态稳定打开）
-  await page.waitForTimeout(1500);
 
   // —— 发帖（真实图片上传 multipart + 服务端压缩/入库）——
-  await shareBtn.click();
-  await expect(page.getByText('选择照片/视频')).toBeVisible({ timeout: 10_000 });
+  // 注册后首页仍在重渲染（信息流/推荐位/SSE 接入），此时点击可能丢失 openCreate。
+  // 此前用固定 `waitForTimeout(1500)` 规避：慢机上不保证够、快机上白等。
+  // 改成**有界重试直到模态真的打开**（点击被吞掉就再点一次）。
+  await expect(async () => {
+    await shareBtn.click();
+    await expect(page.getByText('选择照片/视频')).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 15_000 });
   await page.locator('input[type="file"]').first().setInputFiles({
     name: 'e2e-post.png',
     mimeType: 'image/png',
@@ -123,11 +126,40 @@ test('注册 → 登录态 → 发帖 → 点赞 → 评论 全链路', async ({
   await expect(likeBtn).toBeVisible({ timeout: 10_000 });
 
   // —— 点赞：详情层按钮点击后 aria-label 翻转为「取消点赞」（服务端失败会回滚）——
+  // 此前是「点完等 1500ms，再断言按钮还亮着」—— 固定等待既慢又只是**猜**服务端已经往返完。
+  // 改成等真实的点赞响应并断言 2xx：比等待更强（失败在这里直接红，而不是靠时间蒙）。
+  const likeResponse = page.waitForResponse((r) =>
+    /\/api\/posts\/\d+\/like$/.test(new URL(r.url()).pathname)
+  );
   await likeBtn.click({ force: true });
   const unlikedBtn = detailPanel.getByRole('button', { name: '取消点赞', exact: true });
   await expect(unlikedBtn).toBeVisible({ timeout: 5_000 });
-  await page.waitForTimeout(1500); // 等服务端往返：失败会回滚回「点赞」
+  expect((await likeResponse).ok(), '点赞请求应返回 2xx').toBe(true);
   await expect(unlikedBtn).toBeVisible();
+
+  // —— A5 在途闸门：**快速双击只应发出一个请求**，最终停在「已点赞」——
+  // 先取消点赞回到确定状态，再记录 like 请求序列。
+  await unlikedBtn.click({ force: true });
+  const relike = detailPanel.getByRole('button', { name: '点赞', exact: true });
+  await expect(relike).toBeVisible({ timeout: 5_000 });
+
+  const likeCalls: string[] = [];
+  const trackLikes = (r: Request) => {
+    if (/\/api\/posts\/\d+\/like$/.test(new URL(r.url()).pathname)) likeCalls.push(r.method());
+  };
+  page.on('request', trackLikes);
+  try {
+    await relike.dblclick({ force: true });
+    await expect(detailPanel.getByRole('button', { name: '取消点赞', exact: true })).toBeVisible({
+      timeout: 5_000,
+    });
+    // 「不该发生的事」需要一小段静默期才能确认：等首个请求结束后再看有没有第二个
+    await page.waitForTimeout(400);
+    expect(likeCalls, '双击只应发出一次点赞请求（在途闸门）').toEqual(['POST']);
+    await expect(detailPanel.getByRole('button', { name: '取消点赞', exact: true })).toBeVisible();
+  } finally {
+    page.off('request', trackLikes);
+  }
 
   // —— 评论：详情层评论框唯一；fill 需要稳定性，改 force 聚焦后用真实键盘输入 ——
   const commentText = `e2e评论${stamp}`;
@@ -137,4 +169,34 @@ test('注册 → 登录态 → 发帖 → 点赞 → 评论 全链路', async ({
   await expect(composer).toHaveValue(commentText);
   await detailPanel.getByRole('button', { name: '发送评论' }).click({ force: true });
   await expect(page.getByText(commentText).first()).toBeVisible({ timeout: 10_000 });
+});
+
+/**
+ * 未登录访客点赞 → 弹登录窗。
+ *
+ * 从 `smoke.spec.ts` 移过来：那边是只读公开流程，而 e2e 库每轮重置后**没有帖子**，
+ * 原实现 `if (count === 0) return` 会在空库下静默"通过"（假绿）；改成 `test.skip`
+ * 也只是把假绿改成"永远跳过"，覆盖依旧是零。
+ * 放在这里：同一个文件的前一个用例刚创建了帖子，数据是确定的 —— 可以**硬断言**
+ * 「点赞按钮必须存在」，再用一个全新的浏览器 context 模拟未登录访客。
+ */
+test('未登录访客点赞 → 弹出登录窗口（用前一个用例创建的帖子）', async ({ browser }) => {
+  const db = new Database(DB_PATH);
+  const post = db.prepare('SELECT id FROM posts ORDER BY id DESC LIMIT 1').get() as
+    { id: number } | undefined;
+  db.close();
+  expect(post, '前一个用例应已创建帖子（本用例依赖它，不再静默跳过）').toBeTruthy();
+
+  const guestContext = await browser.newContext({ locale: 'zh-CN' });
+  try {
+    const guest = await guestContext.newPage();
+    await guest.goto('http://localhost:3200/');
+    const likeBtn = guest.locator('button[aria-label="点赞"]').first();
+    // 硬断言：库里有帖子，点赞按钮就必须出现（此前的写法在这里会静默 return）
+    await expect(likeBtn).toBeVisible({ timeout: 15_000 });
+    await likeBtn.click();
+    await expect(guest.locator('input[placeholder="邮箱"]').first()).toBeVisible();
+  } finally {
+    await guestContext.close();
+  }
 });

@@ -9,7 +9,7 @@
  * - 失败回滚
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useLike } from '../state/cache';
 import { events } from '../state/events';
@@ -32,11 +32,22 @@ export function useLikePost(postId: number, options?: UseLikePostOptions) {
   const onToggle = options?.onToggle;
   const onChange = options?.onChange;
 
+  /**
+   * 在途闸门：`toggle` 的依赖是 [liked, likeCount]，而这两者要等重渲染后才更新。
+   * 快速双击时第二次调用读到的仍是旧的 liked/likeCount → 连发两次 likePost，
+   * 服务端计数 +2 而本地乐观值只 +1；若第二次请求失败，回滚还会把计数写回更旧的
+   * prevCount，与本地状态彻底脱节（信息流 staleTime 为 Infinity，可能长期不纠正）。
+   * ref 不受渲染批次影响，可同步占位。
+   */
+  const inFlightRef = useRef(false);
+
   const toggle = useCallback(async () => {
     if (!user) {
       openLoginPrompt();
       return;
     }
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     const wasLiked = liked;
     const prevCount = likeCount;
     const newLikeCount = wasLiked ? prevCount - 1 : prevCount + 1;
@@ -68,6 +79,8 @@ export function useLikePost(postId: number, options?: UseLikePostOptions) {
         setLikeInfo(postId, false, prevCount);
       }
       showToast('操作失败，请重试');
+    } finally {
+      inFlightRef.current = false;
     }
   }, [liked, likeCount, user, postId, openLoginPrompt, setLikeInfo, onToggle, onChange]);
 

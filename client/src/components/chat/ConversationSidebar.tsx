@@ -6,6 +6,7 @@
  * （纯展示组件，数据与行为回调由 Messages 提供）
  */
 
+import { useEffect, useRef } from 'react';
 import { Search, MessageCircle, Bell } from 'lucide-react';
 import type { Conversation, Notification, User } from '../../types';
 import ConversationItem from './ConversationItem';
@@ -48,6 +49,18 @@ export default function ConversationSidebar({
   notifications,
   onNotificationClick,
 }: ConversationSidebarProps) {
+  /**
+   * 失焦延迟关闭的定时器。blur 会在导航/卸载过程中触发，200ms 后回调若落在
+   * 组件已卸载之后就是一次无意义的 setState（且会拖住闭包与 DOM 引用）。
+   */
+  const blurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+    },
+    []
+  );
+
   return (
     <div className={styles.sidebar}>
       <div className={styles.header}>
@@ -64,7 +77,8 @@ export default function ConversationSidebar({
             onChange={(e) => setFollowSearch(e.target.value)}
             onFocus={() => setShowFollowResults(true)}
             onBlur={() => {
-              setTimeout(() => setShowFollowResults(false), 200);
+              if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+              blurTimerRef.current = setTimeout(() => setShowFollowResults(false), 200);
             }}
           />
         </div>

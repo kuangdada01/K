@@ -45,6 +45,9 @@ interface PeerWindowCounters {
 export class QualityMonitor {
   private deps: QualityMonitorDeps;
   private timer: number | null = null;
+  /** 会话已销毁（stop 置位）。实例随 VoiceSession 一次性使用，此标志拦住
+   *  destroy 之后才到达的迟到 start（如授权弹窗期间用户已退出）复活轮询。 */
+  private disposed = false;
   /** 各成员当前展示的质量等级（key 为 userId，含自己） */
   private levels = new Map<number, VoiceQualityLevel>();
   /** 各对端的窗口增量计数器（生命周期对齐 PeerEntry，见 forget/forgetAll） */
@@ -55,6 +58,8 @@ export class QualityMonitor {
   }
 
   start(): void {
+    // stop（会话销毁）之后的迟到 start 直接忽略，否则会复活一个永不清理的轮询
+    if (this.disposed) return;
     this.timer = window.setInterval(() => {
       this.measure().catch(() => {
         /* 统计失败忽略，下轮再试 */
@@ -63,6 +68,7 @@ export class QualityMonitor {
   }
 
   stop(): void {
+    this.disposed = true;
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;

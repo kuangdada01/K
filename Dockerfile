@@ -52,6 +52,10 @@ COPY --from=build /app/server/package.json ./server/package.json
 COPY --from=build /app/shared/dist ./shared/dist
 COPY --from=build /app/server/dist ./server/dist
 COPY --from=build /app/client/dist ./client/dist
+# client/public 必须单独拷贝：/api/music 扫描的是 client/public/music（见 src/config.ts
+# 的 PATHS.music），而不是 client/dist/music。此前运行时阶段只拷 client/dist，
+# 并且仅 mkdir 了一个空的 client/public/music，导致容器里音乐列表恒为空。
+COPY --from=build /app/client/public ./client/public
 
 # 为 shared/server 两个 workspace 装生产依赖（client 是静态产物，不装）
 # 运行时阶段 --omit=dev 会裁掉根 devDep（husky），但 npm 仍执行根 prepare 脚本；
@@ -72,8 +76,9 @@ RUN useradd -r -m app \
   && chown -R app:app /app
 USER app
 
-# 持久化数据目录（数据库文件见上方说明，不作为文件卷声明）
-VOLUME ["/app/server/uploads", "/app/server/uploads_private", "/app/server/books"]
+# 音乐目录用卷挂载：镜像内不含 mp3（client/public/music 在 .gitignore 中），
+# 不挂载时 /api/music 返回空列表属预期行为
+VOLUME ["/app/server/uploads", "/app/server/uploads_private", "/app/server/books", "/app/client/public/music"]
 
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

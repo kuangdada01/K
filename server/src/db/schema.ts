@@ -278,6 +278,7 @@ export function createSchema(db: InstanceType<typeof Database>): void {
       creator_name TEXT DEFAULT '',            -- 创建者用户名快照（登录用户="用户名"，访客="未登录-N"）
       creator_avatar TEXT DEFAULT NULL,        -- 创建者头像快照（创建时记录，访客为 NULL）
       creator_ip TEXT DEFAULT NULL,            -- 创建者来源 IP（仅访客创建时记录；服务端校验用，不外发）
+      owner_token TEXT DEFAULT NULL,           -- 访客房间的所有权令牌（创建时签发，等价于密码；绝不下发列表）
       created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );
 

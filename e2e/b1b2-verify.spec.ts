@@ -148,7 +148,7 @@ test('B2 拖拽排序后按新顺序上传', async ({ page }) => {
         const re = /name="images"; filename="([^"]+)"/g;
         let m: RegExpExecArray | null;
         const names: string[] = [];
-        while ((m = re.exec(text)) !== null) names.push(m[1]);
+        while ((m = re.exec(text)) !== null) names.push(m[1]!);
         uploadedOrder = names;
       }
       route.fulfill({
@@ -186,7 +186,7 @@ test('B2 拖拽排序后按新顺序上传', async ({ page }) => {
   ]);
 
   // 等网格出现两张图
-  const gridImgs = page.locator('div[class*="gridItem"] img');
+  const gridImgs = page.getByTestId('media-grid-item').locator('img');
   await expect(gridImgs).toHaveCount(2, { timeout: 10000 });
   const srcBefore = await gridImgs.evaluateAll((imgs) => imgs.map((i) => (i as HTMLImageElement).src));
 
@@ -206,7 +206,7 @@ test('B2 拖拽排序后按新顺序上传', async ({ page }) => {
 
   // 下一步 → 分享（提交）。注意：侧边栏也有"分享"按钮，这里限定在弹窗内
   await page.getByRole('button', { name: '继续' }).click();
-  const modalShare = page.locator('div[class*="overlay"]').getByRole('button', { name: '分享' });
+  const modalShare = page.getByTestId('composer-dialog').getByRole('button', { name: '分享' });
   await modalShare.click();
 
   // 断言上传顺序与拖拽后网格顺序一致（b 先于 a）

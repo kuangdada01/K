@@ -12,7 +12,7 @@
  * ============================================================
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search, X, Heart, MessageCircle, Layers, Play } from 'lucide-react';
 import { getApiErrorMessage } from '../api/http';
@@ -23,6 +23,7 @@ import PostDetail from '../components/post/PostDetail';
 import { useInfiniteScrollSentinel } from '../hooks/useInfiniteScrollSentinel';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useExplorePostEventsSync } from '../hooks/useExplorePostEventsSync';
+import { parsePostImages } from '../lib/parsePostImages';
 import { Post } from '../types';
 import styles from './ExplorePage.module.css';
 
@@ -150,29 +151,24 @@ export default function ExplorePage() {
   // 参照 useProfileEventsSync 的模式单独成文件）
   useExplorePostEventsSync({ keyword, loadPosts, setPosts });
 
-  const getThumbnail = (post: Post): string => {
-    let raw = '';
-    if (post.video_cover) raw = post.video_cover;
-    else if (post.images && post.images.length > 0) raw = post.images[0] ?? '';
-    else {
-      try {
-        const parsed = JSON.parse(post.image_url);
-        if (Array.isArray(parsed) && parsed.length > 0) raw = parsed[0];
-      } catch {}
-      if (!raw) raw = post.image_url;
-    }
-    // 原生端相对路径会指向 WebView 本地（404），必须转成服务器绝对地址
-    return resolveMediaUrl(raw) || raw;
-  };
-
-  const getMultiImageCount = (post: Post): number => {
-    if (post.images && post.images.length > 0) return post.images.length;
-    try {
-      const parsed = JSON.parse(post.image_url);
-      if (Array.isArray(parsed)) return parsed.length;
-    } catch {}
-    return 0;
-  };
+  /**
+   * 网格项派生数据预计算。
+   *
+   * 原实现把 getThumbnail / getMultiImageCount 直接写在 map 里，每个网格项
+   * 每次渲染都对 image_url 做一遍 JSON.parse（两个函数各一次），而
+   * 搜索词每敲一个字、点赞事件同步一次都会触发整页重渲染；两个函数还各自
+   * 重复实现了 lib/parsePostImages 已有的解析逻辑。这里统一预计算一次。
+   */
+  const gridItems = useMemo(
+    () =>
+      posts.map((post) => {
+        const images = post.images && post.images.length > 0 ? post.images : parsePostImages(post);
+        const raw = post.video_cover || images[0] || post.image_url;
+        // 原生端相对路径会指向 WebView 本地（404），必须转成服务器绝对地址
+        return { post, thumbnail: resolveMediaUrl(raw) || raw, multiCount: images.length };
+      }),
+    [posts]
+  );
 
   return (
     <div className={styles.page}>
@@ -204,42 +200,38 @@ export default function ExplorePage() {
       {posts.length > 0 ? (
         <>
           <div className={styles.grid}>
-            {posts.map((post) => {
-              const thumbnail = getThumbnail(post);
-              const multiCount = getMultiImageCount(post);
-              return (
-                <div key={post.id} className={styles.gridItem} onClick={() => setOverlayPostId(post.id)}>
-                  <img src={thumbnail} alt={post.title || post.description || ''} loading="lazy" />
+            {gridItems.map(({ post, thumbnail, multiCount }) => (
+              <div key={post.id} className={styles.gridItem} onClick={() => setOverlayPostId(post.id)}>
+                <img src={thumbnail} alt={post.title || post.description || ''} loading="lazy" />
 
-                  {/* 视频标识 */}
-                  {post.video_url && (
-                    <span className={styles.videoBadge}>
-                      <Play size={12} fill="white" />
-                      视频
-                    </span>
-                  )}
+                {/* 视频标识 */}
+                {post.video_url && (
+                  <span className={styles.videoBadge}>
+                    <Play size={12} fill="white" />
+                    视频
+                  </span>
+                )}
 
-                  {/* 多图标识 */}
-                  {!post.video_url && multiCount > 1 && (
-                    <span className={styles.multiBadge}>
-                      <Layers size={20} />
-                    </span>
-                  )}
+                {/* 多图标识 */}
+                {!post.video_url && multiCount > 1 && (
+                  <span className={styles.multiBadge}>
+                    <Layers size={20} />
+                  </span>
+                )}
 
-                  {/* Hover 叠加层 */}
-                  <div className={styles.gridOverlay}>
-                    <span className={styles.gridStat}>
-                      <Heart size={18} fill="white" />
-                      {post.like_count}
-                    </span>
-                    <span className={styles.gridStat}>
-                      <MessageCircle size={18} fill="white" />
-                      {post.comment_count}
-                    </span>
-                  </div>
+                {/* Hover 叠加层 */}
+                <div className={styles.gridOverlay}>
+                  <span className={styles.gridStat}>
+                    <Heart size={18} fill="white" />
+                    {post.like_count}
+                  </span>
+                  <span className={styles.gridStat}>
+                    <MessageCircle size={18} fill="white" />
+                    {post.comment_count}
+                  </span>
                 </div>
-              );
-            })}
+              </div>
+            ))}
           </div>
 
           {/* 加载更多触发器 */}
