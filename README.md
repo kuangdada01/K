@@ -19,7 +19,7 @@
 - **CSS Modules + 设计令牌** — 组件级样式隔离，亮/暗双主题
 - **Lucide React** — 图标库
 - **Capacitor 8** — Android 原生打包（Gradle 9.1 + AGP 8.13，支持 Java 25 构建）
-- **Vitest + Testing Library** — 单元测试（`37 文件 330 用例`：语音域各子模块、hooks 乐观更新/回滚、SSE/WS 一次性票据连接、退避重连、单例分发、评论树、错误边界、聊天行/图片清洗纯函数、事件总线、共享收件箱 store（轮询合并/未读合并）、幂等读重试策略、测试基建（原型打桩还原）等）
+- **Vitest + Testing Library** — 单元测试（`38 文件 353 用例`：语音域各子模块、hooks 乐观更新/回滚、SSE/WS 一次性票据连接、退避重连、单例分发、评论树、错误边界、聊天行/图片清洗纯函数、事件总线、共享收件箱 store（轮询合并/未读合并）、幂等读重试策略、测试基建（原型打桩还原）等）
 
 ### 后端（server）
 
@@ -186,9 +186,9 @@ client/src/music/MusicEngine.ts       # 音乐播放引擎（audio 元素生命�
 
 排查套路：现象归类 → 跑对应模块单测（`npx vitest run src/voice/<模块>`）→ 看注入回调边界（`ScreenShareSink`/`MeshManagerOptions`/`AudioGraphOptions`）。网页端与 APK 是同一份 Web 代码，能网页复现的问题优先浏览器 DevTools 定位。
 
-### 单测覆盖（client 330 / server 242）
+### 单测覆盖（client 353 / server 242）
 
-语音域重点：screenShareController 29、wsSignaling 21、meshManager 16、audioGraph 16、senderTuning 11、MusicEngine 10、useChatTTS 8、useVoiceChatStore 8；服务端 33 文件 242 用例（全部注入 `:memory:` 库并执行全部迁移）。客户端 37 文件 330 用例，另有 10 条 Playwright e2e。
+语音域重点：screenShareController 29、wsSignaling 21、meshManager 16、audioGraph 16、senderTuning 11、MusicEngine 10、useChatTTS 8、useVoiceChatStore 8；服务端 33 文件 242 用例（全部注入 `:memory:` 库并执行全部迁移）。客户端 38 文件 353 用例，另有 10 条 Playwright e2e。
 
 ---
 
