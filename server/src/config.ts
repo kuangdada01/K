@@ -15,6 +15,12 @@
  * 而 dotenv 默认**不覆盖已存在变量**，于是更新后的 .env 被静默忽略
  * （曾导致 /api/app/version 一直返回上一版，App 内更新提示不触发）。
  * 未在 .env 中出现的键（如由 ecosystem.config.js 注入的 NODE_ENV）不受影响。
+ *
+ * ★ 例外：NODE_ENV=test 时不覆盖 —— e2e 必须能用自己的环境变量说了算。
+ * Playwright 的 webServer 会注入 PORT/DB_PATH/UPLOADS_DIR/JWT_SECRET 指向隔离实例，
+ * 若 `.env`（本地是生产配置）把它们盖掉，服务端会跑在 3000 且连上真实 `server/k.db`：
+ * 表现为 `Timed out waiting ... from config.webServer`，而 CI（无 .env）却是好的。
+ * 只在 test 场景让位：生产/开发仍是 .env 说了算。
  */
 
 import path from 'path';
@@ -23,7 +29,11 @@ import { z } from 'zod';
 
 // 必须在任何 process.env 读取之前执行：ESM/CJS 的 import 提升会先求值依赖模块，
 // 若依赖 index.ts 里的 dotenv.config()，这里读到的是未加载 .env 的空环境
-dotenv.config({ path: path.join(__dirname, '..', '..', '.env'), override: true });
+dotenv.config({
+  path: path.join(__dirname, '..', '..', '.env'),
+  // test 场景（e2e harness）让进程环境优先；其余场景 .env 覆盖（见文件头说明）
+  override: process.env.NODE_ENV !== 'test',
+});
 
 /** 环境变量 schema（宽松默认值；JWT_SECRET 无默认值——未配置一律拒绝启动，防止生产用公开的 dev 密钥） */
 const envSchema = z.object({

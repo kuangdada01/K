@@ -14,7 +14,12 @@ import path from 'path';
 // 加载 .env 文件（从项目根目录）。
 // override: true —— .env 为准，压掉 PM2 进程环境里残留的上一版旧值
 // （dotenv 默认不覆盖已存在变量，否则发版后新 .env 会被静默忽略；详见 config.ts）
-dotenv.config({ path: path.join(__dirname, '..', '..', '.env'), override: true });
+// 例外：NODE_ENV=test（e2e harness）时让进程环境优先——Playwright 会注入
+// PORT/DB_PATH/UPLOADS_DIR 指向隔离实例，被本地 .env 盖掉会让 e2e 连到真实 k.db
+dotenv.config({
+  path: path.join(__dirname, '..', '..', '.env'),
+  override: process.env.NODE_ENV !== 'test',
+});
 
 import { env } from './config';
 import { createApp } from './app';
