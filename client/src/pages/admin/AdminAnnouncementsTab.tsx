@@ -9,7 +9,7 @@
  */
 
 import type { RefObject } from 'react';
-import { Send, Search, Trash2 } from 'lucide-react';
+import { Send, Search, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { resolveMediaUrl, parseDbTime } from '../../utils';
 import styles from '../AdminPage.module.css';
 import type { AdminAnnouncement } from './types';
@@ -22,6 +22,12 @@ export interface AnnSearchResult {
 
 export interface AdminAnnouncementsTabProps {
   announcements: AdminAnnouncement[];
+  /** 列表搜索与服务端分页（与「发送公告」表单里的目标用户搜索是两件事） */
+  listSearch: string;
+  setListSearch: (v: string) => void;
+  listPage: number;
+  setListPage: (updater: (p: number) => number) => void;
+  listTotalPages: number;
   showSendForm: boolean;
   setShowSendForm: (v: boolean) => void;
   annTitle: string;
@@ -44,6 +50,11 @@ export interface AdminAnnouncementsTabProps {
 
 export default function AdminAnnouncementsTab({
   announcements,
+  listSearch,
+  setListSearch,
+  listPage,
+  setListPage,
+  listTotalPages,
   showSendForm,
   setShowSendForm,
   annTitle,
@@ -69,6 +80,16 @@ export default function AdminAnnouncementsTab({
         <button className={styles.sendBtn} onClick={() => setShowSendForm(!showSendForm)}>
           <Send size={16} /> 发送公告
         </button>
+        <div className={styles.search}>
+          <Search size={16} />
+          <input
+            name="search-announcements"
+            data-testid="admin-ann-search"
+            placeholder="搜索标题/内容/目标用户名"
+            value={listSearch}
+            onChange={(e) => setListSearch(e.target.value)}
+          />
+        </div>
       </div>
       {showSendForm && (
         <div className={styles.sendForm}>
@@ -136,7 +157,7 @@ export default function AdminAnnouncementsTab({
         </div>
       )}
       <div className={styles.tableWrapper}>
-        <table className={styles.table}>
+        <table className={styles.table} data-testid="admin-ann-table">
           <thead>
             <tr>
               <th>ID</th>
@@ -148,6 +169,17 @@ export default function AdminAnnouncementsTab({
             </tr>
           </thead>
           <tbody>
+            {announcements.length === 0 && (
+              <tr>
+                <td
+                  colSpan={6}
+                  data-testid="admin-ann-empty"
+                  style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: 24 }}
+                >
+                  {listSearch.trim() ? '没有匹配的公告' : '暂无公告'}
+                </td>
+              </tr>
+            )}
             {announcements.map((a) => (
               <tr key={a.id}>
                 <td>{a.id}</td>
@@ -169,6 +201,29 @@ export default function AdminAnnouncementsTab({
           </tbody>
         </table>
       </div>
+      {listTotalPages > 1 && (
+        <div className={styles.pagination}>
+          <button
+            data-testid="admin-ann-prev"
+            disabled={listPage <= 1}
+            onClick={() => setListPage((p) => p - 1)}
+            title="上一页"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <span data-testid="admin-ann-page">
+            {listPage} / {listTotalPages}
+          </span>
+          <button
+            data-testid="admin-ann-next"
+            disabled={listPage >= listTotalPages}
+            onClick={() => setListPage((p) => p + 1)}
+            title="下一页"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

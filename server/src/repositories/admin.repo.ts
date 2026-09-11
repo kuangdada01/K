@@ -276,7 +276,10 @@ export function createAnnouncement(input: {
   return stmt('SELECT * FROM announcements WHERE id = ?').get(result.lastInsertRowid) as AdminAnnouncementRow;
 }
 
-/** 所有公告列表（含目标用户名）；硬上限见 HARD_LIST_CAP */
+/** 所有公告列表（含目标用户名）；硬上限见 HARD_LIST_CAP
+ *
+ * ⚠️ 这是**老客户端**（不带 `page`/`q`）仍在用的形状：`{ rows, has_more }`。
+ * 网页端走 listAnnouncementsPage（服务端分页 + 服务端搜索），见第 21 章。 */
 export function listAllAnnouncements(cap: number = HARD_LIST_CAP): {
   rows: AdminAnnouncementRow[];
   has_more: boolean;
@@ -296,6 +299,61 @@ export function listAllAnnouncements(cap: number = HARD_LIST_CAP): {
 /** 删除公告 */
 export function deleteAnnouncement(id: number): void {
   stmt('DELETE FROM announcements WHERE id = ?').run(id);
+}
+
+/**
+ * 公告列表的服务端搜索条件：标题 / 内容 / 目标用户名 / 公告 ID 子串。
+ *
+ * 这里不像用户/帖子那样「对齐客户端原本的过滤字段」—— 因为**原来根本没有搜索**，
+ * 管理员只能在封顶 500 行的整表里用眼睛找。既然是新加的，就按管理端实际会用的
+ * 字段来：改了哪条（标题）、内容里提到什么（内容）、发给谁（目标用户名）、
+ * 直接按编号找（ID 子串）。LIKE 通配符照旧经 escapeLike 转义。
+ */
+function announcementSearchWhere(q: string): { sql: string; params: string[] } {
+  const keyword = q.trim();
+  if (!keyword) return { sql: '', params: [] };
+  const like = `%${escapeLike(keyword)}%`;
+  return {
+    sql:
+      "WHERE (a.title LIKE ? ESCAPE '\\' OR a.content LIKE ? ESCAPE '\\'" +
+      " OR u.username LIKE ? ESCAPE '\\' OR CAST(a.id AS TEXT) LIKE ? ESCAPE '\\')",
+    params: [like, like, like, like],
+  };
+}
+
+/** 公告总数（带搜索条件时只统计命中的行） */
+export function countAnnouncements(q = ''): number {
+  const { sql, params } = announcementSearchWhere(q);
+  return count(
+    `SELECT COUNT(*) as count FROM announcements a LEFT JOIN users u ON a.target_user_id = u.id ${sql}`,
+    ...params
+  );
+}
+
+/**
+ * 公告列表（服务端分页 + 服务端搜索）。
+ *
+ * 老实现一次返回最多 HARD_LIST_CAP 行、**整个列表进 DOM**，而且没有搜索：
+ * 公告攒多了之后，管理员找不到某一条、也删不掉它（只能滚到第 500 行以内）。
+ */
+export function listAnnouncementsPage(input: { q?: string; page: number; limit: number }): {
+  rows: AdminAnnouncementRow[];
+  total: number;
+} {
+  const { q = '', page, limit } = input;
+  const { sql, params } = announcementSearchWhere(q);
+  const total = countAnnouncements(q);
+  const rows = stmt(
+    `
+    SELECT a.*, u.username as target_username
+    FROM announcements a
+    LEFT JOIN users u ON a.target_user_id = u.id
+    ${sql}
+    ORDER BY a.created_at DESC, a.id DESC
+    LIMIT ? OFFSET ?
+  `
+  ).all(...params, limit, (page - 1) * limit) as AdminAnnouncementRow[];
+  return { rows, total };
 }
 
 /** 封禁/解封用户（bannedUntil 为 ISO-8601 时间或 null） */

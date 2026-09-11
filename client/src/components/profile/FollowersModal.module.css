@@ -89,6 +89,30 @@
   font-size: 14px;
 }
 
+/* 「加载更多」——列在最后一项下面，视觉上与列表分隔但不抢眼 */
+.loadMore {
+  display: block;
+  width: calc(100% - 40px);
+  margin: 8px 20px 4px;
+  padding: 8px 0;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.loadMore:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.loadMore:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .item {
   display: flex;
   align-items: center;

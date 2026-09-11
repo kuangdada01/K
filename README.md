@@ -19,7 +19,7 @@
 - **CSS Modules + 设计令牌** — 组件级样式隔离，亮/暗双主题
 - **Lucide React** — 图标库
 - **Capacitor 8** — Android 原生打包（Gradle 9.1 + AGP 8.13，支持 Java 25 构建）
-- **Vitest + Testing Library** — 单元测试（`41 文件 387 用例`：语音域各子模块、hooks 乐观更新/回滚、SSE/WS 一次性票据连接、退避重连、单例分发、评论树、错误边界、聊天行/图片清洗纯函数、事件总线、共享收件箱 store（轮询合并/未读合并）、幂等读重试策略、测试基建（原型打桩还原）等）
+- **Vitest + Testing Library** — 单元测试（`43 文件 404 用例`：语音域各子模块、hooks 乐观更新/回滚、SSE/WS 一次性票据连接、退避重连、单例分发、评论树、错误边界、聊天行/图片清洗纯函数、事件总线、共享收件箱 store（轮询合并/未读合并）、幂等读重试策略、测试基建（原型打桩还原）等）
 
 ### 后端（server）
 
@@ -34,7 +34,7 @@
 - **pino** — 结构化日志
 - **nodemailer** — 邮箱验证码
 - **优雅停机** — SIGTERM 后断开 WS/SSE、等存量请求收尾（10 秒兜底），PM2 reload 无断崖
-- **Vitest** — 单元测试（`server/test`，35 文件 268 用例；全部注入 `:memory:` 库并执行全部迁移，真实 k.db 零接触）
+- **Vitest** — 单元测试（`server/test`，37 文件 292 用例；全部注入 `:memory:` 库并执行全部迁移，真实 k.db 零接触）
 
 ### 共享（shared）
 
@@ -51,7 +51,7 @@
   **已克隆的旧工作区需一次性归一化**（工作区要干净）：`git rm --cached -r . && git reset --hard`
 - **GitHub Actions CI** — push 自动执行 `install → prettier → build → lint → vitest（双端）→ Playwright e2e`，另有并行 Docker job 验证镜像构建 + 容器健康检查冒烟；e2e 失败自动上传报告产物；同分支新推送自动取消在跑的旧 CI（省排队与额度）
 - **Dockerfile** — 一键容器化（非 root 运行 + 健康检查 + 数据目录预建，数据库文件走挂载或 DB_PATH；运行阶段按 workspace 装 shared/server 生产依赖（`npm ci --omit=dev -w shared -w server`），client 为纯静态产物不装依赖）
-- **Playwright** — E2E 测试（`e2e/`，12 条：smoke 只读公开流程 + b1b2 回归 + scroll 移动端滚动 + write-path 真实写路径——注册→登录→发帖→点赞→评论 + p0-regressions 的 P0 缺陷浏览器级回归（授权弹窗期间退房后麦克风必须关闭）+ admin-users / admin-posts 管理端用户·帖子列表的服务端搜索与分页（目标记录在第二页，本地过滤时代搜不到），跑在 DB_PATH 指向的独立测试库上；**每轮重置测试库与上传目录**，选择器用 `data-testid`（不依赖 CSS Modules 哈希类名），等待均为有界轮询（无固定 sleep）；默认不复用外部 3200 服务，需要时显式 `E2E_REUSE=1`）
+- **Playwright** — E2E 测试（`e2e/`，14 条：smoke 只读公开流程 + b1b2 回归 + scroll 移动端滚动 + write-path 真实写路径——注册→登录→发帖→点赞→评论 + p0-regressions 的 P0 缺陷浏览器级回归（授权弹窗期间退房后麦克风必须关闭）+ admin-users / admin-posts / admin-announcements 管理端用户·帖子·公告列表的服务端搜索与分页 + followers 粉丝弹窗的服务端搜索与「加载更多」（目标记录都在第二页，本地过滤时代搜不到），跑在 DB_PATH 指向的独立测试库上；**每轮重置测试库与上传目录**，选择器用 `data-testid`（不依赖 CSS Modules 哈希类名），等待均为有界轮询（无固定 sleep）；默认不复用外部 3200 服务，需要时显式 `E2E_REUSE=1`）
 
 ---
 
@@ -187,9 +187,9 @@ client/src/music/MusicEngine.ts       # 音乐播放引擎（audio 元素生命�
 
 排查套路：现象归类 → 跑对应模块单测（`npx vitest run src/voice/<模块>`）→ 看注入回调边界（`ScreenShareSink`/`MeshManagerOptions`/`AudioGraphOptions`）。网页端与 APK 是同一份 Web 代码，能网页复现的问题优先浏览器 DevTools 定位。
 
-### 单测覆盖（client 387 / server 268）
+### 单测覆盖（client 404 / server 292）
 
-语音域重点：screenShareController 29、wsSignaling 21、meshManager 16、audioGraph 16、senderTuning 11、MusicEngine 10、useChatTTS 8、useVoiceChatStore 8；服务端 35 文件 268 用例（全部注入 `:memory:` 库并执行全部迁移）。客户端 41 文件 387 用例，另有 12 条 Playwright e2e。
+语音域重点：screenShareController 29、wsSignaling 21、meshManager 16、audioGraph 16、senderTuning 11、MusicEngine 10、useChatTTS 8、useVoiceChatStore 8；服务端 37 文件 292 用例（全部注入 `:memory:` 库并执行全部迁移）。客户端 43 文件 404 用例，另有 14 条 Playwright e2e。
 
 ---
 
@@ -267,7 +267,7 @@ npm run dev
 npm run lint         # ESLint（三个包）；客户端为 --max-warnings 0（0 告警基线，新增告警直接失败）
 npm test             # Vitest 单元测试（服务端 + 客户端串行执行）
 npm run test:client  # 客户端 Vitest 单元测试
-npm run e2e          # Playwright e2e（12 条；自动构建并在 3200 端口启动，测试库/上传目录每轮重置）
+npm run e2e          # Playwright e2e（14 条；自动构建并在 3200 端口启动，测试库/上传目录每轮重置）
 npm run format:check # Prettier 格式检查（CI 同款门禁；修复用 npm run format）
 npm run typecheck    # 三包 + e2e 的 TypeScript 检查（CI 门禁）
 ```
@@ -350,21 +350,21 @@ docker run -p 3000:3000 \
 
 这些是「读代码看不出来、但改错了会出事故」的机制，逐条写明位置与边界。
 
-| 机制                            | 位置                                                                  | 边界与理由                                                                                                                                                                                                                                                                                         |
-| ------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 语音房归属**令牌**              | `server/src/routes/voice.ts` + 迁移 026                               | 访客房主判定用创建时签发的令牌（`X-Voice-Owner-Token`，时间安全比较），**不再用 IP**——否则同 NAT 下能删别人的房、换网就丢自己的房。令牌只在创建响应里下发一次，`toVoiceRoom()` 出口统一剥离；存量 NULL 令牌的房回落到 IP 判定                                                                      |
-| 每 IP 语音连接上限              | `server/src/voice/ip-connections.ts`                                  | 访客 10 / 总数 24；超限以 **4004** 关闭且**在消耗任何凭证之前**返回（不浪费一次性票据、不分配访客 id）                                                                                                                                                                                             |
-| 无分页列表**硬上限**            | `server/src/lib/listLimits.ts`                                        | 收藏/转发/粉丝/关注/公告/评论/管理端列表上限 500 行 + `has_more`（**只增不改**：数组形状与既有字段不变）。此前无 LIMIT，一个万级收藏会同步物化全部行并停摆事件循环                                                                                                                                 |
-| 公告未读数                      | `server/src/routes/announcements.ts`                                  | 走**独立 COUNT**，不从（可能被截断的）列表推导——否则徽标数字会偏小                                                                                                                                                                                                                                 |
-| 管理端列表**服务端搜索 + 分页** | `routes/admin/{users,posts}.routes.ts` + `repositories/admin.repo.ts` | 带 `page`/`q` 时返回 `{users,total,page,limit,totalPages,has_more}`：单次只物化 `limit` 行、搜索交给 SQL 的 WHERE（关键词里的 `%`/`_` 经 `escapeLike` 转义）。**不带 `page`/`q` 时仍是老的 `{users,has_more}`**（上限 500 行 + 客户端本地过滤）——已安装的 APK 走这条路，换形状会让它的搜索直接失效 |
-| 管理员提权**一次性开关**        | `server/src/lib/admin-bootstrap.ts`                                   | 只有 `ADMIN_BOOTSTRAP=1/true/yes/on` 才按 `ADMIN_EMAIL` 提权，否则只打提示日志。避免「写进 .env 就等于长期授权」                                                                                                                                                                                   |
-| Token **滑动续期**              | `server/src/lib/jwt.ts` + `client/src/api/http.ts`                    | 签发超过阈值时经响应头 `X-Refreshed-Token` 回一张新 token，一直在用的用户不会在 7 天到点时被登出；彻底沉默的会话照常过期                                                                                                                                                                           |
-| 语音/SSE 一次性票据             | `server/src/lib/oneTimeTicket.ts`                                     | 30 秒有效、单次消费，JWT 不进 URL（避免进反代 access log）；票据一次性 ⇒ EventSource 原生重连不可用，客户端改为指数退避手动重连                                                                                                                                                                    |
-| 幂等读**单次重试**              | `client/src/api/retry.ts`                                             | 只重试 GET/HEAD 且只针对「连不上」与 502/503/504；**超时、已取消、写操作、后台轮询都不重试**（`kRetry: false`）。React Query 侧保持 `retry: false`，避免两层重试相乘                                                                                                                               |
-| 收件箱**单一事实来源**          | `client/src/state/inboxStore.ts`                                      | 会话+通知一份状态：单飞请求（SSE 同步分发给多个消费方只打一次）、引用计数轮询（消息页 10s / 其他页面 30s）、未读合并。此前 Sidebar 与消息页各拉一套，角标会出现「列表已清、侧边栏回弹」                                                                                                            |
-| 崩溃兜底                        | `client/src/components/ErrorBoundary.tsx`                             | 子树异常显示兜底而不是白屏；`main.tsx` 另接 `onUncaughtError`                                                                                                                                                                                                                                      |
-| 上传与临时视频配额              | `server/src/lib/chunkUploadRegistry.ts`                               | 每用户临时视频字节配额 + 并发槽位；429 入队失败时当场回收文件与会话登记                                                                                                                                                                                                                            |
-| ffmpeg 并发闸门                 | `server/src/lib/video/ffmpegGate.ts`                                  | 转码与截帧共用一个进程级上限，防并发 ffmpeg 打满 CPU                                                                                                                                                                                                                                               |
+| 机制                                      | 位置                                                                                  | 边界与理由                                                                                                                                                                                                                                                                                         |
+| ----------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 语音房归属**令牌**                        | `server/src/routes/voice.ts` + 迁移 026                                               | 访客房主判定用创建时签发的令牌（`X-Voice-Owner-Token`，时间安全比较），**不再用 IP**——否则同 NAT 下能删别人的房、换网就丢自己的房。令牌只在创建响应里下发一次，`toVoiceRoom()` 出口统一剥离；存量 NULL 令牌的房回落到 IP 判定                                                                      |
+| 每 IP 语音连接上限                        | `server/src/voice/ip-connections.ts`                                                  | 访客 10 / 总数 24；超限以 **4004** 关闭且**在消耗任何凭证之前**返回（不浪费一次性票据、不分配访客 id）                                                                                                                                                                                             |
+| 无分页列表**硬上限**                      | `server/src/lib/listLimits.ts`                                                        | 收藏/转发/粉丝/关注/公告/评论/管理端列表上限 500 行 + `has_more`（**只增不改**：数组形状与既有字段不变）。此前无 LIMIT，一个万级收藏会同步物化全部行并停摆事件循环                                                                                                                                 |
+| 公告未读数                                | `server/src/routes/announcements.ts`                                                  | 走**独立 COUNT**，不从（可能被截断的）列表推导——否则徽标数字会偏小                                                                                                                                                                                                                                 |
+| 管理端列表与粉丝弹窗**服务端搜索 + 分页** | `routes/admin/{users,posts,announcements}.routes.ts`、`routes/friends.ts` + 对应 repo | 带 `page`/`q` 时返回 `{users,total,page,limit,totalPages,has_more}`：单次只物化 `limit` 行、搜索交给 SQL 的 WHERE（关键词里的 `%`/`_` 经 `escapeLike` 转义）。**不带 `page`/`q` 时仍是老的 `{users,has_more}`**（上限 500 行 + 客户端本地过滤）——已安装的 APK 走这条路，换形状会让它的搜索直接失效 |
+| 管理员提权**一次性开关**                  | `server/src/lib/admin-bootstrap.ts`                                                   | 只有 `ADMIN_BOOTSTRAP=1/true/yes/on` 才按 `ADMIN_EMAIL` 提权，否则只打提示日志。避免「写进 .env 就等于长期授权」                                                                                                                                                                                   |
+| Token **滑动续期**                        | `server/src/lib/jwt.ts` + `client/src/api/http.ts`                                    | 签发超过阈值时经响应头 `X-Refreshed-Token` 回一张新 token，一直在用的用户不会在 7 天到点时被登出；彻底沉默的会话照常过期                                                                                                                                                                           |
+| 语音/SSE 一次性票据                       | `server/src/lib/oneTimeTicket.ts`                                                     | 30 秒有效、单次消费，JWT 不进 URL（避免进反代 access log）；票据一次性 ⇒ EventSource 原生重连不可用，客户端改为指数退避手动重连                                                                                                                                                                    |
+| 幂等读**单次重试**                        | `client/src/api/retry.ts`                                                             | 只重试 GET/HEAD 且只针对「连不上」与 502/503/504；**超时、已取消、写操作、后台轮询都不重试**（`kRetry: false`）。React Query 侧保持 `retry: false`，避免两层重试相乘                                                                                                                               |
+| 收件箱**单一事实来源**                    | `client/src/state/inboxStore.ts`                                                      | 会话+通知一份状态：单飞请求（SSE 同步分发给多个消费方只打一次）、引用计数轮询（消息页 10s / 其他页面 30s）、未读合并。此前 Sidebar 与消息页各拉一套，角标会出现「列表已清、侧边栏回弹」                                                                                                            |
+| 崩溃兜底                                  | `client/src/components/ErrorBoundary.tsx`                                             | 子树异常显示兜底而不是白屏；`main.tsx` 另接 `onUncaughtError`                                                                                                                                                                                                                                      |
+| 上传与临时视频配额                        | `server/src/lib/chunkUploadRegistry.ts`                                               | 每用户临时视频字节配额 + 并发槽位；429 入队失败时当场回收文件与会话登记                                                                                                                                                                                                                            |
+| ffmpeg 并发闸门                           | `server/src/lib/video/ffmpegGate.ts`                                                  | 转码与截帧共用一个进程级上限，防并发 ffmpeg 打满 CPU                                                                                                                                                                                                                                               |
 
 > 上述改动都有对应的回归测试（见 `server/test` / `client/src/**/*.test.ts`），
 > 其中 P0 级缺陷（麦克风驻留、乐观更新在途闸门）另有浏览器级 e2e 与**反向验证**

@@ -14,13 +14,16 @@
  * ============================================================
  */
 
-import type { AdminPost, AdminUser } from './types';
+import type { AdminAnnouncement, AdminPost, AdminUser } from './types';
 
 /** 用户列表每页条数：与服务端 limitQuerySchema 的默认值一致（服务端上限 50） */
 export const ADMIN_USERS_PAGE_SIZE = 20;
 
 /** 帖子列表每页条数（服务端同样默认 20） */
 export const ADMIN_POSTS_PAGE_SIZE = 20;
+
+/** 公告列表每页条数（服务端同样默认 20） */
+export const ADMIN_ANNOUNCEMENTS_PAGE_SIZE = 20;
 
 /** 管理端用户列表的一页数据（与 /api/admin/users 分页模式响应对齐） */
 export interface AdminUsersPage {
@@ -32,6 +35,13 @@ export interface AdminUsersPage {
 /** 管理端帖子列表的一页数据（与 /api/admin/posts 响应对齐） */
 export interface AdminPostsPage {
   posts: AdminPost[];
+  total: number;
+  totalPages: number;
+}
+
+/** 管理端公告列表的一页数据（与 /api/admin/announcements 分页模式响应对齐） */
+export interface AdminAnnouncementsPage {
+  announcements: AdminAnnouncement[];
   total: number;
   totalPages: number;
 }
@@ -65,6 +75,17 @@ export function removePostFromPage(page: AdminPostsPage, postId: number): AdminP
   if (posts.length === page.posts.length) return page;
   const total = Math.max(0, page.total - 1);
   return { posts, total, totalPages: pageCount(total, ADMIN_POSTS_PAGE_SIZE) };
+}
+
+/** 乐观删除公告（同上） */
+export function removeAnnouncementFromPage(
+  page: AdminAnnouncementsPage,
+  announcementId: number
+): AdminAnnouncementsPage {
+  const announcements = page.announcements.filter((a) => a.id !== announcementId);
+  if (announcements.length === page.announcements.length) return page;
+  const total = Math.max(0, page.total - 1);
+  return { announcements, total, totalPages: pageCount(total, ADMIN_ANNOUNCEMENTS_PAGE_SIZE) };
 }
 
 /** 乐观更新某一行（封禁/解封就地改 banned_until，不重取列表） */

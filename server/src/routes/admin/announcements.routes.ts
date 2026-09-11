@@ -5,7 +5,7 @@
  *
  * API 端点:
  * - POST   /api/admin/announcements     - 创建公告
- * - GET    /api/admin/announcements     - 获取所有公告列表
+ * - GET    /api/admin/announcements     - 公告列表（服务端搜索 + 分页；不带 page/q 时保持老的「上限 + has_more」形状）
  * - DELETE /api/admin/announcements/:id - 删除公告
  *
  * 认证 + 管理员权限由组合入口 routes/admin/index.ts 的全局中间件保障。
@@ -16,7 +16,7 @@ import { Router, Request, Response } from 'express';
 import { asyncHandler } from '../../middleware/error';
 import { validateBody } from '../../validate';
 import { notifyUser, notifyAllUsers } from '../../sse';
-import { announcementSchema } from '@k/shared/schemas';
+import { announcementSchema, pageQuerySchema, limitQuerySchema, searchQuerySchema } from '@k/shared/schemas';
 import * as adminRepo from '../../repositories/admin.repo';
 
 const router = Router();
@@ -54,16 +54,42 @@ router.post(
 );
 
 /**
- * GET /api/admin/announcements - 获取所有公告列表
+ * GET /api/admin/announcements - 公告列表
  *
- * 返回所有公告，包含目标用户名（如有）
+ * 查询参数:
+ * - page: 页码（带此参数即进入**服务端分页 + 服务端搜索**模式，默认1）
+ * - limit: 每页数量（默认20，上限50）
+ * - q: 搜索关键词（标题/内容/目标用户名/公告 ID 子串；空则不过滤）
+ *
+ * 两种形状（**只增不改**）：
+ * - 不带 `page`/`q`：`{ announcements, has_more }` —— 老客户端（已安装的 APK）
+ *   行为逐字不变（上限 HARD_LIST_CAP 行）；
+ * - 带 `page` 或 `q`：`{ announcements, total, page, limit, totalPages, has_more }`。
  */
 router.get(
   '/announcements',
-  asyncHandler(async (_req: Request, res: Response) => {
-    // 硬上限 HARD_LIST_CAP 行
-    const { rows: announcements, has_more } = adminRepo.listAllAnnouncements();
-    res.json({ announcements, has_more });
+  asyncHandler(async (req: Request, res: Response) => {
+    const q = searchQuerySchema.parse(req.query.q);
+
+    // 老路径：没要分页也没搜索 → 保持历史形状
+    if (req.query.page === undefined && !q) {
+      const { rows: announcements, has_more } = adminRepo.listAllAnnouncements();
+      res.json({ announcements, has_more });
+      return;
+    }
+
+    const page = pageQuerySchema.parse(req.query.page);
+    const limit = limitQuerySchema.parse(req.query.limit);
+    const { rows: announcements, total } = adminRepo.listAnnouncementsPage({ q, page, limit });
+
+    res.json({
+      announcements,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      has_more: page * limit < total,
+    });
   })
 );
 

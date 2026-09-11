@@ -2471,10 +2471,85 @@ Dockerfile 运行时实测（本机无 Docker）；访客 id 多实例化（需 
 `format:check` / `typecheck` / `lint`(0 error) / `build` 全绿；单测 **服务端 35 文件 268 用例、
 客户端 41 文件 387 用例**；e2e **12/12**（此前 11）。README 计数与表格已同步。
 
-### 20.6 同类残留（本轮没做，原因写在这里）
+### 20.6 同类残留（本章没做，第 21 章补完）
 
-- **管理端公告列表**：仍走「硬上限 500 + has_more」，没有分页；当前体量下无感，
-  真要改也是同一套做法（服务端 `q` + 分页 + 前端翻页）。
-- **用户主页的粉丝/关注弹窗**（`components/profile/FollowersModal.tsx`）：搜索也是
-  **本地过滤**，而列表来自封顶 500 行的接口 —— 属于同一类问题，但那是**前台**功能，
-  改它要动用户可见交互（第 14 章把它归为「需要你确认的 UI 变更」），所以留着等你发话。
+- ~~**管理端公告列表**：仍走「硬上限 500 + has_more」，没有分页~~ → 第 21 章已改成
+  服务端搜索 + 分页。
+- ~~**用户主页的粉丝/关注弹窗**（`components/profile/FollowersModal.tsx`）：搜索是本地过滤，
+  而列表来自封顶 500 行的接口~~ → 第 21 章已改成服务端搜索 + 「加载更多」
+  （那是前台功能，动它属于 UI 变更，你点头后做的）。
+
+---
+
+## 21. 剩下两处同类问题：管理端公告 + 粉丝/关注弹窗（2026-09-11 夜）
+
+第 20 章末尾列的两处，你让一起改。两处都动到了**用户可见的交互**（公告 Tab 多了搜索框与翻页、
+弹窗底部多了「加载更多」），所以先说清各自的最小改法。
+
+### 21.1 管理端公告：从「没有搜索也没有分页」到与用户/帖子同款
+
+老实现是**整个列表最多 500 行一次性进 DOM**，而且**根本没有搜索**：公告攒多了以后，
+管理员找不到某一条、也就删不掉它（只能滚到 500 行以内）。
+
+- `repositories/admin.repo.ts`：新增 `announcementSearchWhere`（标题 ∨ 内容 ∨ 目标用户名 ∨
+  公告 ID 子串 —— 这里**不是**「对齐客户端原本的过滤」，因为原来压根没有搜索；按管理端实际会用的
+  四个字段来，并在注释里写明）、`countAnnouncements`、`listAnnouncementsPage`；
+  `listAllAnnouncements(cap)` 保留给老客户端，注释写明为什么不能删。
+- `routes/admin/announcements.routes.ts`：`page` 或 `q` 出现即进分页模式，
+  否则原样返回 `{ announcements, has_more }`（**只增不改**，与第 19 章同一套）。
+- 客户端：`annPage` + `annListSearch`（300ms 防抖）+ `['admin','announcements',page,q]`；
+  此处刻意与「发送公告」表单里的目标用户搜索分开命名（`annSearch` 是表单的、`annListSearch`
+  是列表的）—— 两者在同一个组件里，混用会出一个「搜目标用户把列表也搜没了」的怪 bug；
+  删公告的乐观更新改走 `removeAnnouncementFromPage`。
+- `AdminAnnouncementsTab`：工具栏右侧加列表搜索框（复用 `styles.search`）、底部复用
+  `styles.pagination`、空态文案、`data-testid`。**没有新增 CSS。**
+
+### 21.2 粉丝/关注弹窗：服务端搜索 + 「加载更多」
+
+老实现是「接口最多返回 500 行 + 弹窗里 `users.filter(用户名)`」。粉丝超过上限的账号，
+那些粉丝**在搜索框里根本不存在** —— 搜不到，也就关注/取关不了。
+
+- `repositories/friend.repo.ts`：新增 `listFollowersPage` / `listFollowingPage`
+  （服务端搜索 + OFFSET 分页，排序与老实现一致：`u.username ASC, u.id ASC`）；
+  两处都保留 `is_following` 按**查看者**计算 —— 分页/搜索之后这一点最容易退化成常量，
+  所以单独有断言。
+- `routes/friends.ts`：`/followers/:id`、`/following/:id` 都支持 `page`/`limit`/`q`，
+  不带 `page`/`q` 时保持老的 `{ users, has_more }`。
+- `FollowersModal`：搜索改为 300ms 防抖后作为 `q` 发服务端；列表一次 20 条，
+  底部「加载更多」按页**追加**；序号守卫丢弃过期响应（慢的旧搜索不能覆盖新结果）。
+  首次/切人的 `loading` 占位保留，搜索与翻页时保留旧列表，避免整块闪一下。
+- 新增一处 CSS：`.loadMore`（沿用弹窗既有的边框/次要色，视觉与「已关注」按钮同族）。
+  这是本轮唯一的样式新增 —— 因为按钮是新控件，不给样式会退化成浏览器默认按钮。
+
+### 21.3 验证（两个接口都是三层）
+
+- 服务端 **24** 条新用例：
+  - `server/test/admin-announcements.test.ts`（12 条）：分页窗口/两页不重叠/越界、四个搜索字段、
+    搜索叠加分页、无命中、★通配符转义、脏参数、★老形状没有 `total`/`totalPages`；
+  - `server/test/followers-search.test.ts`（12 条）：粉丝与关注两侧的分页、用户名与 ID 子串搜索、
+    ★`is_following` 仍按查看者计算（同一条数据对 viewer 是 1、对 star 是 0）、
+    搜索叠加分页、通配符转义、脏参数、★老形状守门。
+- 客户端 **17** 条新用例：
+  - `AdminAnnouncementsTab.test.tsx`（10 条）：★不做本地过滤、列表搜索与表单目标搜索互不串、
+    分页边界、空态、删除回调；
+  - `FollowersModal.test.tsx`（7 条）：★请求带 `page`/`limit`（不带 page 服务端会退回老形状）、
+    ★搜索词防抖后作为 `q` 发服务端、★「加载更多」是**追加**而不是替换、只有一页时不显示按钮、
+    ★过期响应被丢弃（先让慢的旧请求返回，界面必须仍是新结果）。
+- E2E **2** 条：`e2e/admin-announcements.spec.ts` 与 `e2e/followers.spec.ts` ——
+  都是「目标记录排在 25 条种子之后」的构造，验证翻页能到、搜索能搜到、搜不到是空态。
+  粉丝那条还断言了「加载更多之后是 20 + 6 行」（追加语义在真实页面上成立）。
+- **反向验证**：把两个接口的 `q` 同时写死为空串 → 两条 e2e 立刻红，
+  实测都是 `Expected: 1, Received: 26`（= 全部记录）；改回后全绿。
+- 期间修掉一个**测试自身的**错：用 `input.value = x` + `dispatchEvent(new Event('input'))`
+  改受控输入根本不会触发 React 的 onChange（value tracker 认为没变，请求压根不发），
+  换成 `fireEvent.change` 后防抖用例才真正在测东西。
+
+### 21.4 验收
+
+`format:check` / `typecheck` / `lint`(0 error) / `build` 全绿；单测 **服务端 37 文件 292 用例、
+客户端 43 文件 404 用例**（此前 35/268、41/387）；e2e **14/14**（此前 12）。
+README 计数与「服务端搜索 + 分页」那行表格已同步。
+
+**至此第 20.6 节列出的同类问题全部关闭**：收藏/转发/粉丝/关注/公告这些列表仍走
+「硬上限 + has_more」（那是 `listLimits.ts` 里有意的取舍：只封顶、不改形状），
+但**用户能在界面里搜索/翻到的清单**（管理端三个 Tab + 粉丝关注弹窗）已经全部是服务端搜索 + 分页。

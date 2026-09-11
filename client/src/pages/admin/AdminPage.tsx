@@ -43,11 +43,14 @@ import AdminPostsTab from './AdminPostsTab';
 import AdminAnnouncementsTab, { AnnSearchResult } from './AdminAnnouncementsTab';
 import type { AdminUser, AdminPost, AdminAnnouncement } from './types';
 import {
+  ADMIN_ANNOUNCEMENTS_PAGE_SIZE,
   ADMIN_POSTS_PAGE_SIZE,
   ADMIN_USERS_PAGE_SIZE,
   patchUserInPage,
+  removeAnnouncementFromPage,
   removePostFromPage,
   removeUserFromPage,
+  type AdminAnnouncementsPage,
   type AdminPostsPage,
   type AdminUsersPage,
 } from './adminPaging';
@@ -80,9 +83,17 @@ function loadAdminPosts(postPage: number, q: string) {
     }));
 }
 
-/** 公告列表查询（announcements tab 展开时拉取，缓存常驻） */
-function loadAdminAnnouncements() {
-  return api.get('/admin/announcements').then((res) => res.data.announcements as AdminAnnouncement[]);
+/** 公告列表查询（服务端分页 + 服务端搜索；key 含 page/q，翻页/改词即取） */
+function loadAdminAnnouncements(page: number, q: string) {
+  return api
+    .get('/admin/announcements', {
+      params: { page, limit: ADMIN_ANNOUNCEMENTS_PAGE_SIZE, q: q.trim() || undefined },
+    })
+    .then((res) => ({
+      announcements: res.data.announcements as AdminAnnouncement[],
+      total: res.data.total as number,
+      totalPages: res.data.totalPages as number,
+    }));
 }
 
 export default function AdminPage() {
@@ -112,7 +123,8 @@ export default function AdminPage() {
     setPostPage(1);
   };
 
-  // Announcements state
+  // Announcements state（annSearch 是「发送公告」表单里的目标用户搜索，
+  // 与列表搜索 annListSearch 是两件事，刻意分开命名）
   const [showSendForm, setShowSendForm] = useState(false);
   const [annTitle, setAnnTitle] = useState('');
   const [annContent, setAnnContent] = useState('');
@@ -122,6 +134,15 @@ export default function AdminPage() {
   const [annSearchResults, setAnnSearchResults] = useState<AnnSearchResult[]>([]);
   const [showAnnDropdown, setShowAnnDropdown] = useState(false);
   const annDropdownRef = useRef<HTMLDivElement>(null);
+  // 公告**列表**的分页与搜索（服务端做；输入即回到第 1 页）
+  const [annListSearch, setAnnListSearch] = useState('');
+  const [annPage, setAnnPage] = useState(1);
+  const debouncedAnnListSearch = useDebouncedValue(annListSearch, 300);
+
+  const handleAnnListSearch = (value: string) => {
+    setAnnListSearch(value);
+    setAnnPage(1);
+  };
   // 目标用户搜索：防抖定时器已由 useDebouncedValue 内部管理；此处仅保留
   // 请求序号守卫（作废选中/清除目标后的在途响应）与"选中后跳过"标记
   // （防抖值滞后一拍回落到 username 时不再发出搜索请求）
@@ -169,15 +190,17 @@ export default function AdminPage() {
   const postTotal = postsQuery.data?.totalPages ?? 0;
 
   const announcementsQuery = useQuery({
-    queryKey: ['admin', 'announcements'],
+    queryKey: ['admin', 'announcements', annPage, debouncedAnnListSearch],
     queryFn: () =>
-      loadAdminAnnouncements().catch((err) => {
+      loadAdminAnnouncements(annPage, debouncedAnnListSearch).catch((err) => {
         showToast(getApiErrorMessage(err, '公告列表加载失败'));
         throw err;
       }),
     enabled: tab === 'announcements',
+    placeholderData: keepPreviousData,
   });
-  const announcements = announcementsQuery.data ?? [];
+  const announcements = announcementsQuery.data?.announcements ?? [];
+  const annTotalPages = announcementsQuery.data?.totalPages ?? 0;
 
   const handleDeleteUser = (u: AdminUser) => {
     setConfirmMsg(`确定要删除用户 "${u.username}" 吗？该用户的帖子、评论等数据将一并删除。`);
@@ -246,8 +269,9 @@ export default function AdminPage() {
     setConfirmAction(() => async () => {
       try {
         await api.delete(`/admin/announcements/${a.id}`);
-        queryClient.setQueryData<AdminAnnouncement[]>(['admin', 'announcements'], (prev) =>
-          (prev ?? []).filter((x) => x.id !== a.id)
+        queryClient.setQueryData<AdminAnnouncementsPage>(
+          ['admin', 'announcements', annPage, debouncedAnnListSearch],
+          (prev) => (prev ? removeAnnouncementFromPage(prev, a.id) : prev)
         );
         showToast('公告已删除');
       } catch {
@@ -431,6 +455,11 @@ export default function AdminPage() {
         {tab === 'announcements' && (
           <AdminAnnouncementsTab
             announcements={announcements}
+            listSearch={annListSearch}
+            setListSearch={handleAnnListSearch}
+            listPage={annPage}
+            setListPage={setAnnPage}
+            listTotalPages={annTotalPages}
             showSendForm={showSendForm}
             setShowSendForm={setShowSendForm}
             annTitle={annTitle}

@@ -106,10 +106,18 @@ export default function ProfileHeader({
             <span className={styles.stat}>
               <span className={styles.statCount}>{postsCount}</span> 帖子
             </span>
-            <span className="profile-stat clickable" onClick={onShowFollowers}>
+            <span
+              className="profile-stat clickable"
+              data-testid="profile-followers-stat"
+              onClick={onShowFollowers}
+            >
               <span className={styles.statCount}>{followersCount}</span> 粉丝
             </span>
-            <span className="profile-stat clickable" onClick={onShowFollowing}>
+            <span
+              className="profile-stat clickable"
+              data-testid="profile-following-stat"
+              onClick={onShowFollowing}
+            >
               <span className={styles.statCount}>{followingCount}</span> 关注
             </span>
           </div>
