@@ -10,11 +10,18 @@
   z-index: 500;
   /* 全屏看图：禁原生手势（滚动/页面缩放），平移/缩放全交给 JS（useImagePinchZoom） */
   touch-action: none;
+  opacity: 1;
+  /* 入场：一次性淡入动画 */
   animation: chatZoomFadeIn 0.2s ease;
+  /* 关闭与「双击撤销关闭」都走同一条可中断的 transition。
+     此前关闭用 animation（.closing 切换 animation-name）：双击撤销时
+     animation-name 切回入场动画会被浏览器判定为新动画**从头重播**——
+     整屏从全透明重新淡入，正是双击缩放前那一下「闪」。 */
+  transition: opacity 0.18s ease;
 }
 
 .overlay.closing {
-  animation: chatZoomFadeOut 0.15s ease forwards;
+  opacity: 0;
 }
 
 .close {
@@ -43,11 +50,11 @@
   border-radius: 8px;
   /* 双指缩放 transform-origin 中心（useImagePinchZoom 以元素中心为原点计算平移） */
   transform-origin: center;
-  animation: chatZoomScaleIn 0.2s ease;
-}
-
-.image.closing {
-  animation: chatZoomScaleOut 0.15s ease forwards;
+  /* 入场淡入：**只动 opacity，绝不碰 transform**。
+     手势缩放把 translate3d/scale 写成 img 的 inline transform，动画若同时动
+     transform 会按优先级盖掉它（缩放失效/回弹）；而切换 animation-name 又会
+     让动画重播。透明度动画与 inline transform 互不干扰，最省心。 */
+  animation: chatZoomImageIn 0.2s ease;
 }
 
 @keyframes chatZoomFadeIn {
@@ -59,33 +66,11 @@
   }
 }
 
-@keyframes chatZoomFadeOut {
-  from {
-    opacity: 1;
-  }
-  to {
-    opacity: 0;
-  }
-}
-
-@keyframes chatZoomScaleIn {
+@keyframes chatZoomImageIn {
   from {
     opacity: 0;
-    transform: scale(0.95);
   }
   to {
     opacity: 1;
-    transform: scale(1);
-  }
-}
-
-@keyframes chatZoomScaleOut {
-  from {
-    opacity: 1;
-    transform: scale(1);
-  }
-  to {
-    opacity: 0;
-    transform: scale(0.95);
   }
 }

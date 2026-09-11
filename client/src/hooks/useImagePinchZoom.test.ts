@@ -1,6 +1,6 @@
 /**
  * useImagePinchZoom 纯函数数学单测：
- * clampZoomScale / zoomAroundMidpoint / clampZoomPan
+ * clampZoomScale / zoomAroundMidpoint / clampZoomPan / parseZoomMatrix
  * 双击语义：以轻点为锚（起点中点 = 终点中点 = 轻点）复用 zoomAroundMidpoint
  */
 import { describe, expect, it } from 'vitest';
@@ -8,9 +8,12 @@ import {
   clampZoomScale,
   zoomAroundMidpoint,
   clampZoomPan,
+  parseZoomMatrix,
   MIN_ZOOM,
   MAX_ZOOM,
   DOUBLE_TAP_SCALE,
+  DOUBLE_TAP_ZOOM_MS,
+  DOUBLE_TAP_ZOOM_EASING,
 } from './useImagePinchZoom';
 
 describe('clampZoomScale', () => {
@@ -107,6 +110,52 @@ describe('双击放大（以轻点为锚）', () => {
     const { tx, ty } = zoomAroundMidpoint({ ...fromZoomed, ...tap, ...center, scale: 1 });
     expect(tx).toBeCloseTo(0);
     expect(ty).toBeCloseTo(0);
+  });
+});
+
+describe('parseZoomMatrix（动画中途读回当前帧）', () => {
+  it('解析 translate3d + scale 的计算矩阵（matrix(s,0,0,s,tx,ty)）', () => {
+    expect(parseZoomMatrix('matrix(2.5, 0, 0, 2.5, -30, -45)')).toEqual({
+      scale: 2.5,
+      tx: -30,
+      ty: -45,
+    });
+  });
+
+  it('1x 单位矩阵解析为 scale=1 且无平移', () => {
+    expect(parseZoomMatrix('matrix(1, 0, 0, 1, 0, 0)')).toEqual({ scale: 1, tx: 0, ty: 0 });
+  });
+
+  it('基础样式 none / undefined 返回 null（调用方保持原值）', () => {
+    expect(parseZoomMatrix('none')).toBeNull();
+    expect(parseZoomMatrix(undefined)).toBeNull();
+    expect(parseZoomMatrix('')).toBeNull();
+  });
+
+  it('matrix3d / 非矩阵串 / NaN 一律返回 null（不猜）', () => {
+    expect(parseZoomMatrix('matrix3d(1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1)')).toBeNull();
+    expect(parseZoomMatrix('translate3d(10px, 20px, 0)')).toBeNull();
+    expect(parseZoomMatrix('matrix(1, 0, 0, 1, 0)')).toBeNull();
+    expect(parseZoomMatrix('matrix(a, 0, 0, 1, 0, 0)')).toBeNull();
+  });
+
+  it('带斜切/浮点误差时用 hypot 求缩放', () => {
+    const r = parseZoomMatrix('matrix(3, 0, 0, 3.0000001, 12, 8)');
+    expect(r?.scale).toBeCloseTo(3, 5);
+    expect(r?.tx).toBe(12);
+    expect(r?.ty).toBe(8);
+  });
+});
+
+describe('双击缩放手感参数', () => {
+  it('时长比原来的 180ms 更从容（不再起步即满速/硬着陆）', () => {
+    expect(DOUBLE_TAP_ZOOM_MS).toBeGreaterThan(180);
+    expect(DOUBLE_TAP_ZOOM_MS).toBeLessThanOrEqual(400);
+  });
+
+  it('缓动不再是「前 20% 时间吃掉大半位移」的 easeOutQuint', () => {
+    expect(DOUBLE_TAP_ZOOM_EASING).toBe('cubic-bezier(0.32, 0.72, 0, 1)');
+    expect(DOUBLE_TAP_ZOOM_EASING).not.toContain('0.22, 1, 0.36, 1');
   });
 });
 

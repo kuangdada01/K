@@ -10,10 +10,11 @@
  *
  * 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）：
  * - touchmove 直接写 translate3d（合成器线程，60fps 丝滑）；
- * - 松手用 CSS transition 落位：400ms cubic-bezier(0.22, 1, 0.36, 1)，
- *   460ms 后移除 transition；
+ * - 松手用 CSS transition 落位：整页 300ms / 回弹 200ms，cubic-bezier(0.22, 1, 0.36, 1)，
+ *   时长 +60ms 后移除 transition（参数与判定见 hooks/carouselGesture）；
  * - 首次位移判定方向：横向主导才接管（+2px 余量），纵向主导交还浏览器滚动；
- * - 拖动超过视口宽度 ~1/8（0.12）翻一页（一次最多一页），否则回弹起点；
+ * - 拖动超过视口宽度 ~1/8（0.12）翻一页，**快速甩动**（速度 ≥ 0.35px/ms 且位移
+ *   ≥ 10px）即使不足 1/8 也翻一页（一次最多一页），否则回弹起点；
  * - mouse 指针任意位移即翻页（up 判定含 e.pointerType === 'mouse'）——原行为保留。
  *
  * 说明：原实现两轨道共用一份 transTimersRef（两轨道动画在时间上互斥，
@@ -23,6 +24,13 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, RefObject } from 'react';
+import {
+  createVelocityTracker,
+  decidePageFlip,
+  settleDurationMs,
+  SLIDE_EASING,
+  SLIDE_SETTLE_MS,
+} from './carouselGesture';
 
 export interface TransformCarouselApi {
   /** 当前轨道像素偏移（0 = 第一张），手势跟手与动画共用 */
@@ -40,8 +48,9 @@ export interface TransformCarouselApi {
    * 偏差，右边缘露出下一张图片（用户反馈"全屏后右边缘显示下一张"的根因）。
    */
   getSlideWidth: () => number;
-  /** 落位动画到 index（width = 单张图片实际宽度，传 getSlideWidth()） */
-  animateTrackTo: (index: number, width: number) => void;
+  /** 落位动画到 index（width = 单张图片实际宽度，传 getSlideWidth()）。
+   *  durationMs 缺省为整页落位时长；回弹传更短的 settleDurationMs(false)。 */
+  animateTrackTo: (index: number, width: number, durationMs?: number) => void;
   /** 绑定 pointer/touch 手势；返回解绑函数（viewport/track 缺失时为空操作）
    *  isZoomed: 可选——返回 true 时手势完全失效（放大态平移交给缩放 Hook，
    *  防止单指拖动被当成翻页） */
@@ -94,16 +103,16 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
 
   /** 轨道落位动画：CSS transition（合成器执行，帧率满格） */
   const animateTrackTo = useCallback(
-    (index: number, width: number) => {
+    (index: number, width: number, durationMs = SLIDE_SETTLE_MS) => {
       const track = trackRef.current;
       if (!track) return;
       const target = width * index;
       if (Math.abs(offsetRef.current - target) < 1) return;
-      track.style.transition = 'transform 400ms cubic-bezier(0.22, 1, 0.36, 1)';
+      track.style.transition = `transform ${durationMs}ms ${SLIDE_EASING}`;
       setOffset(target);
       const t = setTimeout(() => {
         if (track) track.style.transition = 'none';
-      }, 460);
+      }, durationMs + 60);
       timersRef.current.push(t);
     },
     [trackRef, setOffset]
@@ -129,6 +138,8 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
       let active = false;
       let horizontal = false; // 是否已判定为横向手势（横向主导才接管滚动）
       let moveHandler: ((e: TouchEvent) => void) | null = null;
+      // 松手速度采样（快速甩动判定用）；每次手势起点清空，避免上一手势残留
+      const velocity = createVelocityTracker();
 
       const down = (e: PointerEvent) => {
         if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -155,6 +166,8 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
         startY = e.clientY;
         startOffset = offsetRef.current;
         startIndex = settledRef.current;
+        velocity.reset();
+        velocity.sample(e.clientX, performance.now());
         moveHandler = (te: TouchEvent) => {
           if (!active || te.touches.length !== 1) return;
           const touch = te.touches[0]!;
@@ -176,13 +189,17 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
             }
           }
           te.preventDefault();
+          velocity.sample(touch.clientX, performance.now());
           setOffset(startOffset - dx);
         };
         // passive:false 才能 preventDefault 禁掉原生惯性滚动
         viewport.addEventListener('touchmove', moveHandler, { passive: false });
       };
 
-      const up = (e: PointerEvent) => {
+      /** 手势收尾：allowFlip=false（系统取消，如 pointercancel —— 其
+       *  clientX 常为 0，若照常算速度会得到一个假的极大甩动速度）一律回弹吸附基准，
+       *  绝不翻页。 */
+      const finish = (e: PointerEvent, allowFlip: boolean) => {
         if (!active) return;
         active = false;
         if (moveHandler) {
@@ -201,28 +218,39 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
         const thresholdW = viewport.clientWidth || 1;
         const slideW = getSlideWidth() || thresholdW;
         const total = imageCount;
-        let target = startIndex;
-        if (Math.abs(dx) > thresholdW * 0.12 || e.pointerType === 'mouse') {
-          // 拖动超过 ~1/8 屏 → 翻一页（最多一页，绝不过 2 张）
-          if (dx > 0) target = Math.min(total - 1, startIndex + 1);
-          else if (dx < 0) target = Math.max(0, startIndex - 1);
-        } else {
-          // 微动 → 回到起点
-          target = startIndex;
+        if (!allowFlip) {
+          animateTrackTo(startIndex, slideW, settleDurationMs(false));
+          return;
         }
+        // 速度取「松手事件」为最后一个样本：最后一次 touchmove 与 pointerup 之间
+        // 可能已隔了几十毫秒，只用 touchmove 会低估甩动速度
+        velocity.sample(e.clientX, performance.now());
+        const dir = decidePageFlip({
+          dx,
+          viewportWidth: thresholdW,
+          velocity: velocity.velocity(),
+          alwaysFlip: e.pointerType === 'mouse',
+        });
+        // 一次手势最多翻一页（绝不过 2 张）
+        let target = startIndex;
+        if (dir > 0) target = Math.min(total - 1, startIndex + 1);
+        else if (dir < 0) target = Math.max(0, startIndex - 1);
         settledRef.current = target;
         if (onSettled) onSettled(target);
         onMove(target);
-        animateTrackTo(target, slideW);
+        animateTrackTo(target, slideW, settleDurationMs(target !== startIndex));
       };
+
+      const up = (e: PointerEvent) => finish(e, true);
+      const cancel = (e: PointerEvent) => finish(e, false);
 
       viewport.addEventListener('pointerdown', down);
       viewport.addEventListener('pointerup', up);
-      viewport.addEventListener('pointercancel', up);
+      viewport.addEventListener('pointercancel', cancel);
       return () => {
         viewport.removeEventListener('pointerdown', down);
         viewport.removeEventListener('pointerup', up);
-        viewport.removeEventListener('pointercancel', up);
+        viewport.removeEventListener('pointercancel', cancel);
         if (moveHandler) viewport.removeEventListener('touchmove', moveHandler);
       };
     },

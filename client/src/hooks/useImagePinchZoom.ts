@@ -11,13 +11,17 @@
  *   双击窗口（播关闭动画的时机由消费方编排，见 useCancelableClose 的延迟策略）；
  *   若双击窗口内又来一次轻点构成双击，先回调 onSingleTapCancelled 让组件
  *   撤销已启动的关闭，再执行双击缩放
- * - 双击缩放带 180ms transform 缓动（合成器执行，不瞬跳突兀）；
- *   动画期间新触摸先取消 transition 并吸附到目标倍率再跟手
+ * - 双击缩放带 DOUBLE_TAP_ZOOM_MS 缓动（transform transition，合成器执行）；
+ *   动画期间新触摸从「当前动画帧」读回倍率/平移继续跟手（不硬跳到目标值）
+ * - 绝不写 img.style.animation：把 animation 从 none 还原为 '' 会让浏览器
+ *   把样式表里的入场/出场动画当作**新动画**从头重播（缩回 1x 时整张图从
+ *   透明重新淡入 = 肉眼可见的闪一下）。与入场动画的隔离改由 CSS 侧保证
+ *   （入场动画只动 opacity、不碰 transform，与手势写入的 inline transform 不冲突）
  * - 手势结束后 350ms 内吞掉随后的 click（防误触关闭全屏）
  * - 手势期间视口 touch-action 临时置 none（防原生垂直滚动/页面缩放抢手势）
  *
  * 数学抽为导出纯函数（可单测），DOM 绑定为薄封装：
- * - clampZoomScale / zoomAroundMidpoint / clampZoomPan
+ * - clampZoomScale / zoomAroundMidpoint / clampZoomPan / parseZoomMatrix
  * ============================================================
  */
 
@@ -42,8 +46,15 @@ export const TAP_MOVE_CANCEL_PX = 12;
 export const DOUBLE_TAP_SCALE = 2.5;
 
 /** 双击缩放动画时长（ms）：transform transition（合成器执行），
- *  瞬时跳变在双击缩放下显得突兀 */
-export const DOUBLE_TAP_ZOOM_MS = 180;
+ *  瞬时跳变在双击缩放下显得突兀。
+ *  180ms + easeOutQuint 在移动端偏「生硬」（起步即满速、落点顿），
+ *  放到 300ms 让整段位移有起承转合，接近原生相册的手感 */
+export const DOUBLE_TAP_ZOOM_MS = 300;
+
+/** 双击缩放缓动曲线：起步柔和 → 中段推进 → 长尾缓停（不硬着陆）。
+ *  原 easeOutQuint（cubic-bezier(0.22,1,0.36,1)）前 20% 时间就吃掉约 60% 位移，
+ *  视觉上像「弹」过去，是「生硬」的主要来源 */
+export const DOUBLE_TAP_ZOOM_EASING = 'cubic-bezier(0.32, 0.72, 0, 1)';
 
 export interface ImagePinchZoomApi {
   /** 当前缩放倍数（ref 直读，供外部判断是否放大态） */
@@ -96,6 +107,28 @@ export function zoomAroundMidpoint(opts: {
     tx: opts.midX - opts.centerX - (opts.startMidX - opts.centerX - opts.startTx) * ratio,
     ty: opts.midY - opts.centerY - (opts.startMidY - opts.centerY - opts.startTy) * ratio,
   };
+}
+
+/**
+ * 从 getComputedStyle(el).transform 的矩阵串解析「缩放 + 平移」。
+ * 只用于读取**动画进行中**的中间帧：双击缩放过渡被新手势打断时，从肉眼所见的
+ * 当前位置继续跟手（插值中点），而不是硬跳到动画终点（那一跳很突兀）。
+ * 我们自身只写 `translate3d(tx,ty,0) scale(s)`，其计算值即 matrix(s,0,0,s,tx,ty)；
+ * 无法解析（none / matrix3d / NaN）时返回 null，调用方保持原值不变。
+ */
+export function parseZoomMatrix(
+  matrix: string | null | undefined
+): { scale: number; tx: number; ty: number } | null {
+  if (!matrix) return null;
+  const m = /^matrix\(([^)]+)\)$/.exec(matrix.trim());
+  if (!m) return null;
+  const parts = m[1]!.split(',').map((v) => Number(v.trim()));
+  if (parts.length !== 6 || parts.some((n) => !Number.isFinite(n))) return null;
+  const [a, b, c, d, e, f] = parts as [number, number, number, number, number, number];
+  // 无旋转/斜切时 b=c=0、a=d=s；用 hypot 兼容细微的浮点误差与斜切
+  const scale = (Math.hypot(a, b) + Math.hypot(c, d)) / 2;
+  if (!Number.isFinite(scale) || scale <= 0) return null;
+  return { scale, tx: e, ty: f };
 }
 
 /** 平移钳制：放大后的画面必须始终盖住视口（不露出黑边）。
@@ -164,36 +197,49 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
       // 单击关闭是否已启动并处于双击窗口内（窗口过后由 singleTapTimer 复位）
       let closePending = false;
       let singleTapTimer: ReturnType<typeof setTimeout> | null = null;
-      // 双击缩放 transition 的清理定时器（动画期间新触摸先吸附到目标再跟手）
+      // 双击缩放 transition 的清理定时器（动画期间新触摸从当前帧接续并取消过渡）
       let zoomAnimTimer: ReturnType<typeof setTimeout> | null = null;
       // 最近一次 touchend 时间：吞掉触摸产生的 click（双击窗口内防误关）
       let lastTouchEndAt = 0;
 
-      /** 把当前缩放/平移写到图片 transform；1x 时清空并还原视口 touch-action */
+      /** 把当前缩放/平移写到图片 transform；1x 时清空并还原视口 touch-action。
+       *  ★ 绝不写 img.style.animation：入场/出场动画（ChatZoomOverlay 的
+       *  chatZoomImageIn）若被压成 none 再还原，浏览器会判定为新动画而**从头重播**
+       *  ——双击缩回 1x 时整张图会从 opacity 0 重新淡入，就是用户看到的「闪一下」。
+       *  与动画的隔离改由 CSS 侧保证：入场动画只动 opacity，不碰 transform。 */
       const apply = () => {
         const img = getImage();
         const s = scaleRef.current;
         if (s <= 1.001) {
           if (img) {
             img.style.transform = '';
-            // 还原元素自身动画（入场/出场 transform 动画），否则 inline transform 被动画覆盖
-            img.style.animation = '';
           }
           viewport.style.touchAction = '';
           return;
         }
         if (img) {
           img.style.transform = `translate3d(${txRef.current}px, ${tyRef.current}px, 0) scale(${s})`;
-          // 放大态：暂停元素 transform 动画，避免入场/出场动画覆盖缩放
-          img.style.animation = 'none';
         }
         // 放大态：禁原生垂直滚动/页面缩放，手势完全交给 JS
         viewport.style.touchAction = 'none';
       };
 
+      /** 双击缩放动画进行中被新手势打断：把**当前动画帧**的缩放/平移读回 ref，
+       *  再取消 transition 并写回同一值——手势从肉眼所见的位置无缝接续，
+       *  不硬跳到动画终点（此前实现直接吸附到目标倍率，动画中途落指会跳一下）。 */
+      const syncFromAnimatingFrame = (img: HTMLElement) => {
+        const cur = parseZoomMatrix(getComputedStyle(img).transform);
+        if (cur) {
+          scaleRef.current = clampZoomScale(cur.scale);
+          txRef.current = cur.tx;
+          tyRef.current = cur.ty;
+        }
+        img.style.transition = '';
+      };
+
       /** 双击：未放大 → 以轻点为中心放大；已放大 → 缩回 1x。
        *  带 DOUBLE_TAP_ZOOM_MS 缓动（transform transition，合成器执行）——
-       *  瞬时跳变显得突兀；动画期间新触摸在 touchStart 取消 transition 吸附到目标 */
+       *  瞬时跳变显得突兀；动画期间新触摸读回当前动画帧继续跟手 */
       const handleDoubleTap = (x: number, y: number) => {
         const img = getImage();
         if (!img) return;
@@ -229,7 +275,7 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
           clearTimeout(zoomAnimTimer);
           zoomAnimTimer = null;
         }
-        img.style.transition = `transform ${DOUBLE_TAP_ZOOM_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`;
+        img.style.transition = `transform ${DOUBLE_TAP_ZOOM_MS}ms ${DOUBLE_TAP_ZOOM_EASING}`;
         apply();
         zoomAnimTimer = setTimeout(() => {
           zoomAnimTimer = null;
@@ -240,12 +286,12 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
       const touchStart = (e: TouchEvent) => {
         const img = getImage();
         if (!img) return;
-        // 双击缩放动画进行中：取消 transition 并吸附到目标倍率，
-        // 新手势（捏合/平移/翻页）从目标状态跟手，不残留动画
+        // 双击缩放动画进行中：从当前动画帧读回倍率/平移并取消 transition，
+        // 新手势（捏合/平移/翻页）从肉眼所见位置跟手，不残留动画也不硬跳终点
         if (zoomAnimTimer) {
           clearTimeout(zoomAnimTimer);
           zoomAnimTimer = null;
-          img.style.transition = '';
+          syncFromAnimatingFrame(img);
           apply();
         }
         if (e.touches.length >= 2) {
