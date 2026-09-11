@@ -2553,3 +2553,30 @@ README 计数与「服务端搜索 + 分页」那行表格已同步。
 **至此第 20.6 节列出的同类问题全部关闭**：收藏/转发/粉丝/关注/公告这些列表仍走
 「硬上限 + has_more」（那是 `listLimits.ts` 里有意的取舍：只封顶、不改形状），
 但**用户能在界面里搜索/翻到的清单**（管理端三个 Tab + 粉丝关注弹窗）已经全部是服务端搜索 + 分页。
+
+---
+
+## 22. 上线：第 19–21 章三批改动部署到生产（2026-09-11 20:05）
+
+三批（用户列表、帖子列表、公告 + 粉丝弹窗）都在仓库与 CI 里待了一天，本次一起上线。
+
+**流程**：`.\deploy.ps1 -SERVER <生产IP>`（SSH 私钥免密）→ `npm run build` 一次成功 →
+打包上传 → 远端部署 + 自检 → **`[DEPLOY_VERIFY] PASS`** → 健康检查 200。
+
+**部署后逐项核验（哈希级，全绿）**：
+
+| 项 | 结果 |
+| --- | --- |
+| 客户端产物 | 本地 `index-A74DS9Tf.js` = 线上同名；`index.html` 引用的 **11 个静态产物逐个一致** |
+| 服务端 dist | `config.js`、`index.js`、`routes/friends.js`、`routes/admin/announcements.routes.js`、`repositories/friend.repo.js` **5/5 sha256 与本地逐字节相同** |
+| 数据 | `9 users / 34 posts / 2 rooms / 26 migrations` —— 与部署前**完全一致**（没有意外迁移或丢数据） |
+| 进程 | PM2 `k-server` **online**、unstable restarts **0**、uptime 从部署时刻起算 |
+| 新接口真的在 | `/api/admin/users?page=1`、`/api/admin/posts?page=1&q=x`、`/api/admin/announcements?page=1`、`/api/friends/followers/1?page=1` 全部返回 **401**（存在且鉴权正常），不是 404 |
+| 新前端真的在 | 线上 chunk 里搜到本次新增的文案：`AdminPage-*.js` 含「没有匹配的公告」、`Profile-*.js` 含「加载更多」 |
+| 可用性 | health / feed / 首页 均 200；nginx access.log 覆盖部署时刻的最近 3000 行里 **5xx = 0**（这次连 502 窗口都没有） |
+| 日志 | 应用 error 日志最后一条仍是 **2026-08-31**（本次没有新增 error）；重启后 warn/error 计数 **0** |
+| 首屏预算 | 首屏 9 个 JS 合计 **464.9 KB** < 480 KB（比上次的 463.3 KB 只涨 1.6 KB） |
+| APK | 线上 `k-app-0.2.38-release.apk` 与本地构建 **sha256 相同**（内容没变，但这次仍重传了 15.5 MB —— 正是 18.5 列的那条待优化） |
+| 回滚点 | `/var/www/k/.deploy-backup/20260911-200521/{client,server}/dist` + 部署前的库快照 |
+
+**一句话结论**：线上跑的就是 `e78aa24` 这次提交构建出来的东西（哈希可证），数据未变、进程健康、没有新增错误。
