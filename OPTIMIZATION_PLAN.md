@@ -2411,7 +2411,70 @@ Dockerfile 运行时实测（本机无 Docker）；访客 id 多实例化（需 
 
 ### 19.6 仍未做（本轮只动了用户列表）
 
-- **帖子管理 tab 有一模一样的毛病**：`AdminPostsTab` 里的 `filteredPosts` 只在**当前页 20 行**内过滤，
-  搜一个不在当前页的帖子会得到空表（分页是服务端的，搜索不是）。改法与本次同形
-  （服务端 `/api/admin/posts` 加 `q`、客户端去掉本地过滤）—— 同样动契约，**等你点头再做**。
-- 管理端公告列表仍走「硬上限 + has_more」，没有分页；当前数据量下无感。
+- ~~**帖子管理 tab 有一模一样的毛病**~~ —— **已在第 20 章做完**（帖子列表本来就是分页的，
+  所以那次连契约都没变，只是给已有分页补了 `q`）。
+- 管理端公告列表仍走「硬上限 + has_more」，没有分页；当前数据量下无感（见 20.6）。
+
+---
+
+## 20. 管理端帖子列表：服务端搜索（2026-09-11 晚，接着第 19 章做完）
+
+### 20.1 与用户列表的差别：这次**没有**契约变更
+
+帖子列表本来就是分页的（`/api/admin/posts?page=&limit=` 返回
+`{ posts, total, page, totalPages }`），出问题的是**搜索**：客户端拿到的只有当前页 20 行，
+`AdminPostsTab` 却在这 20 行里做 `filter` —— 搜一个不在当前页的帖子得到空表。
+所以这次只是给已有分页补一个 `q` 参数：**响应形状零变化**，没有双形状、没有兼容分支
+（老客户端不传 `q`，行为逐字不变，有测试守着）。
+
+### 20.2 服务端
+
+- `repositories/admin.repo.ts`：新增 `postSearchWhere`（`u.username LIKE` ∨
+  `CAST(p.user_id AS TEXT) LIKE`，**与客户端原来的本地过滤字段集合一致**）、
+  `countPosts(q)`；`listAllPosts(page, limit, q = '')` 的 `q` 是**可选尾参**，
+  不传时与改动前完全一致（旧调用点无需改动）。通配符同样走 `escapeLike` + `ESCAPE '\'`。
+- `routes/admin/posts.routes.ts`：多解析一个 `searchQuerySchema`（复用第 19 章加的那个），
+  `total` 随之变成「命中数」，`totalPages` 由它算 —— 搜索与分页天然叠加。
+
+### 20.3 客户端
+
+- `loadAdminPosts(postPage, q)` 改为 `params` 形式并带上 `limit`；
+  query key `['admin','posts', postPage, debouncedPostSearch]`（300ms 防抖），
+  `keepPreviousData` 保留旧页显示；「输入即回第 1 页」同样写在 onChange 里（避开
+  `react-hooks/set-state-in-effect`）。
+- 删帖的乐观更新改走 `removePostFromPage`：**同时修 `total`/`totalPages`**，
+  删不在当前页的 id 则原样返回。
+- 顺手把第 19 章建的 `usersPaging.ts` 提升为 `adminPaging.ts`（现在同时管用户与帖子，
+  文件名不该再叫 users），新增 `ADMIN_POSTS_PAGE_SIZE`、`AdminPostsPage`、`removePostFromPage`。
+- `AdminPostsTab`：删掉本地 `filter`；补空态「没有匹配的帖子 / 暂无帖子」；
+  补 `data-testid`（表格/搜索框/分页/缩略图，缩略图那个是为了不再用
+  `document.querySelector('img')` 这种脆弱选择器）。**没有新增 CSS。**
+
+### 20.4 验证（同样是三层 + 反向验证）
+
+- 服务端 **10** 条（`server/test/admin-posts-search.test.ts`）：不带 `q` 时
+  **响应键集合逐字不变**（`['page','posts','total','totalPages']`）且 total 不变、
+  排序仍是 `created_at DESC, id DESC`、按作者名/作者 ID 子串搜索、搜索叠加分页且两页不重叠、
+  无命中、★通配符转义、脏参数（超长/数组/空白）不 500。
+- 客户端 **34** 条（13 条纯函数 + 11 条用户 Tab + **10** 条帖子 Tab）：
+  帖子 Tab 同样钉住 ★「搜索词不匹配也照样渲染全部行」、分页边界、空态、详情回调带 id。
+- E2E **1** 条（`e2e/admin-posts.spec.ts`）：种 25 篇 2021 年的填充帖 + 1 篇 2020 年的目标帖
+  （列表是 `created_at DESC`，所以**目标帖必然在最后一页且不挤占首页信息流第一页**），
+  真实注册拿 token 后提权为 admin，然后：切到「帖子管理」→ 第一页 20 行且 URL 带 `limit=20`
+  → 断言目标帖**不在第一页** → 搜目标作者 → 服务端 `total=1` 且界面只剩那一行
+  → 搜一个不存在的作者 → 出现空态文案 → 清空搜索回到 20 行。
+- **反向验证**：把服务端 `q` 临时写死为空串，e2e 立刻红在 `expect(foundBody.total).toBe(1)`，
+  实测 `Received: 26`（= 1 目标 + 25 填充）。改回后全绿。
+
+### 20.5 验收
+
+`format:check` / `typecheck` / `lint`(0 error) / `build` 全绿；单测 **服务端 35 文件 268 用例、
+客户端 41 文件 387 用例**；e2e **12/12**（此前 11）。README 计数与表格已同步。
+
+### 20.6 同类残留（本轮没做，原因写在这里）
+
+- **管理端公告列表**：仍走「硬上限 500 + has_more」，没有分页；当前体量下无感，
+  真要改也是同一套做法（服务端 `q` + 分页 + 前端翻页）。
+- **用户主页的粉丝/关注弹窗**（`components/profile/FollowersModal.tsx`）：搜索也是
+  **本地过滤**，而列表来自封顶 500 行的接口 —— 属于同一类问题，但那是**前台**功能，
+  改它要动用户可见交互（第 14 章把它归为「需要你确认的 UI 变更」），所以留着等你发话。

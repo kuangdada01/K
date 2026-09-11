@@ -1,22 +1,26 @@
 /**
  * ============================================================
- * 管理端用户列表分页纯函数测试（pages/admin/usersPaging）
+ * 管理端列表分页纯函数测试（pages/admin/adminPaging）
  * ============================================================
- * 这两处算错了不会报错、只会「看起来有点怪」，所以用单测钉住：
+ * 这几处算错了不会报错、只会「看起来有点怪」，所以用单测钉住：
  * - 总页数的边界（0 行不能显示成 1 页；恰好整页不能虚增一页）
  * - 乐观删除后页码与总数要跟着变（否则第二页删空了页脚还说有下一页）
  * - 删一个不在当前页的 id 不能把总数减掉
+ * - 用户与帖子两个列表每页条数各自是常量（都必须是 20，与服务端默认值对齐）
  */
 
 import { describe, it, expect } from 'vitest';
 import {
+  ADMIN_POSTS_PAGE_SIZE,
   ADMIN_USERS_PAGE_SIZE,
   pageCount,
   patchUserInPage,
+  removePostFromPage,
   removeUserFromPage,
+  type AdminPostsPage,
   type AdminUsersPage,
-} from './usersPaging';
-import type { AdminUser } from './types';
+} from './adminPaging';
+import type { AdminPost, AdminUser } from './types';
 
 function user(id: number): AdminUser {
   return {
@@ -36,9 +40,28 @@ function page(ids: number[], total: number): AdminUsersPage {
   return { users: ids.map(user), total, totalPages: pageCount(total) };
 }
 
+/** 帖子列表的一页（只需 id 与用户名，够验证删除语义） */
+function post(id: number): AdminPost {
+  return {
+    id,
+    user_id: 1,
+    username: 'u1',
+    avatar: null,
+    image_url: '[]',
+    images: [],
+    description: `p${id}`,
+    created_at: '2026-01-01T00:00:00.000Z',
+  };
+}
+
+function postsPage(ids: number[], total: number): AdminPostsPage {
+  return { posts: ids.map(post), total, totalPages: pageCount(total, ADMIN_POSTS_PAGE_SIZE) };
+}
+
 describe('pageCount', () => {
   it('每页条数来自一个常量（与服务端默认值对齐）', () => {
     expect(ADMIN_USERS_PAGE_SIZE).toBe(20);
+    expect(ADMIN_POSTS_PAGE_SIZE).toBe(20);
   });
 
   it('0 行 → 0 页（不能显示成 1 页）', () => {
@@ -87,6 +110,27 @@ describe('removeUserFromPage', () => {
     const after = removeUserFromPage(page([1], 0), 1);
     expect(after.total).toBe(0);
     expect(after.totalPages).toBe(0);
+  });
+});
+
+describe('removePostFromPage', () => {
+  it('摘掉该行并把总数与页数一起减（搜索状态下页脚也要跟着变）', () => {
+    const before = postsPage([21], 21); // 第 2 页只剩 1 行
+    const after = removePostFromPage(before, 21);
+    expect(after.posts).toEqual([]);
+    expect(after.total).toBe(20);
+    expect(after.totalPages).toBe(1);
+  });
+
+  it('★ 删一个不在当前页的 id：原样返回，不能顺手减总数', () => {
+    const before = postsPage([1, 2], 30);
+    expect(removePostFromPage(before, 999)).toBe(before);
+  });
+
+  it('其它行不受影响', () => {
+    const after = removePostFromPage(postsPage([1, 2, 3], 23), 2);
+    expect(after.posts.map((p) => p.id)).toEqual([1, 3]);
+    expect(after.total).toBe(22);
   });
 });
 

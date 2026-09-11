@@ -14,11 +14,13 @@
  *   发送公告后 invalidateQueries 触发列表重取（等价原 loadAnnouncements）
  * - 目标用户搜索下拉保持原实现（防抖 + 选中跳过标记 + 序号守卫）
  *
- * 用户管理 tab 的搜索与分页**已改为服务端**（此前是「取回上限内的列表 +
- * 本地过滤」：超过上限的用户搜不到，因此也封禁/改密/删除不了）——
- * query key 为 ['admin','users',page,q]，q 走 300ms 防抖，翻页/改词保留旧页显示。
- * 老客户端（不带 page 参数的已安装 APK）仍拿老的 `{users, has_more}` 形状，
- * 服务端两种形状并存，见 routes/admin/users.routes.ts。
+ * 用户/帖子两个 tab 的搜索与分页**都已改为服务端**（此前是「本地过滤」：
+ * 用户 tab 只看得到封顶的 500 行，帖子 tab 只看得到当前页 20 行，因此超出范围的
+ * 记录搜不到、也就封禁/改密/删除不了）——query key 分别为
+ * ['admin','users',page,q] 与 ['admin','posts',page,q]，q 走 300ms 防抖，
+ * 翻页/改词保留旧页显示。
+ * 用户列表的老客户端（不带 page 参数的已安装 APK）仍拿老的 `{users, has_more}`
+ * 形状，服务端两种形状并存，见 routes/admin/users.routes.ts。
  *
  * 状态与数据逻辑全部集中在本组件；三个 tab 的视图拆分到
  * AdminUsersTab / AdminPostsTab / AdminAnnouncementsTab（展示层）。
@@ -41,11 +43,14 @@ import AdminPostsTab from './AdminPostsTab';
 import AdminAnnouncementsTab, { AnnSearchResult } from './AdminAnnouncementsTab';
 import type { AdminUser, AdminPost, AdminAnnouncement } from './types';
 import {
+  ADMIN_POSTS_PAGE_SIZE,
   ADMIN_USERS_PAGE_SIZE,
   patchUserInPage,
+  removePostFromPage,
   removeUserFromPage,
+  type AdminPostsPage,
   type AdminUsersPage,
-} from './usersPaging';
+} from './adminPaging';
 import styles from '../AdminPage.module.css';
 
 type Tab = 'users' | 'posts' | 'announcements';
@@ -62,11 +67,17 @@ function loadAdminUsers(page: number, q: string) {
     }));
 }
 
-/** 帖子列表查询（key 含分页：翻页即取，keepPreviousData 保持旧页显示） */
-function loadAdminPosts(postPage: number) {
+/** 帖子列表查询（服务端分页 + 服务端搜索；key 含 page/q，翻页/改词即取） */
+function loadAdminPosts(postPage: number, q: string) {
   return api
-    .get(`/admin/posts?page=${postPage}&limit=20`)
-    .then((res) => ({ posts: res.data.posts as AdminPost[], totalPages: res.data.totalPages as number }));
+    .get('/admin/posts', {
+      params: { page: postPage, limit: ADMIN_POSTS_PAGE_SIZE, q: q.trim() || undefined },
+    })
+    .then((res) => ({
+      posts: res.data.posts as AdminPost[],
+      total: res.data.total as number,
+      totalPages: res.data.totalPages as number,
+    }));
 }
 
 /** 公告列表查询（announcements tab 展开时拉取，缓存常驻） */
@@ -90,9 +101,16 @@ export default function AdminPage() {
     setUserPage(1);
   };
 
-  // Posts state
+  // Posts state（与用户列表同款：搜索走服务端，输入即回到第 1 页）
   const [postPage, setPostPage] = useState(1);
   const [postSearch, setPostSearch] = useState('');
+  const debouncedPostSearch = useDebouncedValue(postSearch, 300);
+
+  /** 输入搜索词 → 回到第 1 页（否则会停在旧页码上搜索，看起来像「搜不到」） */
+  const handlePostSearch = (value: string) => {
+    setPostSearch(value);
+    setPostPage(1);
+  };
 
   // Announcements state
   const [showSendForm, setShowSendForm] = useState(false);
@@ -138,9 +156,9 @@ export default function AdminPage() {
   const userTotalPages = usersQuery.data?.totalPages ?? 0;
 
   const postsQuery = useQuery({
-    queryKey: ['admin', 'posts', postPage],
+    queryKey: ['admin', 'posts', postPage, debouncedPostSearch],
     queryFn: () =>
-      loadAdminPosts(postPage).catch((err) => {
+      loadAdminPosts(postPage, debouncedPostSearch).catch((err) => {
         showToast(getApiErrorMessage(err, '帖子列表加载失败'));
         throw err;
       }),
@@ -211,9 +229,8 @@ export default function AdminPage() {
     setConfirmAction(() => async () => {
       try {
         await api.delete(`/admin/posts/${p.id}`);
-        queryClient.setQueryData<{ posts: AdminPost[]; totalPages: number }>(
-          ['admin', 'posts', postPage],
-          (prev) => (prev ? { ...prev, posts: prev.posts.filter((x) => x.id !== p.id) } : prev)
+        queryClient.setQueryData<AdminPostsPage>(['admin', 'posts', postPage, debouncedPostSearch], (prev) =>
+          prev ? removePostFromPage(prev, p.id) : prev
         );
         // 同步前台信息流缓存，删除后立即生效
         updatePostsFeed(queryClient, (prev) => prev.filter((x) => x.id !== p.id));
@@ -402,7 +419,7 @@ export default function AdminPage() {
           <AdminPostsTab
             posts={posts}
             postSearch={postSearch}
-            setPostSearch={setPostSearch}
+            setPostSearch={handlePostSearch}
             postPage={postPage}
             setPostPage={setPostPage}
             postTotal={postTotal}

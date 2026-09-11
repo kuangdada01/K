@@ -6,6 +6,10 @@
  * 本组件只负责帖子表格/搜索/分页的渲染。
  * （PostDetail 弹窗由 AdminPage 页面级渲染——切换 tab 时保持打开，
  * 与历史实现一致。）
+ *
+ * 搜索**不再本地过滤**：关键词经 props 回传给 AdminPage，由服务端
+ * （/api/admin/posts?q=）过滤。本地过滤只看得到**当前这一页的 20 行**，
+ * 于是搜一个不在当前页的帖子会得到空表 —— 那不是「没搜到」，是「搜不了」。
  * ============================================================
  */
 
@@ -35,11 +39,6 @@ export default function AdminPostsTab({
   onDelete,
   onOpenDetail,
 }: AdminPostsTabProps) {
-  const filteredPosts = posts.filter(
-    (p) =>
-      p.username.toLowerCase().includes(postSearch.toLowerCase()) || String(p.user_id).includes(postSearch)
-  );
-
   return (
     <div>
       <div className={styles.toolbar}>
@@ -47,6 +46,7 @@ export default function AdminPostsTab({
           <Search size={16} />
           <input
             name="search-posts"
+            data-testid="admin-post-search"
             placeholder="搜索用户ID或用户名"
             value={postSearch}
             onChange={(e) => setPostSearch(e.target.value)}
@@ -54,7 +54,7 @@ export default function AdminPostsTab({
         </div>
       </div>
       <div className={styles.tableWrapper}>
-        <table className={styles.table}>
+        <table className={styles.table} data-testid="admin-posts-table">
           <thead>
             <tr>
               <th>用户ID</th>
@@ -66,13 +66,25 @@ export default function AdminPostsTab({
             </tr>
           </thead>
           <tbody>
-            {filteredPosts.map((p) => (
+            {posts.length === 0 && (
+              <tr>
+                <td
+                  colSpan={6}
+                  data-testid="admin-posts-empty"
+                  style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: 24 }}
+                >
+                  {postSearch.trim() ? '没有匹配的帖子' : '暂无帖子'}
+                </td>
+              </tr>
+            )}
+            {posts.map((p) => (
               <tr key={p.id}>
                 <td>{p.user_id}</td>
                 <td>
                   <img
                     src={resolveMediaUrl(p.video_cover || p.images?.[0] || p.image_url) || ''}
                     alt=""
+                    data-testid="admin-post-thumb"
                     className={styles.postThumb}
                     style={{ cursor: 'pointer' }}
                     onClick={() => onOpenDetail(p.id)}
@@ -97,13 +109,23 @@ export default function AdminPostsTab({
       </div>
       {postTotal > 1 && (
         <div className={styles.pagination}>
-          <button disabled={postPage <= 1} onClick={() => setPostPage((p) => p - 1)}>
+          <button
+            data-testid="admin-posts-prev"
+            disabled={postPage <= 1}
+            onClick={() => setPostPage((p) => p - 1)}
+            title="上一页"
+          >
             <ChevronLeft size={16} />
           </button>
-          <span>
+          <span data-testid="admin-posts-page">
             {postPage} / {postTotal}
           </span>
-          <button disabled={postPage >= postTotal} onClick={() => setPostPage((p) => p + 1)}>
+          <button
+            data-testid="admin-posts-next"
+            disabled={postPage >= postTotal}
+            onClick={() => setPostPage((p) => p + 1)}
+            title="下一页"
+          >
             <ChevronRight size={16} />
           </button>
         </div>

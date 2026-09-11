@@ -154,16 +154,48 @@ export interface AdminPostRow {
   avatar: string | null;
 }
 
-/** 所有帖子（分页，管理视图） */
-export function listAllPosts(page: number, limit: number): { posts: AdminPostRow[]; total: number } {
-  const total = count('SELECT COUNT(*) as count FROM posts');
+/**
+ * 管理端帖子列表的服务端搜索条件：作者用户名模糊 + 作者 ID 子串。
+ *
+ * 与用户列表同一套语义（`userSearchWhere` 的镜像）：字段集合刻意与客户端
+ * **原来的本地过滤**一致（`p.username.includes` / `String(p.user_id).includes`），
+ * 换成服务端搜索后结果不会变少也不会变多。LIKE 通配符同样经 escapeLike 转义。
+ */
+function postSearchWhere(q: string): { sql: string; params: string[] } {
+  const keyword = q.trim();
+  if (!keyword) return { sql: '', params: [] };
+  const like = `%${escapeLike(keyword)}%`;
+  return {
+    sql: "WHERE (u.username LIKE ? ESCAPE '\\' OR CAST(p.user_id AS TEXT) LIKE ? ESCAPE '\\')",
+    params: [like, like],
+  };
+}
+
+/** 帖子总数（带搜索条件时只统计命中的行，用于算总页数） */
+export function countPosts(q = ''): number {
+  const { sql, params } = postSearchWhere(q);
+  return count(`SELECT COUNT(*) as count FROM posts p JOIN users u ON p.user_id = u.id ${sql}`, ...params);
+}
+
+/**
+ * 所有帖子（分页 + 服务端搜索，管理视图）。
+ *
+ * `q` 可选且默认空 —— 不传时与改动前**逐字相同**（响应形状也没变：本接口本来
+ * 就是分页的，所以这里只是给已有分页加了个 WHERE，没有契约变更）。
+ * 此前搜索在客户端做，而客户端手里只有**当前这一页的 20 行**：
+ * 搜一个不在当前页的帖子会得到空表。
+ */
+export function listAllPosts(page: number, limit: number, q = ''): { posts: AdminPostRow[]; total: number } {
+  const { sql, params } = postSearchWhere(q);
+  const total = countPosts(q);
   const posts = stmt(
     `
     SELECT p.*, u.username, u.avatar
     FROM posts p JOIN users u ON p.user_id = u.id
+    ${sql}
     ORDER BY p.created_at DESC, p.id DESC LIMIT ? OFFSET ?
   `
-  ).all(limit, (page - 1) * limit) as AdminPostRow[];
+  ).all(...params, limit, (page - 1) * limit) as AdminPostRow[];
   return { posts, total };
 }
 
