@@ -2,15 +2,19 @@
 """
 deploy.ps1 的 SFTP 传输后端（替代 pscp/plink，本机网络下 PuTTY 传输不可靠）
 用法（由 deploy.ps1 调用）：
-    python deploy-sftp.py --server <IP> --package <本地 tar.gz 路径> [--apk <本地 APK> --apk-name <版本化文件名>]
+    python deploy-sftp.py --server <IP> --package <本地 tar.gz 路径> [--apk <本地 APK> --apk-name <版本化文件名> --apk-sha <本地 sha256>]
 密码经环境变量 DEPLOY_PASSWORD 传入（不在命令行暴露）；**优先使用 SSH 私钥**
 （DEPLOY_KEY 指向私钥，默认 ~/.ssh/k_deploy_ed25519）—— 口令只作为回退。
 流程：SFTP 上传 /tmp/k-deploy.tar.gz → 远端解压/重链 @k/shared/装依赖/PM2 换名 → 上传新版 APK → 保留最近5个/清除旧版 → 验证。
 --apk/:apk-name 可选：给定时，部署包部署完成后会用 SFTP 单独上传新版 APK 到
     $REMOTE_DIR/client/dist/apk/<apk-name>（大小核验），并在该目录保留最近 5 个版本、清除更旧的。
+--apk-sha 可选：本地 APK 的 sha256。给了就先算**远端同名文件**的 sha256，一致则
+    **跳过上传与旧包清理**（APK 有十几 MB，而它只在客户端发版时才变）。
+    比的是内容不是大小/时间戳：同样大小的不同构建很常见，只比大小会漏掉真正的新包。
+    不给时保持老行为（直接上传）。
 退出码：0 成功；非 0 失败（任意一步核验不过即失败，不静默）。
 """
-import argparse, io, os, sys, time
+import argparse, io, os, shlex, sys, time
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 REMOTE_DIR = "/var/www/k"
@@ -23,6 +27,8 @@ def main():
     ap.add_argument("--package", required=True)
     ap.add_argument("--apk", default="", help="本地新版 APK 完整路径（可省略，省略则不单独上传/不清旧）")
     ap.add_argument("--apk-name", default="", help="上传到 dist/apk 的版本化文件名（k-app-<version>-release.apk）")
+    ap.add_argument("--apk-sha", default="",
+                    help="本地 APK 的 sha256；与远端同名文件一致时跳过上传（省十几 MB 传输）")
     ap.add_argument("--user", default="root")
     ap.add_argument("--port", type=int, default=22)
     ap.add_argument("--trust-host", action="store_true",
@@ -233,38 +239,62 @@ echo DEPLOY_SCRIPT_DONE
     if code != 0:
         c.close(); return 1
 
-    # ---------- 新版 APK 单独上传 ----------
+    # ---------- 新版 APK 单独上传（同名同内容则跳过）----------
     if want_apk:
-        print("\n=== [SFTP] 上传新版 APK ===")
+        print("\n=== [SFTP] 新版 APK ===")
         apk_dir = REMOTE_DIR + "/client/dist/apk"
         remote_apk = apk_dir + "/" + a.apk_name
-        sftp = c.open_sftp()
-        try:
-            sftp.stat(apk_dir)
-        except IOError:
-            try:
-                sftp.mkdir(apk_dir)
-            except IOError:
-                pass  # 并发下已存在则忽略
         local_size = os.path.getsize(a.apk)
-        print(f"  本地 {a.apk_name} {local_size} B → {remote_apk}")
-        def aprogress(sent, total):
-            print(f"\r  ↑ {sent*100//total}% ({sent/1048576:.1f}/{total/1048576:.1f} MB)", end="", flush=True)
-        sftp.put(a.apk, remote_apk, callback=aprogress)
-        print()
-        sftp.close()
-        # 核验远端大小
-        _, out, _ = c.exec_command(f"stat -c %s {remote_apk}", timeout=30)
-        remote_size = out.read().decode().strip()
-        print(f"  远端 {remote_size} B vs 本地 {local_size} B")
-        if remote_size != str(local_size):
-            print("[FAIL] APK 上传不完整（大小不一致）")
-            c.close(); return 1
-        print("  APK 上传完成 ✓")
 
-        # ---------- 远端保留最近 APK_KEEP_COUNT 个，清除更旧 ----------
-        print(f"\n=== [远端] 清理旧 APK（保留最近 {APK_KEEP_COUNT} 个） ===")
-        prune = f"""set -e
+        def remote_sha256(path: str) -> str:
+            """远端文件的 sha256；文件不存在或命令不可用返回空串"""
+            _, out, _ = c.exec_command(f"sha256sum {shlex.quote(path)} 2>/dev/null", timeout=30)
+            text = out.read().decode("utf-8", "ignore").strip()
+            return text.split()[0].lower() if text else ""
+
+        skip_apk = False
+        if a.apk_sha:
+            remote_sha = remote_sha256(remote_apk)
+            if remote_sha and remote_sha == a.apk_sha.lower():
+                skip_apk = True
+                print(f"  本地 {a.apk_name} {local_size} B (sha256 {a.apk_sha[:12]}…)")
+                print(f"  远端同名文件 sha256 一致 → [APK] SKIP：跳过上传与旧包清理"
+                      f"（本次省下约 {local_size / 1048576:.1f} MB 传输）")
+            else:
+                reason = "远端无此文件" if not remote_sha else f"远端 sha256 {remote_sha[:12]}… 不同"
+                print(f"  本地 {a.apk_name} {local_size} B (sha256 {a.apk_sha[:12]}…)，{reason} → 需要上传")
+        else:
+            print("  未提供 --apk-sha，无法比对远端内容 → 按原有行为直接上传")
+
+        if not skip_apk:
+            sftp = c.open_sftp()
+            try:
+                sftp.stat(apk_dir)
+            except IOError:
+                try:
+                    sftp.mkdir(apk_dir)
+                except IOError:
+                    pass  # 并发下已存在则忽略
+            print(f"  {a.apk_name} {local_size} B → {remote_apk}")
+
+            def aprogress(sent, total):
+                print(f"\r  ↑ {sent*100//total}% ({sent/1048576:.1f}/{total/1048576:.1f} MB)", end="", flush=True)
+
+            sftp.put(a.apk, remote_apk, callback=aprogress)
+            print()
+            sftp.close()
+            # 核验远端大小
+            _, out, _ = c.exec_command(f"stat -c %s {remote_apk}", timeout=30)
+            remote_size = out.read().decode().strip()
+            print(f"  远端 {remote_size} B vs 本地 {local_size} B")
+            if remote_size != str(local_size):
+                print("[FAIL] APK 上传不完整（大小不一致）")
+                c.close(); return 1
+            print("  APK 上传完成 ✓")
+
+            # ---------- 远端保留最近 APK_KEEP_COUNT 个，清除更旧 ----------
+            print(f"\n=== [远端] 清理旧 APK（保留最近 {APK_KEEP_COUNT} 个） ===")
+            prune = f"""set -e
 cd {apk_dir}
 # 按版本号排序（sort -V），保留最近 {APK_KEEP_COUNT} 个、删除更旧（新版在末5个）
 ls k-app-*-release.apk 2>/dev/null | sort -V | head -n -{APK_KEEP_COUNT} > /tmp/k-old-apk.txt
@@ -279,28 +309,28 @@ echo '--- 保留的 APK（按版本旧→新） ---'
 ls -1 k-app-*-release.apk 2>/dev/null | sort -V
 echo APK_PRUNE_DONE
 """
-        chan = c.get_transport().open_session()
-        chan.settimeout(30)
-        chan.exec_command(prune)
-        start = time.time()
-        while True:
-            if chan.recv_ready():
-                d = chan.recv(65536)
-                if d:
-                    sys.stdout.write(d.decode("utf-8", "ignore")); sys.stdout.flush()
-            if chan.exit_status_ready():
-                while chan.recv_ready():
+            chan = c.get_transport().open_session()
+            chan.settimeout(30)
+            chan.exec_command(prune)
+            start = time.time()
+            while True:
+                if chan.recv_ready():
                     d = chan.recv(65536)
                     if d:
                         sys.stdout.write(d.decode("utf-8", "ignore")); sys.stdout.flush()
-                break
-            if time.time() - start > 120:
-                print("\n[APK 清理超时]"); c.close(); return 1
-            time.sleep(0.2)
-        pcode = chan.recv_exit_status()
-        print(f"\n[APK 清理退出码: {pcode}]")
-        if pcode != 0:
-            c.close(); return 1
+                if chan.exit_status_ready():
+                    while chan.recv_ready():
+                        d = chan.recv(65536)
+                        if d:
+                            sys.stdout.write(d.decode("utf-8", "ignore")); sys.stdout.flush()
+                    break
+                if time.time() - start > 120:
+                    print("\n[APK 清理超时]"); c.close(); return 1
+                time.sleep(0.2)
+            pcode = chan.recv_exit_status()
+            print(f"\n[APK 清理退出码: {pcode}]")
+            if pcode != 0:
+                c.close(); return 1
 
     # ---------- 部署后验证 ----------
     print("\n=== [SFTP] 部署后验证 ===")
@@ -339,9 +369,15 @@ echo APK_PRUNE_DONE
         ("nginx root 仅指向 k 站点与系统默认（无仓库外路径）", "nginx -T 2>/dev/null | grep -E '^\\s*root ' | grep -vcE '/var/www/k/client/dist|/var/www/html' || true", lambda o: o.strip() == "0"),
     ]
     if want_apk:
-        checks.append(("新版 APK 已落地",
-            f"stat -c %s {REMOTE_DIR}/client/dist/apk/{a.apk_name}",
-            lambda o: o.strip() == str(os.path.getsize(a.apk))))
+        # 有 sha256 就比内容（比大小严格：同样大小的不同构建是存在的），否则退回比大小
+        if a.apk_sha:
+            checks.append(("新版 APK 已落地且内容与本地一致（sha256）",
+                f"sha256sum {REMOTE_DIR}/client/dist/apk/{a.apk_name}",
+                lambda o: bool(o.strip()) and o.strip().split()[0].lower() == a.apk_sha.lower()))
+        else:
+            checks.append(("新版 APK 已落地",
+                f"stat -c %s {REMOTE_DIR}/client/dist/apk/{a.apk_name}",
+                lambda o: o.strip() == str(os.path.getsize(a.apk))))
     all_ok = True
     for title, cmd, cond in checks:
         _, out, err = c.exec_command(cmd, timeout=60)

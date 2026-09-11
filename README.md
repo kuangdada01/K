@@ -295,7 +295,9 @@ cd android && ./gradlew.bat assembleRelease   # Windows；macOS/Linux 用 ./grad
 - 环境：Android SDK（`client/android/local.properties` 的 `sdk.dir`，不入库）+ JDK。Gradle 9.1 起支持 Java 25，Android Studio 自带 JBR 25 可直接构建（旧 JDK 21 亦可）
 - 签名：`client/android/keystore.properties`（storePassword/keyPassword，不入库）+ `app/k-release.keystore`
 - 版本：改 `client/android/app/build.gradle` 的 `versionCode`/`versionName`，并同步 `.env` 的 `APP_VERSION`/`APP_APK_URL`/`APP_UPDATE_NOTES`（App 内更新提示以 `/api/app/version` 返回为准，服务器版本须高于已安装版本才会弹窗）
-- 发布：`deploy.ps1` 检测到新 APK 会自动上传到远端 `client/dist/apk/`（大小核验），并保留最近 5 个版本、清理更旧
+- 发布：`deploy.ps1` 检测到新 APK 会自动上传到远端 `client/dist/apk/`（**sha256 核验**），并保留最近 5 个版本、清理更旧。
+  本地会先算 APK 的 sha256 交给 `deploy-sftp.py`：**远端同名文件内容一致就直接打印 `[APK] SKIP`**，
+  跳过那次多余的单独上传（省十几 MB）——APK 只在客户端发版时才变，而部署包里本来就带着它
 
 ---
 
@@ -330,7 +332,7 @@ docker run -p 3000:3000 \
 - 首次部署新服务器：`deploy-sftp.py` 默认校验本机 `~/.ssh/known_hosts` 中的主机指纹（防中间人），未知主机会被拒绝；确认网络可信后可加 `--trust-host` 豁免一次，或先 `ssh-keyscan -p <端口> <IP> >> ~/.ssh/known_hosts`。
 - **必须用 PowerShell 7（`pwsh`）**：`deploy.ps1` 等脚本含 UTF-8 无 BOM 中文内容，Windows 自带的 PowerShell 5.1（`powershell`）按 GBK 解码会报语法错误（如意外的标记 `)`）。
 - 目标目录 `/var/www/k`；PM2 进程 `k-server`；nginx 站点 `sites-enabled/k`（默认站反向代理到 `127.0.0.1:3000`）；共享包链接 `server/node_modules/@k/shared`。
-- 远端流程（`deploy-sftp.py`，7 步）：`npm run build` → 打包 dist/books/.env（**不含 uploads**，防覆盖生产用户数据）→ SFTP 上传 → ① 解压到**同分区 staging**（不触碰现行产物）→ ② **完整性预检**（缺 `server/dist/index.js` / `client/dist/index.html` / `shared/dist/index.js` 等即中止）→ ③ 旧 `dist` `mv` 进 `.deploy-backup/<时间戳>`、新 `dist` `mv` 就位（两次 rename，无「目录不存在」中间态）→ ④ 同步 `.env`/清单/ecosystem/books/public → ⑤ 运行环境检查（node/ffmpeg/pm2）→ ⑥ **`npm ci --omit=dev`**（按 lockfile 确定性安装）+ 重建 `@k/shared` 链接 → ⑦ **`pm2 startOrReload --update-env`** + `pm2 save`（复用同一条目，避免 `delete+start` 的真空期）→ 新版 APK 单独上传（大小核验，保留最近 5 个）→ 部署后自动核验：首页/health 200、**首页引用的每个 `/assets/*.js|css` 都断言 200**（抓「HTML 是新的、资源是旧的」）、dist 时间戳、node_modules 无外链、nginx root 仅指向 `/var/www/k`。
+- 远端流程（`deploy-sftp.py`，7 步）：`npm run build` → 打包 dist/books/.env（**不含 uploads**，防覆盖生产用户数据）→ SFTP 上传 → ① 解压到**同分区 staging**（不触碰现行产物）→ ② **完整性预检**（缺 `server/dist/index.js` / `client/dist/index.html` / `shared/dist/index.js` 等即中止）→ ③ 旧 `dist` `mv` 进 `.deploy-backup/<时间戳>`、新 `dist` `mv` 就位（两次 rename，无「目录不存在」中间态）→ ④ 同步 `.env`/清单/ecosystem/books/public → ⑤ 运行环境检查（node/ffmpeg/pm2）→ ⑥ **`npm ci --omit=dev`**（按 lockfile 确定性安装）+ 重建 `@k/shared` 链接 → ⑦ **`pm2 startOrReload --update-env`** + `pm2 save`（复用同一条目，避免 `delete+start` 的真空期）→ 新版 APK 单独上传（**先比远端同名文件的 sha256，一致则跳过并打印 `[APK] SKIP`**；需要上传时按 sha256 核验，保留最近 5 个）→ 部署后自动核验：首页/health 200、**首页引用的每个 `/assets/*.js|css` 都断言 200**（抓「HTML 是新的、资源是旧的」）、dist 时间戳、node_modules 无外链、nginx root 仅指向 `/var/www/k`。
 - **回滚**：备份目录即上一版完整产物，`mv` 回去 + `pm2 restart k-server`（脚本末尾会打印本次的确切命令）。备份保留最近 3 份。**数据库不需要跟着回滚**——迁移只做「加列」这类前向兼容改动，旧代码可读新库（已用真实回滚演练验证：回滚/前滚各约 0.5 秒的重启窗口）。
 - **数据库快照**：`.workbuddy/tmp/db-backup.py`（远端 `db.backup()` 一致性备份 → `integrity_check` → SFTP 下载 → sha256 比对，认证同样密钥优先），落到 `server/k.db.prod-backup-<时间戳>.db`。
 - **生产 SSH 已关闭口令登录**（`/etc/ssh/sshd_config.d/00-hardening.conf`，只允许密钥）；需要恢复口令登录时删掉该 drop-in 并 `systemctl reload ssh`。

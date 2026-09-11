@@ -64,6 +64,7 @@ Write-Host "  构建完成 ✓" -ForegroundColor Green
 # 定位新版签名 APK（Gradle 输出）并计算版本化文件名；未构建 APK 时跳过单独上传
 $APK_LOCAL = ""
 $APK_NAME = ""
+$APK_SHA = ""
 $gradle = Join-Path $PSScriptRoot "client\android\app\build.gradle"
 $apkOut = Join-Path $PSScriptRoot "client\android\app\build\outputs\apk\release\app-release.apk"
 if (Test-Path $gradle) {
@@ -71,7 +72,9 @@ if (Test-Path $gradle) {
     if ((Test-Path $apkOut) -and $versionName) {
         $APK_LOCAL = $apkOut
         $APK_NAME = "k-app-$versionName-release.apk"
-        Write-Host "  找到新版 APK: $APK_NAME ($([math]::Round((Get-Item $apkOut).Length/1MB,1)) MB) ✓" -ForegroundColor Green
+        # 本地 sha256：远端同名文件一致时后端会跳过上传（APK 十几 MB，只在发版时才变）
+        $APK_SHA = (Get-FileHash $apkOut -Algorithm SHA256).Hash.ToLower()
+        Write-Host "  找到新版 APK: $APK_NAME ($([math]::Round((Get-Item $apkOut).Length/1MB,1)) MB, sha256 $($APK_SHA.Substring(0,12))…) ✓" -ForegroundColor Green
     } else {
         Write-Host "  未找到 Gradle 输出的 APK（$apkOut），本次跳过 APK 单独上传/清理旧版" -ForegroundColor DarkYellow
     }
@@ -156,9 +159,13 @@ if ($PASSWORD) {
 }
 # 用数组 + splat 调用 native 命令，避免字符串变量被当作单个参数传给 argparse
 $sftpArgs = @("--server", $SERVER, "--package", $pkgPath)
-# 有新 APK 时传给 SFTP 后端做单独上传 + 保留5个/清理旧版
+# 有新 APK 时传给 SFTP 后端做单独上传 + 保留5个/清理旧版；
+# 同时把本地 sha256 传过去：远端同名文件内容一致时后端直接跳过上传（省十几 MB）
 if ($APK_LOCAL -and $APK_NAME) {
     $sftpArgs += @("--apk", $APK_LOCAL, "--apk-name", $APK_NAME)
+    if ($APK_SHA) {
+        $sftpArgs += @("--apk-sha", $APK_SHA)
+    }
 }
 & python $SFTP_BACKEND @sftpArgs
 $sftpExit = $LASTEXITCODE
