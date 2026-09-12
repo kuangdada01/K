@@ -13,15 +13,17 @@
   opacity: 1;
   /* 入场：一次性淡入动画 */
   animation: chatZoomFadeIn 0.2s ease;
-  /* 关闭与「双击撤销关闭」都走同一条可中断的 transition。
-     此前关闭用 animation（.closing 切换 animation-name）：双击撤销时
-     animation-name 切回入场动画会被浏览器判定为新动画**从头重播**——
-     整屏从全透明重新淡入，正是双击缩放前那一下「闪」。 */
-  transition: opacity 0.18s ease;
+  /* ★ transition 只挂在 .closing 上：淡出（= 露出下层消息列表）必须晚于双击窗口
+     （见 useCancelableClose 的 CANCELABLE_CLOSE_FADE_DELAY_MS）。
+     曾经关闭用 animation 切换 animation-name（撤销时入场动画从头重播 = 闪），
+     也试过把 transition 放基类做「平滑淡回」——后者会让双击撤销期间
+     「遮罩变淡 → 露出下层 → 再淡回」，同样是可见的闪烁。 */
 }
 
 .overlay.closing {
   opacity: 0;
+  /* 时长与 CANCELABLE_CLOSE_FADE_MS 一致（keepMs 按它计算卸载时机） */
+  transition: opacity 180ms ease;
 }
 
 .close {

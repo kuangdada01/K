@@ -4,10 +4,10 @@
  * ============================================================
  * 点击消息图片后的全屏预览（纯展示组件）。
  * 支持双指缩放/平移（useImagePinchZoom，1x–4x）。
- * 单击关闭：轻点后延迟 ~110ms 开始淡出（双击窗口内的第二下到达前不播淡出，
- * 双击缩放不闪烁），双击窗口内第二次轻点撤销关闭并转双击缩放；
- * 淡出/撤销共用同一条 opacity transition（可中断可反向），撤销时平滑淡回，
- * 不会像 animation 切换那样把入场动画从头重播（= 闪一下）。
+ * 单击关闭：轻点后**先不播任何动画**，等双击窗口（+余量）过去、确认不会再有
+ * 第二次轻点，才淡出关闭；窗口内第二次轻点撤销关闭并转双击缩放。
+ * 因淡出晚于双击窗口，撤销时遮罩透明度从未变化 —— 既不会透出下层消息列表，
+ * 也不存在「animation 切换导致入场动画重播」的闪烁。
  * （useCancelableClose + onSingleTapCancelled）；
  * 桌面鼠标点击仍走 overlay/img 的 onClick（触摸 click 已被 hook 吞掉）。
  * 关闭动画播完后由 onClose 通知父级卸载。
@@ -33,7 +33,7 @@ export default function ChatZoomOverlay({ zoomImage, onClose }: ChatZoomOverlayP
   const { closing, requestClose, cancelClose } = useCancelableClose(onClose);
 
   // 双指缩放/平移 + 双击放大/单击关闭：绑定到遮罩与图片（图片就绪后 attach 内惰性取元素）。
-  // onSingleTap：触摸轻点启动关闭（淡出延迟 ~110ms，双击可撤销）；
+  // onSingleTap：触摸轻点启动关闭（淡出晚于双击窗口，双击可撤销且无闪烁）；
   // onSingleTapCancelled：窗口内第二次轻点撤销关闭并转双击缩放。
   // 桌面鼠标单击仍走 overlay/img 的 onClick（触摸 click 已被 hook 吞掉）
   useEffect(() => {

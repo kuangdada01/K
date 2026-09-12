@@ -76,8 +76,8 @@ export default function PrivateFolder({
   };
 
   // 私密图片全屏：双指缩放/平移 + 双击放大/单击关闭（1x–4x）。
-  // 单击关闭两阶段编排：轻点后延迟 ~110ms 播淡出（双击窗口内的第二下到达前
-  // 不播动画，双击缩放不闪烁），双击窗口内可撤销转缩放
+  // 单击关闭两阶段编排：轻点后先不播动画，等双击窗口过去才淡出
+  // （淡出早于窗口会让撤销期间透出下层页面 = 闪烁），窗口内可撤销转缩放
   const zoomOverlayRef = useRef<HTMLDivElement>(null);
   const pinchZoom = useImagePinchZoom();
   const zoomVisible = privateZoomIndex !== null;

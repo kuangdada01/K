@@ -10,12 +10,49 @@ import { describe, expect, it, vi, afterEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import {
   useCancelableClose,
-  CANCELABLE_CLOSE_KEEP_MS,
   CANCELABLE_CLOSE_FADE_DELAY_MS,
+  CANCELABLE_CLOSE_FADE_MS,
+  CANCELABLE_CLOSE_KEEP_MS,
 } from './useCancelableClose';
+import { DOUBLE_TAP_MS } from './useImagePinchZoom';
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('关闭时序不变量（防「双击闪烁、漏出下层页面」回归）', () => {
+  // 回归背景：淡出曾设为 110ms（早于 300ms 双击窗口）。第一次轻点后遮罩开始
+  // 变透明，窗口内第二次轻点撤销时用户看到「遮罩变淡 → 露出下层页面 → 再淡回」。
+  it('淡出必须晚于双击判定窗口，撤销路径上才不存在半透明状态', () => {
+    expect(CANCELABLE_CLOSE_FADE_DELAY_MS).toBeGreaterThan(DOUBLE_TAP_MS);
+  });
+
+  it('卸载等待时长必须容得下「淡出延迟 + 淡出时长」，淡出不会被截断', () => {
+    expect(CANCELABLE_CLOSE_KEEP_MS).toBeGreaterThanOrEqual(
+      CANCELABLE_CLOSE_FADE_DELAY_MS + CANCELABLE_CLOSE_FADE_MS
+    );
+  });
+
+  it('卸载等待时长必须 ≥ 双击窗口，否则第二次轻点到达时组件已卸载', () => {
+    expect(CANCELABLE_CLOSE_KEEP_MS).toBeGreaterThanOrEqual(DOUBLE_TAP_MS);
+  });
+
+  it('整个双击窗口内都不会播淡出（逐点检查）', () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    const { result } = renderHook(() => useCancelableClose(onClose));
+    act(() => {
+      result.current.requestClose();
+    });
+    // 从 0 到双击窗口末端，closing 必须始终为 false（遮罩透明度不变）
+    for (let t = 0; t <= DOUBLE_TAP_MS; t += 20) {
+      act(() => {
+        vi.advanceTimersByTime(20);
+      });
+      expect(result.current.closing, `t=${t}ms 时不应开始淡出`).toBe(false);
+    }
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
 
 describe('useCancelableClose', () => {

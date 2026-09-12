@@ -164,15 +164,16 @@
   z-index: 400;
   /* 全屏看图：禁原生手势（滚动/页面缩放），平移/缩放全交给 JS（useImagePinchZoom） */
   touch-action: none;
-  /* 关闭与「双击撤销关闭」共用同一条 transition：transition 常驻基类才能在撤销时
-     从当前透明度**平滑淡回**；此前只挂在 .closing 上，撤销=移除 transition=瞬间
-     硬跳回全不透明，双击缩放前会闪一下。
-     （挂载是元素首次插入、没有 before-change 样式，因此入场不会误播淡入。） */
-  transition: opacity 0.16s ease;
+  /* ★ transition 只挂在 .closing 上：淡出（= 露出下层页面）必须晚于双击窗口，
+     且撤销路径上不存在任何可倒放的过渡。
+     曾把 transition 放到基类做「撤销时平滑淡回」——结果双击撤销看到的是
+     「遮罩变淡 → 露出帖子详情页 → 再淡回」，即用户反馈的闪烁。 */
 }
 
 .zoomOverlay.closing {
   opacity: 0;
+  /* 时长与 CANCELABLE_CLOSE_FADE_MS 一致（keepMs 按它计算卸载时机） */
+  transition: opacity 180ms ease;
 }
 
 .zoomContent {

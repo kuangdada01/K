@@ -19,14 +19,26 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { DOUBLE_TAP_MS } from './useImagePinchZoom';
 
-/** 最终卸载的等待时长：双击窗口 + 安全余量（ms）。
- *  必须 ≥ 双击窗口，否则第二次轻点到达时组件已被卸载，双击缩放失效。 */
-export const CANCELABLE_CLOSE_KEEP_MS = DOUBLE_TAP_MS + 80;
+/** 关闭淡出时长（ms）。★ 必须与 CSS 里 `.closing` 的 transition 时长一致，
+ *  keepMs 靠它保证「淡出播完再卸载」。 */
+export const CANCELABLE_CLOSE_FADE_MS = 180;
 
-/** 关闭动画延迟启动（ms）：双击窗口内的第二次轻点通常早于该间隔到达，
- *  延迟播淡出可让双击缩放前看不到"先暗一下又弹回"的闪烁；
- *  单击关闭的视觉响应仍约 100ms 内开始（此前是 300ms 干等） */
-export const CANCELABLE_CLOSE_FADE_DELAY_MS = 110;
+/** 关闭淡出延迟启动（ms）——**必须晚于双击判定窗口**。
+ *
+ *  教训（用户反馈「双击放大位置闪烁、漏出帖子详情页信息」）：
+ *  这里原为 110ms，早于 300ms 的双击窗口。第一次轻点后遮罩就开始变透明，
+ *  而遮罩底色只有 0.9 不透明度 —— 窗口内第二次轻点撤销时，用户看到的是
+ *  「遮罩变淡 → 露出下层的帖子详情页 → 再淡回」。配合可逆 transition
+ *  （撤销时平滑淡回而非瞬跳）后，这段「露底」被拉长成肉眼可见的闪烁。
+ *
+ *  根因是**在可撤销窗口内启动了一个可逆的「露底」动画**：淡出遮罩 = 露出下层，
+ *  而撤销要把它倒放回去，中途必然透出下层内容；因此淡出必须等双击窗口
+ *  彻底关闭之后才开始 —— 那时已不可能再撤销，露底也就成了「关闭」的正确结果。 */
+export const CANCELABLE_CLOSE_FADE_DELAY_MS = DOUBLE_TAP_MS + 40;
+
+/** 最终卸载的等待时长：淡出延迟 + 淡出时长 + 余量（ms）。
+ *  必须 ≥ 双击窗口，否则第二次轻点到达时组件已被卸载，双击缩放失效。 */
+export const CANCELABLE_CLOSE_KEEP_MS = CANCELABLE_CLOSE_FADE_DELAY_MS + CANCELABLE_CLOSE_FADE_MS + 60;
 
 export interface CancelableCloseApi {
   /** 是否处于关闭中（消费方据此挂 closing 类播放关闭动画） */

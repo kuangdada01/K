@@ -418,11 +418,11 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
           } else {
             lastTap = { x, y, t: Date.now() };
             if (!closePending) {
-              // 单击：立即回调启动关闭流程（不再干等双击窗口）。关闭动画是否
-              // 延迟播放由消费方编排（useCancelableClose 默认延迟 ~110ms——
-              // 双击窗口内的第二次轻点会走上面的双击分支：先 onSingleTapCancelled
-              // 撤销关闭，再执行双击缩放，期间不播淡出不闪烁）。窗口过后置回
-              // closePending=false，允许下一次轻点重新走单击关闭。
+              // 单击：立即回调启动关闭流程（不再干等双击窗口）。真正的关闭动画
+              // 由消费方编排（useCancelableClose 会等双击窗口+余量过去才淡出：
+              // 窗口内第二次轻点走上面的双击分支，先 onSingleTapCancelled 撤销
+              // 关闭再执行双击缩放；此时遮罩透明度从未变化，不会有任何闪烁）。
+              // 窗口过后置回 closePending=false，允许下一次轻点重新走单击关闭。
               closePending = true;
               opts?.onSingleTap?.();
               singleTapTimer = setTimeout(() => {
