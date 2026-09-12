@@ -42,6 +42,8 @@ public final class ImageLoader {
 
     /** 内存缓存上限（KB） */
     private static final int CACHE_KB = 32 * 1024;
+    /** 单张解码后的像素预算（防 OOM）：约 4MP ≈ ARGB_8888 下 16MB */
+    private static final long MAX_DECODE_PIXELS = 4_000_000L;
     private static final ExecutorService POOL = Executors.newFixedThreadPool(3);
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
 
@@ -122,11 +124,21 @@ public final class ImageLoader {
         }
     }
 
-    /** 采样比：取 2 的幂，保证解码结果不小于目标尺寸 */
+    /** 采样比：先保证「不比目标显示尺寸小」（否则看着糊），再按像素预算收敛防 OOM。
+     *
+     *  ★ 为什么必须有第二道：只看「不低于屏幕」时，一张 4000×3000 的竖拍/横拍
+     *  相机会算出 inSampleSize = 1，即按原图解码 —— ARGB_8888 下就是 48MB，
+     *  真机上很容易 OOM 或被系统直接杀掉。换算成像素预算后同类照片落到 2000×1500
+     *  左右（约 12MB），1x 观看无差别，只有 4x 放大时略软。 */
     private static int sampleSize(int w, int h, int reqW, int reqH) {
-        if (reqW <= 0 || reqH <= 0 || w <= 0 || h <= 0) return 1;
+        if (w <= 0 || h <= 0) return 1;
         int size = 1;
-        while (w / (size * 2) >= reqW && h / (size * 2) >= reqH) {
+        if (reqW > 0 && reqH > 0) {
+            while (w / (size * 2) >= reqW && h / (size * 2) >= reqH) {
+                size *= 2;
+            }
+        }
+        while ((long) (w / size) * (h / size) > MAX_DECODE_PIXELS) {
             size *= 2;
         }
         return size;

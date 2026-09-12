@@ -16,6 +16,7 @@
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
 export interface NativeViewerRect {
+  /** 物理像素（**不是** CSS px：已乘 devicePixelRatio，原生侧直接用） */
   x: number;
   y: number;
   width: number;
@@ -28,7 +29,7 @@ export interface OpenNativeViewerOptions {
   index: number;
   /** 需要鉴权的图片（/api/...）带上 Authorization 等请求头 */
   headers?: Record<string, string>;
-  /** 被点缩略图的屏幕矩形（CSS px）——原生侧据此做 Hero 放大进入 */
+  /** 被点缩略图的屏幕矩形（物理像素）——原生侧据此做 Hero 放大进入 */
   rect?: NativeViewerRect;
 }
 
@@ -49,12 +50,28 @@ export function isNativeViewerAvailable(): boolean {
   return Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('NativeImageViewer');
 }
 
-/** 元素 → CSS px 矩形（Hero 用） */
+/**
+ * 元素 → **物理像素**矩形（Hero 用）。
+ *
+ * 为什么在这里换算而不是交给原生：原生侧要用只能靠 `WebView.getScale()` 猜
+ * 缩放比（语义含糊，取到异常值就表现为「从错误位置放大」）；网页层
+ * `devicePixelRatio` 是确定的。App 里页面缩放已关闭（setSupportZoom(false)），
+ * 因此 CSS px × DPR 就是屏幕物理像素，精确无歧义。
+ *
+ * 应急开关：localStorage 置 `k_viewer_hero=off` 可关掉 Hero（退化为淡入），
+ * 便于真机上快速区分「是 Hero 的问题还是查看器本身的问题」。
+ */
 export function rectOf(el: Element | null): NativeViewerRect | undefined {
   if (!el) return undefined;
+  try {
+    if (localStorage.getItem('k_viewer_hero') === 'off') return undefined;
+  } catch {
+    // localStorage 不可用（隐私模式等）：照常返回
+  }
   const r = el.getBoundingClientRect();
   if (r.width <= 0 || r.height <= 0) return undefined;
-  return { x: r.left, y: r.top, width: r.width, height: r.height };
+  const dpr = window.devicePixelRatio || 1;
+  return { x: r.left * dpr, y: r.top * dpr, width: r.width * dpr, height: r.height * dpr };
 }
 
 /**

@@ -79,22 +79,28 @@ public class NativeImageViewerPlugin extends Plugin {
             intent.putExtra(ImageViewerActivity.EXTRA_HEADERS, hb);
         }
 
-        // 缩略图矩形（CSS px）→ 屏幕 px：乘以 WebView 的页面缩放（设备像素比）
+        // 缩略图矩形：**网页层已换算成物理像素**（CSS px × devicePixelRatio）。
+        // 早期版本在这里乘 WebView.getScale()，但该 API 语义含糊，取到异常值就
+        // 表现为「从错误位置放大」；网页层的 devicePixelRatio 是确定的。
+        // 再做一次合理性校验：超出屏幕好几倍就干脆不做 Hero（退化为淡入），
+        // 宁可少一个动画，也不能出现「图从屏幕外飞进来」这种明显 bug。
         JSObject rect = call.getObject("rect");
         if (rect != null) {
-            float scale = 1f;
-            try {
-                if (getBridge() != null && getBridge().getWebView() != null) {
-                    scale = getBridge().getWebView().getScale();
-                }
-            } catch (Throwable ignored) {
-                // 取不到就用 1
-            }
-            int x = Math.round((float) rect.optDouble("x", 0) * scale);
-            int y = Math.round((float) rect.optDouble("y", 0) * scale);
-            int w = Math.round((float) rect.optDouble("width", 0) * scale);
-            int h = Math.round((float) rect.optDouble("height", 0) * scale);
-            if (w > 0 && h > 0) {
+            int x = (int) Math.round(rect.optDouble("x", 0));
+            int y = (int) Math.round(rect.optDouble("y", 0));
+            int w = (int) Math.round(rect.optDouble("width", 0));
+            int h = (int) Math.round(rect.optDouble("height", 0));
+            android.util.DisplayMetrics dm = getContext().getResources().getDisplayMetrics();
+            boolean plausible =
+                    w > 0
+                            && h > 0
+                            && w <= dm.widthPixels * 2
+                            && h <= dm.heightPixels * 2
+                            && x > -dm.widthPixels
+                            && y > -dm.heightPixels
+                            && x < dm.widthPixels * 2
+                            && y < dm.heightPixels * 2;
+            if (plausible) {
                 intent.putExtra(ImageViewerActivity.EXTRA_SRC_RECT, new int[] { x, y, x + w, y + h });
             }
         }

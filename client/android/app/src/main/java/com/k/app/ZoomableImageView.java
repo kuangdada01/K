@@ -128,21 +128,26 @@ public class ZoomableImageView extends AppCompatImageView {
                 dismissStartY = event.getY();
                 dismissDx = 0f;
                 dismissDy = 0f;
+                // 放大态落指即截断父级：本轮手势整段由本视图平移，
+                // 绝不让 ViewPager2 翻页（下一轮手势系统会自动复位该标志）
+                if (isZoomed()) requestDisallowIntercept(true);
                 break;
             case MotionEvent.ACTION_MOVE:
                 if (!scaleDetector.isInProgress() && event.getPointerCount() == 1 && !isZoomed()) {
                     float dy = event.getY() - dismissStartY;
                     float dx = event.getX() - dismissStartX;
-                    // 1x 下「纵向为主」的下拉进入拖拽关闭；横向为主则不动，
-                    // 让 ViewPager2 正常翻页（不截断父级拦截）
-                    if (!dismissing && Math.abs(dy) > DISMISS_SLOP && Math.abs(dy) > Math.abs(dx)) {
+                    // 1x 下「向下为主」的下拉进入拖拽关闭（微信/系统相册都是下拉关闭，
+                    // 上滑不关）；横向为主则不动，让 ViewPager2 正常翻页（不截断父级）
+                    if (!dismissing
+                            && dy > DISMISS_SLOP
+                            && dy > Math.abs(dx)) {
                         dismissing = true;
                         requestDisallowIntercept(true);
                     }
                     if (dismissing) {
                         dismissDy = dy;
                         dismissDx = dx;
-                        float progress = Math.min(1f, Math.abs(dy) / (getHeight() * 0.6f));
+                        float progress = Math.min(1f, dy / (getHeight() * 0.6f));
                         if (dismissListener != null) dismissListener.onDragDismiss(dismissDx, dismissDy, progress);
                         return true;
                     }
@@ -153,7 +158,8 @@ public class ZoomableImageView extends AppCompatImageView {
                 if (dismissing) {
                     dismissing = false;
                     requestDisallowIntercept(false);
-                    boolean commit = Math.abs(dismissDy) > getHeight() * DISMISS_COMMIT;
+                    // 只认下拉（dy > 0）；上滑即使过阈值也不算关闭
+                    boolean commit = dismissDy > getHeight() * DISMISS_COMMIT;
                     if (dismissListener != null) dismissListener.onDragDismissEnd(commit, dismissDx, dismissDy);
                     return true;
                 }
@@ -222,6 +228,10 @@ public class ZoomableImageView extends AppCompatImageView {
         public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
             // 只有放大态才由本视图平移；1x 交给 ViewPager2 / 拖拽关闭
             if (!isZoomed() || scaleDetector.isInProgress()) return false;
+            // ★ 每次 ACTION_DOWN 系统都会重置 disallowIntercept 标志，所以放大态
+            //   必须在手势内重新截断父级，否则横向拖动会被 ViewPager2 抢去翻页
+            //   （症状：放大后拖动变成翻页，而不是平移图片）
+            requestDisallowIntercept(true);
             suppMatrix.postTranslate(-distanceX, -distanceY);
             applyMatrix();
             return true;

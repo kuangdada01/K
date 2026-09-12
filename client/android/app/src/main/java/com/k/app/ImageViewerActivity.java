@@ -54,6 +54,10 @@ public class ImageViewerActivity extends AppCompatActivity {
     public static final String EXTRA_SRC_RECT = "srcRect";
     public static final String EXTRA_COLOR = "bgColor";
     public static final String RESULT_INDEX = "index";
+    /** Hero 等待解码的上限（ms）：超过就退化为淡入，避免「点了没反应」 */
+    private static final long HERO_TIMEOUT_MS = 180;
+
+    private final android.os.Handler mainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
 
     private ViewPager2 pager;
     private TextView counter;
@@ -143,8 +147,13 @@ public class ImageViewerActivity extends AppCompatActivity {
 
     /**
      * Hero 打开：把首图先画在缩略图矩形，再动画到屏幕内的目标矩形。
-     * 目标是「等比铺满」（contain），与页内 ImageView 的显示方式一致，
-     * 动画结束后移除 hero 层、显示正常页面，避免两套绘制叠加。
+     *
+     * ★ 为什么要「立刻给反馈 + 超时兜底」：原生侧的解码是独立的一次请求
+     * （WebView 的图片缓存不共享），首次打开可能要几百毫秒。若这段时间里
+     * 什么都不显示，用户会觉得「点了没反应」。所以：
+     * - 落手指令后**立刻**把幕布拉到 0.35（有明确反馈，又不是全黑）；
+     * - 图在 HERO_TIMEOUT_MS 内解码好 → 播 Hero，幕布同时补到 1；
+     * - 超时或失败 → 退化为「页内加载指示 + 幕布渐入」，绝不空等。
      */
     private void playOpenHero() {
         final FrameLayout root = findViewById(R.id.viewer_root);
@@ -153,16 +162,34 @@ public class ImageViewerActivity extends AppCompatActivity {
         final int screenW = getResources().getDisplayMetrics().widthPixels;
         final int screenH = getResources().getDisplayMetrics().heightPixels;
 
+        // 立刻反馈：半透明幕布（pager 先隐藏，避免未定位的整图闪一下）
+        scrim.setAlpha(0.35f);
+        pager.setAlpha(0f);
+
+        final boolean[] heroDone = { false };
+        final Runnable timeout =
+                () -> {
+                    if (!heroDone[0]) {
+                        heroDone[0] = true;
+                        fadeInOnly();
+                    }
+                };
+        mainHandler.postDelayed(timeout, HERO_TIMEOUT_MS);
+
         ImageLoader.load(url, headers, screenW, screenH, new ImageLoader.Callback() {
             @Override
             public void onSuccess(Bitmap bitmap) {
-                if (isFinishing() || isDestroyed()) return;
+                mainHandler.removeCallbacks(timeout);
+                if (heroDone[0] || isFinishing() || isDestroyed()) return;
                 int bw = bitmap.getWidth();
                 int bh = bitmap.getHeight();
                 if (bw <= 0 || bh <= 0) {
+                    heroDone[0] = true;
                     fadeInOnly();
                     return;
                 }
+                heroDone[0] = true;
+
                 // 目标矩形：等比 contain 进屏幕
                 float scale = Math.min((float) screenW / bw, (float) screenH / bh);
                 int dstW = Math.round(bw * scale);
@@ -173,8 +200,7 @@ public class ImageViewerActivity extends AppCompatActivity {
                 ImageView heroView = new ImageView(ImageViewerActivity.this);
                 heroView.setScaleType(ImageView.ScaleType.FIT_XY);
                 heroView.setImageBitmap(bitmap);
-                FrameLayout.LayoutParams lp =
-                        new FrameLayout.LayoutParams(dstW, dstH);
+                FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dstW, dstH);
                 lp.leftMargin = dstL;
                 lp.topMargin = dstT;
                 root.addView(heroView, lp);
@@ -195,8 +221,6 @@ public class ImageViewerActivity extends AppCompatActivity {
                 heroView.setScaleY(startScale);
                 heroView.setTranslationX(startCx - dstCx);
                 heroView.setTranslationY(startCy - dstCy);
-                // 页内图片先隐藏，Hero 落位后再显示，避免「两张图同时存在」
-                pager.setAlpha(0f);
 
                 ValueAnimator anim = ValueAnimator.ofFloat(0f, 1f);
                 anim.setDuration(240);
@@ -208,7 +232,7 @@ public class ImageViewerActivity extends AppCompatActivity {
                     heroView.setScaleY(s);
                     heroView.setTranslationX((startCx - dstCx) * (1f - t));
                     heroView.setTranslationY((startCy - dstCy) * (1f - t));
-                    scrim.setAlpha(t);
+                    scrim.setAlpha(0.35f + 0.65f * t);
                 });
                 anim.addListener(new android.animation.AnimatorListenerAdapter() {
                     @Override
@@ -223,6 +247,9 @@ public class ImageViewerActivity extends AppCompatActivity {
 
             @Override
             public void onError() {
+                mainHandler.removeCallbacks(timeout);
+                if (heroDone[0]) return;
+                heroDone[0] = true;
                 fadeInOnly();
             }
         });
