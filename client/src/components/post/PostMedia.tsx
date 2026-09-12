@@ -20,7 +20,12 @@ import { resolveMediaUrl } from '../../utils';
 import { useTransformCarousel } from '../../hooks/useTransformCarousel';
 import { useImagePinchZoom } from '../../hooks/useImagePinchZoom';
 import { useCancelableClose } from '../../hooks/useCancelableClose';
-import { isNativeViewerAvailable, openNativeViewer, rectOf } from '../../lib/nativeImageViewer';
+import {
+  authHeadersFor,
+  isNativeViewerAvailable,
+  openNativeViewer,
+  rectOf,
+} from '../../lib/nativeImageViewer';
 import styles from './PostMedia.module.css';
 
 interface PostMediaProps {
@@ -82,15 +87,12 @@ export default function PostMedia({
         setZoomed(true);
         return;
       }
-      // 鉴权图片（私信/私密走 /api/）需要带上 token —— <img> 无法自定义请求头，
-      // 原生侧是普通 HTTP 请求，可以
-      const token = localStorage.getItem('k_token');
-      const needAuth = urls.some((u) => u.includes('/api/'));
       const rect = rectOf(thumbEl);
       void openNativeViewer({
         images: urls,
         index,
-        ...(needAuth && token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+        // 鉴权图片（/api/）带上 token：<img> 无法自定义请求头，原生 HTTP 可以
+        ...authHeadersFor(urls),
         ...(rect ? { rect } : {}),
       }).then((res) => {
         if (res === null) {

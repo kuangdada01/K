@@ -8,9 +8,11 @@
 
 import { RefObject, useEffect, useRef } from 'react';
 import { X, ImagePlus, ChevronLeft, ChevronRight } from 'lucide-react';
+import { resolveMediaUrl } from '../../utils';
 import { useAuthMediaUrl } from '../../hooks/useAuthMediaUrl';
 import { useImagePinchZoom } from '../../hooks/useImagePinchZoom';
 import { useCancelableClose } from '../../hooks/useCancelableClose';
+import { authHeadersFor, openNativeViewer, rectOf } from '../../lib/nativeImageViewer';
 import media from '../post/PostMedia.module.css';
 import styles from './PrivateFolder.module.css';
 
@@ -75,7 +77,25 @@ export default function PrivateFolder({
     setPrivateZoomIndex((prev) => (prev !== null ? (prev + 1) % allImages.length : null));
   };
 
-  // 私密图片全屏：双指缩放/平移 + 双击放大/单击关闭（1x–4x）。
+  /**
+   * 打开全屏看图：Capacitor 原生环境下优先交给原生查看器（原生手势 + 下拉关闭）；
+   * 不可用/打开失败（含列表里混有 blob: 未上传预览的情况）则回退 Web 覆盖层。
+   * 私密图片走 /api/ 需要鉴权，token 由 authHeadersFor 统一附加。
+   */
+  const openZoom = (idx: number, thumbEl: Element | null) => {
+    const urls = allImages.map((a) => resolveMediaUrl(a.url) || a.url);
+    const rect = rectOf(thumbEl);
+    void openNativeViewer({
+      images: urls,
+      index: idx,
+      ...authHeadersFor(urls),
+      ...(rect ? { rect } : {}),
+    }).then((res) => {
+      if (res === null) setPrivateZoomIndex(idx); // 回退 Web 覆盖层
+    });
+  };
+
+  // 私密图片全屏：双指缩放/平移 + 双击放大/单击关闭（1x–4x）—— Web 回退路径。
   // 单击关闭两阶段编排：轻点后先不播动画，等双击窗口过去才淡出
   // （淡出早于窗口会让撤销期间透出下层页面 = 闪烁），窗口内可撤销转缩放
   const zoomOverlayRef = useRef<HTMLDivElement>(null);
@@ -124,9 +144,9 @@ export default function PrivateFolder({
                     url={img.image_url}
                     alt=""
                     className={styles.zoomImg}
-                    onClick={() => {
+                    onClick={(e) => {
                       const idx = allImages.findIndex((a) => a.type === 'existing' && a.id === img.id);
-                      if (idx >= 0) setPrivateZoomIndex(idx);
+                      if (idx >= 0) openZoom(idx, e.currentTarget);
                     }}
                   />
                   <button
@@ -147,9 +167,11 @@ export default function PrivateFolder({
                   src={item.preview}
                   alt=""
                   className={styles.zoomImg}
-                  onClick={() => {
+                  onClick={(e) => {
                     const idx = allImages.findIndex((a) => a.type === 'new' && a.index === i);
-                    if (idx >= 0) setPrivateZoomIndex(idx);
+                    // 未上传的新文件是 blob: 预览，原生抓不到 → openNativeViewer
+                    // 内部会返回 null，自动落到 Web 覆盖层
+                    if (idx >= 0) openZoom(idx, e.currentTarget);
                   }}
                 />
                 <button

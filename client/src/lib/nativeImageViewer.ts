@@ -75,11 +75,33 @@ export function rectOf(el: Element | null): NativeViewerRect | undefined {
 }
 
 /**
+ * 构造鉴权请求头：只要列表里有 `/api/` 图片就带上当前 token。
+ *
+ * 为什么必须由网页层传：原生侧是普通 HTTP 请求（可以自定义请求头），
+ * 而 WebView 里的 `<img>` 不能 —— 私信/私密图片在 Web 侧是「先取 blob 再显示」，
+ * 原生侧得直连 URL，因此需要这张 token。
+ * 返回可展开对象（而不是 `headers: undefined`），避免 exactOptionalPropertyTypes 报错。
+ */
+export function authHeadersFor(images: string[]): { headers?: Record<string, string> } {
+  if (!images.some((u) => u.includes('/api/'))) return {};
+  try {
+    const token = localStorage.getItem('k_token');
+    return token ? { headers: { Authorization: `Bearer ${token}` } } : {};
+  } catch {
+    // localStorage 不可用：不带鉴权头，交给原生侧按 401 处理
+    return {};
+  }
+}
+
+/**
  * 打开原生查看器。不可用时返回 null（调用方回退 Web 查看器）。
  * 关闭（返回键/关闭按钮/下拉）后 resolve，带最终索引。
  */
 export async function openNativeViewer(options: OpenNativeViewerOptions): Promise<NativeViewerResult | null> {
   if (!isNativeViewerAvailable()) return null;
+  // 原生侧是普通 HTTP 抓图：blob:/data: 这类只存在于 WebView 进程内的地址它拿不到，
+  // 直接回退 Web 查看器（典型场景：私密文件夹里「还没上传」的新文件是 blob: 预览）。
+  if (!options.images.every((u) => /^https?:\/\//i.test(u))) return null;
   try {
     return await NativeImageViewer.open(options);
   } catch {
