@@ -40,14 +40,25 @@ public class ZoomableImageView extends AppCompatImageView {
     private static final long ANIM_MS = 250;
     /** 判定为「纵向拖拽关闭」的起始位移（px） */
     private static final float DISMISS_SLOP = 12f;
-    /** 拖拽进度达到该值即视为请求关闭 */
-    private static final float DISMISS_COMMIT = 0.28f;
+    /** 拖拽关闭的位移阈值（dp）：超过即视为关闭。
+     *  真机反馈「阈值太高、很难退出」—— 从屏高 28% 降到固定 80dp（约一指节），
+     *  与微信/系统相册「随手往下一带就关」一致 */
+    private static final float DISMISS_COMMIT_DP = 80f;
+    /** 位移达到屏高这一比例也算够格（小屏/横屏兜底） */
+    private static final float DISMISS_COMMIT_RATIO = 0.1f;
+    /** 下拉速度阈值（px/ms）：快速下滑即使位移不大也关闭 */
+    private static final float DISMISS_FLING_VELOCITY = 1.1f;
 
     /** 拖拽关闭回调：位移与进度交给宿主（背景淡出/页面位移） */
     public interface DragDismissListener {
         void onDragDismiss(float dx, float dy, float progress);
 
         void onDragDismissEnd(boolean commit, float dx, float dy);
+    }
+
+    /** 单击（双击窗口内没有第二下）——原生相册的「点一下退出」 */
+    public interface SingleTapListener {
+        void onSingleTap();
     }
 
     private final Matrix suppMatrix = new Matrix();
@@ -59,6 +70,10 @@ public class ZoomableImageView extends AppCompatImageView {
     private GestureDetector gestureDetector;
     @Nullable
     private DragDismissListener dismissListener;
+    @Nullable
+    private SingleTapListener singleTapListener;
+    /** 松手时的下拉速度（px/ms），用于「快甩即关」 */
+    private android.view.VelocityTracker velocityTracker;
 
     /** 双击/回弹动画（同一时刻只允许一个） */
     @Nullable
@@ -88,10 +103,22 @@ public class ZoomableImageView extends AppCompatImageView {
         scaleDetector.setQuickScaleEnabled(false);
         gestureDetector = new GestureDetector(context, new GestureListener());
         gestureDetector.setOnDoubleTapListener(new GestureListener());
+        velocityTracker = android.view.VelocityTracker.obtain();
     }
 
     public void setDragDismissListener(@Nullable DragDismissListener l) {
         this.dismissListener = l;
+    }
+
+    /** 单击监听（双击窗口内无第二下时触发）＝ 点一下退出全屏 */
+    public void setSingleTapListener(@Nullable SingleTapListener l) {
+        this.singleTapListener = l;
+    }
+
+    /** 拖拽关闭的判定阈值（px）：80dp 与屏高 10% 取小值 */
+    private float dismissThresholdPx() {
+        float dp = DISMISS_COMMIT_DP * getResources().getDisplayMetrics().density;
+        return Math.min(dp, getHeight() * DISMISS_COMMIT_RATIO);
     }
 
     /** 当前缩放倍率 */
@@ -117,6 +144,7 @@ public class ZoomableImageView extends AppCompatImageView {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         if (getDrawable() == null) return super.onTouchEvent(event);
+        if (velocityTracker != null) velocityTracker.addMovement(event);
         scaleDetector.onTouchEvent(event);
         gestureDetector.onTouchEvent(event);
 
@@ -147,7 +175,9 @@ public class ZoomableImageView extends AppCompatImageView {
                     if (dismissing) {
                         dismissDy = dy;
                         dismissDx = dx;
-                        float progress = Math.min(1f, dy / (getHeight() * 0.6f));
+                        // 进度以「关闭阈值」为 1：拖到阈值处背景正好全透明，
+                        // 用户能明确感知「再松手就关了」
+                        float progress = Math.min(1f, dy / Math.max(1f, dismissThresholdPx()));
                         if (dismissListener != null) dismissListener.onDragDismiss(dismissDx, dismissDy, progress);
                         return true;
                     }
@@ -158,11 +188,22 @@ public class ZoomableImageView extends AppCompatImageView {
                 if (dismissing) {
                     dismissing = false;
                     requestDisallowIntercept(false);
-                    // 只认下拉（dy > 0）；上滑即使过阈值也不算关闭
-                    boolean commit = dismissDy > getHeight() * DISMISS_COMMIT;
+                    // 关闭判定：拖够 80dp / 屏高 10%，或快速下滑（不用拖到底）
+                    float threshold = dismissThresholdPx();
+                    float velocityY = 0f;
+                    if (velocityTracker != null) {
+                        velocityTracker.computeCurrentVelocity(1000);
+                        velocityY = velocityTracker.getYVelocity(); // px/s，向下为正
+                    }
+                    boolean far = dismissDy > threshold;
+                    boolean flung = dismissDy > DISMISS_SLOP * 2
+                            && velocityY > DISMISS_FLING_VELOCITY * 1000f;
+                    boolean commit = far || flung;
                     if (dismissListener != null) dismissListener.onDragDismissEnd(commit, dismissDx, dismissDy);
                     return true;
                 }
+                if (velocityTracker != null) velocityTracker.recycle();
+                velocityTracker = android.view.VelocityTracker.obtain();
                 break;
             default:
                 break;
@@ -222,6 +263,24 @@ public class ZoomableImageView extends AppCompatImageView {
                 animateTo(DOUBLE_TAP_SCALE, e.getX(), e.getY());
             }
             return true;
+        }
+
+        /** 单击（确认没有第二下）：放大态先复位缩放，1x 下退出全屏。
+         *  用 onSingleTapConfirmed 而不是 onSingleTapUp：后者在双击的第一下就会
+         *  触发，会把「双击放大」直接变成「退出」。代价是单击要等一个双击窗口
+         *  （~300ms），这与原生相册/微信的单击退出行为一致。 */
+        @Override
+        public boolean onSingleTapConfirmed(MotionEvent e) {
+            if (isZoomed()) {
+                // 原生相册：放大态点一下先回到「适应屏幕」，不直接退出
+                animateTo(1f, e.getX(), e.getY());
+                return true;
+            }
+            if (singleTapListener != null) {
+                singleTapListener.onSingleTap();
+                return true;
+            }
+            return false;
         }
 
         @Override

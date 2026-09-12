@@ -44,8 +44,22 @@ import styles from './PostCard.module.css';
 /** 完全可见后延迟启动自动播放（快速划过不误触） */
 const VIDEO_AUTOPLAY_DELAY_MS = 500;
 
+/** 外部（详情页关闭）回传的图片索引同步指令 */
+export interface PostImageSync {
+  /** 要落到第几张 */
+  index: number;
+  /** 每次回传自增：即使索引值与上次相同（例如两次都停在第 3 张）也要再同步一次，
+   *  所以不能只比较索引值本身，必须用序号判断「是一条新指令」 */
+  seq: number;
+}
+
 interface PostCardProps {
   post: Post;
+  /**
+   * 外部回传的图片同步指令（详情页关闭时带出，见 PostDetail.onClose）：
+   * 让卡片对齐到用户最后看的那张，避免「详情里翻到第 3 张、退出后卡片还在第 1 张」。
+   */
+  imageSync?: PostImageSync;
   onLikeToggle?: () => void;
   /** 打开详情页；imageIndex 为当前图片索引（详情页/全屏首屏定位用） */
   onPostClick?: (postId: number, imageIndex?: number) => void;
@@ -53,7 +67,14 @@ interface PostCardProps {
   onLikeChange?: (postId: number, liked: boolean, likeCount: number) => void;
 }
 
-function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChange }: PostCardProps) {
+function PostCard({
+  post,
+  imageSync,
+  onLikeToggle,
+  onPostClick,
+  onProfileClick,
+  onLikeChange,
+}: PostCardProps) {
   const { user, openLoginPrompt } = useAuth();
   const inRoom = useVoiceInRoom();
   const { getFollowStatus, setFollowStatus } = useFollow();
@@ -116,6 +137,17 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
     isPostDetailOverlayOpen,
     isPostDetailOverlayOpen
   );
+
+  // 详情页关闭回传的图片索引：**渲染期**对齐（项目惯例，避免 effect 内 setState）。
+  // 只改 currentImageIndex，轨道的落位交给下面既有的 [currentImageIndex] effect，
+  // 保证「手势落位」和「外部回传」走同一条路径。
+  // 用 seq 而不是索引值判断「是否是新指令」：连续两次都停在第 3 张时，
+  // 卡片可能已被用户滑到别的张，只比索引会漏掉这次同步。
+  const [prevSyncSeq, setPrevSyncSeq] = useState<number | undefined>(undefined);
+  if (imageSync && imageSync.seq !== prevSyncSeq) {
+    setPrevSyncSeq(imageSync.seq);
+    if (imageSync.index !== currentImageIndex) setCurrentImageIndex(imageSync.index);
+  }
 
   // Auto-play carousel: 部分可见且未悬停暂停时每 3 秒推进一张；
   // 用户手动触摸/滑动过后（userInteractedRef）不再自动播；
@@ -223,9 +255,11 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   // 60fps 丝滑）；松手用 CSS transition（同样走合成器）落位。
   // 轨道位移基准：offset = index * 容器宽度。（手势/轨道逻辑已拆出至 useSwipeCarousel，行为不变）
 
-  // index 变化 → 轨道动画到对应位置（自动轮播/重置/外部切换统一走这里）
+  // index 变化 → 轨道动画到对应位置（自动轮播/重置/外部回传统一走这里）；
+  // 同时把吸附基准对齐到该索引（下一次手势的停靠判定以它为准）
   useEffect(() => {
     if (images.length <= 1 || isPaused) return;
+    swipeCarousel.setSettled(currentImageIndex);
     swipeCarousel.animateTrackTo(currentImageIndex);
   }, [currentImageIndex, images.length, isPaused, swipeCarousel]);
 

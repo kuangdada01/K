@@ -30,7 +30,7 @@ import { attachSnapScroll, scrollToPage, PROGRAMMATIC_SUPPRESS_MS } from './snap
 export interface TransformCarouselApi {
   /** 当前滚动偏移（0 = 第一张） */
   offsetRef: RefObject<number>;
-  /** 上次稳定停靠的图片索引（一次手势最多翻一页） */
+  /** 上次稳定停靠的图片索引 */
   settledRef: RefObject<number>;
   /** 设置稳定停靠索引（ref 归 hook 所有，避免外部直接写 .current） */
   setSettled: (index: number) => void;
@@ -65,6 +65,8 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
   const settledRef = useRef(0);
   // 程序化平滑滚动的抑制截止时间（期间不做停靠校正）
   const programmaticUntilRef = useRef(0);
+  // 用户是否正按着手指（拖动中上报索引，但不允许程序化滚动插手）
+  const touchingRef = useRef(false);
 
   const setSettled = useCallback((index: number) => {
     settledRef.current = index;
@@ -93,9 +95,12 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
     return w && w > 0 ? w : 0;
   }, [trackRef]);
 
-  /** 平滑滚动到 index：原生 behavior:'smooth'（合成器动画，不占主线程逐帧） */
+  /** 平滑滚动到 index：原生 behavior:'smooth'（合成器动画，不占主线程逐帧）
+   *  ★ 用户正按着手指时不发起：拖动过程中索引会实时上报（主轮播/指示点跟随），
+   *    此时再发起程序化滚动就会把用户的手势抢走，表现为「翻一页就被拉回去」。 */
   const animateTrackTo = useCallback(
     (index: number, width: number, _durationMs?: number) => {
+      if (touchingRef.current) return;
       const track = trackRef.current;
       if (!track || !(width > 0)) return;
       const target = width * index;
@@ -130,6 +135,7 @@ export function useTransformCarousel(trackRef: RefObject<HTMLDivElement | null>)
         // exactOptionalPropertyTypes：可选属性不能显式传 undefined，条件展开
         ...(isZoomed ? { isZoomed } : {}),
         programmaticUntilRef,
+        touchingRef,
       });
     },
     [getSlideWidth]

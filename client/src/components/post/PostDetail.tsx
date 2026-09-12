@@ -58,7 +58,8 @@ interface PostDetailProps {
   postId: number;
   /** 进入详情页时定位到的图片索引（首页卡片点开时传入当前轮播位置） */
   initialImageIndex?: number;
-  onClose?: () => void;
+  /** 关闭回调；带出「关闭时正看到第几张」，父级据此把首页卡片对齐到同一张 */
+  onClose?: (finalImageIndex?: number) => void;
   onLikeChange?: (postId: number, liked: boolean, likeCount: number) => void;
   onCommentChange?: (postId: number, commentCount: number) => void;
   highlightCommentId?: number | null;
@@ -114,6 +115,20 @@ export default function PostDetail({
   }, []);
 
   const [activeHighlightId, setActiveHighlightId] = useState<number | null>(null);
+
+  // 关闭时把「当前看到第几张」带出去：首页卡片据此对齐（否则退出详情后
+  // 卡片还停在点开时那张，与刚看的不一致）。用 ref 取最新值，避免闭包过期。
+  const currentImageIndexRef = useRef(currentImageIndex);
+  useEffect(() => {
+    currentImageIndexRef.current = currentImageIndex;
+  }, [currentImageIndex]);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+  const closeWithIndex = useCallback(() => {
+    onCloseRef.current?.(currentImageIndexRef.current);
+  }, []);
 
   // 帖子/用户切换时重置高亮与图片索引（渲染期 prev 值模式，替代 effect 内同步 setState；
   // 评论/分页/加载错误的重置在 usePostDetailData 内同步完成，续拉标志的重置在 useCommentThread 内同步完成）
@@ -199,7 +214,7 @@ export default function PostDetail({
   });
 
   const { closing, handleClose } = usePostDetailClose({
-    onClose,
+    onClose: closeWithIndex,
     zoomed,
     setZoomed,
     overlayRef,

@@ -22,7 +22,7 @@ import { attachSnapScroll, scrollToPage, PROGRAMMATIC_SUPPRESS_MS } from './snap
 export interface SwipeCarouselApi {
   /** 当前滚动偏移（0 = 第一张），与 scrollLeft 同步 */
   offsetRef: RefObject<number>;
-  /** 上次稳定停靠的图片索引（一次手势最多翻一页） */
+  /** 上次稳定停靠的图片索引 */
   settledRef: RefObject<number>;
   /** 设置稳定停靠索引（ref 归 hook 所有，避免外部直接写 .current） */
   setSettled: (index: number) => void;
@@ -50,6 +50,8 @@ export function useSwipeCarousel(
   const settledRef = useRef(0);
   // 程序化平滑滚动的抑制截止时间（期间不做停靠校正）
   const programmaticUntilRef = useRef(0);
+  // 用户是否正按着手指（拖动中要上报索引，但不允许程序化滚动插手）
+  const touchingRef = useRef(false);
 
   const setSettled = useCallback((index: number) => {
     settledRef.current = index;
@@ -80,9 +82,12 @@ export function useSwipeCarousel(
   }, [trackRef]);
 
   /** 平滑滚动到 index（原生 behavior:'smooth' 走合成器，不是 JS 逐帧动画）。
-   *  durationMs 参数仅为兼容旧签名保留——时长由浏览器决定，不再自定义。 */
+   *  durationMs 参数仅为兼容旧签名保留——时长由浏览器决定，不再自定义。
+   *  ★ 用户正按着手指时不发起：拖动过程中索引会实时上报（指示点跟随），
+   *    若此时再发起程序化滚动就会把用户的手势抢走。 */
   const animateTrackTo = useCallback(
     (index: number, _durationMs?: number) => {
+      if (touchingRef.current) return;
       const track = trackRef.current;
       if (!track) return;
       const width = getSlideWidth() || viewportRef.current?.clientWidth || 0;
@@ -115,6 +120,7 @@ export function useSwipeCarousel(
         onInteract,
         onIndexChange,
         programmaticUntilRef,
+        touchingRef,
       });
     },
     [getSlideWidth]
@@ -125,6 +131,7 @@ export function useSwipeCarousel(
   useEffect(() => {
     return () => {
       programmaticUntilRef.current = 0;
+      touchingRef.current = false;
     };
   }, []);
 

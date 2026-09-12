@@ -69,9 +69,14 @@ export default function PostMedia({
   // 不会透出下层详情页——这是「双击放大时闪烁、漏出详情页」的根因修复
   const { closing, requestClose, cancelClose } = useCancelableClose(() => setZoomed(false));
 
-  // 全屏滑动时主轮播同步跟随（退出全屏无追回动画）
+  // 全屏滑动时主轮播同步跟随（退出全屏无追回动画）。
+  // ★ 拿不到宽度就什么都不做：setOffset(0 * index) 会把主轮播悄悄拽回第一张
+  //   —— 这正是「退出全屏/退出详情后，主轮播和刚才看的不是同一张」的一种成因。
   const syncMainCarousel = (index: number) => {
-    mainCarousel.setOffset(mainCarousel.getSlideWidth() * index);
+    const width = mainCarousel.getSlideWidth() || scrollRef.current?.clientWidth || 0;
+    if (!(width > 0)) return;
+    mainCarousel.setSettled(index);
+    mainCarousel.setOffset(width * index);
   };
 
   /**

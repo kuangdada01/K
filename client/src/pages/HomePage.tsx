@@ -19,7 +19,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
-import PostCard from '../components/post/PostCard';
+import PostCard, { type PostImageSync } from '../components/post/PostCard';
 import { loadPostDetail } from '../router/composerChunks';
 const LazyProfileOverlay = lazy(() => import('../components/profile/ProfileOverlay'));
 // 帖子详情浮层（含评论树）按需加载：首页此前静态引入它，把整块实现算进了首屏 chunk。
@@ -170,7 +170,22 @@ export default function HomePage() {
     setOverlayPostId(postId);
   }, []);
 
-  const handlePostClose = useCallback(() => {
+  // 详情页关闭时回传「最后看到第几张」：写回卡片，退出后首页与详情页看到的是同一张。
+  // 带 seq（每次回传自增）而不是单纯存索引：同一张连续两次回传时，卡片可能已被
+  // 用户滑走，只比索引会被判成「没变化」而漏掉同步（见 PostCard.imageSync）
+  const overlayPostIdRef = useRef<number | null>(null);
+  useEffect(() => {
+    overlayPostIdRef.current = overlayPostId;
+  }, [overlayPostId]);
+  const imageSyncSeqRef = useRef(0);
+  const [imageSyncByPost, setImageSyncByPost] = useState<Record<number, PostImageSync>>({});
+
+  const handlePostClose = useCallback((finalImageIndex?: number) => {
+    const id = overlayPostIdRef.current;
+    if (id != null && typeof finalImageIndex === 'number') {
+      const seq = ++imageSyncSeqRef.current;
+      setImageSyncByPost((prev) => ({ ...prev, [id]: { index: finalImageIndex, seq } }));
+    }
     setOverlayPostId(null);
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
@@ -265,6 +280,8 @@ export default function HomePage() {
                     <PostCard
                       key={post.id}
                       post={post}
+                      // exactOptionalPropertyTypes：未回传过时不要显式传 undefined
+                      {...(imageSyncByPost[post.id] ? { imageSync: imageSyncByPost[post.id] } : {})}
                       onPostClick={handlePostClick}
                       onProfileClick={handleProfileClick}
                       onLikeChange={handleLikeChange}
