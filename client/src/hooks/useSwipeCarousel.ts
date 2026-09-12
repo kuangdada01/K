@@ -2,53 +2,35 @@
  * ============================================================
  * 帖子卡片手势轮播 Hook（useSwipeCarousel）
  * ============================================================
- * 自 client/src/components/post/PostCard.tsx 拆出（纯拆分重构，行为不变）。
+ * ★ 现在是**原生滚动分页**（snapScroll）：滚动容器自己做
+ *   `overflow-x: auto` + `scroll-snap-type: x mandatory`，拖动/惯性/越界
+ *   全交给浏览器合成器（线程化滚动），JS 不再逐帧写 transform ——
+ *   这是 WebView 里唯一能拿到「跟手、不掉帧」的路径（详见 hooks/snapScroll）。
  *
- * 与 useTransformCarousel（自 PostMedia 拆出）同源，但语义不同，保持独立实现：
- * - pointerdown 即回调 onInteract（PostCard 用于停止 3 秒自动轮播）；
- * - mouse 指针不享受「任意位移即翻页」：up 判定无 e.pointerType === 'mouse'
- *   分支，与触摸一样要求 > 视口宽 0.12 才翻页（PostCard 原行为，保留）；
- * - 单一 transitionTimerRef（新动画/手势开始时清理旧定时器），
- *   而非 useTransformCarousel 的定时器数组（PostMedia 原行为，保留）。
+ * 于是本 Hook 只剩下：
+ * - 把索引写进滚动位置（animateTrackTo / setTrackOffset）；
+ * - 把滚动位置读回来（offsetRef / getSlideWidth / settledRef）；
+ * - 绑定停靠校正与索引上报（attachGesture → attachSnapScroll）。
  *
- * 行为不变量（分页器语义，详见 hooks/carouselGesture）：
- * - touchmove 直接写 translate3d（合成器线程，60fps 丝滑）；
- * - 松手 CSS transition 落位，时长按剩余距离自适应（260~520ms），
- *   cubic-bezier(0.32, 0.72, 0, 1)（起步柔和、长尾缓停）；
- * - 落点 = 「当前位置 + 松手速度 × PROJECTION_MS」取最近页（一次最多翻一页）：
- *   慢慢拖过半屏才翻页，快速轻甩即使位移很小也翻页；
- * - 越界（第一张继续右拖 / 最后一张继续左拖）按橡皮筋阻尼跟手，松手弹回；
- * - 落位动画中途再次落指：读回当前计算偏移继续跟手，不跳到动画终点；
- * - 首次位移判定方向（横向主导才接管，+2px 余量），纵向主导交还浏览器滚动；
- * - touchmove 以 { passive: false } 绑定以禁掉原生惯性滚动；
- * - pointercancel（系统接管手势）一律回弹本手势起点，绝不翻页；
- * - 轨道位移基准：offset = index * 容器宽度。
+ * 与 useTransformCarousel（帖子详情/全屏看图）同源，两处手感一致。
  * ============================================================
  */
 
 import { useCallback, useEffect, useMemo, useRef, RefObject } from 'react';
-import {
-  clampOffsetWithRubberBand,
-  createVelocityTracker,
-  offsetFromMatrix,
-  resolveTargetIndex,
-  settleDurationMs,
-  SLIDE_EASING,
-} from './carouselGesture';
+import { attachSnapScroll, scrollToPage, PROGRAMMATIC_SUPPRESS_MS } from './snapScroll';
 
 export interface SwipeCarouselApi {
-  /** 当前轨道像素偏移（0 = 第一张），手势跟手与动画共用 */
+  /** 当前滚动偏移（0 = 第一张），与 scrollLeft 同步 */
   offsetRef: RefObject<number>;
-  /** 上次稳定停靠的图片索引：手势完全接管分页（一次最多翻一页） */
+  /** 上次稳定停靠的图片索引（一次手势最多翻一页） */
   settledRef: RefObject<number>;
   /** 设置稳定停靠索引（ref 归 hook 所有，避免外部直接写 .current） */
   setSettled: (index: number) => void;
-  /** 直接写轨道偏移（无动画） */
+  /** 直接写滚动位置（无动画） */
   setTrackOffset: (offset: number) => void;
-  /** 落位动画到 index（宽度取自 viewportRef 当前 clientWidth）。
-   *  durationMs 缺省按剩余距离自适应（settleDurationMs）。 */
+  /** 平滑滚动到 index（合成器动画；距离过近时为无操作） */
   animateTrackTo: (index: number, durationMs?: number) => void;
-  /** 绑定 pointer/touch 手势；返回解绑函数（viewport/track 缺失时为空操作） */
+  /** 绑定滚动监听 + 停靠校正；返回解绑函数（viewport/track 缺失时为空操作） */
   attachGesture: (
     viewport: HTMLDivElement | null,
     track: HTMLDivElement | null,
@@ -62,29 +44,34 @@ export function useSwipeCarousel(
   trackRef: RefObject<HTMLDivElement | null>,
   viewportRef: RefObject<HTMLDivElement | null>
 ): SwipeCarouselApi {
-  // 当前轨道像素偏移（0 = 第一张），供手势跟手与动画共用
+  // 当前滚动偏移（0 = 第一张）
   const offsetRef = useRef(0);
-  // 上次稳定停靠的图片索引：手势完全接管分页（一次最多翻一页）
+  // 上次稳定停靠的图片索引
   const settledRef = useRef(0);
-  const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 程序化平滑滚动的抑制截止时间（期间不做停靠校正）
+  const programmaticUntilRef = useRef(0);
 
   const setSettled = useCallback((index: number) => {
     settledRef.current = index;
   }, []);
 
+  /** 直接写滚动位置（无动画）：原生容器同步生效，且会自动吸附到最近的页。
+   *  标记为程序化：外部定位不应被「一次手势最多翻一页」钳制，也不该被停靠校正改写 */
   const setTrackOffset = useCallback(
     (offset: number) => {
       const track = trackRef.current;
       if (!track) return;
+      programmaticUntilRef.current = performance.now() + PROGRAMMATIC_SUPPRESS_MS;
       offsetRef.current = offset;
-      track.style.transform = `translate3d(${-offset}px, 0, 0)`;
+      track.scrollLeft = offset;
     },
     [trackRef]
   );
 
   /** 单张图片实际渲染宽度：轨道首子元素 rect 宽（flex:0 0 100% 下等于轨道内容宽）。
    *  ★ 不能用 viewport clientWidth：clientWidth 取整，flex 布局下图片宽度可能是
-   *  小数（如 95vw=373.34px），偏移按取整宽度计算会逐页累积偏差露出下一张边缘。 */
+   *  小数（如 95vw=373.34px），偏移按取整宽度计算会逐页累积偏差露出下一张边缘。
+   *  jsdom 无布局时回退到 clientWidth，保证可测。 */
   const getSlideWidth = useCallback(() => {
     const track = trackRef.current;
     const first = track?.firstElementChild;
@@ -92,34 +79,22 @@ export function useSwipeCarousel(
     return w && w > 0 ? w : 0;
   }, [trackRef]);
 
-  // 落位动画：CSS transition（合成器执行，帧率满格）。
-  // 时长按剩余距离自适应（近的快、远的稍慢），避免固定时长的机械感。
+  /** 平滑滚动到 index（原生 behavior:'smooth' 走合成器，不是 JS 逐帧动画）。
+   *  durationMs 参数仅为兼容旧签名保留——时长由浏览器决定，不再自定义。 */
   const animateTrackTo = useCallback(
-    (index: number, durationMs?: number) => {
+    (index: number, _durationMs?: number) => {
       const track = trackRef.current;
       if (!track) return;
       const width = getSlideWidth() || viewportRef.current?.clientWidth || 0;
+      if (!(width > 0)) return;
       const target = width * index;
-      const distance = target - offsetRef.current;
-      if (Math.abs(distance) < 1) return;
-      const ms = durationMs ?? settleDurationMs(distance);
-      if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
-      track.style.transition = `transform ${ms}ms ${SLIDE_EASING}`;
-      track.style.transform = `translate3d(${-target}px, 0, 0)`;
-      offsetRef.current = target;
-      transitionTimerRef.current = setTimeout(() => {
-        if (trackRef.current) trackRef.current.style.transition = 'none';
-      }, ms + 60);
+      if (Math.abs(track.scrollLeft - target) < 1) return;
+      programmaticUntilRef.current = performance.now() + PROGRAMMATIC_SUPPRESS_MS;
+      scrollToPage(track, index, width, true);
     },
     [trackRef, viewportRef, getSlideWidth]
   );
 
-  // —— 手势完全接管（WebView 原生惯性/scroll-snap 不可控，快速滑动会跨页）——
-  // transform 轨道驱动：touchmove 直接写 translate3d（合成器线程，不触发 layout，
-  // 60fps 丝滑）；松手用 CSS transition（同样走合成器）落位。
-  // 落点由「位置 + 速度投影」共同决定（分页器语义，见 carouselGesture），
-  // 越界拖动带橡皮筋阻尼，动画中途落指从「当前肉眼所见位置」继续跟手。
-  // 轨道位移基准：offset = index * 容器宽度。
   const attachGesture = useCallback(
     (
       viewport: HTMLDivElement | null,
@@ -129,132 +104,30 @@ export function useSwipeCarousel(
       onIndexChange: (index: number) => void
     ) => {
       if (!viewport || !track) return () => {};
-      let startX = 0;
-      let startY = 0;
-      let startOffset = 0;
-      let startIndex = 0;
-      let active = false;
-      let horizontal = false; // 是否已判定为横向手势（横向主导才接管滚动）
-      let moveHandler: ((e: TouchEvent) => void) | null = null;
-      // 松手速度采样（速度投影落点用）；每次手势起点清空，避免上一手势残留
-      const velocity = createVelocityTracker();
-
-      /** 轨道偏移的合法区间：0（第一张）→ (count-1) * 单页宽（最后一张） */
-      const offsetRange = (width: number) => [0, Math.max(0, (imageCount - 1) * width)] as const;
-
-      const down = (e: PointerEvent) => {
-        if (e.pointerType === 'mouse' && e.button !== 0) return;
-        onInteract(); // 手动触摸后停止自动轮播
-        // 落位动画进行中再次落指：先读回「当前肉眼所见」的偏移，再取消 transition
-        // 并把同一位置写回，这样轨道不会瞬间跳到动画终点（原实现会跳一下）。
-        // 必须在置 transition:none 之前读计算值——取消过渡会让计算值立刻变成目标值。
-        const visual = offsetFromMatrix(getComputedStyle(track).transform);
-        if (transitionTimerRef.current) {
-          clearTimeout(transitionTimerRef.current);
-          transitionTimerRef.current = null;
-        }
-        track.style.transition = 'none';
-        if (visual !== null) {
-          offsetRef.current = visual;
-          track.style.transform = `translate3d(${-visual}px, 0, 0)`;
-        }
-        active = true;
-        horizontal = false;
-        startX = e.clientX;
-        startY = e.clientY;
-        startOffset = offsetRef.current;
-        startIndex = settledRef.current;
-        velocity.reset();
-        velocity.sample(e.clientX, performance.now());
-        moveHandler = (te: TouchEvent) => {
-          if (!active || te.touches.length !== 1) return;
-          const touch = te.touches[0]!;
-          const dx = touch.clientX - startX;
-          const dy = touch.clientY - startY;
-          if (!horizontal) {
-            // 首次位移判定方向：横向主导才接管，纵向主导（浏览页面）立即放手
-            if (Math.abs(dx) > Math.abs(dy) + 2) {
-              horizontal = true;
-            } else if (Math.abs(dy) > Math.abs(dx) + 2) {
-              active = false; // 交给浏览器纵向滚动页面
-              if (moveHandler) {
-                viewport.removeEventListener('touchmove', moveHandler);
-                moveHandler = null;
-              }
-              return;
-            } else {
-              return; // 位移太小，继续观察
-            }
-          }
-          te.preventDefault();
-          velocity.sample(touch.clientX, performance.now());
-          const width = getSlideWidth() || viewportRef.current?.clientWidth || 1;
-          const [min, max] = offsetRange(width);
-          // 越界部分按橡皮筋压缩：拖到头还有阻尼位移，松手弹回（iOS 手感），
-          // 而不是硬顶住不动
-          setTrackOffset(clampOffsetWithRubberBand(startOffset - dx, min, max));
-        };
-        // passive:false 才能 preventDefault 禁掉原生惯性滚动
-        viewport.addEventListener('touchmove', moveHandler, { passive: false });
-      };
-
-      /** 手势收尾：allowFlip=false（系统取消手势）一律回弹吸附基准，绝不翻页
-       *  （pointercancel 的 clientX 常为 0，照常算速度会得到假的极大甩动速度）。 */
-      const finish = (e: PointerEvent, allowFlip: boolean) => {
-        if (!active) return;
-        active = false;
-        if (moveHandler) {
-          viewport.removeEventListener('touchmove', moveHandler);
-          moveHandler = null;
-        }
-        const width = getSlideWidth() || viewportRef.current?.clientWidth || 1;
-        if (!allowFlip) {
-          // 系统取消手势：回弹到本手势起点（不做速度投影，避免用假的抬手坐标算速度）
-          animateTrackTo(startIndex);
-          return;
-        }
-        // 速度取「松手事件」为最后一个样本：最后一次 touchmove 与 pointerup 之间
-        // 可能已隔了几十毫秒，只用 touchmove 会低估甩动速度
-        velocity.sample(e.clientX, performance.now());
-        // 位置 + 速度投影决定落点（分页器语义；一次手势最多翻一页）
-        const target = resolveTargetIndex({
-          offset: offsetRef.current,
-          velocity: velocity.velocity(),
-          slideWidth: width,
-          startIndex,
-          count: imageCount,
-          // PostCard 原行为：鼠标与触摸同判（鼠标不享受「任意位移即翻页」）
-          alwaysFlip: false,
-        });
-        settledRef.current = target;
-        onIndexChange(target);
-        animateTrackTo(target);
-      };
-
-      const up = (e: PointerEvent) => finish(e, true);
-      const cancel = (e: PointerEvent) => finish(e, false);
-
-      viewport.addEventListener('pointerdown', down);
-      viewport.addEventListener('pointerup', up);
-      viewport.addEventListener('pointercancel', cancel);
-      return () => {
-        viewport.removeEventListener('pointerdown', down);
-        viewport.removeEventListener('pointerup', up);
-        viewport.removeEventListener('pointercancel', cancel);
-        if (moveHandler) viewport.removeEventListener('touchmove', moveHandler);
-      };
+      // 初始停靠索引与滚动位置对齐（外部可能已设过 setSettled/首次渲染）
+      offsetRef.current = track.scrollLeft;
+      return attachSnapScroll({
+        scroller: track,
+        count: imageCount,
+        getSlideWidth,
+        offsetRef,
+        settledRef,
+        onInteract,
+        onIndexChange,
+        programmaticUntilRef,
+      });
     },
-    [setTrackOffset, animateTrackTo, viewportRef, getSlideWidth]
+    [getSlideWidth]
   );
 
-  // 卸载时清理 transition 定时器（原 PostCard 的卸载清理 effect）
+  // 卸载时清掉可能残留的定时器（attachSnapScroll 的 detach 已处理；
+  // 这里保留 effect 以维持「Hook 自身可安全卸载」的语义）
   useEffect(() => {
     return () => {
-      if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
+      programmaticUntilRef.current = 0;
     };
   }, []);
 
-  // 稳定返回对象：消费方把它放进 effect 依赖不会造成每渲染重订阅
   return useMemo(
     () => ({ offsetRef, settledRef, setSettled, setTrackOffset, animateTrackTo, attachGesture }),
     [setSettled, setTrackOffset, animateTrackTo, attachGesture]

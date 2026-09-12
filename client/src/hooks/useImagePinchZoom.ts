@@ -70,13 +70,21 @@ export interface ImagePinchZoomApi {
    * 流程（播动画的时机由消费方编排，不等待双击窗口）；
    * opts.onSingleTapCancelled：该轻点在双击窗口内被第二次轻点构成双击时回调——
    * 组件撤销已启动的关闭流程，双击缩放由 hook 执行。
+   * opts.lockScrollWhenZoomed：viewport 本身是原生滚动容器（全屏看图的
+   * .zoomTrack）时置 true —— 放大期间把它的 overflow-x 临时锁成 hidden，
+   * 保证单指拖动只平移放大后的图片、不会同时翻页（不依赖 touch-action 是否被
+   * 内核遵守，是更硬的保证）；缩回 1x 自动解锁。
    * （桌面鼠标点击仍走元素自身 onClick，不经此回调）。
-   * 返回解绑函数；viewport 为空时为 noop。
+   * 返回解绑函数；viewport 为空时为 noop（解绑时恢复 touch-action / overflow）。
    */
   attach: (
     viewport: HTMLElement | null,
     getImage: () => HTMLElement | null,
-    opts?: { onSingleTap?: () => void; onSingleTapCancelled?: () => void }
+    opts?: {
+      onSingleTap?: () => void;
+      onSingleTapCancelled?: () => void;
+      lockScrollWhenZoomed?: boolean;
+    }
   ) => () => void;
 }
 
@@ -169,9 +177,14 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
     (
       viewport: HTMLElement | null,
       getImage: () => HTMLElement | null,
-      opts?: { onSingleTap?: () => void; onSingleTapCancelled?: () => void }
+      opts?: {
+        onSingleTap?: () => void;
+        onSingleTapCancelled?: () => void;
+        lockScrollWhenZoomed?: boolean;
+      }
     ) => {
       if (!viewport) return () => {};
+      const lockScroll = opts?.lockScrollWhenZoomed === true;
 
       interface PinchState {
         d0: number;
@@ -215,6 +228,8 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
             img.style.transform = '';
           }
           viewport.style.touchAction = '';
+          // 缩回 1x：解锁原生滚动（翻页交还给合成器滚动）
+          if (lockScroll) viewport.style.overflowX = '';
           return;
         }
         if (img) {
@@ -222,6 +237,10 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
         }
         // 放大态：禁原生垂直滚动/页面缩放，手势完全交给 JS
         viewport.style.touchAction = 'none';
+        // 放大态：硬锁横向滚动。touch-action 已表达同样意图，但部分内核对
+        // 祖先/内联 touch-action 的处理不完全一致；overflow-x:hidden 让容器
+        // 根本不具备可滚动性（scrollLeft 保留），单指拖动只平移图片、绝不翻页。
+        if (lockScroll) viewport.style.overflowX = 'hidden';
       };
 
       /** 双击缩放动画进行中被新手势打断：把**当前动画帧**的缩放/平移读回 ref，
@@ -481,6 +500,11 @@ export function useImagePinchZoom(): ImagePinchZoomApi {
         viewport.removeEventListener('touchend', touchEnd);
         viewport.removeEventListener('touchcancel', touchCancel);
         viewport.removeEventListener('click', clickCapture, true);
+        // 解绑时恢复视口样式：切图/关闭会先 detach 再 attach（attach 前会 reset，
+        // 但 reset 不写 DOM），残留的 touch-action:none / overflow-x:hidden 会
+        // 让新会话完全无法翻页 —— 这是「放大后切图再也滑不动」类问题的根因。
+        viewport.style.touchAction = '';
+        if (lockScroll) viewport.style.overflowX = '';
         if (singleTapTimer) {
           clearTimeout(singleTapTimer);
           singleTapTimer = null;

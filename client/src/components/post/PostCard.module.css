@@ -122,19 +122,29 @@
 .imageCarousel {
   position: relative;
   width: 100%;
-  overflow: hidden; /* transform 方案：不再滚动，容器裁剪 */
-  /* 手势完全接管：禁原生水平滚动/惯性，垂直留给页面 */
-  touch-action: pan-y;
+  /* 只负责裁剪：真正的滚动容器是里面的 .imageTrack（原生滚动分页） */
+  overflow: hidden;
   /* 空白区域黑色填充（横图上下留白、加载中均黑底） */
   background: #000;
 }
 
-/* transform 轨道：GPU 合成器驱动，60fps 丝滑（scrollLeft 走主线程会掉帧） */
+/* ★ 原生滚动轨道：拖动/惯性/越界回弹交给浏览器合成器（线程化滚动），
+   JS 不再逐帧写 transform —— 与网页纵向滚动同一条路径，最接近原生手感。
+   每页 scroll-snap-align/stop 保证松手后精确停在一页。 */
 .imageTrack {
   display: flex;
   align-items: center; /* 横图/高度不足的图垂直居中，不留顶部空隙 */
-  will-change: transform;
-  transform: translateZ(0); /* 强制合成层，防 WebView 平移残影 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+  /* 允许横向原生平移；纵向由浏览器做轴判定 → 在图上纵向拖动仍能滚信息流 */
+  touch-action: manipulation;
+  scrollbar-width: none;
+}
+
+.imageTrack::-webkit-scrollbar {
+  display: none;
 }
 
 .image {
@@ -144,9 +154,9 @@
   object-fit: contain;
   display: block;
   background: #000;
-  /* 防 WebView 合成残影：每张图独立合成层，平移后上一张不残留 */
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
+  /* 原生滚动下不再需要「每张图独立合成层」的残影 hack（残影来自 JS 平移轨道） */
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
 }
 
 .videoWrapper {

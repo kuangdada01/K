@@ -22,28 +22,41 @@
   position: relative;
   width: 100%;
   height: 100%;
-  overflow: hidden; /* transform 方案：不再滚动，容器裁剪 */
-  /* 手势完全接管：禁原生水平滚动/惯性（WebView 下跨页不可控），垂直滚动留给页面 */
-  touch-action: pan-y;
+  /* 只负责裁剪：真正的滚动容器是里面的 .imageTrack（原生滚动分页） */
+  overflow: hidden;
   /* 空白区域黑色填充 */
   background: #000;
 }
 
-/* transform 轨道：GPU 合成器驱动，60fps 丝滑（scrollLeft 走主线程会掉帧） */
+/* ★ 原生滚动轨道：拖动/惯性/越界回弹全部由浏览器合成器执行（线程化滚动），
+   JS 不再逐帧写 transform —— 这是 WebView 内唯一能拿到「跟手不掉帧」的路径。
+   每页 scroll-snap-align/stop 让松手后精确停在一页上。 */
 .imageTrack {
   display: flex;
   height: 100%;
-  will-change: transform;
-  transform: translateZ(0); /* 强制合成层，防 WebView 平移残影 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  /* 到头不再把滚动链传给外层 */
+  overscroll-behavior-x: contain;
+  /* 原生滚动的前提是允许横向平移；纵向交给浏览器做轴判定（拖纵向仍滚页面） */
+  touch-action: manipulation;
+  /* 隐藏滚动条：这是分页器，不是可见滚动区域 */
+  scrollbar-width: none;
+}
+
+.imageTrack::-webkit-scrollbar {
+  display: none;
 }
 
 .image {
   flex: 0 0 100%;
   height: 100%;
   object-fit: contain;
-  /* 防 WebView 合成残影：每张图独立合成层，平移后上一张不残留 */
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
+  /* 原生滚动下不再需要「每张图独立合成层」的残影 hack：
+     残影来自 JS 逐帧平移轨道，现在滚动由合成器接管（也是原先的掉帧来源之一） */
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
 }
 
 .imageDots {
@@ -162,8 +175,11 @@
   align-items: center;
   justify-content: center;
   z-index: 400;
-  /* 全屏看图：禁原生手势（滚动/页面缩放），平移/缩放全交给 JS（useImagePinchZoom） */
-  touch-action: none;
+  /* 全屏看图是模态层：只允许横向（交给内部 .zoomTrack 的原生滚动做翻页），
+     纵向什么都不滚 —— 这样拖动图片时不会连带滚动下面的详情页。
+     （touch-action 的判定会走到「最近的滚动容器」即 .zoomTrack，
+       所以这里不会拦住内部翻页；放大态由缩放 Hook 把 .zoomTrack 改成 none） */
+  touch-action: pan-x;
   /* ★ transition 只挂在 .closing 上：淡出（= 露出下层页面）必须晚于双击窗口，
      且撤销路径上不存在任何可倒放的过渡。
      曾把 transition 放到基类做「撤销时平滑淡回」——结果双击撤销看到的是
@@ -189,9 +205,8 @@
   position: relative;
   width: 100%;
   height: 100%;
-  overflow: hidden; /* transform 方案：不再滚动，容器裁剪 */
-  /* 手势完全接管：禁原生水平滚动/惯性 */
-  touch-action: pan-y;
+  /* 只负责裁剪：真正的滚动容器是里面的 .zoomTrack（原生滚动分页） */
+  overflow: hidden;
   /* 空白区域黑色填充 */
   background: #000;
   /* 防止图片被拖拽/长按选中干扰滑动 */
@@ -200,12 +215,26 @@
   -webkit-user-select: none;
 }
 
-/* transform 轨道（全屏） */
+/* ★ 原生滚动轨道（全屏）：拖动与惯性由浏览器合成器执行（线程化滚动），
+   与网页纵向滚动同一条路径 —— 这是 WebView 里最接近原生相册的滑动。
+   每页 scroll-snap-align/stop 让松手后精确停在一页上。 */
 .zoomTrack {
   display: flex;
   height: 100%;
-  will-change: transform;
-  transform: translateZ(0); /* 强制合成层，防 WebView 平移残影 */
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  /* 到头不再把滚动链传给外层（避免带动页面/控件） */
+  overscroll-behavior-x: contain;
+  /* 全屏看图是模态：只消费横向平移（原生翻页），纵向不滚（不会带动详情页）。
+     放大态由 useImagePinchZoom 内联改成 none 并把 overflow-x 锁成 hidden */
+  touch-action: pan-x;
+  /* 隐藏滚动条：这是分页器，不是可见的滚动区域 */
+  scrollbar-width: none;
+}
+
+.zoomTrack::-webkit-scrollbar {
+  display: none;
 }
 
 .zoomImage {
@@ -215,9 +244,10 @@
   cursor: zoom-out;
   /* 双指缩放 transform-origin 中心（useImagePinchZoom 以元素中心为原点计算平移） */
   transform-origin: center;
-  /* 防 WebView 合成残影：每张图独立合成层 */
-  backface-visibility: hidden;
-  -webkit-backface-visibility: hidden;
+  /* 原生滚动下不需要「每张图独立合成层」那套合成残影 hack
+     （残影来自 JS 逐帧平移轨道；现在滚动由合成器接管，不会残留） */
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
 }
 
 .zoomDots {

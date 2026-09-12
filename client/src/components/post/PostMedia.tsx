@@ -100,6 +100,9 @@ export default function PostMedia({
   }, [zoomed, images]);
 
   // 全屏双指缩放/平移 + 双击放大/单击关闭：
+  // ★ 绑定到 **.zoomTrack**（原生滚动容器）而不是外层 .zoomCarousel：
+  //   放大时要锁住的正是这个会滚动的元素（lockScrollWhenZoomed →
+  //   内联 touch-action:none + overflow-x:hidden），锁在外层拦不住它。
   // 绑定到当前显示的图片元素（track 内 index 位置的 img）。
   // zoomed 条件渲染后挂载；放大态下轮播翻页已让位（见 attachGesture isZoomed）。
   // 进入全屏/切换图片时复位缩放（防上次会话残留放大态）。
@@ -107,10 +110,10 @@ export default function PostMedia({
   // onSingleTapCancelled：窗口内第二次轻点撤销关闭并转双击缩放。
   // 桌面鼠标单击仍走 zoomImage 的 onClick（触摸 click 已被 hook 吞掉不冲突）
   useEffect(() => {
-    if (!zoomed || !zoomScrollRef.current) return;
+    if (!zoomed || !zoomTrackRef.current || !zoomScrollRef.current) return;
     pinchZoom.reset();
     const detach = pinchZoom.attach(
-      zoomScrollRef.current,
+      zoomTrackRef.current,
       () => {
         const track = zoomTrackRef.current;
         return track ? (track.children[currentImageIndex] as HTMLElement | null) : null;
@@ -118,6 +121,7 @@ export default function PostMedia({
       {
         onSingleTap: requestClose,
         onSingleTapCancelled: cancelClose,
+        lockScrollWhenZoomed: true,
       }
     );
     return detach;
