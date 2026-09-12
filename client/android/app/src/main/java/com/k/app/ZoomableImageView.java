@@ -132,6 +132,23 @@ public class ZoomableImageView extends AppCompatImageView {
         return getScale() > 1.01f;
     }
 
+    /**
+     * 当前图片在视图坐标里的可见矩形（已含缩放与平移）。
+     * 退场飞行动画的起点要用它：用户可能已经捏合放大/拖动过，
+     * 从「等比 contain 的矩形」起飞会先跳一下。
+     */
+    public void getVisibleImageRect(RectF out) {
+        Drawable d = getDrawable();
+        if (d == null || d.getIntrinsicWidth() <= 0 || d.getIntrinsicHeight() <= 0) {
+            out.setEmpty();
+            return;
+        }
+        Matrix m = new Matrix(baseMatrix);
+        m.postConcat(suppMatrix);
+        out.set(0f, 0f, d.getIntrinsicWidth(), d.getIntrinsicHeight());
+        m.mapRect(out);
+    }
+
     /** 复位到 1x（翻页/关闭时调用） */
     public void resetZoom() {
         cancelAnimator();

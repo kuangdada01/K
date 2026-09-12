@@ -5,6 +5,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.RectF;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -52,6 +53,9 @@ public class ImageViewerActivity extends AppCompatActivity {
     public static final String EXTRA_INDEX = "index";
     public static final String EXTRA_HEADERS = "headers";
     public static final String EXTRA_SRC_RECT = "srcRect";
+    /** 每张图各自的缩略图矩形（扁平 int[4*N]：l,t,r,b；全 0 = 该张没有矩形）。
+     *  退场时的反向 Hero（飞回缩略图）要知道**当前这一张**在哪 */
+    public static final String EXTRA_RECTS = "rects";
     public static final String EXTRA_COLOR = "bgColor";
     public static final String RESULT_INDEX = "index";
     /** Hero 等待解码的上限（ms）：超过就退化为淡入，避免「点了没反应」。
@@ -63,14 +67,19 @@ public class ImageViewerActivity extends AppCompatActivity {
     private static final long HERO_TIMEOUT_MS = 1500;
     /** Hero 落位后等页面自己把图画好的上限（ms）：超过就强制交接，避免一直顶着 */
     private static final long HERO_SWAP_TIMEOUT_MS = 1200;
+    /** 退出时「飞回缩略图」的时长（ms）。与入场同为合成器驱动的属性动画 */
+    private static final long EXIT_FLY_MS = 220;
     /** Hero 是否还在顶屏（等页面就绪后才交接） */
     private boolean heroActive = false;
+    /** 正在播退场飞行动画：期间忽略再次触发（返回键连按/下拉叠加） */
+    private boolean flyingOut = false;
 
     private final android.os.Handler mainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
 
     private ViewPager2 pager;
     private TextView counter;
     private View scrim;
+    private View closeBtn;
     @Nullable
     private ImageView hero;
     /** Hero 入场动画（用户中途下拉时要能取消，否则图会卡在中间缩放态） */
@@ -81,6 +90,9 @@ public class ImageViewerActivity extends AppCompatActivity {
     private int startIndex = 0;
     private int currentIndex = 0;
     private int[] srcRect; // [left, top, right, bottom]（屏幕 px）
+    /** 每张图各自的缩略图矩形（屏幕 px）；元素可能为 null（该张没量到） */
+    @Nullable
+    private int[][] targetRects;
 
     @Override
     protected void onCreate(@Nullable Bundle savedInstanceState) {
@@ -101,16 +113,18 @@ public class ImageViewerActivity extends AppCompatActivity {
         }
         int[] rect = intent.getIntArrayExtra(EXTRA_SRC_RECT);
         srcRect = (rect != null && rect.length == 4 && rect[2] > rect[0] && rect[3] > rect[1]) ? rect : null;
+        targetRects = parseRects(intent.getIntArrayExtra(EXTRA_RECTS), images.size());
 
         setContentView(R.layout.activity_image_viewer);
         scrim = findViewById(R.id.viewer_scrim);
         pager = findViewById(R.id.viewer_pager);
         counter = findViewById(R.id.viewer_counter);
         View close = findViewById(R.id.viewer_close);
+        closeBtn = close;
         // ★ 必须走 finishWithResult：直接 finish() 不带结果，插件拿到的 index 就是 -1，
         //   网页层无法把主轮播对齐到「刚才看的那张」——
         //   真机反馈「返回后详情页主轮播跟退出时不是同一张」的一种成因
-        close.setOnClickListener(v -> finishWithResult());
+        close.setOnClickListener(v -> requestExit(0f, 0f));
 
         pager.setAdapter(new PageAdapter());
         pager.setOffscreenPageLimit(1);
@@ -168,6 +182,145 @@ public class ImageViewerActivity extends AppCompatActivity {
         }
     }
 
+    /** 扁平 int[4*N] → 每张图的矩形；尺寸不合法（w/h<=0）的置 null */
+    @Nullable
+    private static int[][] parseRects(@Nullable int[] flat, int count) {
+        if (flat == null || count <= 0 || flat.length < count * 4) return null;
+        int[][] out = new int[count][];
+        for (int i = 0; i < count; i++) {
+            int l = flat[i * 4];
+            int t = flat[i * 4 + 1];
+            int r = flat[i * 4 + 2];
+            int b = flat[i * 4 + 3];
+            out[i] = (r > l && b > t && r - l <= 20000 && b - t <= 20000) ? new int[] { l, t, r, b } : null;
+        }
+        return out;
+    }
+
+    /** 当前页缩略图矩形（屏幕 px）；没有则 null */
+    @Nullable
+    private int[] targetRectFor(int position) {
+        int[] r =
+                (targetRects != null && position >= 0 && position < targetRects.length)
+                        ? targetRects[position]
+                        : null;
+        // 该张没量到（例如网页里那张还没渲染出尺寸）→ 退回「打开时那张」的矩形：
+        // 同一轮播里每页同宽同位，差异只在高度上，落点已经很接近，比不飞强
+        return r != null ? r : srcRect;
+    }
+
+    /**
+     * 退场（返回键 / 单击 / 右上角关闭 / 下拉过阈值）：**从哪里来到哪里去**。
+     *
+     * 有该张的缩略图矩形就播反向 Hero：整图从当前位置缩回缩略图矩形，黑幕全程不透明
+     * （用户要求「退出时背景是黑的、什么都看不到」，而不是半透明透出下层页面），
+     * 落位后立刻收尾 —— 此时网页层的轮播已经被 willClose 通知对齐到这一张，
+     * 黑幕揭开就是同一张缩略图，接缝不可见。
+     *
+     * 返回 false 表示没能播（没有矩形/该张还没解码好），调用方自行收尾。
+     */
+    private boolean startExitHero(float fromDx, float fromDy) {
+        if (flyingOut) return true;
+        PageHolder holder = holderAt(currentIndex);
+        Bitmap bmp = holder == null ? null : holder.bitmap;
+        int[] dst = targetRectFor(currentIndex);
+        if (bmp == null || dst == null || bmp.getWidth() <= 0 || bmp.getHeight() <= 0) return false;
+
+        flyingOut = true;
+        // ★ 先告诉网页层「要退到第几张」：让它把轮播就位（黑幕期间完成，揭开时不跳）
+        NativeImageViewerPlugin.notifyWillClose(currentIndex);
+
+        // Hero 还在顶屏（入场动画中途就退出）→ 先交接掉，避免两个图层打架
+        dropHeroForDrag();
+
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int screenH = getResources().getDisplayMetrics().heightPixels;
+        // 起点 = 图片**当前**的可见矩形（含捏合缩放/平移）+ 下拉位移：
+        // 放大过/拖过之后也要从眼睛看到的位置起飞，不能从「等比 contain」跳一下再飞
+        RectF start = currentImageRect(holder, bmp, screenW, screenH);
+        start.offset(fromDx, fromDy);
+        int dstW = Math.max(1, dst[2] - dst[0]);
+        int dstH = Math.max(1, dst[3] - dst[1]);
+
+        // 黑幕不透明：退场过程中背后什么都不露（页面的轮播此刻可能还没就位）
+        scrim.setAlpha(1f);
+        pager.setAlpha(0f);
+        closeBtn.setAlpha(0f);
+        counter.setAlpha(0f);
+
+        ImageView fly = addFlyView(bmp, start.centerX(), start.centerY(), start.width(), start.height(),
+                dst[0], dst[1], dstW, dstH);
+        fly.setAlpha(1f);
+        final float startScale = Math.max(start.width() / dstW, start.height() / dstH);
+        ValueAnimator anim = ValueAnimator.ofFloat(0f, 1f);
+        anim.setDuration(EXIT_FLY_MS);
+        anim.setInterpolator(new DecelerateInterpolator());
+        anim.addUpdateListener(a -> applyFlyFrame(fly, startScale, start.centerX(), start.centerY(),
+                dst[0], dst[1], dstW, dstH, (float) a.getAnimatedValue()));
+        anim.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(android.animation.Animator a) {
+                finishWithResult();
+            }
+        });
+        anim.start();
+        return true;
+    }
+
+    /** 图片当前在屏幕上的可见矩形（含缩放/平移）；矩阵尚未建立时退化为等比 contain */
+    private RectF currentImageRect(PageHolder holder, Bitmap bmp, int screenW, int screenH) {
+        RectF r = new RectF();
+        holder.image.getVisibleImageRect(r);
+        if (r.width() > 1f && r.height() > 1f) return r;
+        float scale = Math.min((float) screenW / bmp.getWidth(), (float) screenH / bmp.getHeight());
+        float w = bmp.getWidth() * scale;
+        float h = bmp.getHeight() * scale;
+        r.set((screenW - w) / 2f, (screenH - h) / 2f, (screenW + w) / 2f, (screenH + h) / 2f);
+        return r;
+    }
+
+    /** 请求退出：能飞回缩略图就飞，否则直接收尾（无矩形时的兜底） */
+    private void requestExit(float dx, float dy) {
+        if (flyingOut) return;
+        if (!startExitHero(dx, dy)) finishWithResult();
+    }
+
+    /**
+     * 创建「飞行的图片」图层：FIT_XY 放在目标矩形内，初始用缩放 + 平移映射到起始矩形。
+     * 打开与退出共用这段几何映射（FIT_XY 允许过程中轻微拉伸，落位后与真实布局一致）。
+     */
+    private ImageView addFlyView(Bitmap bmp, float startCx, float startCy, float startW, float startH,
+                                 int dstL, int dstT, int dstW, int dstH) {
+        FrameLayout root = findViewById(R.id.viewer_root);
+        ImageView v = new ImageView(this);
+        v.setScaleType(ImageView.ScaleType.FIT_XY);
+        v.setImageBitmap(bmp);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dstW, dstH);
+        lp.leftMargin = dstL;
+        lp.topMargin = dstT;
+        root.addView(v, lp);
+        float startScale = Math.max(startW / dstW, startH / dstH);
+        float dstCx = dstL + dstW / 2f;
+        float dstCy = dstT + dstH / 2f;
+        v.setPivotX(dstW / 2f);
+        v.setPivotY(dstH / 2f);
+        v.setScaleX(startScale);
+        v.setScaleY(startScale);
+        v.setTranslationX(startCx - dstCx);
+        v.setTranslationY(startCy - dstCy);
+        return v;
+    }
+
+    /** 飞行中每帧：缩放 + 平移按 t(0→1) 插值到目标矩形 */
+    private void applyFlyFrame(ImageView v, float startScale, float startCx, float startCy,
+                               int dstL, int dstT, int dstW, int dstH, float t) {
+        float s = startScale + (1f - startScale) * t;
+        v.setScaleX(s);
+        v.setScaleY(s);
+        v.setTranslationX((startCx - (dstL + dstW / 2f)) * (1f - t));
+        v.setTranslationY((startCy - (dstT + dstH / 2f)) * (1f - t));
+    }
+
     /** 当前页变化（含拖动中的「更近哪张」）→ 更新计数 */
     private void setCurrentIndex(int index) {
         int clamped = Math.max(0, Math.min(index, Math.max(0, images.size() - 1)));
@@ -199,7 +352,6 @@ public class ImageViewerActivity extends AppCompatActivity {
      * 观感就是「从缩略图放大进来闪一下」。
      */
     private void playOpenHero() {
-        final FrameLayout root = findViewById(R.id.viewer_root);
         final int idx = startIndex;
         final String url = images.get(idx);
         final int screenW = getResources().getDisplayMetrics().widthPixels;
@@ -240,33 +392,18 @@ public class ImageViewerActivity extends AppCompatActivity {
                 int dstL = (screenW - dstW) / 2;
                 int dstT = (screenH - dstH) / 2;
 
-                ImageView heroView = new ImageView(ImageViewerActivity.this);
-                heroView.setScaleType(ImageView.ScaleType.FIT_XY);
-                heroView.setImageBitmap(bitmap);
+                // 起始矩形 = 缩略图矩形（居中 + 尺寸）
+                int srcW = Math.max(1, srcRect[2] - srcRect[0]);
+                int srcH = Math.max(1, srcRect[3] - srcRect[1]);
+                float startCx = (srcRect[0] + srcRect[2]) / 2f;
+                float startCy = (srcRect[1] + srcRect[3]) / 2f;
+
+                ImageView heroView = addFlyView(bitmap, startCx, startCy, srcW, srcH, dstL, dstT, dstW, dstH);
                 // 从 0 淡入（见下方 updateListener）：即使图是秒到的缓存命中，
                 // 也不会在「被压暗的下层缩略图」上突然弹出一块更亮的图（观感上的闪）
                 heroView.setAlpha(0f);
-                FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(dstW, dstH);
-                lp.leftMargin = dstL;
-                lp.topMargin = dstT;
-                root.addView(heroView, lp);
                 hero = heroView;
-
-                // 初始映射到缩略图矩形（对目标矩形做缩放 + 平移）
-                int srcW = Math.max(1, srcRect[2] - srcRect[0]);
-                int srcH = Math.max(1, srcRect[3] - srcRect[1]);
-                float startScale = Math.max((float) srcW / dstW, (float) srcH / dstH);
-                float startCx = (srcRect[0] + srcRect[2]) / 2f;
-                float startCy = (srcRect[1] + srcRect[3]) / 2f;
-                float dstCx = dstL + dstW / 2f;
-                float dstCy = dstT + dstH / 2f;
-
-                heroView.setPivotX(dstW / 2f);
-                heroView.setPivotY(dstH / 2f);
-                heroView.setScaleX(startScale);
-                heroView.setScaleY(startScale);
-                heroView.setTranslationX(startCx - dstCx);
-                heroView.setTranslationY(startCy - dstCy);
+                final float startScale = Math.max((float) srcW / dstW, (float) srcH / dstH);
 
                 ValueAnimator anim = ValueAnimator.ofFloat(0f, 1f);
                 anim.setDuration(240);
@@ -274,11 +411,7 @@ public class ImageViewerActivity extends AppCompatActivity {
                 heroAnimator = anim;
                 anim.addUpdateListener(a -> {
                     float t = (float) a.getAnimatedValue();
-                    float s = startScale + (1f - startScale) * t;
-                    heroView.setScaleX(s);
-                    heroView.setScaleY(s);
-                    heroView.setTranslationX((startCx - dstCx) * (1f - t));
-                    heroView.setTranslationY((startCy - dstCy) * (1f - t));
+                    applyFlyFrame(heroView, startScale, startCx, startCy, dstL, dstT, dstW, dstH, t);
                     // 前 20% 淡入：避免「图突然出现」的一帧跳变
                     heroView.setAlpha(Math.min(1f, t * 5f));
                     scrim.setAlpha(0.35f + 0.65f * t);
@@ -373,18 +506,30 @@ public class ImageViewerActivity extends AppCompatActivity {
         }
     }
 
-    /** 下拉关闭过程中：页面位移 + 背景变淡（跟手） */
+    /**
+     * 下拉过程中：图片跟手位移。
+     *
+     * ★ 黑幕**全程不透明**（不再随位移变淡）：用户反馈「下滑时背景不该透出下面的图片，
+     *   应该是黑的、什么都没有」。变淡会在黑幕后面露出网页层那张图，看着像「背景是图片」。
+     *   背景何时揭开交给收尾：飞回缩略图后直接 finish，那一帧网页层已经就位。
+     */
     private void applyDismissProgress(float dx, float dy, float progress) {
         dropHeroForDrag();
         pager.setTranslationX(dx);
         pager.setTranslationY(dy);
-        scrim.setAlpha(Math.max(0f, 1f - progress));
+        scrim.setAlpha(1f);
     }
 
+    /**
+     * 下拉松手：
+     * - 过阈值 → 与返回键/单击同一条退场路径（飞回缩略图，从哪里来到哪里去）；
+     * - 没过 → 弹回全屏（黑幕本就是全屏底色，弹回后即为全屏）。
+     */
     private void finishWithDismiss(boolean commit, float dx, float dy) {
         dropHeroForDrag();
+        if (commit && startExitHero(dx, dy)) return;
         if (commit) {
-            // 收盘：继续滑出并淡出，结束后返回索引
+            // 兜底（该张没有缩略图矩形/还没解码好）：原来的滑出淡出
             float toY = dy >= 0 ? getResources().getDisplayMetrics().heightPixels : -dy;
             pager.animate()
                     .translationY(toY)
@@ -413,7 +558,7 @@ public class ImageViewerActivity extends AppCompatActivity {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
-                finishWithResult();
+                requestExit(0f, 0f);
             }
         });
     }
@@ -452,6 +597,9 @@ public class ImageViewerActivity extends AppCompatActivity {
         private String boundUrl;
         /** 该 holder 当前对应的数据位置（Hero 交接判断用） */
         int position = -1;
+        /** 当前画上去的位图（退场反向 Hero 要拿它做飞行动画） */
+        @Nullable
+        Bitmap bitmap;
 
         PageHolder(@NonNull View itemView) {
             super(itemView);
@@ -471,7 +619,8 @@ public class ImageViewerActivity extends AppCompatActivity {
             });
             // 点一下退出全屏（双击窗口内没有第二下时）——原生相册/微信的行为。
             // 之前只能按返回键或点右上角，用户反馈「不能点击退出全屏」。
-            image.setSingleTapListener(ImageViewerActivity.this::finishWithResult);
+            // 与返回键同一条退场路径：能飞回缩略图就飞回去
+            image.setSingleTapListener(() -> requestExit(0f, 0f));
         }
 
         /** 首图是否已经画上去（供 Hero 交接判断，见 bind 中的 notifyPageReady） */
@@ -484,6 +633,7 @@ public class ImageViewerActivity extends AppCompatActivity {
         void bind(final String url) {
             boundUrl = url;
             rendered = false;
+            bitmap = null;
             image.resetZoom();
             image.setImageDrawable(null);
             loading.setVisibility(View.VISIBLE);
@@ -492,11 +642,12 @@ public class ImageViewerActivity extends AppCompatActivity {
             final int h = getResources().getDisplayMetrics().heightPixels;
             ImageLoader.load(url, headers, w, h, new ImageLoader.Callback() {
                 @Override
-                public void onSuccess(Bitmap bitmap) {
+                public void onSuccess(Bitmap bmp) {
                     // 期间滑走了就别再写进去（RecyclerView 复用）
                     if (!url.equals(boundUrl)) return;
                     loading.setVisibility(View.GONE);
-                    image.setImageBitmap(bitmap);
+                    image.setImageBitmap(bmp);
+                    bitmap = bmp;
                     rendered = true;
                     // 页面自己画好了：如果 Hero 还在顶屏，现在交接（无闪烁）
                     notifyPageReady(position);
@@ -517,6 +668,7 @@ public class ImageViewerActivity extends AppCompatActivity {
         void recycle() {
             boundUrl = null;
             rendered = false;
+            bitmap = null;
             image.resetZoom();
             image.setImageDrawable(null);
         }

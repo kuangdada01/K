@@ -23,8 +23,10 @@ import { useCancelableClose } from '../../hooks/useCancelableClose';
 import {
   authHeadersFor,
   isNativeViewerAvailable,
+  onNativeViewerWillClose,
   openNativeViewer,
   rectOf,
+  rectsOfTrack,
 } from '../../lib/nativeImageViewer';
 import styles from './PostMedia.module.css';
 
@@ -55,6 +57,8 @@ export default function PostMedia({
   const zoomTrackRef = useRef<HTMLDivElement>(null);
   // 全屏内最后停靠的图片索引（同步写入 ref，退出时以此为准，避免依赖可能过期的 state）
   const lastZoomIndexRef = useRef(0);
+  /** 是否有「本组件打开的」原生查看器会话（willClose 通知只认自己那次） */
+  const nativeOpenRef = useRef(false);
 
   // 两个 transform 轨道实例（主轮播 + 全屏轮播）：
   // 各持 offsetRef/settledRef/transition 定时器与自己的 animateTrackTo
@@ -82,7 +86,7 @@ export default function PostMedia({
   /**
    * 打开全屏看图：
    * - Capacitor 原生环境 → 原生查看器（ViewPager2 + 原生手势 + 下拉关闭 +
-   *   从缩略图 Hero 放大进入）；打开失败/插件不可用 → 回退下面的 Web 覆盖层；
+   *   从缩略图 Hero 放大进入 / 退出飞回缩略图）；打开失败/插件不可用 → 回退下面的 Web 覆盖层；
    * - 原生可用时**不渲染** Web 覆盖层，避免两套 UI 叠加。
    */
   const openViewer = useCallback(
@@ -93,18 +97,24 @@ export default function PostMedia({
         return;
       }
       const rect = rectOf(thumbEl);
+      // 每张各自的矩形：退出时飞回「当前这一张」的缩略图（不是打开时那张）
+      const rects = rectsOfTrack(mainTrackRef.current);
+      nativeOpenRef.current = true;
       void openNativeViewer({
         images: urls,
         index,
         // 鉴权图片（/api/）带上 token：<img> 无法自定义请求头，原生 HTTP 可以
         ...authHeadersFor(urls),
         ...(rect ? { rect } : {}),
+        ...(rects.length > 0 ? { rects } : {}),
       }).then((res) => {
+        nativeOpenRef.current = false;
         if (res === null) {
           setZoomed(true); // 原生打开失败 → 回退 Web 覆盖层
           return;
         }
         // 用户可能在原生里翻过页：回来后同步主轮播与索引
+        // （正常情况下 willClose 已经同步过一次，这里只是兜底）
         if (res.index >= 0 && res.index !== index) {
           setCurrentImageIndex(res.index);
           lastZoomIndexRef.current = res.index;
@@ -115,6 +125,23 @@ export default function PostMedia({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [images]
   );
+
+  /**
+   * 原生查看器**退场飞行开始时**就把主轮播对齐到要返回的那一张。
+   *
+   * 等 open() 的 Promise（Activity 真正结束）再同步就晚了：那时黑幕已经揭开，
+   * 会看到「飞回来的图是第 3 张、背景却是第 1 张」再跳一下。黑幕期间完成对齐，
+   * 揭开时就是同一张缩略图，接缝不可见。
+   */
+  useEffect(() => {
+    return onNativeViewerWillClose((index) => {
+      if (!nativeOpenRef.current || index < 0) return; // 不是本组件打开的那次会话
+      setCurrentImageIndex(index);
+      lastZoomIndexRef.current = index;
+      syncMainCarousel(index);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // 主轮播手势（详情页）
   useEffect(() => {

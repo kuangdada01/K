@@ -12,7 +12,7 @@ import { resolveMediaUrl } from '../../utils';
 import { useAuthMediaUrl } from '../../hooks/useAuthMediaUrl';
 import { useImagePinchZoom } from '../../hooks/useImagePinchZoom';
 import { useCancelableClose } from '../../hooks/useCancelableClose';
-import { authHeadersFor, openNativeViewer, rectOf } from '../../lib/nativeImageViewer';
+import { authHeadersFor, openNativeViewer, rectOf, rectsOfElements } from '../../lib/nativeImageViewer';
 import media from '../post/PostMedia.module.css';
 import styles from './PrivateFolder.module.css';
 
@@ -85,11 +85,17 @@ export default function PrivateFolder({
   const openZoom = (idx: number, thumbEl: Element | null) => {
     const urls = allImages.map((a) => resolveMediaUrl(a.url) || a.url);
     const rect = rectOf(thumbEl);
+    // 网格里每张缩略图的矩形（与 allImages 同序）：退出时飞回「当前这一张」
+    const gridEls = Array.from(imagesGridRef.current?.children ?? []).map(
+      (cell) => cell.querySelector('img') ?? cell
+    );
+    const rects = rectsOfElements(gridEls);
     void openNativeViewer({
       images: urls,
       index: idx,
       ...authHeadersFor(urls),
       ...(rect ? { rect } : {}),
+      ...(rects.length > 0 ? { rects } : {}),
     }).then((res) => {
       if (res === null) setPrivateZoomIndex(idx); // 回退 Web 覆盖层
     });
@@ -99,6 +105,8 @@ export default function PrivateFolder({
   // 单击关闭两阶段编排：轻点后先不播动画，等双击窗口过去才淡出
   // （淡出早于窗口会让撤销期间透出下层页面 = 闪烁），窗口内可撤销转缩放
   const zoomOverlayRef = useRef<HTMLDivElement>(null);
+  /** 网格容器：退场反向 Hero 需要每张缩略图的位置（见 openZoom） */
+  const imagesGridRef = useRef<HTMLDivElement>(null);
   const pinchZoom = useImagePinchZoom();
   const zoomVisible = privateZoomIndex !== null;
   const { closing, requestClose, cancelClose } = useCancelableClose(onZoomClose);
@@ -135,7 +143,7 @@ export default function PrivateFolder({
             <h3 style={{ margin: 0 }}>私密文件夹</h3>
             <span style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{visibleCount}/10</span>
           </div>
-          <div className={styles.images}>
+          <div className={styles.images} ref={imagesGridRef}>
             {privateImages
               .filter((img) => !privateDeletedIds.has(img.id))
               .map((img) => (

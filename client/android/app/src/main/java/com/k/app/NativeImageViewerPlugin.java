@@ -4,6 +4,7 @@ import android.content.Intent;
 import android.os.Bundle;
 
 import androidx.activity.result.ActivityResult;
+import androidx.annotation.Nullable;
 
 import com.getcapacitor.JSArray;
 import com.getcapacitor.JSObject;
@@ -37,8 +38,38 @@ import java.util.Iterator;
 @CapacitorPlugin(name = "NativeImageViewer")
 public class NativeImageViewerPlugin extends Plugin {
 
+    /** 当前插件实例：Activity 退场时要主动通知网页层（静态可达） */
+    @Nullable
+    private static NativeImageViewerPlugin activePlugin;
+
     /** 正在展示中的调用（close() 由 JS 主动关闭时用） */
     private PluginCall pendingCall;
+
+    @Override
+    public void load() {
+        activePlugin = this;
+    }
+
+    @Override
+    protected void handleOnDestroy() {
+        if (activePlugin == this) activePlugin = null;
+    }
+
+    /**
+     * Activity → 网页层：**即将退出**（退场飞行动画开始时）。
+     *
+     * 为什么需要这条通知：退出时原生会把图片「飞回缩略图」，期间黑幕不透明；
+     * 黑幕揭开的那一帧，网页层的轮播必须已经停在返回的这一张上，否则会看到
+     * 「落地的是 B 张、背景却露出 A 张」再跳一下。等 open() 的 Promise resolve
+     * 再同步就晚了（那时画面已经揭开）。
+     */
+    static void notifyWillClose(int index) {
+        NativeImageViewerPlugin p = activePlugin;
+        if (p == null) return;
+        JSObject data = new JSObject();
+        data.put("index", index);
+        p.notifyListeners("willClose", data);
+    }
 
     @PluginMethod
     public void open(PluginCall call) {
@@ -90,23 +121,48 @@ public class NativeImageViewerPlugin extends Plugin {
             int y = (int) Math.round(rect.optDouble("y", 0));
             int w = (int) Math.round(rect.optDouble("width", 0));
             int h = (int) Math.round(rect.optDouble("height", 0));
-            android.util.DisplayMetrics dm = getContext().getResources().getDisplayMetrics();
-            boolean plausible =
-                    w > 0
-                            && h > 0
-                            && w <= dm.widthPixels * 2
-                            && h <= dm.heightPixels * 2
-                            && x > -dm.widthPixels
-                            && y > -dm.heightPixels
-                            && x < dm.widthPixels * 2
-                            && y < dm.heightPixels * 2;
-            if (plausible) {
+            if (plausible(x, y, w, h, getContext().getResources().getDisplayMetrics())) {
                 intent.putExtra(ImageViewerActivity.EXTRA_SRC_RECT, new int[] { x, y, x + w, y + h });
             }
         }
 
+        // 每张图各自的缩略图矩形（扁平 int[4*N]，单位见下）：退场反向 Hero 要知道
+        // 「当前这一张」在网页里的位置 —— 用户在查看器里翻到第 5 张再退出，
+        // 就要飞回第 5 张的缩略图，而不是打开时那张
+        JSArray rects = call.getArray("rects");
+        if (rects != null && rects.length() > 0) {
+            android.util.DisplayMetrics dm = getContext().getResources().getDisplayMetrics();
+            int[] flat = new int[list.size() * 4];
+            for (int i = 0; i < list.size() && i < rects.length(); i++) {
+                JSONObject r = rects.optJSONObject(i);
+                if (r == null) continue;
+                int x = (int) Math.round(r.optDouble("x", 0));
+                int y = (int) Math.round(r.optDouble("y", 0));
+                int w = (int) Math.round(r.optDouble("width", 0));
+                int h = (int) Math.round(r.optDouble("height", 0));
+                if (w <= 0 || h <= 0 || !plausible(x, y, w, h, dm)) continue; // 不合理 → 留 0（该张不做 Hero）
+                flat[i * 4] = x;
+                flat[i * 4 + 1] = y;
+                flat[i * 4 + 2] = x + w;
+                flat[i * 4 + 3] = y + h;
+            }
+            intent.putExtra(ImageViewerActivity.EXTRA_RECTS, flat);
+        }
+
         pendingCall = call;
         startActivityForResult(call, intent, "viewerResult");
+    }
+
+    /** 矩形是否合理：物理像素、尺寸为正、且不会离谱到屏幕外几倍（宁可少个动画也不能乱飞） */
+    private static boolean plausible(int x, int y, int w, int h, android.util.DisplayMetrics dm) {
+        return w > 0
+                && h > 0
+                && w <= dm.widthPixels * 2
+                && h <= dm.heightPixels * 2
+                && x > -dm.widthPixels
+                && y > -dm.heightPixels
+                && x < dm.widthPixels * 2
+                && y < dm.heightPixels * 2;
     }
 
     /** JS 主动关闭（例如网页层自己也需要收起时） */
