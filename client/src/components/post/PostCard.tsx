@@ -14,7 +14,7 @@
  * ============================================================
  */
 
-import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, useSyncExternalStore, memo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MessageCircle, Share2, Repeat2 } from 'lucide-react';
 import RepostCheck from '../icons/RepostCheck';
@@ -33,6 +33,7 @@ import { useFollowToggle } from '../../hooks/useFollowToggle';
 import { useShareLink } from '../../hooks/useShareLink';
 import { useHeartFill } from '../../hooks/useHeartFill';
 import { events } from '../../state/events';
+import { subscribePostDetailOverlay, isPostDetailOverlayOpen } from '../../state/postDetailOverlay';
 import { formatRelativeTime, resolveMediaUrl } from '../../utils';
 import { parsePostImages } from '../../lib/parsePostImages';
 import { loadPostDetail } from '../../router/composerChunks';
@@ -107,10 +108,27 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
   // （图片数组解析自 lib/parsePostImages 拆出，行为不变：images 非空直接返回）
   const images = useMemo(() => parsePostImages(post), [post]);
 
+  // 帖子详情遮罩是否打开：遮罩底色是 rgba(0,0,0,0.65)（半透明）且信息流不卸载，
+  // 详情页期间卡片仍然可见 —— 自动轮播必须暂停，否则用户在详情页里会看到
+  // 后面的图片自己跳（同时白白消耗合成器/主线程）。
+  const detailOverlayOpen = useSyncExternalStore(
+    subscribePostDetailOverlay,
+    isPostDetailOverlayOpen,
+    isPostDetailOverlayOpen
+  );
+
   // Auto-play carousel: 部分可见且未悬停暂停时每 3 秒推进一张；
-  // 用户手动触摸/滑动过后（userInteractedRef）不再自动播
+  // 用户手动触摸/滑动过后（userInteractedRef）不再自动播；
+  // 详情页打开期间暂停（关闭后随依赖变化自动恢复）
   useEffect(() => {
-    if (images.length <= 1 || isPaused || userInteractedRef.current || !isPartiallyVisible) return;
+    if (
+      images.length <= 1 ||
+      isPaused ||
+      userInteractedRef.current ||
+      !isPartiallyVisible ||
+      detailOverlayOpen
+    )
+      return;
     const timer = setInterval(() => {
       setCurrentImageIndex((prev) => (prev + 1) % images.length);
     }, 3000);
@@ -119,7 +137,7 @@ function PostCard({ post, onLikeToggle, onPostClick, onProfileClick, onLikeChang
       clearInterval(timer);
       autoPlayTimerRef.current = null;
     };
-  }, [images.length, isPaused, isPartiallyVisible]);
+  }, [images.length, isPaused, isPartiallyVisible, detailOverlayOpen]);
 
   // 视频：帖子完全可见后稍作延迟再加载播放（快速划过不触发）。
   // 布局由封面图撑起（.videoPoster），视频作为绝对定位覆盖层淡入——

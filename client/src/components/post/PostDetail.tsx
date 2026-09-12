@@ -45,6 +45,7 @@ import { usePostDetailData } from '../../hooks/usePostDetailData';
 import { useCommentThread } from '../../hooks/useCommentThread';
 import { useEvent } from '../../context/EventContext';
 import { events } from '../../state/events';
+import { pushPostDetailOverlay, popPostDetailOverlay } from '../../state/postDetailOverlay';
 import { showToast } from '../ui/Toast';
 import { resolveMediaUrl } from '../../utils';
 import { parsePostImages, cleanEditImages } from '../../lib/parsePostImages';
@@ -103,6 +104,14 @@ export default function PostDetail({
   const overlayRef = useRef<HTMLDivElement>(null);
   const detailVideoRef = useRef<HTMLVideoElement>(null);
   const heartRef = useRef<SVGSVGElement>(null);
+
+  // 详情遮罩开关：首页信息流不会因为详情页打开而卸载，而遮罩底色是
+  // rgba(0,0,0,0.65)（半透明）——卡片上的 3 秒自动轮播在详情页期间仍可见地继续跑。
+  // 上报给全局状态，让信息流卡片在详情页打开时暂停自动轮播。
+  useEffect(() => {
+    pushPostDetailOverlay();
+    return () => popPostDetailOverlay();
+  }, []);
 
   const [activeHighlightId, setActiveHighlightId] = useState<number | null>(null);
 
