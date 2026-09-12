@@ -31,4 +31,18 @@
         <item name="android:enforceStatusBarContrast">false</item>
         <item name="android:enforceNavigationBarContrast">false</item>
     </style>
+
+    <!-- 原生图片查看器：无 ActionBar、窗口透明（Hero 动画需要看到下层网页），
+         黑色幕布交给布局里的 scrim，避免窗口底色抢先铺黑导致 Hero 出现黑边 -->
+    <style name="AppTheme.ImageViewer" parent="Theme.MaterialComponents.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+    </style>
 </resources>

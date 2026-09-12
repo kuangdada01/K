@@ -51,6 +51,8 @@ public class MainActivity extends BridgeActivity {
     protected void onCreate(Bundle savedInstanceState) {
         // 必须在 super.onCreate() 之前设置，让 AppCompat 自动处理系统夜间模式变化
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM);
+        // 注册自定义插件也必须在 super.onCreate() 之前
+        registerPlugin(NativeImageViewerPlugin.class);
         Log.d(TAG, ">>> onCreate START");
         super.onCreate(savedInstanceState);
 

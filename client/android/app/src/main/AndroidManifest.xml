@@ -29,6 +29,16 @@
 
         </activity>
 
+        <!-- 原生图片查看器：透明窗口、无系统切换动画
+             （打开/关闭的 Hero 与下拉关闭动画由 Activity 自己绘制） -->
+        <activity
+            android:name=".ImageViewerActivity"
+            android:theme="@style/AppTheme.ImageViewer"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:launchMode="singleTop"
+            android:hardwareAccelerated="true"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

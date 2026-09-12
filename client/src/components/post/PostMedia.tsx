@@ -4,19 +4,23 @@
  * ============================================================
  * PostDetail 的媒体区（图片轮播/视频/缩放查看）抽取：
  * - 图片轮播 + 指示点 + 左右切换（受控组件，索引/缩放状态由调用方管理）
- * - 详情页主轮播：无自动轮播，手势跟手翻页（transform 轨道驱动，GPU 合成器 60fps）
- * - 缩放查看 overlay（全屏）：点击进入/退出，滑动翻页（同样 transform 驱动）
- * - 手势/轨道通用逻辑已拆出至 hooks/useTransformCarousel（行为不变）
+ * - 详情页主轮播：无自动轮播，手势跟手翻页（原生滚动分页，合成器驱动）
+ * - 缩放查看 overlay（全屏）：点击进入/退出，滑动翻页
+ * - **Capacitor 环境下优先走原生查看器**（NativeImageViewer：
+ *   ViewPager2 + 原生缩放手势 + 下拉关闭 + 缩略图 Hero 转场），
+ *   插件不可用（网页端/桌面）时回退到本组件的 Web 覆盖层
+ * - 手势/轨道通用逻辑已拆出至 hooks/useTransformCarousel
  * ============================================================
  */
 
-import { useEffect, useLayoutEffect, useRef, RefObject } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, RefObject } from 'react';
 import { X, ZoomIn, ChevronLeft, ChevronRight } from 'lucide-react';
 import type { Post } from '../../types';
 import { resolveMediaUrl } from '../../utils';
 import { useTransformCarousel } from '../../hooks/useTransformCarousel';
 import { useImagePinchZoom } from '../../hooks/useImagePinchZoom';
 import { useCancelableClose } from '../../hooks/useCancelableClose';
+import { isNativeViewerAvailable, openNativeViewer, rectOf } from '../../lib/nativeImageViewer';
 import styles from './PostMedia.module.css';
 
 interface PostMediaProps {
@@ -64,6 +68,46 @@ export default function PostMedia({
   const syncMainCarousel = (index: number) => {
     mainCarousel.setOffset(mainCarousel.getSlideWidth() * index);
   };
+
+  /**
+   * 打开全屏看图：
+   * - Capacitor 原生环境 → 原生查看器（ViewPager2 + 原生手势 + 下拉关闭 +
+   *   从缩略图 Hero 放大进入）；打开失败/插件不可用 → 回退下面的 Web 覆盖层；
+   * - 原生可用时**不渲染** Web 覆盖层，避免两套 UI 叠加。
+   */
+  const openViewer = useCallback(
+    (index: number, thumbEl: Element | null) => {
+      const urls = images.map((u) => resolveMediaUrl(u) || u);
+      if (!isNativeViewerAvailable()) {
+        setZoomed(true);
+        return;
+      }
+      // 鉴权图片（私信/私密走 /api/）需要带上 token —— <img> 无法自定义请求头，
+      // 原生侧是普通 HTTP 请求，可以
+      const token = localStorage.getItem('k_token');
+      const needAuth = urls.some((u) => u.includes('/api/'));
+      const rect = rectOf(thumbEl);
+      void openNativeViewer({
+        images: urls,
+        index,
+        ...(needAuth && token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+        ...(rect ? { rect } : {}),
+      }).then((res) => {
+        if (res === null) {
+          setZoomed(true); // 原生打开失败 → 回退 Web 覆盖层
+          return;
+        }
+        // 用户可能在原生里翻过页：回来后同步主轮播与索引
+        if (res.index >= 0 && res.index !== index) {
+          setCurrentImageIndex(res.index);
+          lastZoomIndexRef.current = res.index;
+          syncMainCarousel(res.index);
+        }
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [images]
+  );
 
   // 主轮播手势（详情页）
   useEffect(() => {
@@ -231,10 +275,11 @@ export default function PostMedia({
                     src={resolveMediaUrl(url) || url}
                     alt={post.title}
                     className={styles.image}
-                    // 点击图片进入全屏查看（触摸滑动由浏览器识别为滚动，不会触发 click）
+                    // 点击图片进入全屏查看（原生环境走原生查看器，网页端走覆盖层）；
+                    // 触摸滑动由浏览器识别为滚动，不会触发 click
                     onClick={(e) => {
                       e.stopPropagation(); // 防止冒泡关闭详情 overlay
-                      setZoomed(true);
+                      openViewer(i, e.currentTarget);
                     }}
                   />
                 ))}
@@ -244,7 +289,9 @@ export default function PostMedia({
               className={styles.zoomBtn}
               onClick={(e) => {
                 e.stopPropagation();
-                setZoomed(true);
+                // 用当前这张缩略图做 Hero 起点（取自轮播轨道里的对应元素）
+                const cur = mainTrackRef.current?.children[currentImageIndex] ?? null;
+                openViewer(currentImageIndex, cur);
               }}
               aria-label="放大查看"
             >
