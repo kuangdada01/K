@@ -1,0 +1,42 @@
+// 独立原生工程（不含 Capacitor / Cordova）。
+// 插件走 buildscript classpath 解析（与旧工程同一条已验证的仓库链路），
+// 避免依赖 Gradle Plugin Portal 的 marker 构件。
+//
+// 注意 `url = uri(...)` 的写法：Gradle 9 起，Groovy DSL 的"空格调用"语法
+// （`url '…'` / `propName value`）被标记为弃用，Gradle 10 会移除 ——
+// 构建时会打 "Properties should be assigned using the 'propName = value' syntax"。
+// 这里全部改成显式赋值，`--warning-mode all` 下不再有该条弃用。
+buildscript {
+
+    repositories {
+        maven { url = uri('https://maven.aliyun.com/repository/google') }
+        maven { url = uri('https://maven.aliyun.com/repository/public') }
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:9.1.0'
+        // Kotlin 2.4.20：官方兼容 Gradle 7.6.3–9.7.0、AGP 8.5.2–9.3.1，
+        // 本工程 Gradle 9.1.0 + AGP 9.1.0 均在区间内
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.20'
+        // Compose 编译器插件（Kotlin 2.0+ 起随 KGP 发布，必须与 kotlin-gradle-plugin 严格同版本）
+        classpath 'org.jetbrains.kotlin:compose-compiler-gradle-plugin:2.4.20'
+        // kotlinx.serialization 编译器插件（同样随 Kotlin 同版本；运行时库另外在版本目录里）
+        classpath 'org.jetbrains.kotlin:kotlin-serialization:2.4.20'
+    }
+}
+
+apply from: "variables.gradle"
+
+allprojects {
+    repositories {
+        maven { url = uri('https://maven.aliyun.com/repository/google') }
+        maven { url = uri('https://maven.aliyun.com/repository/public') }
+        google()
+        mavenCentral()
+    }
+}
+
+tasks.register('clean', Delete) {
+    delete rootProject.layout.buildDirectory
+}

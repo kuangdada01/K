@@ -1,0 +1,28 @@
+ext {
+    minSdkVersion = 24
+    // compileSdk 37：AndroidX/Compose 的 2026 年版本要求依赖方 compile 到 37 或更高
+    // （见 gradle/libs.versions.toml 顶部说明）。:app 与 :native 共用这一个值。
+    compileSdkVersion = 37
+    targetSdkVersion = 37
+
+    kotlinVersion = '2.4.20'
+
+    // 与旧工程保持同版本：这些构件本机 Gradle 缓存已有，减少首次拉取与版本漂移风险
+    androidxAppCompatVersion = '1.7.1'
+    androidxCoreVersion = '1.17.0'
+    androidxActivityVersion = '1.11.0'
+    androidxWebkitVersion = '1.14.0'
+    androidxViewpager2Version = '1.1.0'
+    androidxExifinterfaceVersion = '1.3.7'
+    materialVersion = '1.13.0'
+    coreSplashScreenVersion = '1.2.0'
+    biometricVersion = '1.1.0'
+
+    junitVersion = '4.13.2'
+    androidxJunitVersion = '1.3.0'
+    androidxEspressoCoreVersion = '3.7.0'
+
+    // JVM 单测跑 bridge 的协议解析要用到真正的 org.json 实现：
+    // 单元测试里的 android.jar 是"桩"（方法默认返回 null/0），org.json 必须换成官方实现。
+    jsonVersion = '20231013'
+}

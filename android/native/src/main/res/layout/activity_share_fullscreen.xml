@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  屏幕共享全屏宿主（ShareFullscreenActivity）。
+
+  结构只有三层，每层都有"为什么"：
+
+   1. root（k_share_fullscreen_root）= **纯黑**。
+      它是"黑边"的唯一来源：画面框按画面比例居中，上下或左右多出来的部分就是这层露出来的黑。
+      ⚠️ SurfaceView 的 Surface 在窗口 UI 层**下面**出图（在窗口上挖洞），
+      所以这一层铺黑**不会**盖住画面；而如果谁在画面框**之上**再铺一层不透明底色，
+      画面会被整块盖黑（M6.16 真机事故）。层级：root(黑) → box(画面比例) → 渲染器。
+
+   2. k_share_fullscreen_box = **画面比例框**（宽高在代码里按比例算，这里只是空的承载壳）。
+      渲染器铺满它，于是 `SurfaceViewRenderer.onMeasure` 算出来的 View 比例 == 画面比例，
+      配合 FIT 出图 + 关掉硬件缩放器，**结构上不可能裁切/拉伸**。
+
+   3. k_share_fullscreen_hint = 「双击退出全屏」提示。
+      它压在画面**上方**，但只在不透明胶囊那点面积里有底色 —— 全屏看电脑屏幕（横向）时
+      这个位置落在上黑边里；竖屏共享时会被画面上缘盖住（Surface 挖洞），
+      已知边界，双击退出本身不受影响。
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/k_share_fullscreen_root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@android:color/black">
+
+    <FrameLayout
+        android:id="@+id/k_share_fullscreen_box"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center"
+        android:background="@android:color/black" />
+
+    <TextView
+        android:id="@+id/k_share_fullscreen_hint"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="32dp"
+        android:background="@drawable/k_share_hint_background"
+        android:paddingStart="12dp"
+        android:paddingTop="4dp"
+        android:paddingEnd="12dp"
+        android:paddingBottom="4dp"
+        android:text="@string/k_share_fullscreen_hint"
+        android:textColor="@android:color/white"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
+</FrameLayout>

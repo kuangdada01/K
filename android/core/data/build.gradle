@@ -1,0 +1,81 @@
+plugins {
+    id 'com.android.library'
+    // AGP 9 内置 Kotlin：不声明 `org.jetbrains.kotlin.android`
+    id 'org.jetbrains.kotlin.plugin.serialization'
+}
+
+// 版本号来源与 :app / :native 相同
+def versionProps = new Properties()
+file('../../version.properties').withInputStream { versionProps.load(it) }
+
+android {
+    namespace = "top.kuangdada.k.core.data"
+    compileSdk = rootProject.ext.compileSdkVersion
+
+    defaultConfig {
+        minSdkVersion 27
+
+        // 服务器地址单一来源。生产为 https://www.kuangdada.top（见 rewrite-plan §9 Q1）。
+        // 注意域名**带 www**（docs/android-native-architecture.md 第 23 行也是这个值）。
+        buildConfigField "String", "DEFAULT_SERVER_URL", '"https://www.kuangdada.top"'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+}
+
+kotlin {
+    jvmToolchain(21)
+}
+
+// 中文路径下 Gradle 的测试 worker 会挂（见 docs/android-native-architecture.md §6），
+// 单测走 android/scripts/run-kotlin-tests.mjs（它会调下面的 dumpTestClasspath 导出清单）
+tasks.configureEach { t ->
+    if (t.name in ['test', 'testDebugUnitTest', 'testReleaseUnitTest']) {
+        t.enabled = false
+    }
+}
+
+tasks.register('dumpTestClasspath') {
+    group = 'verification'
+    description = '导出单元测试 runtime classpath（供 Node 侧直接跑 JUnit 用）'
+    dependsOn 'compileDebugUnitTestKotlin'
+    def outputFile = layout.buildDirectory.file('kotlin-test-classpath.txt')
+    outputs.file(outputFile)
+    doLast {
+        def testTask = tasks.named('testDebugUnitTest').get()
+        def entries = testTask.classpath.files
+        def file = outputFile.get().asFile
+        file.parentFile.mkdirs()
+        file.setText(entries.join(File.pathSeparator), 'UTF-8')
+        logger.lifecycle("[dumpTestClasspath:core:data] ${entries.size()} 个条目 → ${file.absolutePath}")
+    }
+}
+
+dependencies {
+    implementation libs.androidx.core.ktx
+    implementation libs.androidx.lifecycle.viewmodel.compose
+
+    implementation libs.retrofit
+    api libs.retrofit.kotlinx.serialization
+    implementation libs.okhttp
+    implementation libs.okhttp.sse
+    // api：DTO 上公开用了 @Serializable，消费方（:native 的测试）需要可见
+    api libs.kotlinx.serialization.json
+    // 令牌落盘走 EncryptedSharedPreferences（Android Keystore 包装的 AES）
+    implementation libs.androidx.security.crypto
+    implementation libs.androidx.datastore.preferences
+    // 图片压缩要把 EXIF 方向烘焙进像素（否则上传后照片躺倒）
+    implementation libs.androidx.exifinterface
+
+    // 调试期看请求日志（只在 debug 变体生效，见 KApi 的反射加载）
+    debugImplementation libs.okhttp.logging
+
+    testImplementation libs.junit
+}

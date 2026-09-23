@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 全屏宿主退场：淡出（把"渲染器跨窗口交接、Surface 重建"的那一下盖住） -->
+<alpha xmlns:android="http://schemas.android.com/apk/res/android"
+    android:duration="180"
+    android:fromAlpha="1.0"
+    android:interpolator="@android:interpolator/fast_out_slow_in"
+    android:toAlpha="0.0" />

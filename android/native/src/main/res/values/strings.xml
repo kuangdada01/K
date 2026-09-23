@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">K</string>
+
+    <!-- 语音房前台服务通知（保活凭据 + 退出入口） -->
+    <string name="voice_channel">语音房</string>
+    <string name="voice_channel_desc">在后台保持语音通话（Android 14+ 后台采集麦克风必须由前台服务持有）</string>
+    <string name="voice_stop">退出房间</string>
+
+    <!--
+      全屏看共享时单击亮一下的提示。**不能只有双击而没有提示**：这一版按用户要求去掉了
+      右上角的 × 图标（"本来就可以点击 2 次来选择全屏或者关闭"），
+      纯双击退出而毫无说明，第一次用的人会觉得"退不出去了"。
+      带上共享者名字：全屏铺满时这是**唯一**还能说明"我在看谁的画面"的地方。
+      `%1$s` 之外的字面 `%` 不需要转义（这里只有一个占位符）。
+    -->
+    <string name="k_share_fullscreen_hint">%1$s 的共享 · 双击退出全屏</string>
+</resources>

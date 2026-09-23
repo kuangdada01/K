@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      内联视频播放的"表面类型"（KVideoSurface 用 ContextThemeWrapper 应用这个主题）。
+
+      为什么必须显式指定 texture_view：PlayerView 默认用 `surface_view`，而 SurfaceView
+      会在窗口上"挖洞"、由 SurfaceFlinger 直接合成，**绕开 Compose 的绘制顺序** ——
+      盖在视频上的 Compose 元素（我们的进度条、"剩余 mm:ss"、暂停遮罩）会**完全画不出来**
+      （不是被盖住，是根本没画）。换成 TextureView 后视频按普通 View 参与合成，
+      Compose 覆盖层才可见；代价是多一次 GPU 拷贝。
+
+      父主题用 `Theme.KNative`（应用自己的主题，平台 Material 系）：四个理由 ——
+        · 它已经在本 App 里被 manifest 用过，inflate PlayerView 的默认布局是验证过的路径；
+        · 不用引入 AppCompat/AppCompat 主题（本项目没有该依赖）；
+        · 自动继承深/浅色的 windowBackground（values-night 里有对应值）；
+        · surface_type 是 media3-ui 自己声明的 attr，不依赖任何 AppCompat 属性。
+    -->
+    <style name="KVideoSurface" parent="Theme.KNative">
+        <item name="surface_type">texture_view</item>
+    </style>
+
+    <!--
+      屏幕共享全屏宿主的进出场动画：**淡入淡出**（180ms，与 KMotion 的"快速"档同量级）。
+
+      为什么不能硬切（`windowAnimationStyle` 留空 = 系统默认的滑动/缩放）：
+       1. 进场那一帧画面正在跨窗口交接（Surface 重建，见 ShareFullscreenActivity 的说明），
+          系统默认动画会把这个过程放得很显眼；
+       2. 退场时房间页在同一时刻把渲染器接回内联槽位、也要重建一次 Surface ——
+          淡出把这一下盖住，观感才是"画面缩小回去"而不是"闪一下再回来"。
+
+      只改 alpha，不改位移/缩放：共享画面是全屏铺开的，位移/缩放动画会让"黑边"边缘抖动。
+    -->
+    <style name="KShareFullscreenWindowAnimation" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/k_share_fullscreen_in</item>
+        <item name="android:activityOpenExitAnimation">@anim/k_share_fullscreen_out</item>
+        <item name="android:activityCloseEnterAnimation">@anim/k_share_fullscreen_in</item>
+        <item name="android:activityCloseExitAnimation">@anim/k_share_fullscreen_out</item>
+    </style>
+</resources>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 全屏宿主进场：淡入（只改 alpha，不位移/不缩放 —— 理由见 styles.xml 的 KShareFullscreenWindowAnimation） -->
+<alpha xmlns:android="http://schemas.android.com/apk/res/android"
+    android:duration="180"
+    android:fromAlpha="0.0"
+    android:interpolator="@android:interpolator/fast_out_slow_in"
+    android:toAlpha="1.0" />

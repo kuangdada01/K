@@ -1,0 +1,8 @@
+// M4 起只保留原生模块。
+// `:app`（WebView 宿主 + Capacitor 桥）已随 M4 第 19 项移除 —— 原生版不再需要
+// 内嵌 web 产物，桥层与 assets/web 一并删除。
+include ':native'
+include ':core:designsystem'
+include ':core:data'
+
+rootProject.name = 'K'

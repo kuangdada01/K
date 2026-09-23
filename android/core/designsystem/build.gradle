@@ -1,0 +1,51 @@
+plugins {
+    id 'com.android.library'
+    // AGP 9 内置 Kotlin：不再声明 `org.jetbrains.kotlin.android`
+    id 'org.jetbrains.kotlin.plugin.compose'
+}
+
+android {
+    namespace = "top.kuangdada.k.core.designsystem"
+    compileSdk = rootProject.ext.compileSdkVersion
+
+    defaultConfig {
+        minSdkVersion 27
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+
+    buildFeatures {
+        compose = true
+    }
+}
+
+kotlin {
+    jvmToolchain(21)
+}
+
+tasks.configureEach { t ->
+    if (t.name in ['test', 'testDebugUnitTest', 'testReleaseUnitTest']) {
+        t.enabled = false
+    }
+}
+
+dependencies {
+    implementation platform(libs.androidx.compose.bom)
+    // runtime：CompositionLocal / @Composable / derivedStateOf
+    implementation libs.androidx.compose.runtime
+    // foundation：Modifier.background/border/clickable、BasicTextField、Canvas、interaction
+    // （animation 的动画 API 也在 foundation 的依赖里，但显式声明更清楚）
+    implementation libs.androidx.compose.foundation
+    implementation libs.androidx.compose.animation
+    // material3：Typography / MaterialTheme / ColorScheme
+    implementation libs.androidx.compose.material3
+    implementation libs.androidx.compose.ui
+    implementation libs.androidx.compose.ui.graphics
+    implementation libs.androidx.compose.ui.tooling.preview
+    debugImplementation libs.androidx.compose.ui.tooling
+
+    testImplementation libs.junit
+}

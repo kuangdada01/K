@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  原生版（:native）入口。
+
+  与 :app（WebView 宿主）的关系：两者 applicationId 不同，可同时安装、对照使用。
+  原生版不做任何窗口级 inset 避让 —— 走 edge-to-edge，由 Compose 的 WindowInsets 自行避让。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      语音房要用的权限。**漏声明的话真机上是"静默失败"**：
+      requestPermissions 会立刻回 denied，WebRTC 的 AudioRecord 建出来是无效的，
+      既不抛异常也不报错，表现只是"本地永远静音、别人听不到你"。
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!--
+      「保存图片/视频到相册」（长按媒体）在 **API 27–28** 上要写公共 Pictures/K、Movies/K，
+      需要这条权限；**API 29 起走 MediaStore 的 RELATIVE_PATH，不需要任何权限**
+      （见 MediaStoreSaver 的两条分支）。
+
+      `maxSdkVersion="28"` 是必须的：不加的话新系统上会向用户申请一个"已废弃、且我们不需要"
+      的存储权限 —— 商店审核与用户观感都是负分。
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <!--
+      语音房「文字聊天 → 朗读」要用的系统 TTS 引擎（M6.2）。
+
+      Android 11（API 30）起有**包可见性**限制：不在这里声明，`TextToSpeech` 就**静默
+      初始化失败** —— 不报错、不崩溃，只是点了朗读没有任何反应。这是"朗读没反应"最常见的原因。
+      action 名是系统约定的 `android.intent.action.TTS_SERVICE`（区分大小写）。
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
+        </intent>
+    </queries>
+
+    <!--
+      语音房前台服务。**Android 14（API 34）起，后台应用不能采集麦克风** ——
+      没有前台服务持有时，锁屏/切后台后系统会把采集静音，表现是"界面还在、
+      别人听不到你说话"，且不报任何错。所以进房必须起前台服务。
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- 屏幕共享期间同样要保持前台（Android 14+ 对 mediaProjection 类型有同样要求） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!--
+      Android 13+ 通知权限：没有它前台服务的通知不显示（服务仍在跑，但用户看不到也退不掉）
+    -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      保存图片到相册：API 29+ 走 MediaStore 不需要权限，**但 27–28 需要**。
+      maxSdkVersion=28 让它在新系统上不出现（也不会被用户看到"存储权限"这种吓人的请求）。
+    -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+
+    <!--
+      App 自更新（APK 下载后拉起安装）。**漏了它不会崩、也不会报错** ——
+      表现是"点了检查更新、下载完了、但安装页弹不出来"，极难定位。
+      Android 8+ 还需要用户在系统设置里允许"安装未知应用"（由 DownloadController 引导）。
+    -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <!--
+      发帖选位置：地图选点 + 「回到我的位置」。**只在前台、用户主动点击时取一次**，
+      不做后台定位（因此不需要 ACCESS_BACKGROUND_LOCATION，也避开了审核与耗电问题）。
+      COARSE 与 FINE 一起声明：用户可以只给"大致位置"，那种情况下也照常能选点。
+    -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+
+    <!--
+      定位是硬件特性但不是必需品：没有定位硬件的设备也能装（地图仍可拖动选点）。
+    -->
+    <uses-feature
+        android:name="android.hardware.location"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.location.gps"
+        android:required="false" />
+
+    <!--
+      麦克风是硬件特性但不是必需品：没有麦克风的设备（少数平板）也要能装、
+      以「只听」模式进房。所以 required="false"。
+    -->
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
+
+    <!--
+      enableOnBackInvokedCallback（M2 新增）：显式开启"预测式返回"。
+      不显式声明的话，targetSdk 33+ 的默认值在不同版本上并不一致 —— 而我们的返回动画
+      （AppShell 的 PredictiveBackHandler）依赖系统把**手势进度**喂进来：
+      只有开了它，返回手势才会先给 App 一系列 progress 事件，而不是等手势结束才通知一次。
+      显式声明还有一个好处：它是自文档化的（读 Manifest 就知道这个 App 支持预测式返回）。
+
+      注：本机自检机是 Android 16（API 36），预测式返回可用；API 33 以下的设备上
+      该属性无效，PredictiveBackHandler 退化成普通返回键处理。
+    -->
+    <application
+        android:name=".KApp"
+        android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.KNative">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|smallestScreenSize|density|fontScale|locale|layoutDirection"
+            android:windowSoftInputMode="adjustResize"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!--
+              深链：站内链接交给 App 打开。
+              刻意**不加** autoVerify —— 那需要在服务器放 /.well-known/assetlinks.json，
+              未配置时 Android 会认为验证失败并退回浏览器。不加的话系统会弹选择器，
+              行为可预期（与 :app 的既有实现一致）。
+              launchMode 必须是 singleTop：否则 App 已开着时点链接会再开一个实例。
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="www.kuangdada.top" />
+                <data android:scheme="https" android:host="kuangdada.top" />
+            </intent-filter>
+
+            <!-- 「分享到 K」：接收文本/链接（发帖页会把文本填进正文） -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          屏幕共享**全屏宿主**（M6.17：全屏 = 独立 Activity + Surface 交接）。
+
+          为什么是独立 Activity 而不是同一棵树里的浮层：直播类 App 的标准做法
+          —— 播放器实例与 Surface 只一份，全屏只是把 Surface 交给新宿主
+          （等价于 ExoPlayer 的 `player.setVideoSurfaceView(...)`），
+          所以"进全屏不黑、退出全屏不重新加载"。渲染器由
+          `voice/ShareRenderHolder` 在两个宿主之间交接，全程不 release/不重新 init。
+
+          三处配置都不能省：
+           · **configChanges 与 MainActivity 逐字一致**：不做的话旋转/尺寸变化会重建 Activity
+             —— 而重建 = 宿主窗口换了 = 渲染器要第三次交接，画面必然黑一下。
+             全屏看电脑屏幕（横向内容）时用户很自然会横过来看，这条路必须不重建。
+           · **theme**：纯黑窗口底色（黑边就是它）；用应用主题的话第一帧是浅色青瓷，会闪一下白。
+           · **launchMode="singleTop"**：连点两下画面不会叠出两个宿主（第二个 intent 只回调
+             onNewIntent），否则第二个宿主拿不到渲染器（它已经有父了），只会看到一块黑屏。
+        -->
+        <activity
+            android:name=".ShareFullscreenActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|smallestScreenSize|density|fontScale|locale|layoutDirection"
+            android:theme="@style/Theme.KNative.ShareFullscreen" />
+
+        <!--
+          注：图片查看器（`ui.viewer.ImageViewerActivity`）在 M5 已退役。
+          它原来是"独立 Activity + 全屏黑底"的实现，代价是**跨 Activity 做不了 Compose 共享元素**
+          （点缩略图只能硬切、黑屏一闪）。现在它是 Shell 里的覆盖层
+          （画在导航胶囊之后，与登录/设置弹层同一套机制），于是"点图放大 / 下拉缩小回卡片"
+          可以真的飞起来。退役带来的连带删除：这个 `<activity>` 条目、`Theme.KNative.Viewer`、
+          以及查看器里的"保存到相册"死代码（界面上早就没有保存按钮了）。
+        -->
+
+        <!--
+          语音房前台服务。foregroundServiceType 必须在这里声明（Android 10+ 起强制），
+          与代码里 ServiceCompat.startForeground 传的类型要一致：
+          mediaPlayback（音频输出）+ microphone（麦克风采集）。
+        -->
+        <service
+            android:name=".voice.VoiceForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback|microphone|mediaProjection" />
+
+        <!--
+          录制分享用。`android:name="androidx.core.content.FileProvider"` 直接用
+          AndroidX 的实现（不需要自己写子类），authorities 必须与代码里
+          FileProvider.getUriForFile 传的 `${context.packageName}.fileprovider` 一致。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+
+</manifest>

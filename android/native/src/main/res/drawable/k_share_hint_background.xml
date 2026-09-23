@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  「双击退出全屏」提示的胶囊底（半透明黑 + pill 圆角）。
+  为什么用 drawable 而不是代码里 setBackgroundColor：圆角只能用 shape 画；
+  而这条提示必须**只有胶囊那点面积不透明** —— 全屏是"黑边 + 画面"，多一层实心底会盖住画面
+  （SurfaceView 在窗口 UI 层下面出图，见 activity_share_fullscreen.xml 的层级说明）。
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/k_share_hint_background" />
+    <corners android:radius="999dp" />
+</shape>

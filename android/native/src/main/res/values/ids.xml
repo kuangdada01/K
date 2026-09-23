@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  给 SurfaceViewRenderer 的 setTag 用（记录"这个 renderer 已经挂了哪路视频轨"）。
+  WebRTC 对同一个 renderer 重复 addSink 同一路轨会抛异常，重组时 AndroidView 的
+  factory 可能被再次调用，所以需要一个稳定的 tag id 来去重。
+-->
+<resources>
+    <item name="k_share_sink_tag" type="id" />
+</resources>

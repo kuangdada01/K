@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 冷启动/窗口底色 = 令牌 bgPage（浅色青瓷 #EEF2EE）-->
+    <color name="k_window_background">#EEF2EE</color>
+
+    <!-- 屏幕共享全屏宿主的窗口底色：**纯黑**（黑边就是它，见 themes.xml 的 Theme.KNative.ShareFullscreen） -->
+    <color name="k_share_fullscreen_background">#FF000000</color>
+    <!-- 「双击退出全屏」提示的胶囊底（与房间内既有提示同一个 alpha 档：0.55） -->
+    <color name="k_share_hint_background">#8C000000</color>
+</resources>
