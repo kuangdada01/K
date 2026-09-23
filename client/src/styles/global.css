@@ -23,25 +23,84 @@
      --bg-page  页面底色 #0d0f14 / 卡片表面 #161a22 / 鎏金强调 #c9a962
    ============================================================ */
 :root {
+  /* ---------- 页面与表面 ---------- */
   --bg-page: #eef2ee; /* 页面底色（青瓷） */
   --bg-primary: #ffffff; /* 卡片/表面（白瓷） */
   --bg-secondary: #ffffff; /* 次级表面 */
   --bg-hover: #dfe8df; /* 悬停/浅表面 */
+  /* 表面三层（实心卡片的材质来自这里，不再靠毛玻璃） */
+  --surface: #ffffff; /* 正文卡片实心面 */
+  --surface-raised: #ffffff; /* 模态/下拉菜单 */
+  --surface-sunken: #e8f0e8; /* 图片位/进度槽等凹陷面 */
+  --bg-frosted: rgba(255, 255, 255, 0.66); /* 仅浮层（导航胶囊/模态）用毛玻璃 */
+
+  /* ---------- 描边 ---------- */
   --border-color: #d2ddd2; /* 瓷缘灰绿 */
+  --border-subtle: #dee8de; /* 卡片/行内分隔线 */
+  --border-strong: #bac9ba; /* 输入框/次级按钮默认描边 */
+  --accent-border: #a8bfb5; /* 幽灵按钮描边 */
+
+  /* ---------- 文字 ---------- */
   --text-primary: #1f2b26;
   --text-secondary: #55645d;
-  --text-muted: #82948b;
+  --text-muted: #5a6d63; /* 对比度 2.83:1 → 4.88:1（原 #82948b 不达 AA） */
+
+  /* ---------- 强调 ---------- */
   --accent: #2f5d50; /* 松柏深绿 */
   --accent-hover: #24493e;
   --accent-soft: rgba(47, 93, 80, 0.15);
   --on-accent: #f5faf6; /* 强调色上的文字 */
-  --danger: #b5544a;
-  --danger-hover: #a3473e;
-  --success: #3a7d5c;
+
+  /* ---------- 语义色 ---------- */
+  --danger: #a84a40; /* 对比度 4.29:1 → 4.99:1 */
+  --danger-hover: #8e3d34;
+  --danger-soft: #e8dedb; /* 危险区按钮底 */
+  --success: #347252; /* 对比度 4.35:1 → 5.05:1 */
+
+  /* ---------- 遮罩 / 焦点 ---------- */
+  --scrim: rgba(20, 31, 26, 0.45);
+  --focus-ring: #2f5d50;
+
+  /* ---------- 尺度：圆角（原项目散落 18 种取值，收敛为 6 档）---------- */
+  --radius-chip: 6px;
+  --radius-control: 10px;
+  --radius-row: 14px;
+  --radius-card: 18px;
+  --radius-sheet: 24px;
+  --radius-pill: 999px;
+
+  /* ---------- 尺度：字号 ---------- */
+  --font-title: 24px;
+  --font-heading: 17px;
+  --font-body: 15px;
+  --font-label: 13px;
+  --font-caption: 12px;
+  --font-micro: 11px;
+
+  /* ---------- 尺度：间距 ---------- */
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 20px;
+  --space-2xl: 24px;
+
+  /* ---------- 尺度：动效 ---------- */
+  --dur-fast: 120ms; /* 微反馈（按下） */
+  --dur-base: 180ms; /* 状态切换 */
+  --dur-slow: 260ms; /* 浮层进出 */
+  --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* ---------- 底部导航（唯一真相：高度 / 浮起 / 内容预留）---------- */
+  --nav-capsule-h: 68px;
+  --nav-capsule-gap: 16px;
+  /* 内容区底部预留 = 胶囊高 + 浮起 + 呼吸，改胶囊尺寸只需改上面两个值 */
+  --nav-reserve: calc(var(--nav-capsule-h) + var(--nav-capsule-gap) + 12px);
+
   --sidebar-width-collapsed: 220px;
   --sidebar-width-expanded: 220px;
   --radius: 16px;
-  --shadow: 0 6px 20px rgba(31, 60, 48, 0.06);
+  /* 卡片阴影：近距 1 层做边缘定义 + 远距 1 层做浮起感（原单层 0.06 太弱） */
+  --shadow: 0 6px 20px rgba(31, 60, 48, 0.08), 0 1px 3px rgba(31, 60, 48, 0.06);
   --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
@@ -54,8 +113,7 @@
   --bg-btn-secondary-hover: #d2ddd2;
   --bg-tag-admin: #d8e6de;
   --text-tag-admin: #2f5d50;
-  --bg-danger-light: rgba(181, 84, 74, 0.12);
-  --bg-frosted: rgba(255, 255, 255, 0.62);
+  --bg-danger-light: rgba(168, 74, 64, 0.12);
   --shadow-dropdown: 0 8px 24px rgba(31, 60, 48, 0.14);
 
   /* 浅色主题：浏览器按此渲染原生控件/滚动条（不设置时深色页面会残留浅色滚动条） */
@@ -65,21 +123,37 @@
 /* 暗色模式变量覆盖（玄夜鎏金） */
 [data-theme='dark'] {
   --bg-page: #0d0f14;
-  --bg-primary: #161a22;
+  --bg-primary: #1e232d; /* 卡面由 #161a22 提起，与页底分离度 1.09 → 1.17 */
   --bg-secondary: #1e232d;
   --bg-hover: #1e232d;
+  --surface: #1e232d;
+  --surface-raised: #262b36; /* 模态/下拉比卡片再提一层 */
+  --surface-sunken: #141721;
+  --bg-frosted: rgba(28, 32, 42, 0.72); /* 深色下需更高不透明度，否则玻璃上的弱化文字掉出 4.5:1 */
+
   --border-color: #262b35;
+  --border-subtle: #1f242e;
+  --border-strong: #454f5e;
+  --accent-border: #6b5c38;
+
   --text-primary: #e8e6e1;
   --text-secondary: #a8abaf;
-  --text-muted: #6d7178;
+  --text-muted: #8b9098; /* 对比度 3.91:1 → 5.97:1（原 #6d7178 不达 AA） */
+
   --accent: #c9a962; /* 鎏金 */
   --accent-hover: #d9bd7c;
   --accent-soft: rgba(201, 169, 98, 0.18);
   --on-accent: #0d0f14; /* 金底用深字 */
+
   --danger: #e0586b;
   --danger-hover: #ea7080;
+  --danger-soft: #2e1a21;
   --success: #7fbf8f;
-  --shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+
+  --scrim: rgba(0, 0, 0, 0.62);
+  --focus-ring: #c9a962;
+
+  --shadow: 0 6px 20px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
   --bg-input: #1e232d;
   --bg-input-hover: #262b35;
   --bg-btn-secondary: #1e232d;
@@ -87,7 +161,6 @@
   --bg-tag-admin: rgba(201, 169, 98, 0.15);
   --text-tag-admin: #c9a962;
   --bg-danger-light: rgba(224, 88, 107, 0.15);
-  --bg-frosted: rgba(28, 32, 42, 0.58);
   --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.45);
 
   /* 深色主题：滚动条/原生表单控件随主题变深色，避免浅色滚动条突兀 */
@@ -198,6 +271,15 @@ img {
   max-width: 100%;
 }
 
+/* 键盘焦点环（全站统一）：原来只有侧栏有，其余页面 Tab 导航看不到焦点。
+   用 inset 阴影而非 outline —— 不少容器带 overflow:hidden，
+   outline 画在元素外会被裁成"半个边框"。
+   侧栏另有自己的覆盖规则（见 Sidebar.module.css）。 */
+:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--focus-ring);
+}
+
 .app-layout {
   display: flex;
   align-items: flex-start;
@@ -267,12 +349,12 @@ img {
     /* 状态栏避让：原生 edge-to-edge 下 WebView 铺满全屏，
        env() 原生端 = 状态栏高度（全屏沉浸时自动归 0），网页端 = 0 无影响 */
     padding-top: var(--safe-area-top);
-    /* 底部留出悬浮胶囊导航 + 安全区空间（胶囊 68px + 16px 浮起 + 12px 呼吸） */
-    padding-bottom: calc(96px + var(--safe-area-bottom));
+    /* 底部留出悬浮胶囊导航 + 安全区空间（尺寸来自 --nav-reserve，见 :root） */
+    padding-bottom: calc(var(--nav-reserve) + var(--safe-area-bottom));
   }
 
   /* 沉浸页（图书详情/阅读器/语音房间内）隐藏了底部胶囊导航，
-     同步回收为胶囊预留的 96px 底部内边距，只保留安全区 */
+     同步回收为胶囊预留的底部内边距，只保留安全区 */
   .app-layout.mobile-nav-hidden .main-content {
     padding-bottom: var(--safe-area-bottom);
   }

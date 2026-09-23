@@ -14,7 +14,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Capacitor } from '@capacitor/core';
+import { isNative } from '../../lib/native';
 import api from '../../api/http';
 import { Conversation, Notification } from '../../types';
 import { useAuth } from '../../context/AuthContext';
@@ -148,7 +148,7 @@ export default function Messages() {
       if (selectedPostId) return; // PostDetail 会自己处理
       if (selectedPartner) {
         setSelectedPartner(null);
-      } else if (!Capacitor.isNativePlatform() && activeTab === 'notifications') {
+      } else if (!isNative() && activeTab === 'notifications') {
         // 仅 web 端：通知标签页返回到消息标签页
         setActiveTab('messages');
       }

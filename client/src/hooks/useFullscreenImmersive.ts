@@ -7,7 +7,7 @@
  *   Android WebView custom view 路径的 fullscreenElement 不可靠）
  * - fullscreenchange 兜底：null 事件只有"曾进入真实全屏"才视为退出恢复
  *   （返回手势/系统退出后状态栏恢复的根因修复）
- * - 原生沉浸模式（AndroidBridge.setImmersiveMode）+ 全屏时刷新 theme-color
+ * - 原生沉浸模式（lib/native.setImmersiveMode）+ 全屏时刷新 theme-color
  *   （部分移动浏览器全屏后状态栏变黑的修复）
  * - 卸载兜底：全屏中离开房间/共享结束 → 恢复系统栏，避免沉浸状态残留
  * ============================================================
@@ -15,6 +15,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
+import { setImmersiveMode } from '../lib/native';
 
 export function useFullscreenImmersive(stageRef: RefObject<HTMLDivElement | null>) {
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -41,12 +42,10 @@ export function useFullscreenImmersive(stageRef: RefObject<HTMLDivElement | null
     }
   }, []);
 
-  // 原生沉浸模式（隐藏/恢复状态栏+导航栏）；仅原生端存在 AndroidBridge
+  // 原生沉浸模式（隐藏/恢复状态栏+导航栏）；非原生环境桥内部自动降级为 no-op
   const applyImmersive = useCallback(
     (on: boolean) => {
-      const bridge = (window as unknown as { AndroidBridge?: { setImmersiveMode?: (v: boolean) => void } })
-        .AndroidBridge;
-      bridge?.setImmersiveMode?.(on);
+      setImmersiveMode(on);
       if (on) refreshThemeColor();
     },
     [refreshThemeColor]

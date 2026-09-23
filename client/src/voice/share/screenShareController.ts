@@ -34,8 +34,8 @@ export interface ScreenShareSink {
   getSelfUserId(): number;
   /** self.sharing 变化（参与者列表数据源） */
   onSelfSharingChanged(sharing: boolean): void;
-  /** 信令上行（share-start / share-stop） */
-  sendShareStart(withAudio: boolean): void;
+  /** 信令上行（share-start 带共享方声明的采集尺寸，见 `captureSizeOf`；share-stop 不带） */
+  sendShareStart(withAudio: boolean, size: { width: number; height: number } | null): void;
   sendShareStop(): void;
   /** 参与者列表刷新（共享状态变化后，与历史实现同一时刻） */
   emitParticipants(): void;
@@ -57,6 +57,64 @@ export interface ScreenShareSink {
   attachRemoteShareAudio(stream: MediaStream, muted: boolean): void;
   disposeRemoteShareAudio(): void;
   applyShareMuted(muted: boolean): void;
+}
+
+/**
+ * 采集轨道声明的**像素尺寸**（`share-start` 的 width/height）。
+ *
+ * 拿不到或数值非法一律返回 null = "未声明" —— 服务端与观看端都会回落到接收探针，
+ * 与"老客户端不发这两个字段"是同一条路径（见 shared/src/types.ts 的 VoiceParticipant.width）。
+ */
+export function captureSizeOf(
+  track: MediaStreamTrack | null | undefined
+): { width: number; height: number } | null {
+  const s = track?.getSettings();
+  const w = s?.width;
+  const h = s?.height;
+  return typeof w === 'number' && typeof h === 'number' && w > 0 && h > 0 ? { width: w, height: h } : null;
+}
+
+/** 采集尺寸真值的等待上限 / 轮询间隔（见 [resolveCaptureSize] 的注释：为什么必须等、为什么等得起） */
+const SHARE_SIZE_WAIT_MS = 300;
+const SHARE_SIZE_POLL_MS = 25;
+
+/**
+ * 采集尺寸的**真值**（`share-start` 要带的那两个数）。
+ *
+ * ⚠️ 这里有个 Chrome 的坑，实测数据（2560x1600 屏、请求 2134x1200）：
+ * ```
+ *  getDisplayMedia 返回时  getSettings() = 2134x1200（比例 1.778）← 请求的**约束盒**，不是采集尺寸
+ *  +100ms                 getSettings() = 1920x1200（比例 1.600）← 采集真的出帧后的真实尺寸
+ * ```
+ * 直接读第一次会得到一个**错的比例**（16:9 而画面是 16:10）。而这个字段在观看端是**最高优先**
+ * 的比例来源，报错的比观看端就会拿 16:9 的框去套 16:10 的画面 —— 正是这一轮要消灭的东西。
+ *
+ * 判定规则：读数与**请求的约束盒**（[requested]，调用方传自己给 getDisplayMedia 的 ideal 值）
+ * 不同 ⇒ 已经是真值，直接用（Firefox/Safari 与"源尺寸≠请求盒"的多数情况都走这条，零等待）；
+ * 相同 ⇒ 可能还没出帧（Chrome 先报请求盒）⇒ 轮询等它变化，
+ * 上限 [capMs]（真值 ~100ms 就出现；上限同时兜底"源尺寸恰好等于请求盒"与 Chrome 行为变化）。
+ *
+ * 等得起：观看端的首帧在这之后约 1s（真机实测：声明 13:25:16.206 → 首帧 13:25:17.290），
+ * "首帧之前就知道比例"依然成立。
+ */
+export async function resolveCaptureSize(
+  track: MediaStreamTrack | null | undefined,
+  requested?: { width: number; height: number },
+  capMs = SHARE_SIZE_WAIT_MS
+): Promise<{ width: number; height: number } | null> {
+  const first = captureSizeOf(track);
+  if (!first) return null;
+  const looksLikeRequestBox =
+    !!requested && first.width === requested.width && first.height === requested.height;
+  if (!looksLikeRequestBox) return first;
+  const deadline = Date.now() + capMs;
+  let latest = first;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, SHARE_SIZE_POLL_MS));
+    latest = captureSizeOf(track) ?? latest;
+    if (latest.width !== first.width || latest.height !== first.height) return latest;
+  }
+  return latest;
 }
 
 export class ScreenShareController {
@@ -103,11 +161,17 @@ export class ScreenShareController {
 
   /**
    * 共享开始后的状态登记（VoiceSession 已完成 getDisplayMedia 捕获与
-   * 销毁前校验）。顺序与原实现逐行一致：登记流 → 包装发送流 →
-   * 声明状态（服务端互斥/抢占并广播）→ 挂 track → 应用质量档 →
-   * 启动统计 → UI 回调。
+   * 销毁前校验）：登记流 → 包装发送流 → 本地 UI 回调 →
+   * **声明状态（服务端互斥/抢占并广播）→ 挂 track** → 应用质量档 → 启动统计。
+   *
+   * 「声明 → 挂轨」这一对是**异步**的（见 [announce]）：声明必须带采集尺寸的**真值**，
+   * 而 Chrome 要等采集真的出帧才报真值（见 [resolveCaptureSize]）。顺序不能反：
+   * 先声明后挂轨，对方才不会先收到帧、比例还没到。
+   *
+   * @param requested 本端给 getDisplayMedia 的 ideal 宽高（用于识别"Chrome 报的是请求盒"）
+   * @returns 声明+挂轨完成（返回 Promise 只为了可测：调用方（VoiceSession）不关心它何时完成）
    */
-  start(stream: MediaStream): void {
+  start(stream: MediaStream, requested?: { width: number; height: number }): Promise<void> {
     this.shareStream = stream;
     const video = stream.getVideoTracks()[0] ?? null;
     this.withShareAudio = stream.getAudioTracks().length > 0;
@@ -133,13 +197,33 @@ export class ScreenShareController {
     this.sink.onSelfSharingChanged(true);
     this.sink.emitParticipants();
 
-    // 先声明状态（服务端互斥/抢占并广播），随后挂 track；重协商由 onnegotiationneeded 自动完成
-    this.sink.sendShareStart(this.withShareAudio);
-    this.sink.attachShareTracksToAll();
+    const announced = this.announce(stream, video, requested);
     this.shareStats.start();
 
     this.sink.onShareChanged({ userId: this.sink.getSelfUserId(), audio: this.withShareAudio });
     if (this.shareSendVideoStream) this.sink.onShareVideo(this.shareSendVideoStream);
+    return announced;
+  }
+
+  /**
+   * 上行 `share-start`（带采集尺寸真值）并挂 track —— 开始共享的**唯一**入口。
+   *
+   * 为什么要等（而不是立刻发）：尺寸来自 [resolveCaptureSize]，Chrome 在采集出帧之前报的是
+   * **请求的约束盒**（实测 2134x1200/1.778），真值要 ~100ms 后才可见（1920x1200/1.600）。
+   * 发一个 16:9 的框给 16:10 的画面，观看端就会按错的框排版。
+   *
+   * 等待期间用户可能点了停止/被抢占（`sharingActive` 翻假）或换了另一路共享：那时**不能**再补发
+   * `share-start` —— 服务端会把它当成一次新的共享声明。所以这里用 `shareStream` 身份比对兜底。
+   */
+  private async announce(
+    stream: MediaStream,
+    video: MediaStreamTrack | null,
+    requested?: { width: number; height: number }
+  ): Promise<void> {
+    const size = await resolveCaptureSize(video, requested);
+    if (!this.sharingActive || this.shareStream !== stream) return;
+    this.sink.sendShareStart(this.withShareAudio, size);
+    this.sink.attachShareTracksToAll();
   }
 
   /** 停止屏幕共享；notify=false 用于被抢占/服务端兜底（状态已在服务端翻转，不再回发 share-stop）。

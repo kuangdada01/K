@@ -44,6 +44,18 @@ export default defineConfig({
   // 浏览器无法执行 require 导致页面崩溃；强制走 esbuild 预构建转为 ESM
   optimizeDeps: {
     include: ['@k/shared'],
+    /**
+     * ★ 预构建依赖也要钉住 Safari 14，且必须与 build.target 一致。
+     *
+     * 只设 build.target 是不够的：Vite 预构建（esbuild）默认按更激进的目标输出，
+     * 产物里的 `??=` / `||=` / `&&=`（逻辑赋值，Safari 14.1 才有）会**原样直通**
+     * 到打包结果里 —— rolldown 不会再降级它。于是老 iOS / 老内核 Android WebView
+     * 会在**解析期**直接 SyntaxError（整块 chunk 报废，表现为该页面崩或全站白屏）。
+     * 实测：只改 build.target 时 index/http/query/react 等 chunk 仍残留 33 处。
+     */
+    esbuildOptions: {
+      target: 'safari14',
+    },
   },
   // 语音降噪 worklet（RNNoise WASM 内嵌的单文件模块）经 ?worker&url 导出为独立 bundle；
   // 必须用 ES 格式：AudioWorkletGlobalScope 可执行 ESM，且内嵌 wasm 胶水依赖 import.meta.url
@@ -51,6 +63,25 @@ export default defineConfig({
     format: 'es',
   },
   build: {
+    /**
+     * ★ CSS 压缩目标必须显式钉在 Safari 14，不能用默认值。
+     *
+     * 默认目标下压缩器会把媒体查询改写成 **范围语法**：
+     *   `@media (max-width: 768px)`  →  `@media (width<=768px)`
+     * 这种写法（Media Queries Level 4 range syntax）Safari 16.4 才支持，
+     * 而 **iOS 微信内置 WebView 跟随系统 WebKit 版本** —— iOS 15 / 16.0~16.3
+     * 的用户会整条 @media 丢弃（不是部分失效，是整个断点不生效）：
+     *   - 移动端底部胶囊导航不出现，永远是桌面侧边栏
+     *   - .main-content 被 220px 侧栏挤成一条缝，页面报错文案单字竖排
+     * 钉住目标后压缩器会保留 max-width / min-width 写法，兼容到 iOS 14。
+     */
+    cssTarget: ['chrome87', 'edge88', 'firefox78', 'safari14'],
+    /**
+     * JS 目标同样钉住 Safari 14（默认 baseline 目标会直出逻辑赋值 `??=` / `||=`，
+     * 那是 Safari 14.1 才有的语法 —— iOS 14.0、以及跟随老内核的微信 WebView
+     * 会直接 SyntaxError，表现为**懒加载页面整块崩在解析期**）。
+     */
+    target: ['es2020', 'chrome87', 'edge88', 'firefox78', 'safari14'],
     rollupOptions: {
       output: {
         // 手动分包：稳定第三方库独立缓存，业务代码变更不影响其缓存

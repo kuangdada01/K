@@ -1,13 +1,19 @@
 /**
- * 屏幕共享舞台样式：16:9 画框（默认），深色底、圆角与页面一致；
+ * 屏幕共享舞台样式：默认 16:9 画框，深色底、圆角与页面一致；
  * :fullscreen 时铺满整屏，画面 object-fit: contain 不裁切。
+ *
+ * **画框比例会跟随实际画面**：`.stage` 的行内 `--share-aspect` 变量由 JS 按
+ * 传入视频轨的真实尺寸写入（见 VoiceShareStage.tsx）。原来是**写死 16:9**，
+ * 而手机屏幕共享是竖屏（9:19.5）—— 塞进 16:9 画框后左右大量留黑，
+ * 画面被压成中间窄窄一条（用户实测反馈："横屏手机不是铺满屏幕的，
+ * 而是很小一个窗口在中间"）。没有变量时回落到 16:9，行为与改动前一致。
  */
 
 .stage {
   position: relative;
   width: 100%;
   max-width: 1080px;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: var(--share-aspect, 16 / 9);
   margin: 0 auto 24px;
   display: flex;
   align-items: center;
@@ -77,6 +83,17 @@
   position: absolute;
   inset: 0;
   background: #101418;
+}
+
+/* 原生系统小窗（真机踩过）：小窗里显示的是**整个 Activity**（也就是这一页 WebView），
+   所以进入小窗时把画布槽位提升为"铺满视口的纯黑层"—— 小窗里就只剩共享画面，
+   而不是房间头部/成员/聊天/控件那一整页 UI。用 fixed + 高 z-index 覆盖整页即可，
+   不需要逐个隐藏页面元素（同一层 DOM 节点不搬家，画布不会重新挂载）。 */
+.pipCanvasSlot {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  background: #000;
 }
 
 /* 全屏：槽位背景用纯黑（与 canvas letterbox、.stage:fullscreen 一致） */

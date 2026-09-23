@@ -16,11 +16,12 @@
 import { useState, useEffect, useRef, useCallback, Suspense, lazy } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { Search } from 'lucide-react';
+import { Search, Plus } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../context/AuthContext';
+import { useEvent } from '../context/EventContext';
 import PostCard, { type PostImageSync } from '../components/post/PostCard';
-import { loadPostDetail } from '../router/composerChunks';
+import { loadPostDetail, loadCreatePost } from '../router/composerChunks';
 const LazyProfileOverlay = lazy(() => import('../components/profile/ProfileOverlay'));
 // 帖子详情浮层（含评论树）按需加载：首页此前静态引入它，把整块实现算进了首屏 chunk。
 // 信息流卡片 hover/touch 时会预取（见 PostCard），所以正常点开没有额外等待。
@@ -47,6 +48,7 @@ import styles from './HomePage.module.css';
 
 export default function HomePage() {
   const { user, openLoginPrompt } = useAuth();
+  const { openCreate } = useEvent();
   const { setFollowStatus } = useFollow();
   const queryClient = useQueryClient();
   const { id: urlPostId } = useParams();
@@ -201,6 +203,12 @@ export default function HomePage() {
     setProfileUserId(userId);
   }, []);
 
+  /** 预取发布弹层（懒加载 chunk）：与侧栏「分享」同一策略，
+   *  把首次打开多出的那次网络往返藏进「按下 → 抬起」之间 */
+  const prefetchCreatePost = useCallback(() => {
+    void loadCreatePost().catch(() => {});
+  }, []);
+
   return (
     <>
       {/* Pull-to-refresh indicator — always rendered, ref-driven for zero latency */}
@@ -338,6 +346,20 @@ export default function HomePage() {
           </>
         )}
       </div>
+      {/* 发布悬浮按钮（仅移动端）：底部导航压到 5 项后，原导航里的「分享」入口由它承担。
+          未登录不渲染 —— 发布需要登录，与侧栏原行为的门控一致。 */}
+      {user && (
+        <button
+          className={styles.fab}
+          onClick={openCreate}
+          onTouchStart={prefetchCreatePost}
+          onMouseEnter={prefetchCreatePost}
+          onFocus={prefetchCreatePost}
+          aria-label="发布新帖"
+        >
+          <Plus size={24} strokeWidth={2.4} />
+        </button>
+      )}
       <IcpFooter />
     </>
   );

@@ -140,17 +140,20 @@
   }
 }
 
+/* 未读角标
+   ★ 文字色用 --on-accent 而非写死的 white：深色下 --danger(#E0586B) 配白字只有 3.63:1，
+   低于 AA；跟 on-accent 走后浅色 4.99:1、深色 5.27:1，两主题同时达标。 */
 .badge {
   position: absolute;
   top: -6px;
   right: -8px;
   background: var(--danger);
-  color: white;
+  color: var(--on-accent);
   font-size: 10px;
   font-weight: 700;
   min-width: 16px;
   height: 16px;
-  border-radius: 8px;
+  border-radius: var(--radius-pill);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -158,6 +161,9 @@
   line-height: 1;
   flex-shrink: 0;
 }
+
+/* 桌面端专属导航项（搜索 / 分享 / 公告 / 管理）：
+   桌面端正常显示，窄屏（移动胶囊）下隐藏 —— 隐藏规则见文件末尾的 mobile 媒体查询。 */
 
 /* 键盘导航（Tab）聚焦环：用 inset 阴影，避免被 .sidebar 的
    overflow:hidden 裁剪成"半个边框"（默认 outline 画在元素外） */
@@ -186,26 +192,36 @@
 
 /* 移动端头像入口（已迁移至主页右上角设置图标，移除） */
 
-/* Mobile floating capsule nav */
+/* ============================================================
+   移动端：底部悬浮胶囊导航（5 项）
+   ------------------------------------------------------------
+   一级入口压到 5 项（首页 / 消息 / 图书 / 语音 / 主页）并恢复文字标签。
+   移出的入口：搜索 → 首页页头圆钮；分享（发布）→ 首页 FAB；
+   公告 / 管理 → 头像二级菜单（见 AvatarMenu，仅窄屏出现）。
+   几何量统一走 --nav-capsule-* 令牌（见 global.css :root），
+   与内容区的底部预留（--nav-reserve）共用同一组数值。
+   ============================================================ */
 @media (max-width: 768px) {
   .sidebar {
     position: fixed !important;
     top: auto !important;
-    bottom: calc(16px + var(--safe-area-bottom)) !important;
+    bottom: calc(var(--nav-capsule-gap) + var(--safe-area-bottom)) !important;
     left: 50% !important;
     right: auto !important;
     transform: translateX(-50%) !important;
-    width: calc(100% - 24px) !important;
-    max-width: 420px !important;
-    height: 68px !important;
+    /* 左右各留 21px：内容会从胶囊两侧透出 —— 这才是"悬浮"，而不是一条把内容切断的实心栏 */
+    width: calc(100% - 42px) !important;
+    max-width: 440px !important;
+    height: var(--nav-capsule-h) !important;
     flex-direction: row !important;
-    border: 1px solid rgba(255, 255, 255, 0.14) !important;
-    border-radius: 999px !important;
-    padding: 8px 10px !important;
+    border: 1px solid var(--border-subtle) !important;
+    border-radius: calc(var(--nav-capsule-h) / 2) !important;
+    padding: 5px !important;
     z-index: 200;
     transition: none !important;
+    /* 角标要压出图标边界，不能被胶囊裁掉 */
     overflow: visible !important;
-    /* 悬浮胶囊毛玻璃 + 阴影（统一 var(--bg-frosted) + 18px） */
+    /* 毛玻璃只服务浮层：胶囊底下的内容会真正穿过并被 blur 掉 */
     background: var(--bg-frosted) !important;
     -webkit-backdrop-filter: blur(18px) saturate(180%);
     backdrop-filter: blur(18px) saturate(180%);
@@ -216,7 +232,6 @@
 
   [data-theme='dark'] .sidebar {
     background: var(--bg-frosted) !important;
-    border-color: rgba(255, 255, 255, 0.06) !important;
     box-shadow:
       0 10px 30px rgba(0, 0, 0, 0.32),
       0 4px 12px rgba(0, 0, 0, 0.22) !important;
@@ -227,35 +242,44 @@
     display: none !important;
   }
 
+  /* 桌面端专属项（搜索 / 分享 / 公告 / 管理）在移动胶囊里让位 */
+  .itemDesktopOnly {
+    display: none !important;
+  }
+
   .nav {
     flex: 1 !important;
     flex-direction: row !important;
-    align-items: center !important;
+    /* stretch 让每个 tab 撑满胶囊内高（58px），选中块才是完整的一块 */
+    align-items: stretch !important;
     justify-content: space-evenly !important;
     padding: 0 !important;
-    gap: 2px !important;
+    gap: 0 !important;
     margin-top: 0 !important;
     width: 100% !important;
   }
 
   .item {
     flex: 1 !important;
-    padding: 10px 0 !important;
+    padding: 0 !important;
     margin: 0 !important;
+    height: 100% !important;
     flex-direction: column !important;
-    gap: 2px !important;
+    gap: 3px !important;
     justify-content: center !important;
     align-items: center !important;
-    font-size: 10px !important;
+    /* 11px 文字标签（恢复标签后单项可用宽度约 70px，触控目标达标） */
+    font-size: var(--font-micro) !important;
     -webkit-tap-highlight-color: transparent;
     background: transparent !important;
     box-shadow: none !important;
-    border-radius: 999px !important;
+    /* 选中块圆角 = (胶囊内高 58) / 2 */
+    border-radius: calc((var(--nav-capsule-h) - 10px) / 2) !important;
     min-width: 0 !important;
     transition:
-      background 0.18s ease,
-      color 0.18s ease,
-      transform 0.12s ease !important;
+      background var(--dur-base) var(--ease-standard),
+      color var(--dur-base) var(--ease-standard),
+      transform var(--dur-fast) var(--ease-standard) !important;
   }
 
   .item:active {
@@ -274,33 +298,34 @@
     }
   }
 
-  /* 选中态强制透明：触屏点击后 :hover 会残留（sticky hover），
-     深色下 [data-theme="dark"] .item:hover 特异性 (0,3,0) 高于 .item.active (0,2,0)，
-     会把选中项染成灰底 —— 因此 active 连同 active:hover 一起覆盖，且写在 hover 规则之后 */
+  /* 选中态：实心强调底 + 图标与标签反色。
+     ⚠️ 图标必须跟 --on-accent 走，不能写死白色 —— accent 的明度在两主题间是反相的
+     （浅色 accent 是深绿、深色 accent 是浅金），固定白字在深色下只有 3.6:1。
+     写法上：连同 :hover 一起覆盖，且必须置于 hover 规则之后
+     （[data-theme="dark"] .item:hover 特异性 (0,3,0) 高于 .item.active (0,2,0)，
+      否则触屏 sticky hover 会把选中项染成灰底）。 */
   .item.active,
   .item.active:hover,
   [data-theme='dark'] .item.active:hover {
-    background: transparent !important;
-    color: var(--accent) !important;
+    background: var(--accent) !important;
+    color: var(--on-accent) !important;
     box-shadow: none !important;
   }
 
-  .itemLabel {
-    display: none !important;
-  }
-
+  /* 图标 20px：与设计基线一致。选中态不再放大图标 ——
+     选中靠实心块表达就够了，再叠尺寸差会跟完整渲染的图标抢视觉重心。 */
   .itemIcon svg {
-    width: 26px;
-    height: 26px;
+    width: 20px;
+    height: 20px;
   }
 
-  .item.active .itemIcon svg {
-    width: 28px;
-    height: 28px;
-  }
-
-  .itemSearch {
-    display: none !important;
+  /* 未读角标：压在图标右上角（而不是并排在上方），尺寸按基线 15px */
+  .badge {
+    top: -6px;
+    right: -6px;
+    min-width: 15px;
+    height: 15px;
+    font-size: 10px;
   }
 
   /* 二级/三级沉浸页（图书详情、阅读器、语音房间内）：隐藏底部胶囊导航。

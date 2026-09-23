@@ -22,6 +22,7 @@ import { showToast } from '../../components/ui/Toast';
 import { getApiErrorMessage } from '../../api/http';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import { saveRoomOwnerToken, forgetRoomOwnerToken, isOwnedGuestRoom } from '../../voice/roomOwnership';
+import { resolveMediaUrl } from '../../utils';
 import type { VoiceRoom } from '../../types';
 import { VOICE_MAX_ROOM_SIZE } from '@k/shared';
 import styles from '../VoicePage.module.css';
@@ -115,9 +116,18 @@ export default function VoiceRoomList({
             const canDelete = room.isCreator === true || user?.role === 'admin' || isOwnedGuestRoom(room.id);
             return (
               <div key={room.id} className={`${styles.roomCard} ${active ? styles.roomActive : ''}`}>
-                <div className={styles.roomIcon}>
-                  {active ? <AudioLines size={22} /> : <Headphones size={22} />}
-                </div>
+                {room.cover_url ? (
+                  <img
+                    className={styles.roomCover}
+                    src={resolveMediaUrl(room.cover_url) ?? ''}
+                    alt=""
+                    loading="lazy"
+                  />
+                ) : (
+                  <div className={styles.roomIcon}>
+                    {active ? <AudioLines size={22} /> : <Headphones size={22} />}
+                  </div>
+                )}
                 <button className={styles.roomBody} onClick={() => onJoin(room)}>
                   <div className={styles.roomName}>{room.name}</div>
                   <div className={styles.roomMeta}>

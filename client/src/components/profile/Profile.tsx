@@ -9,11 +9,16 @@
  * - 头像上传（自己的主页）
  * - 资料编辑（用户名、简介）
  * - 帖子网格展示（9宫格布局）
- * - 私密文件夹管理（最多10张私密图片）
+ * - 分享主页（复制主页链接；原生宿主里额外拉起系统分享面板）
  * - 关注/取消关注、发消息按钮（他人主页）
  *
+ * 「私密文件夹」已按用户要求在 09-18 **整体删除**（入口 + hooks/usePrivateFolder +
+ * components/profile/PrivateFolder 一起移除）：它当年是 WebView 版才有的能力，
+ * 原生重写之后既没人用、又要多养一条生物识别链路。
+ * 后端的 `/users/me/private-images` 端点与 `private_images` 表（迁移 028）也一并删除。
+ *
  * 结构: 数据/行为逻辑保留在本组件，
- * 视图拆分到 components/profile/（ProfileHeader/ProfilePostGrid/PrivateFolder）。
+ * 视图拆分到 components/profile/（ProfileHeader/ProfilePostGrid）。
  * ============================================================
  */
 
@@ -23,6 +28,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { postsFeedKey, updatePostsFeed } from '../../hooks/usePostsFeed';
 import api from '../../api/http';
 import { getApiErrorMessage } from '../../api/http';
+import { getServerUrl } from '../../config';
+import { isNative, shareText } from '../../lib/native';
 import { Post } from '../../types';
 import { MAX_IMAGE_BYTES, toMB } from '@k/shared';
 import { useAuth } from '../../context/AuthContext';
@@ -33,14 +40,12 @@ import { events } from '../../state/events';
 import { showToast } from '../ui/Toast';
 import { useProfileData } from '../../hooks/useProfileData';
 import { useProfileEventsSync } from '../../hooks/useProfileEventsSync';
-import { usePrivateFolder } from '../../hooks/usePrivateFolder';
 import { cleanEditImages } from '../../lib/parsePostImages';
 import ConfirmDialog from '../ui/ConfirmDialog';
 import PostDetail from '../post/PostDetail';
 import FollowersModal from './FollowersModal';
 import ProfileHeader from './ProfileHeader';
 import ProfilePostGrid from './ProfilePostGrid';
-import PrivateFolder from './PrivateFolder';
 import styles from './Profile.module.css';
 
 interface ProfileProps {
@@ -238,23 +243,35 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
     });
   };
 
-  // 私密文件夹状态机（objectURL 生命周期 + 保存串行，自 usePrivateFolder 拆出，行为不变）
-  const {
-    showPrivateFolder,
-    privateImages,
-    privateNewFiles,
-    privateDeletedIds,
-    privateZoomIndex,
-    setPrivateZoomIndex,
-    privateFileInputRef,
-    handleOpenPrivateFolder,
-    handleAddPrivateImages,
-    handleRemovePrivateNewFile,
-    handleToggleDeletePrivate,
-    handleSavePrivateFolder,
-    handleCancelPrivateFolder,
-    getAllPrivateImages,
-  } = usePrivateFolder();
+  /**
+   * 分享主页：复制主页链接（原生宿主里额外拉起系统分享面板）。
+   *
+   * 与帖子的 useShareLink 同一套语义：
+   * - 链接必须指向**服务器**，不能用 `window.location.origin` —— 原生宿主的页面来源是
+   *   本地资源域（appassets.androidplatform.net），拼出来是死链；浏览器端
+   *   `getServerUrl()` 为空 → 回落同源。
+   * - 复制优先 clipboard，HTTP 环境降级 textarea + execCommand。
+   * - 原生宿主里复制之外**再**拉起系统分享（微信/QQ/…）：分享面板被划掉时
+   *   用户手里仍然有链接。
+   */
+  const handleShareProfile = async () => {
+    if (!userId) return;
+    const url = `${getServerUrl() || window.location.origin}/profile/${userId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = url;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    showToast('主页链接已复制');
+    if (isNative()) {
+      void shareText(url, 'K').catch(() => {});
+    }
+  };
 
   const handleSaveProfile = async () => {
     try {
@@ -291,7 +308,7 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
         fileInputRef={fileInputRef}
         onAvatarUpload={handleAvatarUpload}
         onToggleEdit={() => setEditing(!editing)}
-        onOpenPrivateFolder={handleOpenPrivateFolder}
+        onShareProfile={handleShareProfile}
         onFollow={handleFollow}
         onMessage={() => navigate(`/messages/${profileUser.id}`)}
         onSaveProfile={handleSaveProfile}
@@ -320,24 +337,6 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
           onClose={() => {
             setSelectedPostId(null);
           }}
-        />
-      )}
-
-      {showPrivateFolder && (
-        <PrivateFolder
-          privateImages={privateImages}
-          privateNewFiles={privateNewFiles}
-          privateDeletedIds={privateDeletedIds}
-          allImages={getAllPrivateImages()}
-          privateZoomIndex={privateZoomIndex}
-          setPrivateZoomIndex={setPrivateZoomIndex}
-          privateFileInputRef={privateFileInputRef}
-          onAddImages={handleAddPrivateImages}
-          onToggleDelete={handleToggleDeletePrivate}
-          onRemoveNew={handleRemovePrivateNewFile}
-          onCancel={handleCancelPrivateFolder}
-          onSave={handleSavePrivateFolder}
-          onZoomClose={() => setPrivateZoomIndex(null)}
         />
       )}
 

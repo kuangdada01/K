@@ -91,6 +91,18 @@
   color: var(--accent);
 }
 
+/* 房间封面缩略图（创建时上传过的房间）：与 roomIcon 同槽位同尺寸，
+   跟随主题 —— 凹陷底 + 细描边给加载中/加载失败一个落点，圆角与图标圆一致 */
+.roomCover {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  object-fit: cover;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+}
+
 .roomBody {
   flex: 1;
   min-width: 0;

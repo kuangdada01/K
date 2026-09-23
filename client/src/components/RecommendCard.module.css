@@ -1,18 +1,13 @@
-/* 推荐关注卡片（参考稿 premium-celadon/obsidian 的 panel 样式） */
+/* 推荐关注卡片（参考稿 premium-celadon/obsidian 的 panel 样式）
+   正文卡片走实心面，不再用毛玻璃 —— 卡片下是纯色页底，模糊不产生任何信息，
+   只白白牺牲与页底的对比度（详见 UI 优化方案 §1.4） */
 
 .card {
-  background: var(--bg-frosted);
-  border: 1px solid rgba(210, 221, 210, 0.92);
-  border-radius: 22px;
+  background: var(--surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-card);
   padding: 18px;
   box-shadow: var(--shadow);
-  backdrop-filter: blur(18px) saturate(180%);
-  -webkit-backdrop-filter: blur(18px) saturate(180%);
-}
-
-[data-theme='dark'] .card {
-  background: var(--bg-frosted);
-  border-color: rgba(38, 43, 53, 0.95);
 }
 
 .title {
@@ -33,14 +28,10 @@
   align-items: center;
   gap: 10px;
   padding: 10px 0;
-  border-top: 1px solid rgba(210, 221, 210, 0.76);
+  border-top: 1px solid var(--border-subtle);
   transition:
     opacity 0.4s ease,
     transform 0.4s ease;
-}
-
-[data-theme='dark'] .item {
-  border-top-color: rgba(38, 43, 53, 0.72);
 }
 
 .item:first-child {
@@ -63,18 +54,20 @@
   transition: opacity 0.15s;
 }
 
-.itemLink:hover {
-  opacity: 0.7;
+@media (hover: hover) {
+  .itemLink:hover {
+    opacity: 0.7;
+  }
 }
 
 /* 迷你胶囊按钮（参考稿 mini-btn） */
 .followBtn {
   flex-shrink: 0;
-  border: none;
-  background: var(--bg-tag-admin);
-  color: var(--text-tag-admin);
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
   padding: 7px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 12px;
   font-weight: 700;
   cursor: pointer;
@@ -83,12 +76,10 @@
     opacity 0.15s;
 }
 
-.followBtn:hover {
-  opacity: 0.85;
-}
-
-[data-theme='dark'] .followBtn {
-  border: 1px solid rgba(201, 169, 98, 0.22);
+@media (hover: hover) {
+  .followBtn:hover {
+    opacity: 0.85;
+  }
 }
 
 .itemAvatar {

@@ -230,4 +230,47 @@ describe('useChatTTS', () => {
       if (desc) Object.defineProperty(window, 'speechSynthesis', desc);
     }
   });
+
+  /**
+   * ★ 2026-09-19 线上事故回归用例：
+   * 微信 iOS 内置 WebView 的 speechSynthesis **存在但是残缺对象** ——
+   * speak/cancel 在，但没继承 EventTarget（没有 addEventListener）。
+   * 旧实现用 `'speechSynthesis' in window` 判支持 → 判为 true → 挂载后第一个
+   * effect 调 addEventListener 即 TypeError → 错误边界接住 → 整个语音页变
+   * 「页面出错了」。
+   *
+   * 现按"不再兼容过低版本"的决策：这类内核**直接判为不支持**（开关置灰），
+   * 不再走 onvoiceschanged 之类的回退；关键断言是**挂载不抛错**。
+   */
+  it('speechSynthesis 残缺（无 addEventListener / getVoices）：判为不支持，挂载不抛错', () => {
+    vi.stubGlobal('speechSynthesis', { speak: synth.speak, cancel: synth.cancel });
+
+    const h = setup({ liveMessage: null, participants: [self], inRoom: true });
+
+    expect(h.result.current.ttsSupported).toBe(false);
+    act(() => h.result.current.handleSpeakMessage(msg(1, 2, 'hi')));
+    expect(h.result.current.speakingMsgId).toBeNull();
+    expect(synth.speak).not.toHaveBeenCalled();
+  });
+
+  it('speechSynthesis 只有空壳（speak/cancel 缺失）：判为不支持，调用为 no-op', () => {
+    vi.stubGlobal('speechSynthesis', {});
+
+    const h = setup({ liveMessage: null, participants: [self], inRoom: true });
+
+    expect(h.result.current.ttsSupported).toBe(false);
+    act(() => h.result.current.handleSpeakMessage(msg(1, 2, 'hi')));
+    expect(h.result.current.speakingMsgId).toBeNull();
+    expect(synth.speak).not.toHaveBeenCalled();
+  });
+
+  it('SpeechSynthesisUtterance 构造器缺失：判为不支持，不抛错', () => {
+    vi.stubGlobal('SpeechSynthesisUtterance', undefined);
+
+    const h = setup({ liveMessage: null, participants: [self], inRoom: true });
+
+    expect(h.result.current.ttsSupported).toBe(false);
+    act(() => h.result.current.handleSpeakMessage(msg(1, 2, 'hi')));
+    expect(h.result.current.speakingMsgId).toBeNull();
+  });
 });

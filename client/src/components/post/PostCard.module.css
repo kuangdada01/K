@@ -1,20 +1,24 @@
-/* 帖子卡片（参考稿 premium-celadon/obsidian 的白瓷卡片样式） */
+/* 帖子卡片（参考稿 premium-celadon/obsidian 的白瓷卡片样式）
+   ★ 材质：实心面 + 描边 + 双层阴影。
+   原来用毛玻璃（--bg-frosted + blur）压在页面底上，实测卡片与页底只有 1.08:1，
+   层次等于没有 —— 而且卡片下方是纯色页底，模糊本来就产生不了任何信息。
+   毛玻璃只保留给浮层（导航胶囊 / 模态）。详见 UI 优化方案 §1.4 / §3.1。 */
 
 .card {
-  background: var(--bg-frosted);
-  border: 1px solid rgba(210, 221, 210, 0.9);
-  border-radius: 22px;
-  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-card);
+  padding: 16px;
   margin: 0 auto 22px;
   box-shadow: var(--shadow);
-  backdrop-filter: blur(18px) saturate(180%);
-  -webkit-backdrop-filter: blur(18px) saturate(180%);
   max-width: 620px;
 }
 
-[data-theme='dark'] .card {
-  background: var(--bg-frosted);
-  border-color: rgba(38, 43, 53, 0.95);
+/* 移动端卡片间距按基线收紧到 14px（桌面端保持 22px 的松散节奏） */
+@media (max-width: 768px) {
+  .card {
+    margin-bottom: 14px;
+  }
 }
 
 .header {
@@ -56,47 +60,48 @@
   margin-top: 2px;
 }
 
-/* 胶囊关注按钮（参考稿 follow-btn / follow-btn.soft） */
+/* 胶囊关注按钮（参考稿 follow-btn / follow-btn.soft）
+   描边走 --accent-border 令牌，不再用 rgba(47,93,80,.22) 这类"把令牌拆了 alpha"的硬编码 */
 .followBtn {
   margin-left: auto;
   flex-shrink: 0;
-  border: 1px solid rgba(47, 93, 80, 0.22);
+  border: 1px solid var(--accent-border);
   background: var(--accent);
   color: var(--on-accent);
-  padding: 8px 13px;
-  border-radius: 999px;
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--font-label);
   font-weight: 700;
   transition:
-    background 0.15s,
-    color 0.15s,
-    border-color 0.15s;
+    background var(--dur-base) var(--ease-standard),
+    color var(--dur-base) var(--ease-standard),
+    border-color var(--dur-base) var(--ease-standard);
 }
 
-.followBtn:hover {
-  background: var(--accent-hover);
+@media (hover: hover) {
+  .followBtn:hover {
+    background: var(--accent-hover);
+  }
 }
 
 .followBtn.following {
   background: transparent;
   color: var(--accent);
-  border-color: rgba(47, 93, 80, 0.22);
+  border-color: var(--accent-border);
 }
 
-[data-theme='dark'] .followBtn {
-  border-color: rgba(201, 169, 98, 0.38);
-}
-
-.followBtn.following:hover {
-  background: var(--accent-soft);
+@media (hover: hover) {
+  .followBtn.following:hover {
+    background: var(--accent-soft);
+  }
 }
 
 .caption {
-  padding: 10px 2px 0;
+  padding: 12px 2px 0;
   color: var(--text-secondary);
-  line-height: 1.8;
-  font-size: 14px;
+  line-height: 1.6;
+  font-size: var(--font-body);
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
@@ -116,7 +121,7 @@
   width: 100%;
   overflow: hidden;
   cursor: pointer;
-  border-radius: 18px;
+  border-radius: var(--radius-row);
 }
 
 .imageCarousel {
@@ -124,8 +129,8 @@
   width: 100%;
   /* 只负责裁剪：真正的滚动容器是里面的 .imageTrack（原生滚动分页） */
   overflow: hidden;
-  /* 空白区域黑色填充（横图上下留白、加载中均黑底） */
-  background: #000;
+  /* 留白底色跟随主题：原来写死 #000，浅色主题下横图上下会露出一条突兀的黑矩形 */
+  background: var(--surface-sunken);
 }
 
 /* ★ 原生滚动轨道：拖动/惯性/越界回弹交给浏览器合成器（线程化滚动），
@@ -153,7 +158,7 @@
   max-height: 520px;
   object-fit: contain;
   display: block;
-  background: #000;
+  background: var(--surface-sunken);
   /* 原生滚动下不再需要「每张图独立合成层」的残影 hack（残影来自 JS 平移轨道） */
   scroll-snap-align: start;
   scroll-snap-stop: always;
@@ -162,8 +167,8 @@
 .videoWrapper {
   position: relative;
   width: 100%;
-  background: #000;
-  border-radius: 18px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-row);
   overflow: hidden;
 }
 
@@ -224,14 +229,18 @@
   background: white;
 }
 
-/* 操作栏（参考稿 post-actions：点赞恒为危险色，其余 text-soft） */
+/* 操作栏
+   ★ 点赞三态（修一个真实缺陷）：原实现把「第一条按钮」恒设为 --danger，
+   而 .liked 也是 --danger —— 未点赞与已点赞的文字色完全相同，只靠 svg 的 fill 区分，
+   快速滑动时用户很难判断自己点没点过。现在按状态分色：
+     未赞 = text-secondary（描边图标） ／ 已赞 = danger（实心图标） ／ 按下 = 轻微缩小 */
 .actions {
   display: flex;
   align-items: center;
   gap: 18px;
   padding: 14px 2px 0;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: var(--font-label);
 }
 
 .actionBtn {
@@ -239,17 +248,20 @@
   align-items: center;
   gap: 4px;
   padding: 4px;
-  border-radius: 4px;
+  border-radius: var(--radius-chip);
   color: inherit;
   background: none;
   border: none;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  transition: opacity 0.15s;
+  transition:
+    opacity var(--dur-base) var(--ease-standard),
+    transform var(--dur-fast) var(--ease-standard),
+    color var(--dur-base) var(--ease-standard);
 }
 
-.actionBtn:first-child {
-  color: var(--danger);
+.actionBtn:active {
+  transform: scale(0.92);
 }
 
 @media (hover: hover) {
@@ -267,7 +279,7 @@
 }
 
 .actionCount {
-  font-size: 14px;
+  font-size: var(--font-label);
   font-weight: 400;
   margin-left: 2px;
 }
@@ -291,7 +303,7 @@
   color: var(--bg-primary);
   font-size: 12px;
   padding: 2px 8px;
-  border-radius: 4px;
+  border-radius: var(--radius-chip);
   white-space: nowrap;
   animation: postCardFadeInOut 1.5s ease-in-out;
 }

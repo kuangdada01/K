@@ -13,7 +13,7 @@
  */
 
 import { BrowserRouter, HashRouter } from 'react-router-dom';
-import { Capacitor } from '@capacitor/core';
+import { isNative } from './lib/native';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { queryClient } from './state/queryClient';
 import { AuthProvider } from './context/AuthContext';
@@ -25,8 +25,8 @@ import { AppRoutes } from './router/AppRoutes';
 import Toast from './components/ui/Toast';
 import AppUpdatePrompt from './components/AppUpdatePrompt';
 
-/** 安卓 Capacitor 环境使用 HashRouter（更可靠），Web 环境使用 BrowserRouter */
-const Router = Capacitor.isNativePlatform() ? HashRouter : BrowserRouter;
+/** 安卓原生宿主内使用 HashRouter（页面由本地资源域提供，history 路由会在刷新/重建时 404），Web 环境使用 BrowserRouter */
+const Router = isNative() ? HashRouter : BrowserRouter;
 
 export default function App() {
   return (

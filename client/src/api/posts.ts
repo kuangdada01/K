@@ -6,7 +6,7 @@
  */
 
 import api, { ApiError } from './http';
-import { Capacitor } from '@capacitor/core';
+import { isNative } from '../lib/native';
 import { UPLOAD_CHUNK_BYTES } from '@k/shared';
 import { getApiBaseUrl } from '../config';
 import type { Post, Comment, PaginatedResponse } from '../types';
@@ -120,7 +120,7 @@ export function myReposts(): Promise<{ posts: Post[] }> {
  * 超时会让客户端误报失败，而服务端仍在处理并可能已入库（"发布失败但已发出"）。
  */
 export function createImagePost(formData: FormData): Promise<Post> {
-  if (Capacitor.isNativePlatform()) {
+  if (isNative()) {
     return nativeFetchUpload<Post>('/posts', formData, 'POST');
   }
   return api
@@ -130,7 +130,7 @@ export function createImagePost(formData: FormData): Promise<Post> {
 
 /** 创建视频帖子（multipart）- 原生走 fetch 流式上传防闪退 */
 export function createVideoPost(formData: FormData): Promise<Post> {
-  if (Capacitor.isNativePlatform()) {
+  if (isNative()) {
     return nativeFetchUpload<Post>('/posts/video', formData, 'POST');
   }
   return api
@@ -200,7 +200,7 @@ export async function createVideoPostChunked(
 
 /** 上传临时视频（发布前预览）- 原生同样走 fetch */
 export function uploadTempVideo(formData: FormData): Promise<{ url: string }> {
-  if (Capacitor.isNativePlatform()) {
+  if (isNative()) {
     return nativeFetchUpload<{ url: string }>('/posts/video-temp', formData, 'POST');
   }
   return api
@@ -243,7 +243,7 @@ export async function createVideoPostFromTempUrl(
   fd.append('description', description);
   if (closeComments) fd.append('close_comments', '1');
   if (pinned) fd.append('pinned', '1');
-  if (Capacitor.isNativePlatform()) {
+  if (isNative()) {
     return nativeFetchUpload<Post>('/posts/video', fd, 'POST');
   }
   return api
@@ -253,7 +253,7 @@ export async function createVideoPostFromTempUrl(
 
 /** 编辑帖子（multipart，新增图片可能达9×10MB，同样禁用超时避免误报失败） */
 export function updatePost(postId: number, formData: FormData): Promise<Post> {
-  if (Capacitor.isNativePlatform()) {
+  if (isNative()) {
     return nativeFetchUpload<Post>(`/posts/${postId}`, formData, 'PUT');
   }
   return api

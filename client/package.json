@@ -8,23 +8,16 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/check-css-compat.mjs",
     "typecheck": "tsc -b",
     "preview": "vite preview",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "//": "注意：@capacitor/camera 与 @capacitor/filesystem 在 client/src 里没有任何引用（仅经原生工程注册）。移除它们需要重新构建并验证 APK，故暂留。",
+  "//": "原生端已由 android/（Kotlin）独立承担，client 不再携带任何 Capacitor 依赖：网页只经 client/src/lib/native 的自研桥访问原生能力。",
   "dependencies": {
     "@breezystack/lamejs": "^1.2.7",
-    "@capacitor/android": "^8.4.0",
-    "@capacitor/app": "^8.1.0",
-    "@capacitor/camera": "^8.2.0",
-    "@capacitor/core": "^8.4.0",
-    "@capacitor/filesystem": "^8.1.2",
-    "@capacitor/splash-screen": "^8.0.1",
-    "@capacitor/status-bar": "^8.0.2",
     "@k/shared": "file:../shared",
     "@tanstack/react-query": "^5.101.4",
     "axios": "^1.16.1",
@@ -36,7 +29,6 @@
     "react-router-dom": "^7.6.1"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.5.1",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",

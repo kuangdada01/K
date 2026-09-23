@@ -22,6 +22,7 @@ import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useParams, useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, ChevronLeft, ChevronRight, List, AArrowUp, AArrowDown } from 'lucide-react';
 import api from '../api/http';
+import { getApiBaseUrl } from '../config';
 import type { BookDetail, BookChapter, BookVolume } from '../types';
 import styles from './BookReaderPage.module.css';
 
@@ -72,7 +73,11 @@ export default function BookReaderPage() {
 
   const goChapter = (chapter: BookChapter) => {
     if (chapter.type === 'pdf') {
-      window.open(`/api/books/${id}/content?file=${encodeURIComponent(chapter.file)}`, '_blank');
+      // 相对路径在原生宿主里会指向本地资源域 → 必须用 API 基址（原生端为服务器绝对地址）
+      window.open(
+        `${getApiBaseUrl()}/books/${id}/content?file=${encodeURIComponent(chapter.file)}`,
+        '_blank'
+      );
       return;
     }
     navigate(`/books/${id}/read?file=${encodeURIComponent(chapter.file)}`);

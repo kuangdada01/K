@@ -22,7 +22,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, Dispatch, SetStateAction } from 'react';
-import { Capacitor } from '@capacitor/core';
+import { isNative, getDeviceInfo } from '../lib/native';
 import { MAX_IMAGE_BYTES, MAX_VIDEO_BYTES, LARGE_VIDEO_BYTES, toMB } from '@k/shared';
 import { showToast } from '../components/ui/Toast';
 import { fileToPreviewUrl } from '../utils';
@@ -181,10 +181,21 @@ export function useMediaDraft<T extends { url: string }>(
       return;
     }
 
-    // Android WebView 提示：大文件仅影响自动截帧，预览仍尝试（metadata 模式不占大内存）
-    const isNative = Capacitor.isNativePlatform();
-    if (isNative && file.size > LARGE_VIDEO_BYTES) {
-      showToast(`视频较大(${(file.size / 1024 / 1024).toFixed(0)}MB)，将使用分片上传，预览可能较慢`);
+    // 原生宿主提示：大文件仅影响自动截帧，预览仍尝试（metadata 模式不占大内存）
+    if (isNative() && file.size > LARGE_VIDEO_BYTES) {
+      const sizeHint = `视频较大(${(file.size / 1024 / 1024).toFixed(0)}MB)，将使用分片上传，预览可能较慢`;
+      // 网络提示**先查后提示**：直接 fire-and-forget 会出现"先弹分片提示、一两秒后再补弹流量提示"，
+      // 用户此时可能已经切到 Wi-Fi（误报）。查得到就两条一起按顺序弹，查不到只弹分片提示。
+      void getDeviceInfo()
+        .then((info) => {
+          showToast(sizeHint);
+          if (info.network === 'cellular') {
+            showToast('当前是移动网络，上传大视频会消耗较多流量');
+          }
+        })
+        .catch(() => {
+          showToast(sizeHint);
+        });
     }
 
     // 选择视频时清除照片状态
@@ -223,7 +234,7 @@ export function useMediaDraft<T extends { url: string }>(
       // /uploads/temp（服务端专为此设计的 HTTP Range 预览通道），blob 预览
       // 失败时切换到 HTTP URL 播放；发布时直接复用该文件，不产生额外流量。
       // 原生 App WebView 对 blob: 解码正常，跳过上传避免多花流量与大文件内存压力。
-      if (!Capacitor.isNativePlatform()) {
+      if (!isNative()) {
         const gen = tempGenRef.current;
         const fd = new FormData();
         fd.append('video', file);

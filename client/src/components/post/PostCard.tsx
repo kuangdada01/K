@@ -431,6 +431,14 @@ function PostCard({
         )}
       </div>
 
+      {/* 正文在操作栏之前 —— 与设计基线一致（配图 → 正文 → 操作栏） */}
+      {post.description && (
+        <div className={styles.caption}>
+          <span className={styles.captionUsername}>{post.username}</span>
+          <TaggedText text={post.description} />
+        </div>
+      )}
+
       <div className={styles.actions}>
         <button
           className={`${styles.actionBtn} ${liked ? styles.liked : ''}`}
@@ -492,13 +500,6 @@ function PostCard({
           {showTooltip && <span className={styles.shareTooltipText}>已复制链接</span>}
         </button>
       </div>
-
-      {post.description && (
-        <div className={styles.caption}>
-          <span className={styles.captionUsername}>{post.username}</span>
-          <TaggedText text={post.description} />
-        </div>
-      )}
     </div>
   );
 }

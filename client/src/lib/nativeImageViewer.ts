@@ -2,59 +2,27 @@
  * ============================================================
  * 原生图片查看器桥接（nativeImageViewer）
  * ============================================================
- * Capacitor 环境下优先走**原生查看器**（ViewPager2 + 原生缩放手势 +
+ * 原生宿主内优先走**原生查看器**（ViewPager2 + 原生缩放手势 +
  * 下拉关闭 + 缩略图 Hero 转场），这是微信朋友圈/酷安/系统相册那一套；
- * 浏览器/桌面或插件不可用时返回 null，调用方回退到现有 Web 查看器。
+ * 浏览器或原生不可用时返回 null，调用方回退到现有 Web 查看器。
  *
  * 用法：
  *   const native = await openNativeViewer({ images, index, headers, rect });
  *   if (!native) { 走 Web 覆盖层 }
  *   else 用 native.index 同步自己的状态（用户可能在原生里翻过页）
+ *
+ * 与旧实现的差异：原来经 Capacitor `registerPlugin('NativeImageViewer')`，
+ * 现在经自研桥 `lib/native`（方法名 `viewer.open` / `viewer.close`，
+ * 事件 `willClose`），**参数与返回契约完全不变**。
  * ============================================================
  */
 
-import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor/core';
+import { NativeError, call, isNative, on } from './native';
+import type { NativeViewerRect, NativeViewerResult, OpenNativeViewerOptions } from './native';
 
-export interface NativeViewerRect {
-  /** 物理像素（**不是** CSS px：已乘 devicePixelRatio，原生侧直接用） */
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
+export type { NativeViewerRect, OpenNativeViewerOptions, NativeViewerResult };
 
-export interface OpenNativeViewerOptions {
-  /** 图片地址（已 resolve 成绝对地址） */
-  images: string[];
-  index: number;
-  /** 需要鉴权的图片（/api/...）带上 Authorization 等请求头 */
-  headers?: Record<string, string>;
-  /** 被点缩略图的屏幕矩形（物理像素）——原生侧据此做 Hero 放大进入 */
-  rect?: NativeViewerRect;
-  /**
-   * **每张图各自**的缩略图矩形（物理像素，与 images 同序，量不到的位置为 null）。
-   *
-   * 用于**退场**的反向 Hero：用户在查看器里翻到第 5 张再退出，就要飞回第 5 张
-   * 的缩略图，而不是打开时那张。轨道里没滚到视口的页由 `rectsOfTrack` 换算成
-   * 「该页滚到视口时」的矩形，因此网页层不必先滚动、也不会露馅。
-   */
-  rects?: (NativeViewerRect | null)[];
-}
-
-export interface NativeViewerResult {
-  /** 关闭时停留的索引；-1 表示被主动 close（无有效索引） */
-  index: number;
-}
-
-interface NativeImageViewerPluginApi {
-  open(options: OpenNativeViewerOptions): Promise<NativeViewerResult>;
-  close(): Promise<void>;
-  addListener(eventName: 'willClose', cb: (data: { index: number }) => void): Promise<PluginListenerHandle>;
-}
-
-const NativeImageViewer = registerPlugin<NativeImageViewerPluginApi>('NativeImageViewer');
-
-/** 「即将退出」的本地订阅者与「插件 listener 是否已注册」标记（见 onNativeViewerWillClose） */
+/** 「即将退出」的本地订阅者与「桥事件是否已注册」标记（见 onNativeViewerWillClose） */
 const willCloseListeners = new Set<(index: number) => void>();
 let willCloseBound = false;
 
@@ -68,9 +36,9 @@ function heroDisabled(): boolean {
   }
 }
 
-/** 是否可用：仅原生 Android 且插件已注册（网页端恒为 false） */
+/** 是否可用：仅原生宿主内（浏览器恒为 false） */
 export function isNativeViewerAvailable(): boolean {
-  return Capacitor.isNativePlatform() && Capacitor.isPluginAvailable('NativeImageViewer');
+  return isNative();
 }
 
 /**
@@ -162,9 +130,15 @@ export async function openNativeViewer(options: OpenNativeViewerOptions): Promis
   // 直接回退 Web 查看器（典型场景：私密文件夹里「还没上传」的新文件是 blob: 预览）。
   if (!options.images.every((u) => /^https?:\/\//i.test(u))) return null;
   try {
-    return await NativeImageViewer.open(options);
-  } catch {
-    // 原生侧异常（Activity 启动失败等）不应让「看图」整个失效 → 回退 Web
+    // **不设超时**：这个 Promise 要等用户看完图关掉查看器才 resolve。
+    // 早期用默认 15s，看久一点就会被误判失败 → 网页叠一层 Web 全屏图（"两张图"），
+    // 且随后的 willClose 被守卫丢掉，导致退出后轮播不同步。
+    return await call<NativeViewerResult>('viewer.open', options, { timeoutMs: 0 });
+  } catch (err) {
+    // 超时只可能来自不认 timeoutMs 的旧版宿主：此时查看器多半**已经开着**，
+    // 绝不能回退 Web 覆盖层（会叠图）—— 返回"仍在原生"的结果，让调用方不要接管。
+    if (err instanceof NativeError && err.code === 'ERR_TIMEOUT') return { index: -1 };
+    // 其它异常（Activity 启动失败等）才回退 Web —— 看图能力不会整体失效
     return null;
   }
 }
@@ -173,7 +147,7 @@ export async function openNativeViewer(options: OpenNativeViewerOptions): Promis
 export async function closeNativeViewer(): Promise<void> {
   if (!isNativeViewerAvailable()) return;
   try {
-    await NativeImageViewer.close();
+    await call('viewer.close');
   } catch {
     // 忽略：没有打开中的查看器
   }
@@ -186,14 +160,15 @@ export async function closeNativeViewer(): Promise<void> {
  * 的那一帧网页层的轮播必须已经停在返回的这一张 —— 等 resolve 再同步就晚了，
  * 会出现「落地的是第 3 张、背景露出第 1 张」再跳一下（真机反馈的那个问题）。
  *
- * 插件的 listener 全进程只注册一次，这里只做本地分发；返回退订函数。
+ * 桥事件全进程只注册一次，这里只做本地分发；返回退订函数。
  */
 export function onNativeViewerWillClose(cb: (index: number) => void): () => void {
   if (!isNativeViewerAvailable()) return () => {};
   willCloseListeners.add(cb);
   if (!willCloseBound) {
     willCloseBound = true;
-    void NativeImageViewer.addListener('willClose', (data) => {
+    on('willClose', (payload) => {
+      const data = payload as { index?: number } | null;
       for (const fn of [...willCloseListeners]) {
         try {
           fn(data?.index ?? -1);
@@ -201,9 +176,6 @@ export function onNativeViewerWillClose(cb: (index: number) => void): () => void
           // 单个订阅者出错不影响其它订阅者
         }
       }
-    }).catch(() => {
-      // 注册失败：退场对齐降级为「resolve 后再同步」（仍有 startExitHero 的黑幕兜底）
-      willCloseBound = false;
     });
   }
   return () => {

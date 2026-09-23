@@ -151,7 +151,9 @@ export default function Sidebar() {
           </span>
           <span className={styles.itemLabel}>首页</span>
         </Link>
-        <Link to="/explore" className={`${itemClass('/explore')} ${styles.itemSearch}`} onClick={goHome}>
+        {/* —— 以下三项为桌面端专属（窄屏隐藏）：移动端入口已重新安家 ——
+            搜索 → 首页页头圆钮；分享 → 首页 FAB；公告 / 管理 → 头像二级菜单 */}
+        <Link to="/explore" className={`${itemClass('/explore')} ${styles.itemDesktopOnly}`} onClick={goHome}>
           <span className={styles.itemIcon}>
             <Search size={22} />
           </span>
@@ -168,7 +170,7 @@ export default function Sidebar() {
         )}
         {user && (
           <button
-            className={styles.item}
+            className={`${styles.item} ${styles.itemDesktopOnly}`}
             onClick={openCreate}
             // 发布弹层是懒加载的（P1-7）：在「想点」的瞬间就把 chunk 拉回来，
             // 把首次打开多出的那一次网络往返藏进 hover→点击之间
@@ -183,7 +185,11 @@ export default function Sidebar() {
           </button>
         )}
         {user && (
-          <Link to="/announcements" className={itemClass('/announcements')} onClick={goHome}>
+          <Link
+            to="/announcements"
+            className={`${itemClass('/announcements')} ${styles.itemDesktopOnly}`}
+            onClick={goHome}
+          >
             <span className={styles.itemIcon}>
               <Megaphone size={22} />
               {announcementCount > 0 && <span className={styles.badge}>{announcementCount}</span>}
@@ -215,7 +221,7 @@ export default function Sidebar() {
           </Link>
         )}
         {user?.role === 'admin' && (
-          <Link to="/admin" className={itemClass('/admin')} onClick={goHome}>
+          <Link to="/admin" className={`${itemClass('/admin')} ${styles.itemDesktopOnly}`} onClick={goHome}>
             <span className={styles.itemIcon}>
               <Shield size={22} />
             </span>

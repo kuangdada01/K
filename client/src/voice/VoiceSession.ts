@@ -20,6 +20,7 @@
 import { CONTROL_CHAR_RE, STUN_SERVER_URLS } from '@k/shared';
 import { getVoiceIceServers } from '../api/voice';
 import { showToast } from '../components/ui/Toast';
+import { checkVoiceCapabilities, describeMissing } from '../lib/compat';
 import type { VoiceChatMessage, VoiceParticipant } from '../types';
 // RNNoise 语音降噪（WASM 内嵌的单文件 AudioWorklet，经 Vite 打包为独立 ES bundle）：
 // vendor 于 src/voice/rnnoise/（含 VAD 门控能量恢复，保证"开降噪后与不开人声大小一致"）
@@ -72,6 +73,15 @@ export { NOISE_REDUCTION_KEY, MUSIC_MODE_KEY };
 
 /** ICE 兜底配置（接口失败时使用，与服务端默认一致；STUN 地址来自 @k/shared 共享常量） */
 const FALLBACK_ICE_SERVERS: RTCIceServer[] = [{ urls: [...STUN_SERVER_URLS] }];
+
+/**
+ * 屏幕捕获**请求的约束盒**（`getDisplayMedia` 的 ideal 宽高）：
+ * 2134×1200 = 1920×1080 除以 Chromium 那 ~0.9 的缩放余量（见 startScreenShare 里的注释）。
+ *
+ * 之所以单独抽成常量：控制器要靠它识别出"Chrome 现在报的还是请求盒、不是真实采集尺寸"
+ * （见 `resolveCaptureSize`）——把数字写在两处，早晚会漂移成"识别不出来"。
+ */
+const SHARE_CAPTURE_BOX = { width: 2134, height: 1200 };
 
 export class VoiceSession {
   private cb: VoiceSessionCallbacks;
@@ -189,7 +199,10 @@ export class VoiceSession {
     onSelfSharingChanged: (sharing) => {
       this.self.sharing = sharing;
     },
-    sendShareStart: (withAudio) => this.send({ type: 'share-start', audio: withAudio }),
+    // 采集尺寸随 share-start 上行（可选字段）：服务端把它放进 share-changed 与房间成员信息，
+    // 观看端首帧之前就能定下画面比例（见 shared/src/types.ts 的 VoiceParticipant.width）
+    sendShareStart: (withAudio, size) =>
+      this.send({ type: 'share-start', audio: withAudio, ...(size ?? {}) }),
     sendShareStop: () => this.send({ type: 'share-stop' }),
     emitParticipants: () => this.emitParticipants(),
     getVideoSenders: () =>
@@ -260,6 +273,23 @@ export class VoiceSession {
     this.roomId = roomId;
     this.emitStatus('connecting');
 
+    // ★ 语音能力门槛（2026-09-19 决策：不再为过低版本的内核做静默降级兼容，
+    //   缺能力就直接说清楚缺什么，而不是让它在半残状态下跑 ——
+    //   "能进房但看不见别人、开关点了没反应"这类状态正是这么来的）。
+    //   提示不阻断进房：信令照常建立，文字聊天与成员可见性尽量保留。
+    const voiceCompat = checkVoiceCapabilities();
+    if (voiceCompat.missing.length > 0) {
+      // 阻断型：建不起对端 / 拿不到麦克风 / 出不了声 —— 通话本质不可用
+      const blocking = voiceCompat.missing.some(
+        (m) => m.id === 'rtc' || m.id === 'getUserMedia' || m.id === 'audioContext'
+      );
+      this.cb.onError(
+        blocking
+          ? `当前浏览器版本过低，语音通话不可用（缺少：${describeMissing(voiceCompat.missing)}）`
+          : `部分语音功能不可用（缺少：${describeMissing(voiceCompat.missing)}）`
+      );
+    }
+
     // 进房即广播本地成员（自己）：底部麦克风按钮/成员卡片由 participants[0] 驱动，
     // 提前广播避免连接期间（取 ICE 配置 + WS 握手 + 服务端 joined 确认）按钮误显示红色静音态
     this.emitParticipants();
@@ -272,22 +302,31 @@ export class VoiceSession {
     }
     if (this.abortIfDestroyed()) return;
 
-    // 创建音频上下文（RNNoise 固定 48 kHz，见 audioGraph.createContext）：
-    // AudioContext 需要用户手势后才能出声（点击"加入房间"即手势）；
-    // 刷新自动回房等无手势场景由 AudioGraph 的 resumeFallback 兜底
-    const audioCtx = this.audio.createContext();
-
-    // 播放总线（听者模式也需要）：各远端 gain 汇入 masterGain → 压限器 → 扬声器。
-    // 压限器只压超 -6dB 的叠加峰值（多人同时说话叠加 >1.0 会硬削波炸麦），单人正常音量不受影响
-    this.audio.buildMasterBus();
-
-    // 预载降噪 worklet（与拿麦克风并行，不拖慢进房速度）
-    this.denoiser.prepare(audioCtx);
-    // 预载录音采集 worklet（同理并行；录音走音频线程，主线程卡顿不丢样本）
-    this.rec.prepareWorklet(audioCtx);
-
-    // 麦克风：拿不到权限则以听者模式加入
+    // ★ 音频链路整体容错：老内核（微信 iOS 等）可能缺 AudioContext / AudioWorklet
+    //   等能力。任一环节抛错都**不能阻断后面的 WS 建连** —— 否则信令根本没发出，
+    //   服务端收不到 join，界面却已显示"在房间里"，于是双方互相看不见；
+    //   而且异常发生在 async 流程里，错误边界接不到，线上不留任何痕迹。
+    let audioCtx: AudioContext | null = null;
     try {
+      audioCtx = this.audio.createContext();
+
+      // 播放总线（听者模式也需要）：各远端 gain 汇入 masterGain → 压限器 → 扬声器。
+      // 压限器只压超 -6dB 的叠加峰值（多人同时说话叠加 >1.0 会硬削波炸麦），单人正常音量不受影响
+      this.audio.buildMasterBus();
+
+      // 预载降噪 worklet（与拿麦克风并行，不拖慢进房速度）
+      this.denoiser.prepare(audioCtx);
+      // 预载录音采集 worklet（同理并行；录音走音频线程，主线程卡顿不丢样本）
+      this.rec.prepareWorklet(audioCtx);
+    } catch (e) {
+      console.warn('[voice] 音频链路初始化失败，以降级模式继续（信令不受影响）', e);
+      this.self.listener = true;
+      this.self.muted = true;
+    }
+
+    // 麦克风：拿不到权限（或音频上下文本身没建起来）则以听者模式加入
+    try {
+      if (!audioCtx) throw new Error('audio context unavailable');
       this.micStream = await navigator.mediaDevices.getUserMedia({
         // 浏览器原生 NS 与 RNNoise 只留一个：RNNoise 生效时不启用浏览器 NS，避免双重降噪压瘪人声
         // 音乐模式：连 AEC/AGC 也一并关闭（保真优先，代价是外放会产生回声，UI 提示佩戴耳机）
@@ -325,9 +364,15 @@ export class VoiceSession {
     // 授权/预载期间用户可能已退出（teardown 只执行一次）：此时绝不能再开 WS 或复活轮询
     if (this.abortIfDestroyed()) return;
 
+    // ★ 信令建连必须走到这里：上面任何音频步骤失败（含 AudioContext 不可用）
+    //   都不影响它，否则就是"界面已进房、服务端无记录"的静默不一致
     this.signaling.open();
-    this.audio.startSpeakingLoop();
     this.quality.start();
+    try {
+      this.audio.startSpeakingLoop();
+    } catch (e) {
+      console.warn('[voice] 说话检测轮询启动失败（不影响通话）', e);
+    }
   }
 
   /**
@@ -389,23 +434,38 @@ export class VoiceSession {
         }
         // 收到既有成员列表 → 由我（新加入者）逐一发起 offer
         this.emitStatus('connected');
+        // ★ 逐对端各自容错：ensurePeer 在缺 RTCPeerConnection 的老内核上会抛错，
+        //   原写法一抛就中断整个 for 循环，连下面的 emitParticipants() 都到不了
+        //   → 表现为「进房了但看不见别人」，而服务端记录里一切正常。
         for (const p of msg.participants as VoiceParticipant[]) {
-          const entry = this.mesh.ensurePeer(p);
-          this.mesh.initiateOffer(entry).catch(() => {
-            // 单对端协商失败（对端恰在此时退出/PC 关闭等）只摘除该对端，
-            // 不再整会话 teardown——异常对端不应成为打崩整个房间的武器
-            this.mesh.removePeer(entry.participant.userId);
-            this.emitParticipants();
-          });
+          try {
+            const entry = this.mesh.ensurePeer(p);
+            this.mesh.initiateOffer(entry).catch(() => {
+              // 单对端协商失败（对端恰在此时退出/PC 关闭等）只摘除该对端，
+              // 不再整会话 teardown——异常对端不应成为打崩整个房间的武器
+              this.mesh.removePeer(entry.participant.userId);
+              this.emitParticipants();
+            });
+          } catch (e) {
+            console.warn('[voice] 与既有成员建立连接失败（跳过该成员）', p?.userId, e);
+          }
         }
         // 加入时已有人在共享：先立状态与徽标（画面随后经该共享者的补挂重协商到达）
-        this.share.onJoined(msg.participants as VoiceParticipant[]);
+        try {
+          this.share.onJoined(msg.participants as VoiceParticipant[]);
+        } catch (e) {
+          console.warn('[voice] 共享状态初始化失败（不影响成员列表）', e);
+        }
         this.emitParticipants();
         break;
       }
       case 'peer-joined':
         // 别人加入：建好对等连接等他的 offer（规则：新加入者发起）
-        this.mesh.ensurePeer(msg.participant as VoiceParticipant);
+        try {
+          this.mesh.ensurePeer(msg.participant as VoiceParticipant);
+        } catch (e) {
+          console.warn('[voice] 新成员连接建立失败', e);
+        }
         this.emitParticipants();
         break;
       case 'peer-left':
@@ -448,6 +508,15 @@ export class VoiceSession {
         const entry = this.mesh.peers.get(userId);
         if (entry) {
           entry.participant.sharing = active;
+          // 共享者声明的采集尺寸（可选字段）：写回成员模型，观看端在首帧之前就有比例可用；
+          // 停止共享时清掉，避免下一次共享先按上一次的尺寸排版
+          if (active && typeof msg.width === 'number' && typeof msg.height === 'number') {
+            entry.participant.width = msg.width;
+            entry.participant.height = msg.height;
+          } else if (!active) {
+            delete entry.participant.width;
+            delete entry.participant.height;
+          }
           this.emitParticipants();
         }
         this.share.onShareChanged(userId, active, audio);
@@ -626,7 +695,11 @@ export class VoiceSession {
         // 宽度恒为 1920，高度跟随源，实测帧率反而更高（37→43fps）
         // 实验结论：帧率请求 120 时 getSettings 报 120 但实际帧到达率仍 43fps ——
         // 捕获链路上限与请求值无关（实测 60/120 请求均为 ~42fps），保持 60 请求
-        video: { width: { ideal: 2134 }, height: { ideal: 1200 }, frameRate: { ideal: 60, max: 60 } },
+        video: {
+          width: { ideal: SHARE_CAPTURE_BOX.width },
+          height: { ideal: SHARE_CAPTURE_BOX.height },
+          frameRate: { ideal: 60, max: 60 },
+        },
         // Chrome/Edge 的共享选择器带"分享音频"勾选；Safari/Firefox 忽略 audio 也不报错
         audio: true,
       });
@@ -638,7 +711,9 @@ export class VoiceSession {
       return 'cancelled';
     }
 
-    this.share.start(stream);
+    // 把"请求的约束盒"一起交给控制器：Chrome 在采集出帧前会把**请求盒**当成 getSettings()
+    // 报出来（见 resolveCaptureSize），控制器要靠它识别出"这个读数还不是真值"
+    this.share.start(stream, SHARE_CAPTURE_BOX);
     return 'started';
   }
 
@@ -647,24 +722,54 @@ export class VoiceSession {
     this.share.stop(notify);
   }
 
-  /** 把当前共享的 video / 系统声音 track 挂到对端 PC（开始共享遍历全房间；对端新建连接后补挂） */
-  private maybeAttachShareTracks(entry: PeerEntry): void {
-    if (!this.share.sharingActive || !this.share.shareStream) return;
+  /**
+   * 把当前共享的 video / 系统声音 track 挂到对端 PC（开始共享时遍历全房间；对端新建连接后补挂）。
+   *
+   * **视频优先复用对端 offer 里那条 recvonly 的视频 m-line**（M6.12）：安卓观看端的 offer
+   * 现在会预置一条 recvonly video m-line，只要本函数在 `createAnswer()` **之前**被调用，
+   * `addTrack` 就能复用它 —— 视频与音频在**同一个 answer** 里协商完成，省掉一整轮
+   * offer/answer（跨公网时就是用户看到的"进房要等 3~4 秒"）。
+   * 没有可复用的 m-line（对端 offer 不含 video，如老版本客户端）时退回 `addTransceiver`。
+   *
+   * 为什么复用必须用 `addTrack` 而不是 `addTransceiver`：`addTransceiver` **永远新建**一条
+   * m-line（规范如此），复用只发生在 `addTrack` 的收发器匹配里 —— 见本文件建音频收发器处
+   * 那条注释（Chrome 只复用 `addTrack` 建的收发器）。
+   *
+   * @returns 本次是否已把**视频**挂上（调用方据此决定要不要再补挂重协商）
+   */
+  private maybeAttachShareTracks(entry: PeerEntry): boolean {
+    if (!this.share.sharingActive || !this.share.shareStream) return false;
+    let attached = false;
     const video = this.share.shareSendVideoStream?.getVideoTracks()[0];
     if (video && this.share.shareSendVideoStream && !entry.videoSender) {
-      // addTransceiver（而非 addTrack）：直接拿到收发器，便于设置编解码偏好
-      const transceiver = entry.pc.addTransceiver(video, {
-        direction: 'sendonly',
-        streams: [this.share.shareSendVideoStream],
+      const reusable = entry.pc.getTransceivers().find((t) => {
+        const kind = t.receiver.track?.kind;
+        return kind === 'video' && t.sender.track === null && t.direction === 'recvonly';
       });
-      entry.videoSender = transceiver.sender;
-      preferH264ForSender(transceiver);
-      applyShareQualityToSender(entry.videoSender, this.share.shareQuality, this.share.shareSharpText);
+      if (reusable) {
+        const sender = entry.pc.addTrack(video, this.share.shareSendVideoStream);
+        // 共享只需发：方向收成 sendonly（否则 answer 里会声明"我也要收一路视频"）
+        reusable.direction = 'sendonly';
+        entry.videoSender = sender;
+        preferH264ForSender(reusable);
+        applyShareQualityToSender(sender, this.share.shareQuality, this.share.shareSharpText);
+      } else {
+        // addTransceiver（而非 addTrack）：直接拿到收发器，便于设置编解码偏好
+        const transceiver = entry.pc.addTransceiver(video, {
+          direction: 'sendonly',
+          streams: [this.share.shareSendVideoStream],
+        });
+        entry.videoSender = transceiver.sender;
+        preferH264ForSender(transceiver);
+        applyShareQualityToSender(entry.videoSender, this.share.shareQuality, this.share.shareSharpText);
+      }
+      attached = true;
     }
     const audio = this.share.withShareAudio ? this.share.shareSendAudioStream?.getAudioTracks()[0] : null;
     if (audio && this.share.shareSendAudioStream && !entry.shareAudioSender) {
       entry.shareAudioSender = entry.pc.addTrack(audio, this.share.shareSendAudioStream);
     }
+    return attached;
   }
 
   getShareQuality(): ShareQuality {

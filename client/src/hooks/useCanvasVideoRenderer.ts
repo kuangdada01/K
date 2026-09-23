@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { isNative, setPipEnabled } from '../lib/native';
 
 export function useCanvasVideoRenderer({
   stream,
@@ -78,8 +79,11 @@ export function useCanvasVideoRenderer({
   // 小窗模式下 canvas 位于 PiP 窗口，绘制循环继续工作；
   // 主页面转到后台时 rAF 被节流，改用 40ms 定时器驱动，保证小窗画面不冻结。
   useEffect(() => {
-    // 预览隐藏或小窗激活时舞台被不透明提示覆盖，暂停本地绘制（观众画面走 WebRTC 发送，与此无关）
-    if (!live || pipActive) return;
+    // 暂停绘制的唯一理由：**浏览器版 PiP** 把 <video> 拿到独立小窗去显示，主文档里的画布没人看。
+    // 原生系统小窗（本工程实际走的路径）恰好相反：小窗显示的就是这一页，画布**就是**小窗内容，
+    // 一旦在这里因为 pipActive 而 return，小窗里就只剩一帧冻住不动的画面（真机踩过）。
+    // 判据用 `document.pictureInPictureElement`（浏览器版 PiP 才有），而不是 pipActive。
+    if (!live || document.pictureInPictureElement) return;
     let stopped = false;
     let raf = 0;
     let timer = 0;
@@ -108,7 +112,7 @@ export function useCanvasVideoRenderer({
       cancelAnimationFrame(raf);
       clearTimeout(timer);
     };
-  }, [stream, live, pipActive]);
+  }, [stream, live]);
 
   // 视频原生 PiP 退出同步（用户在原生窗口关闭 PiP 时）
   useEffect(() => {
@@ -118,6 +122,16 @@ export function useCanvasVideoRenderer({
     document.addEventListener('leavepictureinpicture', onLeave);
     return () => document.removeEventListener('leavepictureinpicture', onLeave);
   }, []);
+
+  // 原生宿主：声明"现在适合画中画" —— 共享画面在放时，用户按 Home 会进系统小窗。
+  // WebView 不支持网页版 PiP API（requestPictureInPicture），所以只能走原生系统画中画。
+  useEffect(() => {
+    if (!isNative()) return;
+    void setPipEnabled(Boolean(stream) && live).catch(() => {});
+    return () => {
+      void setPipEnabled(false).catch(() => {});
+    };
+  }, [stream, live]);
 
   return { videoRef, canvasRef, canvasSlotRef, pipActive, setPipActive };
 }

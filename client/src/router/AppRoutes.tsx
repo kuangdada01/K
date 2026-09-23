@@ -14,6 +14,10 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useEvent } from '../context/EventContext';
 import { useAndroidBackButton } from '../hooks/useAndroidBackButton';
+import { useNativeDeeplink } from '../hooks/useNativeDeeplink';
+import { useNativeDeviceStatus } from '../hooks/useNativeDeviceStatus';
+import { useNativeForeground } from '../hooks/useNativeForeground';
+import { useNativeNotifications } from '../hooks/useNativeNotifications';
 import { MainLayout } from '../layouts/MainLayout';
 import { ProtectedRoute } from './ProtectedRoute';
 import { loadCreatePost, loadEditPost } from './composerChunks';
@@ -76,6 +80,14 @@ export function AppRoutes() {
     showCreate,
     closeCreate,
   });
+
+  // 二期 W2：原生深链（通知点击/外部链接/分享到 K）与后台本地通知
+  useNativeDeeplink();
+  useNativeNotifications();
+  // 二期 W3：后台音频保活（语音房/音乐的前台服务 + 音频焦点命令）
+  useNativeForeground();
+  // 二期 W4：系统状态（断网/恢复提示；navigator.onLine 在 WebView 里不可信）
+  useNativeDeviceStatus();
 
   if (loading) {
     return (

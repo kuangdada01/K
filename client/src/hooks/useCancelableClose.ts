@@ -12,7 +12,7 @@
  *   不播反向淡出），随后由 useImagePinchZoom 执行双击缩放。
  * - 卸载兜底：组件提前卸载（路由切换等）时清除定时器，绝不回调 onClose。
  *
- * 供 PostMedia / ChatZoomOverlay / PrivateFolder 共用。
+ * 供 PostMedia / ChatZoomOverlay 共用。
  * ============================================================
  */
 

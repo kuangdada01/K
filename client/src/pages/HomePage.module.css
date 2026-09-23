@@ -43,31 +43,64 @@
   color: var(--text-primary);
 }
 
-/* 移动端首页右上角搜索入口（桌面端侧边栏已有搜索，隐藏） */
+/* 移动端首页右上角搜索入口
+   —— 底部导航压到 5 项后，「搜索」的入口由这里承担（桌面端左导航已有搜索，隐藏）。
+   底用 --surface + 描边，不用凹陷色：浅色凹陷色与页底只有 1.04:1，边界读不出来。 */
 .searchBtn {
   display: none;
   align-items: center;
   justify-content: center;
   width: 38px;
   height: 38px;
-  border-radius: 50%;
+  border-radius: var(--radius-pill);
   color: var(--accent);
-  background: transparent;
-  border: none;
+  background: var(--surface);
+  border: 1px solid var(--border-color);
   transition:
-    transform 0.12s ease,
-    opacity 0.12s ease,
-    color 0.12s ease;
+    transform var(--dur-fast) var(--ease-standard),
+    background var(--dur-base) var(--ease-standard);
 }
 
 .searchBtn:active {
   transform: scale(0.92);
-  opacity: 0.8;
+  background: var(--accent-soft);
 }
 
 @media (max-width: 768px) {
   .searchBtn {
     display: flex;
+  }
+}
+
+/* 发布悬浮按钮（FAB）
+   —— 底部导航压到 5 项后，「分享（发布）」的入口由这里承担，仅移动端显示。
+   绝对/固定定位在胶囊之上，与胶囊按 --nav-capsule-* 令牌留 32px 间距，
+   改胶囊尺寸时这里自动跟随。z-index 低于胶囊（200），重叠时导航优先。 */
+.fab {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .fab {
+    display: flex;
+    position: fixed;
+    right: 16px;
+    bottom: calc(var(--nav-capsule-gap) + var(--nav-capsule-h) + 32px + var(--safe-area-bottom));
+    width: 56px;
+    height: 56px;
+    border-radius: var(--radius-pill);
+    align-items: center;
+    justify-content: center;
+    background: var(--accent);
+    color: var(--on-accent);
+    border: none;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
+    z-index: 190;
+    transition: transform var(--dur-fast) var(--ease-standard);
+  }
+
+  .fab:active {
+    transform: scale(0.92);
   }
 }
 
@@ -95,7 +128,8 @@
     max-width: 100% !important;
     margin: 0 auto !important;
     grid-template-columns: minmax(0, 1fr);
-    padding: 22px 16px 96px;
+    /* 底部预留跟随 --nav-reserve（= 胶囊高 + 浮起 + 呼吸），改胶囊尺寸无需再改这里 */
+    padding: 22px 16px var(--nav-reserve);
     gap: 0;
   }
 
@@ -105,8 +139,10 @@
     margin: 0 auto;
   }
 
+  /* 页头：标题与右侧 38px 圆钮垂直居中（基线对齐会让 24px 字与圆钮重心错位） */
   .feedHead {
-    margin-bottom: 16px;
+    align-items: center;
+    margin-bottom: 14px;
   }
 
   .feedHead h1 {

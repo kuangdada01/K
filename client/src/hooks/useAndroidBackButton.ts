@@ -2,14 +2,22 @@
  * ============================================================
  * 安卓硬件返回键 Hook（hooks/useAndroidBackButton）
  * ============================================================
- * 自 App.tsx 拆出（行为不变）：仅 Capacitor 原生平台注册。
+ * 自 App.tsx 拆出（行为不变）：仅原生宿主内注册。
  * 返回优先级：全局模态框（登录/编辑/创建）→ 最深 [data-back] 按钮
- * → 搜索/图书单次返回 → 主 Tab 双击退出（2s 内再按最小化）。
+ * → 搜索/图书单次返回 → 主 Tab 双击退出（2s 内再按最小化到后台）。
+ *
+ * 与旧实现（Capacitor App 插件事件）的差异：
+ * 原生侧用 `OnBackPressedCallback` 同步调用 `window.__KNative.onBackPressed()`，
+ * 取本函数的**返回值**作为裁决 —— 不再有"事件发出去、原生自己决定"的时序问题：
+ *   'handled'  网页已处理（关闭模态/点了返回按钮）
+ *   'minimize' 原生最小化到后台（moveTaskToBack，进程保留）
+ *   'exit'     原生结束 Activity
+ * 原生侧另有一条 300ms 超时兜底（桥未就绪时不杀进程，改为最小化）。
+ * ============================================================
  */
 
 import { useEffect, useRef } from 'react';
-import { Capacitor } from '@capacitor/core';
-import { App as CapApp } from '@capacitor/app';
+import { isNative, setBackDecisionHandler } from '../lib/native';
 import { showToast } from '../components/ui/Toast';
 
 interface AndroidBackButtonOptions {
@@ -31,9 +39,8 @@ export function useAndroidBackButton({
 }: AndroidBackButtonOptions): void {
   const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 安卓硬件返回键处理
   useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return;
+    if (!isNative()) return;
 
     const MAIN_TABS = [
       '/',
@@ -55,26 +62,26 @@ export function useAndroidBackButton({
       return all.length > 0 ? (all[all.length - 1] as HTMLElement) : null;
     };
 
-    const handler = () => {
+    const handler = (): string => {
       // 1. 关闭模态框
       if (showLoginPrompt) {
         closeLoginPrompt();
-        return;
+        return 'handled';
       }
       if (editPost) {
         closeEdit();
-        return;
+        return 'handled';
       }
       if (showCreate) {
         closeCreate();
-        return;
+        return 'handled';
       }
 
       // 2. 触发最深层的返回图标功能（适用于所有页面）
       const backBtn = findDeepestBackBtn();
       if (backBtn) {
         backBtn.click();
-        return;
+        return 'handled';
       }
 
       // 3. 搜索/图书单次返回（首页右上角/图书入口，需 1 次回退而非双击退出）
@@ -86,44 +93,42 @@ export function useAndroidBackButton({
         currentPath.startsWith('/explore/')
       ) {
         if (window.history.length > 1) window.history.back();
-        else {
-          window.location.hash = '#/';
-        }
-        return;
+        else window.location.hash = '#/';
+        return 'handled';
       }
       if (currentPath.startsWith('/books/')) {
-        const backBtn = findDeepestBackBtn();
-        if (backBtn) {
-          backBtn.click();
-          return;
-        }
         if (window.history.length > 1) window.history.back();
-        else {
-          window.location.hash = '#/books';
-        }
-        return;
+        else window.location.hash = '#/books';
+        return 'handled';
       }
+
+      // 4. 主 Tab：两秒内再按一次 → 最小化到后台（进程保留，用户从最近任务划掉才真正关闭）
       if (MAIN_TABS.includes(currentPath)) {
         window.history.pushState(null, '', window.location.href);
 
         if (exitTimerRef.current) {
           clearTimeout(exitTimerRef.current);
           exitTimerRef.current = null;
-          // 最小化到后台（moveTaskToBack）：进程保留，用户从最近任务划掉才真正关闭。
-          // exitApp() 会 finishAffinity 直接杀进程，不符合预期
-          CapApp.minimizeApp();
-        } else {
-          showToast('再按一次退出应用');
-          exitTimerRef.current = setTimeout(() => {
-            exitTimerRef.current = null;
-          }, 2000);
+          return 'minimize';
         }
+        showToast('再按一次退出应用');
+        exitTimerRef.current = setTimeout(() => {
+          exitTimerRef.current = null;
+        }, 2000);
+        return 'handled';
       }
+
+      // 未覆盖的路径（深链等）：最小化而不是杀进程（与"双击返回=最小化"的既定语义一致）
+      return 'minimize';
     };
 
-    const listener = CapApp.addListener('backButton', handler);
+    setBackDecisionHandler(handler);
     return () => {
-      listener.then((l) => l.remove());
+      setBackDecisionHandler(() => 'minimize');
+      if (exitTimerRef.current) {
+        clearTimeout(exitTimerRef.current);
+        exitTimerRef.current = null;
+      }
     };
   }, [showLoginPrompt, closeLoginPrompt, showCreate, closeCreate, editPost, closeEdit]);
 }

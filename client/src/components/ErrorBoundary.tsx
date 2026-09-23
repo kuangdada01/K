@@ -63,6 +63,21 @@ export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
         <div style={{ fontSize: 13, marginTop: 8, opacity: 0.8 }}>
           可以点下面的按钮重试；若反复出现，请刷新页面
         </div>
+        {/* 错误摘要：旧版 iOS / 微信 WebView 等无法远程看控制台的环境里，
+            这一行是唯一能带回来的现场（截图即可定位），因此保留在兜底 UI 中 */}
+        <div
+          style={{
+            fontSize: 11,
+            marginTop: 12,
+            opacity: 0.6,
+            wordBreak: 'break-word',
+            maxWidth: 320,
+            marginLeft: 'auto',
+            marginRight: 'auto',
+          }}
+        >
+          {String(error.name || 'Error')}: {String(error.message || '').slice(0, 200)}
+        </div>
         <button
           type="button"
           onClick={this.reset}

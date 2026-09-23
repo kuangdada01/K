@@ -10,25 +10,14 @@
  * - 在 <html> 上设置 data-theme 属性驱动 CSS 变量
  * - 监听系统 prefers-color-scheme 变化（system 模式下自动切换）
  * - 动态更新 <meta name="theme-color">
- * - Capacitor Android 状态栏样式适配
+ * - 原生宿主：同步状态栏图标颜色与窗口背景色（经 lib/native 桥）
  * ============================================================
  */
 
 import { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
-import { Capacitor } from '@capacitor/core';
-import { StatusBar, Style } from '@capacitor/status-bar';
+import { isNative, setStatusBarBackground, setStatusBarStyle, setWindowBackgroundColor } from '../lib/native';
 
 type ThemeMode = 'light' | 'dark' | 'system';
-
-/** Android 原生注入的桥（Capacitor 插件不可用时的兜底通道） */
-declare global {
-  interface Window {
-    AndroidBridge?: {
-      setWindowBackgroundColor?: (color: string) => void;
-      setAppThemeMode?: (mode: ThemeMode) => void;
-    };
-  }
-}
 
 interface ThemeContextValue {
   /** 用户选择的主题模式 */
@@ -71,39 +60,24 @@ function updateDataTheme(theme: 'light' | 'dark') {
 }
 
 /**
- * 更新 Android 状态栏图标颜色
- * 双通道保障：Capacitor 插件 + AndroidBridge 兜底
- * 关键：system 模式传 Style.Default，让 Capacitor 插件自主跟随系统变化
+ * 同步原生宿主的系统栏与窗口背景。
+ *
+ * 三件事缺一不可：
+ * 1. `statusBar.setStyle`：状态栏图标明暗（system 传 system，由原生读系统 uiMode）；
+ * 2. `statusBar.setBackground`：非 edge-to-edge 机型/Android 16 之前的状态栏底色；
+ * 3. `window.setBackgroundColor`：**edge-to-edge 下状态栏区域透出的就是这一层**，
+ *    应用内深色是 CSS 级切换（系统 uiMode 不变、values-night 不会激活），
+ *    不显式设置就会露白（浅色→深色时）或露黑（深色→浅色时）。
  */
 function applyStatusBar(mode: ThemeMode) {
-  const isNative = Capacitor.isNativePlatform() || !!window.AndroidBridge;
-  if (!isNative) return;
+  if (!isNative()) return;
 
-  let capacitorStyle = Style.Default;
-  if (mode === 'light') capacitorStyle = Style.Light;
-  else if (mode === 'dark') capacitorStyle = Style.Dark;
+  setStatusBarStyle(mode);
 
-  StatusBar.setStyle({ style: capacitorStyle }).catch((e) => {
-    console.warn('[Theme] Capacitor StatusBar.setStyle failed:', e);
-  });
-
-  // 状态栏底色随主题：WebView 非 edge-to-edge（从状态栏下方开始），
-  // styles.xml 只能定死一个启动色，运行时明暗切换在这里跟随
-  const effective: 'light' | 'dark' =
-    mode === 'system' ? (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : mode;
+  const effective: 'light' | 'dark' = mode === 'system' ? getSystemTheme() : mode;
   const bgColor = effective === 'dark' ? '#0d0f14' : '#eef2ee';
-  StatusBar.setBackgroundColor({ color: bgColor }).catch((e) => {
-    console.warn('[Theme] Capacitor StatusBar.setBackgroundColor failed:', e);
-  });
-
-  try {
-    const bridge = window.AndroidBridge;
-    // Android 16 强制 edge-to-edge：上面的 setBackgroundColor 会被系统忽略，
-    // 状态栏条透出的是 DecorView 背景色，必须显式设置才能跟随应用内主题
-    // （应用内深色是 CSS 级切换，系统 uiMode 不变，values-night 不会激活）
-    bridge?.setWindowBackgroundColor?.(bgColor);
-    bridge?.setAppThemeMode?.(mode);
-  } catch {}
+  setStatusBarBackground(bgColor);
+  setWindowBackgroundColor(bgColor);
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
@@ -125,16 +99,16 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const setMode = useCallback((newMode: ThemeMode) => {
     setModeState(newMode);
     localStorage.setItem(STORAGE_KEY, newMode);
-    const resolved = resolveTheme(newMode);
-    setResolved(resolved);
-    updateDataTheme(resolved);
-    updateThemeColor(resolved);
-    // Android: 双通道同步状态栏图标颜色（Capacitor 插件 + AndroidBridge 兜底）
+    const resolvedTheme = resolveTheme(newMode);
+    setResolved(resolvedTheme);
+    updateDataTheme(resolvedTheme);
+    updateThemeColor(resolvedTheme);
+    // 原生宿主：同步状态栏图标颜色与窗口背景色
     applyStatusBar(newMode);
   }, []);
 
   // 初始化：resolved 与 data-theme 已由 useState 初始化器同步（避免首帧闪烁），
-  // 此处仅延迟应用状态栏主题，确保 Capacitor Bridge 已初始化
+  // 此处仅延迟应用状态栏主题，确保原生 WebView 与桥已就绪
   useEffect(() => {
     const timer = setTimeout(() => {
       applyStatusBar(mode);

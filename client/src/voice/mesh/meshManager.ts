@@ -56,8 +56,14 @@ export interface MeshManagerOptions {
   forgetAllQuality(): void;
   /** 摘除对端音频节点（dispose 时） */
   disposePeerAudio(audio: PeerAudio): void;
-  /** 共享中则把共享 track 补挂到该对端（首次协商完成后自动重协商出画面） */
-  attachShareTracks(entry: PeerEntry): void;
+  /**
+   * 共享中则把共享 track 补挂到该对端。
+   *
+   * 返回值 = **本次是否已经把视频挂上了**（M6.12）。调用方据此决定要不要再触发一次
+   * 补挂重协商：在 `createAnswer()` **之前**调用时，若对端 offer 里带了 recvonly 的
+   * video m-line，视频会和音频在同一个 answer 里协商完 —— 此时**不需要**再重协商。
+   */
+  attachShareTracks(entry: PeerEntry): boolean;
   /** flushPendingOffer 补处理失败摘除对端后刷新参与者列表 */
   onParticipantsChanged(): void;
 }
@@ -321,14 +327,25 @@ export class MeshManager {
     await entry.pc.setRemoteDescription({ type: 'offer', sdp });
     entry.remoteDescSet = true;
     await this.flushCandidates(entry);
+    /**
+     * **在生成 answer 之前**尝试补挂共享轨（M6.12，"进房要等 3~4 秒"的根因之一）。
+     *
+     * 老流程：先答音频 → 协商完成后才 `attachShareTracks` → 触发**第二次** offer/answer
+     * 才把视频 m-line 协商出来。安卓观看端现在会在 offer 里预置一条 **recvonly** 的视频
+     * m-line，于是这里可以 `addTrack` 复用那条 m-line、把方向收成 sendonly，
+     * 让**视频与音频在同一个 answer 里协商完** —— 省掉一整个往返
+     * （跨公网 + TURN 时，那正是用户看到的 3~4 秒黑框等待）。
+     */
+    const attachedEarly = this.opts.attachShareTracks(entry);
     const answer = await entry.pc.createAnswer();
     if (!answer.sdp) return; // 理论上不会发生（createAnswer 必返回 sdp）
     const sdp2 = applyOpusPreferences(answer.sdp, this.opts.isMusicMode());
     await entry.pc.setLocalDescription({ type: 'answer', sdp: sdp2 });
     this.opts.sendSignal(entry.participant.userId, { type: 'answer', sdp: sdp2 });
-    // 首次协商完成：解除抑制；共享中则把共享 track 补挂到这条新建对端连接（随后自动重协商出画面）
     entry.negotiateSuppressed = false;
-    this.opts.attachShareTracks(entry);
+    // 已经在本轮 answer 里带上视频了 → 不能再补挂（addTransceiver 会多出一条 m-line + 白跑一轮重协商）；
+    // 没能提前挂上（对端 offer 不含 video m-line）才走老的"补挂 + 重协商"路径
+    if (!attachedEarly) this.opts.attachShareTracks(entry);
   }
 
   /** 补处理被完美协商冲突忽略的远端 offer（本端协商落定、非协商中时执行）。

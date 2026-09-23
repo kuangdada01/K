@@ -23,7 +23,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
-import { Sun, Moon, Monitor, Check, LogOut, LogIn, User, Settings } from 'lucide-react';
+import { Sun, Moon, Monitor, Check, LogOut, LogIn, User, Settings, Megaphone, Shield } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import Avatar from './ui/Avatar';
@@ -68,6 +68,13 @@ export default function AvatarMenu({
   const location = useLocation();
 
   const open = openPath !== null && openPath === location.pathname;
+
+  /**
+   * 窄屏判定：底部胶囊导航压到 5 项后，被移出导航的「公告 / 管理」入口落在这里，
+   * 所以只在窄屏出现 —— 桌面端左导航本来就有这两项，重复放没有意义。
+   * 渲染期取值（与下面 getMenuStyle / menuSheet 的判定同一写法），菜单每次打开都会重渲染。
+   */
+  const isMobileViewport = window.matchMedia('(max-width: 768px)').matches;
 
   const themeOptions: ThemeOption[] = [
     { key: 'system', label: '跟随系统', icon: <Monitor size={16} /> },
@@ -223,6 +230,24 @@ export default function AvatarMenu({
                   <User size={16} />
                 </span>
                 <span>个人主页</span>
+              </Link>
+            )}
+
+            {/* 窄屏专属：从底部导航移出的两个入口（桌面端左导航已有，不重复） */}
+            {user && isMobileViewport && (
+              <Link to="/announcements" className={styles.item} onClick={close} role="menuitem">
+                <span className={styles.itemIcon}>
+                  <Megaphone size={16} />
+                </span>
+                <span>公告</span>
+              </Link>
+            )}
+            {user?.role === 'admin' && isMobileViewport && (
+              <Link to="/admin" className={styles.item} onClick={close} role="menuitem">
+                <span className={styles.itemIcon}>
+                  <Shield size={16} />
+                </span>
+                <span>管理后台</span>
               </Link>
             )}
 

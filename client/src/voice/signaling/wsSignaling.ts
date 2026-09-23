@@ -24,7 +24,7 @@
  * ============================================================
  */
 
-import { Capacitor } from '@capacitor/core';
+import { isNative } from '../../lib/native';
 import { getServerUrl } from '../../config';
 import { fetchVoiceTicket } from '../../api/voice';
 
@@ -54,7 +54,7 @@ export class WsSignaling {
   /** 信令基址（协议 + 主机；不含路径与凭证） */
   private wsBase(): string {
     const serverUrl = getServerUrl();
-    if (Capacitor.isNativePlatform() && serverUrl) {
+    if (isNative() && serverUrl) {
       // 仅原生端直连配置的服务器（无混合内容限制）
       return serverUrl.replace(/^http/, 'ws'); // http→ws / https→wss
     }

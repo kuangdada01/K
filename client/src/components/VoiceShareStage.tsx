@@ -13,7 +13,7 @@
  * 样式复用 VoiceShareStage.module.css（与拆分前同一份 CSS，视觉零变化）。
  */
 
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   MonitorUp,
   Maximize,
@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { useVoice, useVoiceRealtime } from '../context/VoiceContext';
 import { useCanvasVideoRenderer } from '../hooks/useCanvasVideoRenderer';
+import { enterPip as enterNativePip, isNative, onPipChanged } from '../lib/native';
 import { useFullscreenImmersive } from '../hooks/useFullscreenImmersive';
 import type { ShareQuality } from '../voice/VoiceSession';
 import styles from './VoiceShareStage.module.css';
@@ -62,13 +63,69 @@ export default function VoiceShareStage() {
     live: previewLive,
   });
 
+  /**
+   * 画框比例：跟随**传入视频轨的真实尺寸**。
+   *
+   * 为什么需要：画框原来写死 16:9，而手机屏幕共享是竖屏（9:19.5）——
+   * 塞进 16:9 后画面被压成中间窄条、两边大片留黑（用户实测反馈）。
+   * 取 0 表示还没拿到尺寸，此时不写变量、CSS 回落到 16:9（行为与改动前一致）。
+   *
+   * 用 track 的 `resize` 事件而不是读一次：共享中途分辨率会变
+   * （例如编码器按带宽降分辨率、或共享者换了窗口尺寸），比例要跟着走。
+   */
+  const [shareRatio, setShareRatio] = useState(0);
+  useEffect(() => {
+    const track = share?.stream?.getVideoTracks?.()[0];
+    if (!track) {
+      setShareRatio(0);
+      return;
+    }
+    const read = () => {
+      const s = track.getSettings();
+      if (s.width && s.height && s.height > 0) setShareRatio(s.width / s.height);
+    };
+    read();
+    track.addEventListener('resize', read);
+    return () => track.removeEventListener('resize', read);
+  }, [share?.stream]);
+
+  /**
+   * 共享者**声明的采集比例**（`share-start` 上行、服务端放进房间成员信息的 width/height）。
+   *
+   * 为什么要它：接收轨的 `getSettings()` 在**首帧到达之前是没有宽高的**（Chrome 要等收到帧才填），
+   * 所以 `shareRatio` 一开始是 0、画框按 CSS 的 16:9 撑开，首帧那一刻才收成真实比例
+   * （16:10 会左右留黑）—— 用户看到的就是"画面跳一下"。有了声明值，从第一帧起比例就是对的。
+   * 语义与缺省行为见 shared/src/types.ts 的 `VoiceParticipant.width`：没带就回落到上面的轨道尺寸，
+   * 与改动前逐字一致（老客户端/老服务端）。
+   */
+  const declaredSharer = voice.participants.find((p) => p.userId === share?.userId);
+  const declaredWidth = declaredSharer?.width ?? 0;
+  const declaredHeight = declaredSharer?.height ?? 0;
+  const declaredAspect = declaredWidth > 0 && declaredHeight > 0 ? declaredWidth / declaredHeight : 0;
+  /** 画框实际用的比例：轨道尺寸（真实解码尺寸）优先，其次声明值；0 = 都未知（CSS 回落 16:9） */
+  const stageAspect = shareRatio > 0 ? shareRatio : declaredAspect;
+
+  // 原生系统画中画：进/出小窗由系统回调驱动（网页版 PiP 的 leavepictureinpicture 事件在
+  // WebView 里根本不会触发），据此维护 pipActive 以便舞台显示"画面正在小窗中播放"
+  useEffect(() => {
+    if (!isNative()) return;
+    return onPipChanged(({ inPip }) => setPipActive(inPip));
+  }, [setPipActive]);
+
   if (!share) return null;
 
   const sharerName = voice.participants.find((p) => p.userId === share.userId)?.username ?? '成员';
-  const supportsPip = typeof document !== 'undefined' && !!document.pictureInPictureEnabled;
+  // 网页版 PiP 在 Android WebView 里没有实现（pictureInPictureEnabled 恒为 false），
+  // 原生宿主内改用系统画中画（MainActivity.enterPip）
+  const supportsPip = (typeof document !== 'undefined' && !!document.pictureInPictureEnabled) || isNative();
 
-  /** 小窗模式：经典视频 PiP（原生小窗无地址栏，自带返回到标签页按钮） */
+  /** 小窗模式：网页端走经典视频 PiP；原生宿主走系统画中画（无地址栏，自带返回） */
   const enterPip = async () => {
+    if (isNative()) {
+      const result = await enterNativePip().catch(() => ({ entered: false }));
+      if (result.entered) setPipActive(true);
+      return;
+    }
     const v = videoRef.current;
     if (!v) return;
     try {
@@ -84,20 +141,18 @@ export default function VoiceShareStage() {
       ref={stageRef}
       className={`${styles.stage} ${isFullscreen ? styles.fullscreen : ''}`}
       onDoubleClick={toggleFullscreen}
+      // 画框比例：轨道尺寸 → 共享者声明的采集尺寸 → CSS 回落 16:9（stageAspect=0 时不写变量）
+      style={stageAspect > 0 ? ({ '--share-aspect': String(stageAspect) } as React.CSSProperties) : undefined}
     >
       {share.stream ? (
         <>
           {/* 解码源：缩小到 1px 藏在角落，保持解码活跃；画面实际由上方 canvas 绘制。
               隐藏预览/小窗模式 = 上方盖一层不透明占位卡（元素不卸载，恢复显示零延迟） */}
           <video ref={videoRef} className={styles.sourceVideo} autoPlay playsInline muted />
-          <div ref={canvasSlotRef} className={styles.canvasSlot}>
-            {pipActive && (
-              <div className={styles.pipPlayingNote}>
-                <MonitorUp size={26} />
-                画面正在小窗中播放
-              </div>
-            )}
-          </div>
+          {/* 原生小窗激活时槽位铺满视口（`.pipCanvasSlot`）：小窗里显示的就是这一页，
+              只有把画面铺满、其余 UI 压到下面，小窗里才"只有共享画面"。
+              注意**不要**在小窗层里放任何提示文案 —— 它会盖在画面上出现在小窗里。 */}
+          <div ref={canvasSlotRef} className={pipActive ? styles.pipCanvasSlot : styles.canvasSlot} />
           {!previewLive && !pipActive && (
             <div className={styles.previewHidden}>
               <MonitorUp size={30} />

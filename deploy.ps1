@@ -65,10 +65,11 @@ Write-Host "  构建完成 ✓" -ForegroundColor Green
 $APK_LOCAL = ""
 $APK_NAME = ""
 $APK_SHA = ""
-$gradle = Join-Path $PSScriptRoot "client\android\app\build.gradle"
-$apkOut = Join-Path $PSScriptRoot "client\android\app\build\outputs\apk\release\app-release.apk"
-if (Test-Path $gradle) {
-    $versionName = (Select-String -Path $gradle -Pattern 'versionName\s+"([^"]+)"').Matches.Groups[1].Value
+$versionFile = Join-Path $PSScriptRoot "android\version.properties"
+$apkOut = Join-Path $PSScriptRoot "android\app\build\outputs\apk\release\app-release.apk"
+if (Test-Path $versionFile) {
+    # 版本号单一来源：android/version.properties（不再从 build.gradle 里抠字符串）
+    $versionName = (Select-String -Path $versionFile -Pattern '^versionName\s*=\s*(.+)$').Matches.Groups[1].Value.Trim()
     if ((Test-Path $apkOut) -and $versionName) {
         $APK_LOCAL = $apkOut
         $APK_NAME = "k-app-$versionName-release.apk"

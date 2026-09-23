@@ -2,8 +2,7 @@
  * ============================================================
  * 全屏图片双指缩放 Hook（useImagePinchZoom）
  * ============================================================
- * 帖子全屏看图（PostMedia zoom overlay）/聊天图片全屏
- * （ChatZoomOverlay）/私密文件夹全屏（PrivateFolder）共用：
+ * 帖子全屏看图（PostMedia zoom overlay）/聊天图片全屏（ChatZoomOverlay）共用：
  * - 双指捏合缩放（1x–4x，围绕捏合中点跟手缩放）
  * - 放大后单指拖动平移（边缘钳制，不露黑边）
  * - 缩回 1x 自动复位 transform，横向翻页交还轮播

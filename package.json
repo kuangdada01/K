@@ -19,6 +19,11 @@
     "e2e": "playwright test",
     "install:all": "npm install",
     "test:client": "npm run test --prefix client",
+    "android:debug": "node android/scripts/build-apk.mjs debug",
+    "android:apk": "node android/scripts/build-apk.mjs release",
+    "android:test": "node android/scripts/run-kotlin-tests.mjs",
+    "android:preflight": "node android/scripts/preflight.mjs",
+    "android:device-check": "node android/scripts/preflight.mjs --device",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepare": "husky || exit 0"

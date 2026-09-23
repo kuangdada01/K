@@ -14,10 +14,8 @@ const mocks = vi.hoisted(() => ({
   deleteTempVideo: vi.fn(),
 }));
 
-vi.mock('@capacitor/core', () => ({
-  Capacitor: {
-    isNativePlatform: () => mocks.isNative,
-  },
+vi.mock('../lib/native', () => ({
+  isNative: () => mocks.isNative,
 }));
 
 vi.mock('../api/posts', () => ({

@@ -13,13 +13,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Capacitor } from '@capacitor/core';
+import { isNative } from '../../lib/native';
 import { getServerUrl } from '../../config';
 import { fetchVoiceTicket } from '../../api/voice';
 import { WsSignaling, type WsSignalingOptions } from './wsSignaling';
 
-vi.mock('@capacitor/core', () => ({
-  Capacitor: { isNativePlatform: vi.fn(() => false) },
+vi.mock('../../lib/native', () => ({
+  isNative: vi.fn(() => false),
 }));
 
 vi.mock('../../config', () => ({
@@ -309,12 +309,12 @@ describe('WsSignaling', () => {
     vi.mocked(fetchVoiceTicket).mockResolvedValue({ ticket: 'tk' });
 
     // 网页端（location 由 jsdom 提供，http://localhost:3000）
-    vi.mocked(Capacitor.isNativePlatform).mockReturnValue(false);
+    vi.mocked(isNative).mockReturnValue(false);
     await openSettled();
     expect(FakeWebSocket.instances[0]!.url).toBe('ws://localhost:3000/api/voice/ws?ticket=tk');
 
     // 原生端：http 服务器 → ws://
-    vi.mocked(Capacitor.isNativePlatform).mockReturnValue(true);
+    vi.mocked(isNative).mockReturnValue(true);
     vi.mocked(getServerUrl).mockReturnValue('http://192.168.1.5:3000');
     await openSettled(new WsSignaling(opts));
     expect(FakeWebSocket.instances[1]!.url).toBe('ws://192.168.1.5:3000/api/voice/ws?ticket=tk');

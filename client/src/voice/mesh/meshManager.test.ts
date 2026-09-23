@@ -137,7 +137,7 @@ function participant(userId: number): VoiceParticipant {
 
 describe('MeshManager', () => {
   let calls: string[];
-  let attachShareTracks: ReturnType<typeof vi.fn<(entry: PeerEntry) => void>>;
+  let attachShareTracks: ReturnType<typeof vi.fn<(entry: PeerEntry) => boolean>>;
   let opts: MeshManagerOptions;
   let m: MeshManager;
   let sendTrack: MediaStreamTrack | null;
@@ -147,7 +147,7 @@ describe('MeshManager', () => {
     vi.stubGlobal('RTCPeerConnection', FakePC);
     vi.stubGlobal('MediaStream', FakeMediaStream);
     calls = [];
-    attachShareTracks = vi.fn<(entry: PeerEntry) => void>();
+    attachShareTracks = vi.fn<(entry: PeerEntry) => boolean>().mockReturnValue(false);
     sendTrack = { enabled: true } as MediaStreamTrack;
     opts = {
       getSelf: () => participant(SELF_ID),

@@ -36,6 +36,54 @@ export function detectSpeakLang(text: string): 'zh' | 'en' {
   return 'zh';
 }
 
+/**
+ * 语音合成对象的形态（标准 SpeechSynthesis 接口）。
+ * 字段声明为可选：运行时由 getTtsSynth 逐个校验，缺任一项就判为不可用。
+ */
+interface TtsSynth {
+  speak: (utterance: SpeechSynthesisUtterance) => void;
+  cancel: () => void;
+  getVoices?: () => SpeechSynthesisVoice[];
+  addEventListener?: (type: string, listener: EventListener) => void;
+  removeEventListener?: (type: string, listener: EventListener) => void;
+}
+
+/**
+ * 取可用的语音合成对象；**接口不完整就返回 null（判为不支持）**。
+ *
+ * ★ 判据是「要调的方法确实可调用」，而不是「属性存在」—— 但**不再做逐层降级**。
+ *
+ * 背景（2026-09-19 线上事故）：微信 iOS 内置 WebView 里 `window.speechSynthesis`
+ * **存在但是残缺对象** —— 没有 `addEventListener` / `removeEventListener`
+ * （SpeechSynthesis 本应继承 EventTarget），部分版本连 `getVoices` 都没有。
+ * 旧实现用 `'speechSynthesis' in window` 判支持 → true → 挂载后第一个 effect 调
+ * `addEventListener('voiceschanged')` → TypeError → 被错误边界接住 →
+ * **整个语音页变成「页面出错了」**。
+ *
+ * 2026-09-19 决策：这类"缺胳膊少腿"的内核**不再走兼容分支**（早先试过退回
+ * `onvoiceschanged` 属性赋值），而是直接判为不支持 → 朗读开关置灰。
+ * 宁可明确少一个功能，也不要一个会随机崩掉整页的功能。
+ */
+function getTtsSynth(): TtsSynth | null {
+  if (typeof window === 'undefined') return null;
+  const synth = (window as unknown as { speechSynthesis?: Partial<TtsSynth> }).speechSynthesis;
+  if (!synth) return null;
+  const required = ['speak', 'cancel', 'getVoices', 'addEventListener', 'removeEventListener'] as const;
+  for (const key of required) {
+    if (typeof synth[key] !== 'function') return null;
+  }
+  return synth as TtsSynth;
+}
+
+/**
+ * 朗读总能力：合成对象可用 **且** 能构造 utterance。
+ * `SpeechSynthesisUtterance` 同样可能缺失（残缺内核），而它是在 speak 时才被 new 的
+ * —— 放在这里一起判，才能把"不支持的设备"挡在开关置灰那一步，而不是点击后才炸。
+ */
+function detectTtsSupported(): boolean {
+  return getTtsSynth() !== null && typeof SpeechSynthesisUtterance === 'function';
+}
+
 export interface UseChatTTSOptions {
   /** 最新一条实时消息（服务端广播；开关开启时自动朗读非自己发的） */
   liveMessage: VoiceChatMessage | null;
@@ -46,8 +94,8 @@ export interface UseChatTTSOptions {
 }
 
 export function useChatTTS({ liveMessage, participants, inRoom }: UseChatTTSOptions) {
-  /** 浏览器是否支持语音合成（不支持时开关置灰） */
-  const ttsSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
+  /** 浏览器是否支持语音合成（不支持时开关置灰）—— 功能性检测，见 detectTtsSupported */
+  const ttsSupported = detectTtsSupported();
   /** 朗读开关（默认关；偏好持久化） */
   const [ttsEnabled, setTtsEnabled] = useState(() => localStorage.getItem(CHAT_TTS_KEY) === '1');
   /** 正在朗读的消息 id（用于"再点停止"与高亮复位） */
@@ -72,53 +120,53 @@ export function useChatTTS({ liveMessage, participants, inRoom }: UseChatTTSOpti
 
   /** 停止朗读（打断当前 + 清状态；令牌置空使旧 utterance 的迟到回调失效） */
   const stopTTS = useCallback(() => {
-    if (!ttsSupported) return;
     // 取消尚未触发的延迟播放（否则退出房间后仍可能出声一次）
     if (speakDelayRef.current !== null) {
       clearTimeout(speakDelayRef.current);
       speakDelayRef.current = null;
     }
-    window.speechSynthesis.cancel();
+    // 每次现取：能力探测不缓存，取不到就跳过（不支持朗读的设备上这里是 no-op，
+    // 但上面的定时器清理必须照做）
+    getTtsSynth()?.cancel();
     speakingRef.current = false;
     currentUtterRef.current = null;
     setSpeakingMsgId(null);
-  }, [ttsSupported]);
+  }, []);
 
   /** 朗读一条消息：新消息打断正在播的旧消息（最新优先），播完自动复位 */
-  const speakMessage = useCallback(
-    (id: number, text: string, lang: 'zh' | 'en') => {
-      if (!ttsSupported) return;
-      const synth = window.speechSynthesis;
-      // 先打断正在播的（若正在播同一条则是"再点停止"语义，由调用方处理）
-      synth.cancel();
-      speakingRef.current = true; // P2 修复：立即置位（原实现从未置 true，防重入守卫失效）
-      setSpeakingMsgId(id);
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = lang === 'zh' ? 'zh-CN' : 'en-US';
-      const voice = lang === 'zh' ? voicesRef.current.zh : voicesRef.current.en;
-      if (voice) utter.voice = voice;
-      const finish = () => {
-        // P2 修复：令牌守卫——只有仍是最新一条时才复位（cancel 会触发旧 utterance
-        // 的 onend，若不加守卫会把新消息的高亮/状态清掉）
-        if (currentUtterRef.current !== utter) return;
-        currentUtterRef.current = null;
-        speakingRef.current = false;
-        setSpeakingMsgId(null);
-      };
-      utter.onend = finish;
-      utter.onerror = finish;
-      currentUtterRef.current = utter;
-      // Chrome 在 cancel 后立即 speak 可能静默失败（crbug 已知问题），
-      // 延迟到下一个宏任务再播，避开 cancel 的内部异步清理窗口
-      if (speakDelayRef.current !== null) clearTimeout(speakDelayRef.current);
-      speakDelayRef.current = setTimeout(() => {
-        speakDelayRef.current = null;
-        // 期间被更新的消息打断（令牌已换）则不播这条
-        if (currentUtterRef.current === utter) synth.speak(utter);
-      }, 0);
-    },
-    [ttsSupported]
-  );
+  const speakMessage = useCallback((id: number, text: string, lang: 'zh' | 'en') => {
+    const synth = getTtsSynth();
+    // 缺少合成对象或构造器时静默返回，而不是抛错（本函数会被事件处理器与
+    // 自动朗读 effect 调用，抛出即整页崩）
+    if (!synth || typeof SpeechSynthesisUtterance !== 'function') return;
+    // 先打断正在播的（若正在播同一条则是"再点停止"语义，由调用方处理）
+    synth.cancel();
+    speakingRef.current = true; // P2 修复：立即置位（原实现从未置 true，防重入守卫失效）
+    setSpeakingMsgId(id);
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = lang === 'zh' ? 'zh-CN' : 'en-US';
+    const voice = lang === 'zh' ? voicesRef.current.zh : voicesRef.current.en;
+    if (voice) utter.voice = voice;
+    const finish = () => {
+      // P2 修复：令牌守卫——只有仍是最新一条时才复位（cancel 会触发旧 utterance
+      // 的 onend，若不加守卫会把新消息的高亮/状态清掉）
+      if (currentUtterRef.current !== utter) return;
+      currentUtterRef.current = null;
+      speakingRef.current = false;
+      setSpeakingMsgId(null);
+    };
+    utter.onend = finish;
+    utter.onerror = finish;
+    currentUtterRef.current = utter;
+    // Chrome 在 cancel 后立即 speak 可能静默失败（crbug 已知问题），
+    // 延迟到下一个宏任务再播，避开 cancel 的内部异步清理窗口
+    if (speakDelayRef.current !== null) clearTimeout(speakDelayRef.current);
+    speakDelayRef.current = setTimeout(() => {
+      speakDelayRef.current = null;
+      // 期间被更新的消息打断（令牌已换）则不播这条
+      if (currentUtterRef.current === utter) synth.speak(utter);
+    }, 0);
+  }, []);
 
   /** 点击消息手动朗读（自己的消息也可读）；再点正在朗读的同一消息 → 停止 */
   const handleSpeakMessage = useCallback(
@@ -152,20 +200,30 @@ export function useChatTTS({ liveMessage, participants, inRoom }: UseChatTTSOpti
     });
   }, [liveMessage, stopTTS]);
 
-  // 语音包列表异步加载（Chrome 首次 getVoices 可能为空，监听 voiceschanged）
+  // 语音包列表异步加载（Chrome 首次 getVoices 可能为空，靠 voiceschanged 刷新）
+  //
+  // ★ 这个 effect 是 2026-09-19 语音页整页崩溃的现场：残缺内核没有 addEventListener，
+  //   直接调就 TypeError，而 effect 里抛出的异常会被错误边界接住 → 整页变兜底 UI。
+  //   现在 getTtsSynth 已经把"接口不完整"的内核整体判为不支持（开关置灰），
+  //   所以走到这里的对象一定是标准完整的 —— 不再需要任何逐层回退分支。
   useEffect(() => {
-    if (!ttsSupported) return;
+    const synth = getTtsSynth();
+    if (!synth) return;
     const loadVoices = () => {
-      const voices = window.speechSynthesis.getVoices();
-      voicesRef.current = {
-        zh: voices.find((v) => v.lang.toLowerCase().startsWith('zh')) ?? null,
-        en: voices.find((v) => v.lang.toLowerCase().startsWith('en')) ?? null,
-      };
+      const voices = synth.getVoices?.() ?? [];
+      // voice.lang 仍可能缺失（音色对象残缺属于数据问题，不是接口问题）
+      const pick = (prefix: string) =>
+        voices.find((v) =>
+          String(v?.lang ?? '')
+            .toLowerCase()
+            .startsWith(prefix)
+        ) ?? null;
+      voicesRef.current = { zh: pick('zh'), en: pick('en') };
     };
     loadVoices();
-    window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
-    return () => window.speechSynthesis.removeEventListener('voiceschanged', loadVoices);
-  }, [ttsSupported]);
+    synth.addEventListener?.('voiceschanged', loadVoices);
+    return () => synth.removeEventListener?.('voiceschanged', loadVoices);
+  }, []);
 
   // 自动朗读：开关开启 + 有新实时消息 + 非自己发的 → 播报「用户名说内容」
   useEffect(() => {
@@ -188,13 +246,12 @@ export function useChatTTS({ liveMessage, participants, inRoom }: UseChatTTSOpti
 
   // 页面切到后台：停止朗读（避免标签页不可见时还在出声）
   useEffect(() => {
-    if (!ttsSupported) return;
     const onVisibility = () => {
       if (document.hidden) queueMicrotask(stopTTS);
     };
     document.addEventListener('visibilitychange', onVisibility);
     return () => document.removeEventListener('visibilitychange', onVisibility);
-  }, [ttsSupported, stopTTS]);
+  }, [stopTTS]);
 
   return {
     ttsSupported,

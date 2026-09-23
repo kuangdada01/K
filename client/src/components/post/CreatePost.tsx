@@ -27,7 +27,7 @@
 import { useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { Video } from 'lucide-react';
-import { Capacitor } from '@capacitor/core';
+import { isNative } from '../../lib/native';
 import { useQueryClient } from '@tanstack/react-query';
 import { getApiErrorMessage } from '../../api/http';
 import VideoCoverEditor from './VideoCoverEditor';
@@ -51,7 +51,7 @@ import {
   createVideoPostFromTempUrl,
   getTempVideoStatus,
 } from '../../api/posts';
-import { IMAGE_PREVIEW_FALLBACK } from '../../utils';
+import { IMAGE_PREVIEW_FALLBACK, resolveMediaUrl } from '../../utils';
 import composer from './PostComposer.module.css';
 
 export default function CreatePost() {
@@ -126,8 +126,12 @@ export default function CreatePost() {
   // ⚠️ temp URL 带 ?v=previewRetry 版本参数：转码完成是"同 URL 原地替换内容"，
   // 浏览器可能缓存转码前（4K/HEVC 不可播）的响应/媒体缓存，重载同 URL 会
   // 反复拿到旧内容。版本参数随每次重试递增，强制重新拉取转码后的新文件。
+  // 服务端返回的是相对路径（/uploads/temp/xxx.mp4）。这里必须用 resolveMediaUrl 解析：
+  // Web 端解析为同源相对地址，**原生宿主解析为服务器绝对地址** ——
+  // 早期用 window.location.origin 拼接，在 App 里会指向本地资源域
+  // （https://appassets.androidplatform.net），临时视频预览永远拉不到（表现为卡在"转码中"）。
   const effectiveVideoSrc =
-    tempActive && tempVideoUrl ? `${window.location.origin}${tempVideoUrl}?v=${previewRetry}` : videoPreview;
+    tempActive && tempVideoUrl ? `${resolveMediaUrl(tempVideoUrl)}?v=${previewRetry}` : videoPreview;
   const handleVideoPreviewError = () => {
     // 明确报错：解除看门狗（避免超时重复判定）
     clearDecodeWatchdog();
@@ -264,11 +268,11 @@ export default function CreatePost() {
     try {
       let newPost: import('../../types').Post | null = null;
       if (videoFile) {
-        const isNativeLarge = Capacitor.isNativePlatform() && videoFile.size > 20 * 1024 * 1024;
+        const isNativeLarge = isNative() && videoFile.size > 20 * 1024 * 1024;
         // 浏览器环境：选择视频时已后台上传临时文件（预览兜底通道）——
         // 等它落地后直接以 video_url 发布（服务端移动文件进正式目录，不二次上传）。
         // 上传失败/未触发时走原有整文件上传路径，行为不变。
-        const pendingUpload = !Capacitor.isNativePlatform() ? waitForTempVideoUpload() : null;
+        const pendingUpload = !isNative() ? waitForTempVideoUpload() : null;
         const landResult = pendingUpload ? await pendingUpload.catch(() => null) : null;
         const tempUrl = landResult?.url ?? tempVideoUrl;
         if (tempUrl) {

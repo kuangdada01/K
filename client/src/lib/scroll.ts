@@ -7,7 +7,7 @@
  * 消除"组件反向依赖页面"的分层问题。
  */
 
-import { Capacitor } from '@capacitor/core';
+import { isNative } from './native';
 
 /** sessionStorage key for home page scroll position */
 const SCROLL_CACHE_KEY = 'home_scrollY';
@@ -15,12 +15,12 @@ const SCROLL_CACHE_KEY = 'home_scrollY';
 /**
  * 获取首页实际的滚动元素。
  * 桌面端：body 是滚动容器，返回 window。
- * 移动端（含 Capacitor 和移动端 Web）：body 已锁定不滚动，
+ * 移动端（含原生 App 和移动端 Web）：body 已锁定不滚动，
  * .main-content 承担滚动，返回该 DOM 元素。
  */
 export function getScrollTarget(): Window | HTMLElement {
-  // 检测是否为移动端：Capacitor 原生 App 或屏幕宽度 ≤ 768px
-  const isMobile = Capacitor.isNativePlatform() || window.innerWidth <= 768;
+  // 检测是否为移动端：原生宿主内 或 屏幕宽度 ≤ 768px
+  const isMobile = isNative() || window.innerWidth <= 768;
   if (isMobile) {
     const el = document.querySelector('.main-content') as HTMLElement | null;
     if (el) return el;

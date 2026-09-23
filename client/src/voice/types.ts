@@ -32,7 +32,21 @@ export type VoiceServerMessage =
   | { type: 'mute-changed'; userId: number; muted: boolean }
   | { type: 'peer-quality'; userId: number; level: VoiceQualityLevel }
   | { type: 'signal'; from: number; data: VoiceSignalPayload }
-  | { type: 'share-changed'; userId: number; active: boolean; audio: boolean }
+  /**
+   * 共享状态广播。`width`/`height` = 共享方**声明的采集像素尺寸**（可选，只有 active=true 才带）：
+   * 与 `VoiceParticipant.width/height` 是同一份字段与语义（**唯一事实来源**写在
+   * `shared/src/types.ts` 的 `VoiceParticipant.width` —— 采集分辨率，不是编码后的发送分辨率），
+   * 观看端据此在**首帧到达之前**把画面框按正确比例摆好；缺省即"未声明"，
+   * 观看端回落到接收探针（老服务端/老客户端的既有行为）。
+   */
+  | {
+      type: 'share-changed';
+      userId: number;
+      active: boolean;
+      audio: boolean;
+      width?: number;
+      height?: number;
+    }
   | { type: 'share-force-stop' }
   | { type: 'chat'; message: VoiceChatMessage }
   | { type: 'chat-cleared' }

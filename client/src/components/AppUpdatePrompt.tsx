@@ -6,8 +6,8 @@
  * 有更新则弹出提示，用户可选择「立即更新」或「以后再说」。
  *
  * 功能:
- * - 仅原生平台生效（Capacitor.isNativePlatform()），Web 端静默
- * - 通过 App.getInfo() 读取当前安装版本，与 /api/app/version 对比
+ * - 仅原生宿主内生效（isNative()），Web 端静默
+ * - 通过桥 getAppInfo() 读取当前安装版本，与 /api/app/version 对比
  * - 版本号语义化比较（0.2.0 > 0.1.9）
  * - 点「立即更新」用系统浏览器打开 APK 下载链接
  * - 点「以后再说」本地记住跳过的版本号，同一版本只提示一次
@@ -15,11 +15,11 @@
  * ============================================================
  */
 
-import { useEffect, useState, useCallback } from 'react';
-import { Capacitor } from '@capacitor/core';
-import { App as CapApp } from '@capacitor/app';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { getAppInfo, isNative, onDownload, openExternal, updateApk } from '../lib/native';
 import { Download, X } from 'lucide-react';
 import api from '../api/http';
+import { showToast } from './ui/Toast';
 import styles from './AppUpdatePrompt.module.css';
 
 const SKIP_VERSION_KEY = 'k_skip_update_version';
@@ -47,6 +47,9 @@ interface UpdateInfo {
 export default function AppUpdatePrompt() {
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [closing, setClosing] = useState(false);
+  /** 已交给系统 DownloadManager 下载中（下载完原生侧自动拉起安装） */
+  const [downloading, setDownloading] = useState(false);
+  const downloadIdRef = useRef<number | null>(null);
 
   const handleClose = useCallback(() => {
     if (closing) return;
@@ -66,29 +69,62 @@ export default function AppUpdatePrompt() {
     handleClose();
   }, [update, handleClose]);
 
-  /** 立即更新：系统浏览器打开 APK 下载链接 */
+  /**
+   * 立即更新：
+   * - 原生宿主：交给系统 **DownloadManager** 下载（后台/杀进程也继续、自带通知栏进度），
+   *   下载完成由原生自动拉起安装（未授权"安装未知应用"时会引导到系统设置）；
+   * - 桥不可用/入队失败：回退为系统浏览器打开 APK 链接（原来唯一的行为）。
+   */
   const handleUpdate = useCallback(() => {
-    if (!update?.apkUrl) return;
-    // Capacitor Android WebView 中 _system 由原生接管，跳转系统浏览器下载
-    window.open(update.apkUrl, '_system');
-    handleClose();
-  }, [update, handleClose]);
+    if (!update?.apkUrl || downloading) return;
+    if (!isNative()) {
+      openExternal(update.apkUrl);
+      handleClose();
+      return;
+    }
+    updateApk(update.apkUrl, `K-${update.version ?? 'latest'}.apk`)
+      .then((res) => {
+        downloadIdRef.current = res.id;
+        setDownloading(true);
+      })
+      .catch(() => {
+        showToast('下载启动失败，已改用浏览器下载');
+        openExternal(update.apkUrl!);
+        handleClose();
+      });
+  }, [update, downloading, handleClose]);
+
+  // 下载完成/失败事件（原生 DownloadManager 广播转发）
+  useEffect(() => {
+    const off = onDownload((event) => {
+      if (downloadIdRef.current !== event.id) return;
+      if (event.status === 'completed') {
+        setDownloading(false);
+        showToast('下载完成，正在打开安装程序');
+        handleClose();
+      } else if (event.status === 'failed') {
+        setDownloading(false);
+        showToast('下载失败，可在浏览器里重试');
+      }
+    });
+    return off;
+  }, [handleClose]);
 
   useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return;
+    if (!isNative()) return;
 
     let cancelled = false;
 
     (async () => {
       try {
         const [info, res] = await Promise.all([
-          CapApp.getInfo(), // 当前安装版本（Android versionName）
+          getAppInfo(), // 当前安装版本（原生侧 versionName）
           api.get('/app/version'),
         ]);
         if (cancelled) return;
 
         const server = res.data as UpdateInfo;
-        const current = info.version ?? '0.0.0';
+        const current = info?.version ?? '0.0.0';
 
         // 服务端未配置版本信息 → 无更新
         if (!server.version || !server.apkUrl) return;
@@ -131,14 +167,15 @@ export default function AppUpdatePrompt() {
         )}
 
         <div className={styles.actions}>
-          <button className={styles.primary} onClick={handleUpdate}>
+          <button className={styles.primary} onClick={handleUpdate} disabled={downloading}>
             <Download size={16} />
-            立即更新
+            {downloading ? '下载中…' : '立即更新'}
           </button>
-          <button className={styles.secondary} onClick={handleLater}>
-            以后再说
+          <button className={styles.secondary} onClick={handleLater} disabled={downloading}>
+            {downloading ? '后台下载' : '以后再说'}
           </button>
         </div>
+        {downloading && <div className={styles.notes}>已交给系统下载，完成后会自动打开安装程序。</div>}
       </div>
     </div>
   );

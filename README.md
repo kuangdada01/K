@@ -18,7 +18,9 @@
 - **Axios** — HTTP 请求（拦截器统一错误处理）
 - **CSS Modules + 设计令牌** — 组件级样式隔离，亮/暗双主题
 - **Lucide React** — 图标库
-- **Capacitor 8** — Android 原生打包（Gradle 9.1 + AGP 8.13，支持 Java 25 构建）
+- **原生 Android 宿主（`android/`）** — Kotlin 2.4.20 + Gradle 9.1 + AGP 8.13，**不含 Capacitor/Cordova**：
+  UI 仍是本目录的 React 移动端页面（`WebViewAssetLoader` 把 `assets/web/` 托管在 `https://appassets.androidplatform.net`），
+  原生能力经自研桥 `window.KNative` 与页面互通（契约见 `docs/android-native-architecture.md`）
 - **Vitest + Testing Library** — 单元测试（`43 文件 404 用例`：语音域各子模块、hooks 乐观更新/回滚、SSE/WS 一次性票据连接、退避重连、单例分发、评论树、错误边界、聊天行/图片清洗纯函数、事件总线、共享收件箱 store（轮询合并/未读合并）、幂等读重试策略、测试基建（原型打桩还原）等）
 
 ### 后端（server）
@@ -87,7 +89,6 @@ k/
 │   │   ├── voice/               # 语音域（见「语音域架构与维护」）：VoiceSession 门面 + share/signaling/audio/mesh 子模块 + recorder/rnnoise
 │   │   ├── music/               # MusicEngine（audio 元素生命周期/播放列表/ended 自切歌）
 │   │   └── styles/              # global.css + tokens（其余已模块化）
-│   ├── android/                 # Capacitor Android 工程
 │   ├── scripts/                 # 一次性验证脚本（b5-verify）
 │   └── package.json
 ├── server/                      # 后端
@@ -109,6 +110,12 @@ k/
 │   ├── uploads/                 # 用户上传文件（images/avatars/temp，不入库）
 │   └── package.json
 ├── e2e/                         # Playwright 测试（smoke + b1b2 回归 + scroll + write-path + p0-regressions）
+├── android/                     # 安卓原生工程（Kotlin + Jetpack Compose；见 docs/android-native-rewrite-plan.md）
+│   ├── native/src/main/          # 原生 App（:native，applicationId top.kuangdada.k.nativeapp）
+│   ├── core/designsystem/        # 设计令牌 + 组件层（:core:designsystem）
+│   ├── core/data/                # 网络 / 鉴权 / DTO / 仓库（:core:data）
+│   ├── scripts/build-apk.mjs     # 一键打包（debug / release）
+│   └── version.properties        # versionCode / versionName 单一来源
 ├── .github/workflows/ci.yml     # CI
 ├── Dockerfile
 ├── OPTIMIZATION_PLAN.md         # 优化与加固的执行记录（问题清单 → 改动 → 逐项验证数据；含撤回/不做的决定）
@@ -286,18 +293,48 @@ cd server && npm start
 ### 6. 构建 Android APK
 
 ```bash
-npm run build                          # 构建 Web 产物（APK 内嵌的就是这份 dist）
-cd client && npx cap sync android      # 同步 Web 资源与插件到 Android 工程
-cd android && ./gradlew.bat assembleRelease   # Windows；macOS/Linux 用 ./gradlew
+npm run build            # 构建 Web 产物（APK 内嵌的就是这份 dist）
+npm run android:test     # Kotlin 单测（44 例，纯 JVM，不需要真机/模拟器）
+npm run android:apk      # 同步 Web 资源 → gradlew assembleRelease（自动定位 JDK 21）
+npm run android:verify   # 解包发布 APK 自检（dist 一致 / 引用完整 / 桥方法名在 / Manifest 齐全）
+npm run android:preflight    # 真机验收前置检查：本地配置 + 线上 CORS/版本号/APK 是否就绪（不需要手机）
+npm run android:device-check # 连上手机后跑可脚本化的那半验收（安装/启动/日志/首帧/崩溃/截图 → 出报告）
 ```
 
-- 产物：`client/android/app/build/outputs/apk/release/app-release.apk`
-- 环境：Android SDK（`client/android/local.properties` 的 `sdk.dir`，不入库）+ JDK。Gradle 9.1 起支持 Java 25，Android Studio 自带 JBR 25 可直接构建（旧 JDK 21 亦可）
-- 签名：`client/android/keystore.properties`（storePassword/keyPassword，不入库）+ `app/k-release.keystore`
-- 版本：改 `client/android/app/build.gradle` 的 `versionCode`/`versionName`，并同步 `.env` 的 `APP_VERSION`/`APP_APK_URL`/`APP_UPDATE_NOTES`（App 内更新提示以 `/api/app/version` 返回为准，服务器版本须高于已安装版本才会弹窗）
+**原生能力一览**（**原生 App 已完全独立，不再内嵌网页、不再有 WebView 与桥层** ——
+M4 第 19 项移除了旧的 `:app` 宿主模块与 `assets/web`。方案、决策与逐里程碑验收见
+`docs/android-native-rewrite-plan.md`；被移除的旧架构记录见 `docs/android-native-architecture.md`）：
+
+- 界面：Jetpack Compose + Material3，**全部原生页面**（首页/搜索/图书/阅读器/消息/语音/主页/管理后台）
+- 设计系统：18 个语义色彩令牌 × 双主题（浅色青瓷黛绿 / 深色玄夜鎏金），跟随系统或手动三态切换并持久化
+- 看图：原生全屏查看器（捏合 1x–4x / 双击缩放 / 下拉关闭 / 翻页 / 保存到相册）
+- 文件：Photo Picker / 相机（FileProvider）、**选图原生压缩 + EXIF 校正**、下载与 APK 安装（DownloadManager）
+- 系统：系统分享面板、深链（站内链接 / 「分享到 K」）、通知点击跳回所在语音房
+- 语音房：WebRTC 网格音频（回声消除/降噪/增益走 WebRTC 内建链）、屏幕共享、全房间混音录制、
+  前台服务保活（`mediaPlayback|microphone|mediaProjection`）、成员网络质量指示
+- 隐私：生物识别解锁私密文件夹（最多 10 张，走 `/api/users/me/private-images`）
+- 观测：`ApplicationExitInfo` 退出原因、首帧耗时；debug 包可用 `NETTEST` 触发进程内网络诊断
+
+- 产物：`android/native/build/outputs/apk/release/native-release.apk`（脚本会打印体积与 sha256）
+- 只调试不打包发布：`npm run android:debug`（debug 包 `applicationIdSuffix .debug`，可与 release 并存安装）
+- Kotlin 单测：`npm run android:test`（`:core:data` + `:native` 两个模块；含接口契约、令牌映射、
+  深链解析、信令负载格式、混音结算、版本比较、私密文件夹上限等纯逻辑）。**不要用 `gradlew test`** ——
+  本工程路径含中文时 Gradle 的 `@argfile` 会被 java 启动器按 GBK 误读，测试类全部
+  `ClassNotFoundException`；`run-kotlin-tests.mjs` 让 Gradle 只编译+导出 classpath，由 Node 直接起 JUnit
+- 环境：Android SDK（`android/local.properties` 的 `sdk.dir`，不入库）+ **JDK 21**。
+  脚本按 `JAVA_HOME` → `C:/Users/25359/.jdks/jbr-21.0.11` → Android Studio JBR 顺序自动定位；
+  Android Studio 自带的是 JBR 25，部分 Gradle/AGP 组合不支持，故不优先使用
+- 签名：`android/keystore.properties`（口令，不入库）+ **`android/k-release.keystore`**
+  （**丢失即无法原地更新 App，务必备份**）。keystore 原先放在 `app/` 目录内，
+  M4 移除该模块时**已迁到 `android/` 根下** —— 不迁的话删目录会永久丢失发布私钥
+- 版本：只改 `android/version.properties` 的 `versionCode`/`versionName`，
+  并同步 `.env` 的 `APP_VERSION`/`APP_APK_URL`/`APP_UPDATE_NOTES`
+  （App 内更新提示以 `/api/app/version` 返回为准，服务器版本须高于已安装版本才会弹窗）
 - 发布：`deploy.ps1` 检测到新 APK 会自动上传到远端 `client/dist/apk/`（**sha256 核验**），并保留最近 5 个版本、清理更旧。
   本地会先算 APK 的 sha256 交给 `deploy-sftp.py`：**远端同名文件内容一致就直接打印 `[APK] SKIP`**，
   跳过那次多余的单独上传（省十几 MB）——APK 只在客户端发版时才变，而部署包里本来就带着它
+- **不再需要**为 App 配置 CORS 来源：旧 WebView 版要放行 `https://appassets.androidplatform.net`，
+  原生版的请求不带 Origin 头，服务器 `ALLOWED_ORIGINS` 与 App 能否联网无关
 
 ---
 

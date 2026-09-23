@@ -3,8 +3,11 @@
  * 个人主页头部 (ProfileHeader)
  * ============================================================
  * 头像/统计/简介 + 返回按钮 + 右上角头像二级菜单（主题/退出登录）
- * + 操作按钮（编辑资料/私密文件夹 或 关注/发信息）+ 资料编辑表单。
+ * + 操作按钮（编辑资料/分享主页 或 关注/发信息）+ 资料编辑表单。
  * 纯展示组件，行为回调由 Profile 提供。
+ *
+ * 「私密文件夹」已在 09-18 整体删除，位置换成「分享主页」——
+ * 与原生端主页的操作区保持一致（那边一直是 编辑资料 / 分享主页）。
  */
 
 import { RefObject, Dispatch, SetStateAction } from 'react';
@@ -31,7 +34,7 @@ interface ProfileHeaderProps {
   fileInputRef: RefObject<HTMLInputElement | null>;
   onAvatarUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
   onToggleEdit: () => void;
-  onOpenPrivateFolder: () => void;
+  onShareProfile: () => void;
   onFollow: () => void;
   onMessage: () => void;
   onSaveProfile: () => void;
@@ -57,7 +60,7 @@ export default function ProfileHeader({
   fileInputRef,
   onAvatarUpload,
   onToggleEdit,
-  onOpenPrivateFolder,
+  onShareProfile,
   onFollow,
   onMessage,
   onSaveProfile,
@@ -131,8 +134,8 @@ export default function ProfileHeader({
           <button className={styles.editBtn} onClick={onToggleEdit}>
             编辑资料
           </button>
-          <button className={styles.editBtn} onClick={onOpenPrivateFolder}>
-            私密文件夹
+          <button className={styles.editBtn} onClick={onShareProfile}>
+            分享主页
           </button>
         </div>
       ) : (

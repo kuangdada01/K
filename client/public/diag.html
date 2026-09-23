@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#eef2ee" />
+    <title>K 兼容性自检</title>
+    <!-- 样式可内联（CSP 的 style-src 放行 unsafe-inline）；
+         脚本**必须**外链 —— 站点 CSP 是 script-src 'self'，内联 script 会被直接拦掉。
+         同 public/theme-init.js 的处理方式。 -->
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #eef2ee;
+        --card: #ffffff;
+        --text: #1f2b26;
+        --muted: #55645d;
+        --line: #d2ddd2;
+        --ok: #2f5d50;
+        --bad: #a84a40;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0d0f14;
+          --card: #1e232d;
+          --text: #e8e6e1;
+          --muted: #a8abaf;
+          --line: #262b35;
+          --ok: #7fbf8f;
+          --bad: #e0586b;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 20px 16px 40px;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          15px/1.6 -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          'PingFang SC',
+          'Microsoft YaHei',
+          sans-serif;
+      }
+      h1 {
+        font-size: 19px;
+        margin: 0 0 6px;
+      }
+      .hint {
+        color: var(--muted);
+        font-size: 13px;
+        margin: 0 0 16px;
+      }
+      .ua {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-size: 12px;
+        color: var(--muted);
+        word-break: break-all;
+        margin-bottom: 16px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      td {
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+        font-size: 14px;
+        vertical-align: top;
+      }
+      tr:last-child td {
+        border-bottom: none;
+      }
+      td.mark {
+        width: 34px;
+        text-align: center;
+        font-weight: 700;
+        font-size: 15px;
+      }
+      .yes {
+        color: var(--ok);
+      }
+      .no {
+        color: var(--bad);
+      }
+      .detail {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 2px;
+        word-break: break-all;
+      }
+      h2 {
+        font-size: 14px;
+        margin: 22px 0 8px;
+        color: var(--muted);
+        font-weight: 500;
+      }
+      /* 结论卡：三档 —— 完全支持 / 语音受限 / 整站不支持 */
+      .verdict {
+        border-radius: 12px;
+        padding: 14px 16px;
+        margin-bottom: 16px;
+        border: 1px solid var(--line);
+        background: var(--card);
+      }
+      .verdict-title {
+        font-size: 15px;
+        font-weight: 600;
+        margin-bottom: 6px;
+      }
+      .verdict-desc {
+        font-size: 13px;
+        color: var(--muted);
+        line-height: 1.7;
+      }
+      .verdict-ok .verdict-title {
+        color: var(--ok);
+      }
+      .verdict-warn .verdict-title {
+        color: #ba7517;
+      }
+      .verdict-bad {
+        border-color: var(--bad);
+      }
+      .verdict-bad .verdict-title {
+        color: var(--bad);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>K 兼容性自检</h1>
+    <p class="hint">
+      在出问题的浏览器里打开这一页（例如 iOS 微信内），把结果截图发给开发者，就能直接定位是哪项能力缺失。
+    </p>
+    <div class="ua" id="ua">读取中…</div>
+    <div id="verdict"></div>
+    <div id="out"></div>
+    <script src="/diag.js"></script>
+  </body>
+</html>

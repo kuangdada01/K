@@ -10,7 +10,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ScreenShareController, type ScreenShareSink } from './screenShareController';
+import {
+  ScreenShareController,
+  captureSizeOf,
+  resolveCaptureSize,
+  type ScreenShareSink,
+} from './screenShareController';
 import type { VoiceParticipant } from '../../types';
 
 class FakeTrack {
@@ -49,11 +54,19 @@ class FakeMediaStream {
 const SELF_ID = 7;
 const OTHER_ID = 5;
 
-function makeSink(rec: string[]): ScreenShareSink {
+/** 采集尺寸声明的捕获点（`sendShareStart` 的第二个参数） */
+interface ShareStartCapture {
+  size?: { width: number; height: number } | null;
+}
+
+function makeSink(rec: string[], captured: ShareStartCapture = {}): ScreenShareSink {
   return {
     getSelfUserId: () => SELF_ID,
     onSelfSharingChanged: (s) => rec.push(`selfSharing:${s}`),
-    sendShareStart: (a) => rec.push(`shareStart:${a}`),
+    sendShareStart: (a, size) => {
+      captured.size = size;
+      rec.push(`shareStart:${a}`);
+    },
     sendShareStop: () => rec.push('shareStop'),
     emitParticipants: () => rec.push('participants'),
     getVideoSenders: () => [],
@@ -83,11 +96,13 @@ const participant = (userId: number, sharing = false): VoiceParticipant => ({
 describe('ScreenShareController', () => {
   let rec: string[];
   let sink: ScreenShareSink;
+  let captured: ShareStartCapture;
   let h: ScreenShareController;
 
   beforeEach(() => {
     rec = [];
-    sink = makeSink(rec);
+    captured = {};
+    sink = makeSink(rec, captured);
     h = new ScreenShareController(sink);
     vi.stubGlobal('MediaStream', FakeMediaStream);
   });
@@ -104,19 +119,25 @@ describe('ScreenShareController', () => {
     expect(h.shareStream).toBeNull();
   });
 
-  it('start：登记捕获流并挂到对端，回调时序与原实现一致', () => {
+  /**
+   * 开始共享的回调时序：**本地 UI 先到**（自己那格的徽标/预览不该等信令），
+   * **声明 + 挂轨后到** —— 它们要等采集尺寸真值（见 resolveCaptureSize 的注释：
+   * Chrome 在采集出帧前报的是请求盒）。顺序仍是"先声明、后挂轨"：
+   * 反过来的话对方可能先收到帧、比例还没到，那正是"首帧跳一下"。
+   */
+  it('start：登记捕获流并挂到对端，本地 UI 先到、声明+挂轨随后', async () => {
     const video = new FakeTrack('video');
     const audio = new FakeTrack('audio');
     const stream = new FakeMediaStream([video, audio]);
-    h.start(stream as unknown as MediaStream);
+    await h.start(stream as unknown as MediaStream);
 
     expect(rec).toEqual([
       'selfSharing:true',
       'participants',
-      'shareStart:true', // 携带系统声音
-      'attachAll',
       `changed:${SELF_ID}:true`,
-      'video:set', // 本地画面回显
+      'video:set', // 本地画面回显（不等信令）
+      'shareStart:true', // 携带系统声音；等采集尺寸真值后才上行
+      'attachAll',
     ]);
     expect(h.isSharing()).toBe(true);
     expect(h.withShareAudio).toBe(true);
@@ -125,24 +146,101 @@ describe('ScreenShareController', () => {
     expect(video.onended).not.toBeNull();
   });
 
-  it('start：无系统声音时 share-start 与音频包装流为空', () => {
+  it('start：无系统声音时 share-start 与音频包装流为空', async () => {
     const stream = new FakeMediaStream([new FakeTrack('video')]);
-    h.start(stream as unknown as MediaStream);
+    await h.start(stream as unknown as MediaStream);
     expect(rec).toContain('shareStart:false');
     expect(h.shareSendAudioStream).toBeNull();
     expect(h.withShareAudio).toBe(false);
   });
 
-  it('start：开启清晰文字模式时捕获轨道 contentHint=detail', () => {
+  /** 采集尺寸声明（方案 B）：`share-start` 要带上采集分辨率，观看端（含之后进房的人）
+   *  才能在**首帧到达之前**把画面框按正确比例摆好 —— 否则比例只能等接收探针量到帧尺寸，
+   *  观感就是"先填满 16:9、首帧那一刻收成 16:10 + 左右黑边"。 */
+  it('start：share-start 带上采集尺寸（来自轨道 getSettings）', async () => {
+    await h.start(new FakeMediaStream([new FakeTrack('video')]) as unknown as MediaStream);
+    expect(captured.size).toEqual({ width: 1920, height: 1080 });
+  });
+
+  /** 拿不到尺寸时带 null（= 未声明）：服务端不写字段、观看端回落接收探针，与老客户端同一条路径 */
+  it('captureSizeOf：缺字段/退化值一律按未声明返回 null', () => {
+    expect(captureSizeOf(null)).toBeNull();
+    expect(captureSizeOf(undefined)).toBeNull();
+    const fake = (settings: MediaTrackSettings) =>
+      ({ getSettings: () => settings }) as unknown as MediaStreamTrack;
+    expect(captureSizeOf(fake({}))).toBeNull();
+    expect(captureSizeOf(fake({ width: 0, height: 1080 }))).toBeNull();
+    expect(captureSizeOf(fake({ width: 1920, height: 0 }))).toBeNull();
+    expect(captureSizeOf(fake({ width: 1920, height: 1200 }))).toEqual({ width: 1920, height: 1200 });
+  });
+
+  /**
+   * **Chrome 的请求盒坑**（真机量到的行为）：拿到流时 `getSettings()` 报的是**请求的约束盒**
+   * （2134x1200/1.778），采集真的出帧后才变成真实尺寸（1920x1200/1.600）。
+   * 声明必须用真值 —— 否则观看端会拿 16:9 的框去套 16:10 的画面。
+   */
+  it('resolveCaptureSize：读数等于请求盒时等它变成真值', async () => {
+    let reads = 0;
+    const track = {
+      getSettings: () => (++reads <= 1 ? { width: 2134, height: 1200 } : { width: 1920, height: 1200 }),
+    } as unknown as MediaStreamTrack;
+    const size = await resolveCaptureSize(track, { width: 2134, height: 1200 }, 300);
+    expect(size).toEqual({ width: 1920, height: 1200 });
+  });
+
+  /** 读数与请求盒不同 ⇒ 已经是真值，**零等待**（Firefox/Safari 与"源尺寸≠请求盒"的多数情况） */
+  it('resolveCaptureSize：不等于请求盒时直接返回，不等待', async () => {
+    const track = { getSettings: () => ({ width: 2560, height: 1600 }) } as unknown as MediaStreamTrack;
+    const t0 = Date.now();
+    expect(await resolveCaptureSize(track, { width: 2134, height: 1200 }, 300)).toEqual({
+      width: 2560,
+      height: 1600,
+    });
+    expect(Date.now() - t0).toBeLessThan(100);
+  });
+
+  /** 一直等于请求盒（源尺寸恰好就是那个盒子）⇒ 上限后返回同一个值，不能卡住共享 */
+  it('resolveCaptureSize：始终等于请求盒时到上限返回，不卡住', async () => {
+    const track = { getSettings: () => ({ width: 2134, height: 1200 }) } as unknown as MediaStreamTrack;
+    expect(await resolveCaptureSize(track, { width: 2134, height: 1200 }, 60)).toEqual({
+      width: 2134,
+      height: 1200,
+    });
+  });
+
+  /** 拿不到尺寸（轨道没有宽高）⇒ 立刻 null，等于"未声明" */
+  it('resolveCaptureSize：没有尺寸时立刻返回 null', async () => {
+    expect(await resolveCaptureSize({ getSettings: () => ({}) } as unknown as MediaStreamTrack)).toBeNull();
+    expect(await resolveCaptureSize(null)).toBeNull();
+  });
+
+  /** 等尺寸期间用户点了停止：**不能**再补发 share-start（服务端会当成一次新的共享声明） */
+  it('start：等尺寸期间已停止共享 → 不补发 share-start、不挂轨', async () => {
+    const video = new FakeTrack('video');
+    const pending = h.start(new FakeMediaStream([video]) as unknown as MediaStream);
+    h.stop(); // 同步停止（此时 announce 还没跑到发信令那一步）
+    await pending;
+    expect(rec).not.toContain('shareStart:true');
+    expect(rec).not.toContain('attachAll');
+  });
+
+  it('start：轨道没有尺寸时 share-start 带 null（不假造比例）', async () => {
+    const noSize = new FakeTrack('video');
+    noSize.getSettings = () => ({ frameRate: 30 });
+    await h.start(new FakeMediaStream([noSize]) as unknown as MediaStream);
+    expect(captured.size).toBeNull();
+  });
+
+  it('start：开启清晰文字模式时捕获轨道 contentHint=detail', async () => {
     h.setShareSharpText(true);
     const video = new FakeTrack('video');
-    h.start(new FakeMediaStream([video]) as unknown as MediaStream);
+    await h.start(new FakeMediaStream([video]) as unknown as MediaStream);
     expect(video.contentHint).toBe('detail');
   });
 
-  it('浏览器"停止共享"条（轨道 onended）→ 与主动停止同一路径，含 share-stop 上行', () => {
+  it('浏览器"停止共享"条（轨道 onended）→ 与主动停止同一路径，含 share-stop 上行', async () => {
     const video = new FakeTrack('video');
-    h.start(new FakeMediaStream([video]) as unknown as MediaStream);
+    await h.start(new FakeMediaStream([video]) as unknown as MediaStream);
     rec.length = 0;
     video.onended?.();
     expect(rec).toContain('shareStop');
@@ -150,9 +248,9 @@ describe('ScreenShareController', () => {
     expect(h.isSharing()).toBe(false);
   });
 
-  it('stop(true)：摘除全部对端 track、停捕获流、发 share-stop、清 UI 回调', () => {
+  it('stop(true)：摘除全部对端 track、停捕获流、发 share-stop、清 UI 回调', async () => {
     const video = new FakeTrack('video');
-    h.start(new FakeMediaStream([video]) as unknown as MediaStream);
+    await h.start(new FakeMediaStream([video]) as unknown as MediaStream);
     rec.length = 0;
     h.stop();
     expect(rec).toEqual([
@@ -168,8 +266,8 @@ describe('ScreenShareController', () => {
     expect(h.shareSendVideoStream).toBeNull();
   });
 
-  it('stop(false)：被抢占/服务端兜底路径不再回发 share-stop', () => {
-    h.start(new FakeMediaStream([new FakeTrack('video')]) as unknown as MediaStream);
+  it('stop(false)：被抢占/服务端兜底路径不再回发 share-stop', async () => {
+    await h.start(new FakeMediaStream([new FakeTrack('video')]) as unknown as MediaStream);
     rec.length = 0;
     h.stop(false);
     expect(rec).not.toContain('shareStop');
@@ -182,9 +280,9 @@ describe('ScreenShareController', () => {
   });
 
   describe('重连对账（onWsClosed）', () => {
-    it('共享方断线：静默停止本地共享（不发 share-stop），捕获流被回收', () => {
+    it('共享方断线：静默停止本地共享（不发 share-stop），捕获流被回收', async () => {
       const video = new FakeTrack('video');
-      h.start(new FakeMediaStream([video]) as unknown as MediaStream);
+      await h.start(new FakeMediaStream([video]) as unknown as MediaStream);
       rec.length = 0;
       h.onWsClosed();
       // stop(false) 序列 + 自己正是共享者被 stop 清掉 → 无后续 sharer 清理
@@ -231,8 +329,8 @@ describe('ScreenShareController', () => {
       expect(rec).toEqual(['disposeRemoteAudio', 'video:null', 'changed:null:false']);
     });
 
-    it('自己被服务端判定不再共享（被抢占）→ 本地兜底停止，回调与原实现一样双发', () => {
-      h.start(new FakeMediaStream([new FakeTrack('video')]) as unknown as MediaStream);
+    it('自己被服务端判定不再共享（被抢占）→ 本地兜底停止，回调与原实现一样双发', async () => {
+      await h.start(new FakeMediaStream([new FakeTrack('video')]) as unknown as MediaStream);
       rec.length = 0;
       h.onShareChanged(SELF_ID, false, false);
       // stop(false) 的收尾回调 + case 尾部 onShareChanged({null, audio}) 各一次
@@ -337,9 +435,9 @@ describe('ScreenShareController', () => {
       expect(h.getShareQuality()).toBe('1080p30');
     });
 
-    it('setShareSharpText：共享中实时改捕获轨道 contentHint（开=detail / 关=空）', () => {
+    it('setShareSharpText：共享中实时改捕获轨道 contentHint（开=detail / 关=空）', async () => {
       const video = new FakeTrack('video');
-      h.start(new FakeMediaStream([video]) as unknown as MediaStream);
+      await h.start(new FakeMediaStream([video]) as unknown as MediaStream);
       rec.length = 0;
       h.setShareSharpText(true);
       expect(video.contentHint).toBe('detail');
@@ -356,9 +454,9 @@ describe('ScreenShareController', () => {
     });
   });
 
-  it('destroy：会话级清理，不再触发任何 UI 回调', () => {
+  it('destroy：会话级清理，不再触发任何 UI 回调', async () => {
     const video = new FakeTrack('video');
-    h.start(new FakeMediaStream([video, new FakeTrack('audio')]) as unknown as MediaStream);
+    await h.start(new FakeMediaStream([video, new FakeTrack('audio')]) as unknown as MediaStream);
     h.onShareChanged(OTHER_ID, true, true);
     rec.length = 0;
     h.destroy();
