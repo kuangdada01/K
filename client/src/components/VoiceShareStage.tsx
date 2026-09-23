@@ -73,21 +73,31 @@ export default function VoiceShareStage() {
    * 用 track 的 `resize` 事件而不是读一次：共享中途分辨率会变
    * （例如编码器按带宽降分辨率、或共享者换了窗口尺寸），比例要跟着走。
    */
-  const [shareRatio, setShareRatio] = useState(0);
+  const stream = share?.stream ?? null;
+  const [measured, setMeasured] = useState<{ stream: MediaStream | null; ratio: number }>({
+    stream: null,
+    ratio: 0,
+  });
   useEffect(() => {
-    const track = share?.stream?.getVideoTracks?.()[0];
-    if (!track) {
-      setShareRatio(0);
-      return;
-    }
+    const track = stream?.getVideoTracks?.()[0];
+    if (!track) return;
     const read = () => {
       const s = track.getSettings();
-      if (s.width && s.height && s.height > 0) setShareRatio(s.width / s.height);
+      if (s.width && s.height && s.height > 0) setMeasured({ stream, ratio: s.width / s.height });
     };
     read();
     track.addEventListener('resize', read);
     return () => track.removeEventListener('resize', read);
-  }, [share?.stream]);
+  }, [stream]);
+  /**
+   * 换了一路共享（或共享结束）就把上一次的测量值当作**未知**（0）。
+   *
+   * 为什么不在 effect 里 `setShareRatio(0)` 复位：那是"在 effect 体内同步 setState"，
+   * 会多一轮级联渲染（`react-hooks/set-state-in-effect`），而本仓库 client 的 lint 是
+   * `--max-warnings 0`，一条 warning 就能把 CI 挡下来。测量值连着它所属的那一路流一起存，
+   * 渲染期比一下就够了 —— 语义与逐字复位完全一致，少一次渲染。
+   */
+  const shareRatio = measured.stream === stream ? measured.ratio : 0;
 
   /**
    * 共享者**声明的采集比例**（`share-start` 上行、服务端放进房间成员信息的 width/height）。
