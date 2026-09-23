@@ -85,37 +85,6 @@ export function updateAvatar(userId: number, avatarUrl: string): SafeUserRow {
   return getSafeUser(userId)!;
 }
 
-// ============================================================
-// 私密图片
-// ============================================================
-
-export interface PrivateImageRow {
-  id: number;
-  user_id: number;
-  image_url: string;
-  created_at: string;
-}
-
-export function listPrivateImages(userId: number): PrivateImageRow[] {
-  return stmt('SELECT * FROM private_images WHERE user_id = ? ORDER BY created_at DESC').all(
-    userId
-  ) as PrivateImageRow[];
-}
-
-export function countPrivateImages(userId: number): number {
-  return count('SELECT COUNT(*) as count FROM private_images WHERE user_id = ?', userId);
-}
-
-export function createPrivateImage(userId: number, imageUrl: string): PrivateImageRow {
-  const result = stmt('INSERT INTO private_images (user_id, image_url) VALUES (?, ?)').run(userId, imageUrl);
-  return stmt('SELECT * FROM private_images WHERE id = ?').get(result.lastInsertRowid) as PrivateImageRow;
-}
-
-export function findOwnPrivateImage(imageId: number, userId: number): PrivateImageRow | undefined {
-  return stmt('SELECT * FROM private_images WHERE id = ? AND user_id = ?').get(imageId, userId) as
-    PrivateImageRow | undefined;
-}
-
-export function deletePrivateImage(imageId: number): void {
-  stmt('DELETE FROM private_images WHERE id = ?').run(imageId);
-}
+// 这里曾有「私密图片」一节（PrivateImageRow / listPrivateImages / countPrivateImages /
+// createPrivateImage / findOwnPrivateImage / deletePrivateImage）。该功能 09-18 整体删除，
+// 表也由迁移 028 一并 drop（见 db/migrations/028-drop-private-images.ts）。

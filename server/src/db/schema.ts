@@ -87,6 +87,7 @@ export function createSchema(db: InstanceType<typeof Database>): void {
       image_url TEXT NOT NULL,                 -- 图片URL（JSON数组格式）
       title TEXT DEFAULT '',                   -- 标题（可选）
       description TEXT DEFAULT '',             -- 描述/正文
+      location TEXT DEFAULT '',                -- 位置（可选，客户端填的地点名）
       close_comments INTEGER DEFAULT 0,        -- 是否关闭评论
       pinned INTEGER DEFAULT 0,                -- 是否置顶
       video_url TEXT DEFAULT NULL,             -- 视频URL
@@ -193,17 +194,10 @@ export function createSchema(db: InstanceType<typeof Database>): void {
       FOREIGN KEY (friend_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
-    /* ========== 私密图片表 ==========
-     * 存储用户的私密图片（独立于帖子的私密空间）
-     * - 每个用户最多10张
+    /* ========== （已删除）私密图片表 ==========
+     * 这里曾有 private_images（每个用户最多 10 张私密图片）。
+     * 功能 09-18 整体删除：新库不再建表，存量库由迁移 028 连数据一起 drop。
      */
-    CREATE TABLE IF NOT EXISTS private_images (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,                -- 所属用户ID
-      image_url TEXT NOT NULL,                 -- 图片文件路径
-      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
 
     /* ========== 分享记录表 ==========
      * 记录用户对帖子的分享，防止重复计数
@@ -317,7 +311,6 @@ export function createSchema(db: InstanceType<typeof Database>): void {
     CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(user_id, read); -- 按用户+已读状态查通知
     CREATE INDEX IF NOT EXISTS idx_friends_user ON friends(user_id);         -- 按用户查关注
     CREATE INDEX IF NOT EXISTS idx_friends_friend ON friends(friend_id);     -- 按被关注者查粉丝
-    CREATE INDEX IF NOT EXISTS idx_private_images_user ON private_images(user_id); -- 按用户查私密图片
     CREATE INDEX IF NOT EXISTS idx_shares_post_id ON shares(post_id);
     CREATE INDEX IF NOT EXISTS idx_bookmarks_user_id ON bookmarks(user_id);
     CREATE INDEX IF NOT EXISTS idx_bookmarks_post_id ON bookmarks(post_id);

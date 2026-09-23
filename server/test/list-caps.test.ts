@@ -22,6 +22,7 @@ import * as adminRepo from '../src/repositories/admin.repo';
 import * as friendRepo from '../src/repositories/friend.repo';
 import * as notifRepo from '../src/repositories/notification.repo';
 import * as commentRepo from '../src/repositories/comment.repo';
+import * as postRepo from '../src/repositories/post.repo';
 
 let db: InstanceType<typeof Database>;
 let seq = 0;
@@ -189,6 +190,68 @@ describe('公告列表上限与未读数', () => {
 
     notifRepo.markAnnouncementRead(targeted, uid);
     expect(notifRepo.countUnreadAnnouncements(uid)).toBe(0);
+  });
+});
+
+describe('他人主页的转发列表（listUserReposts）', () => {
+  function makeRepost(userId: number, postId: number): void {
+    db.prepare('INSERT INTO reposts (user_id, post_id) VALUES (?, ?)').run(userId, postId);
+  }
+
+  it('只返回目标用户转发的帖子，按转发时间倒序', () => {
+    const author = makeUser();
+    const target = makeUser();
+    const other = makeUser();
+    const p1 = makePost(author);
+    const p2 = makePost(author);
+    const p3 = makePost(author);
+
+    makeRepost(target, p1);
+    makeRepost(target, p2);
+    makeRepost(other, p3);
+
+    const { rows, has_more } = postRepo.listUserReposts(target, undefined);
+    // 别人的转发不能混进来 —— 按 id 倒序即"最后转的那条在最前"
+    expect(rows.map((r) => r.id)).toEqual([p2, p1]);
+    expect(has_more).toBe(false);
+  });
+
+  it('登录状态列按**观察者**算（不是按目标用户）', () => {
+    const author = makeUser();
+    const target = makeUser();
+    const viewer = makeUser();
+    const postId = makePost(author);
+    makeRepost(target, postId);
+    db.prepare('INSERT INTO likes (user_id, post_id) VALUES (?, ?)').run(viewer, postId);
+
+    const mine = postRepo.listUserReposts(target, viewer).rows[0];
+    expect(mine?.liked).toBe(1);
+    // 观察者自己没转发过这条，所以 reposted=0（target 转过不算）
+    expect(mine?.reposted).toBe(0);
+
+    const anonymous = postRepo.listUserReposts(target, undefined).rows[0];
+    expect(anonymous?.liked).toBe(0);
+  });
+
+  it('超过硬上限时截断并标记 has_more', () => {
+    const author = makeUser();
+    const target = makeUser();
+    const ids: number[] = [];
+    for (let i = 0; i < 3; i += 1) ids.push(makePost(author));
+    for (const id of ids) makeRepost(target, id);
+
+    const capped = postRepo.listUserReposts(target, undefined, 2);
+    expect(capped.rows).toHaveLength(2);
+    expect(capped.has_more).toBe(true);
+
+    const exact = postRepo.listUserReposts(target, undefined, 3);
+    expect(exact.rows).toHaveLength(3);
+    expect(exact.has_more).toBe(false);
+  });
+
+  it('没转发过任何东西 = 空列表（而不是报错）', () => {
+    const target = makeUser();
+    expect(postRepo.listUserReposts(target, undefined)).toEqual({ rows: [], has_more: false });
   });
 });
 

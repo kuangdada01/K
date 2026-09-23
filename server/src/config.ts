@@ -102,9 +102,14 @@ export const PATHS = {
   uploadsTemp: path.join(UPLOADS_ROOT, 'uploads', 'temp'),
   /** 头像目录: <UPLOADS_ROOT>/uploads/avatars */
   avatars: path.join(UPLOADS_ROOT, 'uploads', 'avatars'),
+  /** 语音房间封面目录: <UPLOADS_ROOT>/uploads/voice-covers */
+  voiceCovers: path.join(UPLOADS_ROOT, 'uploads', 'voice-covers'),
   /**
-   * 私密内容目录: <UPLOADS_ROOT>/uploads_private（私密图片 + 私信图片）
-   * 不在 /uploads 静态服务范围内，只能通过鉴权接口按归属下发
+   * 私密内容目录: <UPLOADS_ROOT>/uploads_private
+   * 不在 /uploads 静态服务范围内，只能通过鉴权接口按归属下发。
+   *
+   * 现在只放**私信图片**（`messages.image_url`）—— 「私密文件夹」的私密图片
+   * 已随该功能在 09-18 删除，目录名保留是为了不动存量文件。
    */
   uploadsPrivate: path.join(UPLOADS_ROOT, 'uploads_private'),
   /** 图书数据目录: server/books */

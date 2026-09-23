@@ -190,6 +190,7 @@ router.get(
  * - images: 图片文件（最多9张，每张10MB限制）
  * - title: 标题（可选）
  * - description: 描述（可选）
+ * - location: 位置（可选，自由文本，如「深圳·南山」）
  * - close_comments: 是否关闭评论（'1'=关闭）
  *
  * 成功响应 (201): 创建的帖子对象
@@ -204,6 +205,7 @@ router.post(
       files: (req.files as Express.Multer.File[]) || [],
       title: req.body.title,
       description: req.body.description,
+      location: req.body.location,
       closeComments: req.body.close_comments === '1' ? 1 : 0,
       pinned: req.body.pinned === '1' ? 1 : 0,
     });
@@ -222,6 +224,7 @@ router.post(
  * - images: 新增图片文件
  * - keepImages: 保留的图片URL（JSON数组字符串）
  * - description: 新描述
+ * - location: 位置（可选；不传则保持原值）
  * - close_comments: 是否关闭评论
  *
  * 成功响应 (200): 更新后的帖子对象
@@ -239,6 +242,7 @@ router.put(
       files: (req.files as Express.Multer.File[]) || [],
       keepImages: req.body.keepImages,
       description: req.body.description,
+      location: req.body.location,
       closeComments: req.body.close_comments === '1' ? 1 : 0,
       pinned: req.body.pinned === '1' ? 1 : 0,
     });

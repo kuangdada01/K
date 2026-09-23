@@ -37,6 +37,8 @@ function createPostWithTags(userId: number, description: string) {
     imageUrl: '["/uploads/test.jpg"]',
     title: '',
     description,
+    // 必填（迁移 027 起 posts 有 location 列）；本套件只关心话题，位置留空
+    location: '',
     closeComments: 0,
     pinned: 0,
   });
@@ -102,6 +104,7 @@ describe('post_tags 同步与搜索', () => {
       userId: 1,
       imageUrl: '["/uploads/test.jpg"]',
       description: '改成了#新话题',
+      location: '',
       closeComments: 0,
       pinned: 0,
     });

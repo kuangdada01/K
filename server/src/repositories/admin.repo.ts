@@ -152,6 +152,13 @@ export interface AdminPostRow {
   created_at: string;
   username: string;
   avatar: string | null;
+  /**
+   * 评论数（子查询算出来的，posts 表没有这一列）。
+   *
+   * 管理端列表要显示"· N 条评论"，而此前这里没查它 —— 客户端拿不到，
+   * 那一栏只能是空的。与 post.repo.ts 里同名字段用的是同一条子查询。
+   */
+  comment_count: number;
 }
 
 /**
@@ -190,7 +197,8 @@ export function listAllPosts(page: number, limit: number, q = ''): { posts: Admi
   const total = countPosts(q);
   const posts = stmt(
     `
-    SELECT p.*, u.username, u.avatar
+    SELECT p.*, u.username, u.avatar,
+      (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count
     FROM posts p JOIN users u ON p.user_id = u.id
     ${sql}
     ORDER BY p.created_at DESC, p.id DESC LIMIT ? OFFSET ?
@@ -229,15 +237,6 @@ export function listUserPostMedia(userId: number): PostMediaRow[] {
   return stmt('SELECT image_url, video_url, video_cover FROM posts WHERE user_id = ?').all(
     userId
   ) as PostMediaRow[];
-}
-
-/** 查询某用户私密图片文件名列表（uploads_private，DB 只存文件名） */
-export function listUserPrivateImageNames(userId: number): string[] {
-  return (
-    stmt('SELECT image_url FROM private_images WHERE user_id = ?').all(userId) as {
-      image_url: string;
-    }[]
-  ).map((r) => r.image_url);
 }
 
 /** 查询某用户发出的带图私信文件名列表（uploads_private，DB 只存文件名） */

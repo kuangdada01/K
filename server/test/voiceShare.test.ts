@@ -169,6 +169,58 @@ describe('语音房间屏幕共享', () => {
     await waitFor(alice, (m) => m.type === 'share-changed' && m.userId === bobId && m.active === false);
   });
 
+  /**
+   * 采集尺寸声明（方案 B）：共享方开始共享时把采集分辨率随信令带上，
+   * 观看端（含**之后**进房的人）在首帧到达之前就能把画面框摆成正确比例。
+   *
+   * 三条都要钉死：① 带尺寸 → share-changed 与 joined.participants 都带；
+   * ② 不带/非法 → 字段根本不出现（老客户端行为，观看端回落接收探针）；
+   * ③ 停止共享 → 尺寸随共享态一起消失（否则下一次共享会先按旧比例排版）。
+   */
+  it('share-start 带采集尺寸：share-changed 与 joined.participants 都带 width/height', async () => {
+    const room = voiceRepo.createRoom(aliceId, '尺寸声明房', '', { creatorName: 'alice' });
+    const alice = await connect(aliceToken);
+    send(alice, { type: 'join', roomId: room.id });
+    await waitFor(alice, (m) => m.type === 'joined');
+
+    // 1920x1200 = 16:10，正是用户看到"先填满 16:9 再收边"的那种采集分辨率
+    send(alice, { type: 'share-start', audio: false, width: 1920, height: 1200 });
+    const on = await waitFor(alice, (m) => m.type === 'share-changed' && m.active === true);
+    expect(on.width).toBe(1920);
+    expect(on.height).toBe(1200);
+    expect(on.audio).toBe(false);
+
+    // 后进房者：从**房间成员信息**里直接读到（这一步是"首帧之前就知道比例"的关键）
+    const bob = await connect(bobToken);
+    send(bob, { type: 'join', roomId: room.id });
+    const joined = await waitFor(bob, (m) => m.type === 'joined');
+    const aliceInfo = joined.participants.find((p: any) => p.userId === aliceId);
+    expect(aliceInfo.sharing).toBe(true);
+    expect(aliceInfo.width).toBe(1920);
+    expect(aliceInfo.height).toBe(1200);
+
+    // 非法尺寸（0 / 负数）等价于"未声明"：字段根本不出现 —— 与老客户端逐字一致
+    send(alice, { type: 'share-stop' });
+    await waitFor(bob, (m) => m.type === 'share-changed' && m.userId === aliceId && m.active === false);
+    send(alice, { type: 'share-start', audio: false, width: 0, height: -5 });
+    const onInvalid = await waitFor(alice, (m) => m.type === 'share-changed' && m.active === true);
+    expect('width' in onInvalid).toBe(false);
+    expect('height' in onInvalid).toBe(false);
+
+    // 停止共享后尺寸必须一起清掉：新进房者看到的是"没人在共享"且没有残留尺寸
+    send(alice, { type: 'share-stop' });
+    await waitFor(bob, (m) => m.type === 'share-changed' && m.userId === aliceId && m.active === false);
+    send(bob, { type: 'leave' });
+    await waitFor(alice, (m) => m.type === 'peer-left' && m.userId === bobId);
+    const bob2 = await connect(bobToken);
+    send(bob2, { type: 'join', roomId: room.id });
+    const joined2 = await waitFor(bob2, (m) => m.type === 'joined');
+    const aliceInfo2 = joined2.participants.find((p: any) => p.userId === aliceId);
+    expect(aliceInfo2.sharing).toBe(false);
+    expect('width' in aliceInfo2).toBe(false);
+    bob2.close();
+  });
+
   it('共享者直接断线：广播 share-changed(active=false)', async () => {
     const { roomId, alice, bob } = await setupRoom();
 

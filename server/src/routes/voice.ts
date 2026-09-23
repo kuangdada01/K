@@ -34,11 +34,18 @@ import * as voiceHub from '../voice/hub';
 import { guestIds } from '../voice/guest-ids';
 import { voiceTickets } from '../voice/tickets';
 import { getClientIp } from '../lib/client-ip';
-import { env } from '../config';
+import { env, PATHS } from '../config';
+import fs from 'fs';
+import path from 'path';
 import { createVoiceRoomSchema } from '@k/shared/schemas';
+import { createVoiceCoverUploader } from '../lib/upload';
+import { imageFileFilter, compressImage } from '../lib/image';
 import { STUN_SERVER_URLS } from '@k/shared';
 
 const router = Router();
+
+/** 房间封面上传中间件：限 10MB、仅图片，落盘 uploads/voice-covers（公开静态目录） */
+const uploadRoomCover = createVoiceCoverUploader(imageFileFilter);
 
 /** ICE 服务器基础配置（STUN 部分，静态不变；urls 兼容单地址字符串与数组两种形态。
  *  STUN 地址来自 @k/shared 共享常量，与客户端兜底配置同源） */
@@ -177,6 +184,27 @@ router.post(
 );
 
 /**
+ * POST /api/voice/rooms/cover - 上传房间封面（登录用户或访客均可，与建房权限一致）
+ *
+ * 为什么单独一个接口：建房请求是 JSON（zod 校验），封面需要先上传拿到 URL、
+ * 在建房表单里预览确认后随创建请求落库 —— 与帖子视频的两步上传同一思路。
+ * 存储：公开静态目录 uploads/voice-covers；压缩到长边 1440（封面展示高度仅 108dp）。
+ * 删除房间时封面文件暂不回收（孤儿文件，量小可接受）。
+ */
+router.post(
+  '/rooms/cover',
+  voiceAuth,
+  uploadRoomCover.single('cover'),
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!req.file) throw new AppError(400, '请选择封面图片');
+    const finalPath = await compressImage(req.file.path, { maxWidth: 1440, quality: 82 });
+    // compressImage 可能改扩展名（avif→jpg / heic→jpg），一律以最终文件名为准
+    const url = `/uploads/voice-covers/${path.basename(finalPath)}`;
+    res.json({ url });
+  })
+);
+
+/**
  * POST /api/voice/rooms - 创建房间
  *
  * 认证: voiceAuth（登录用户或未登录访客均可创建）
@@ -187,7 +215,7 @@ router.post(
   voiceAuth,
   validateBody(createVoiceRoomSchema),
   asyncHandler(async (req: Request, res: Response) => {
-    const { name, description } = req.body;
+    const { name, description, coverUrl } = req.body;
     const user = req.user!;
     // 每个创建者（登录用户或访客 IP）同时持有的房间数上限：访客创建不设限的话，
     // 脚本可刷出海量空房间撑爆列表（房间无 TTL 自动清理，靠该上限封顶）
@@ -202,6 +230,9 @@ router.post(
       creatorId: user.id,
       name,
       description: description ?? '',
+      // 封面：客户端先经 POST /rooms/cover 上传，随建房请求带上服务端相对路径
+      coverUrl:
+        typeof coverUrl === 'string' && coverUrl.startsWith('/uploads/voice-covers/') ? coverUrl : null,
       limit: MAX_ROOMS_PER_CREATOR,
       ...(user.id > 0
         ? { creatorName: safe?.username ?? user.username, creatorAvatar: safe?.avatar ?? null }

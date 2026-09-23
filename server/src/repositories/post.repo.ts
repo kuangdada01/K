@@ -25,6 +25,7 @@ export interface PostRow {
   image_url: string;
   title: string;
   description: string;
+  location: string;
   close_comments: number;
   pinned: number;
   video_url: string | null;
@@ -182,7 +183,41 @@ export function listUserPosts(
   return { posts, total };
 }
 
-/** 当前用户收藏的帖子（按收藏时间倒序；登录状态列: liked + bookmarked=1） */
+/**
+ * **某个用户**转发的帖子（他人主页的「转发」标签）。
+ *
+ * 与 [listRepostedPosts] 的差别只有两处，但都很关键：
+ *  1. 目标用户是**别人**（`r.user_id = targetUserId`），那个是"我的"（来自 JWT）；
+ *  2. 登录状态列（liked / reposted）按**观察者** `viewerId` 计算 ——
+ *     公开接口也要能标出"我看过没有"，否则点开别人的转发列表，所有心都是空的，
+ *     用户会以为自己的点赞丢了。未登录时传 undefined（EXISTS 恒假，见 `uid()`）。
+ *
+ * 硬上限见 HARD_LIST_CAP：一次请求最多物化 上限+1 行（每行还带 2 个 COUNT(*) +
+ * 2 个 EXISTS，同步 SQLite 期间事件循环停摆），多取的那一行只用于判断 `has_more`。
+ */
+export function listUserReposts(
+  targetUserId: number,
+  viewerId: number | undefined,
+  cap: number = HARD_LIST_CAP
+): { rows: PostWithUser[]; has_more: boolean } {
+  const raw = stmt(
+    `
+    SELECT p.*, u.username, u.avatar,
+      (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
+      (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
+      EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = ?) as liked,
+      EXISTS(SELECT 1 FROM reposts WHERE post_id = p.id AND user_id = ?) as reposted
+    FROM reposts r
+    JOIN posts p ON r.post_id = p.id
+    JOIN users u ON p.user_id = u.id
+    WHERE r.user_id = ?
+    ORDER BY r.created_at DESC, r.post_id DESC
+    LIMIT ?
+  `
+  ).all(uid(viewerId), uid(viewerId), targetUserId, probeLimit(cap)) as PostWithUser[];
+  return capRows(raw, cap);
+}
+
 /**
  * 当前用户收藏的帖子（按收藏时间倒序）。
  *
@@ -245,12 +280,21 @@ export function createPost(input: {
   imageUrl: string;
   title: string;
   description: string;
+  location: string;
   closeComments: number;
   pinned: number;
 }): PostWithUser {
   const result = stmt(
-    'INSERT INTO posts (user_id, image_url, title, description, close_comments, pinned) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(input.userId, input.imageUrl, input.title, input.description, input.closeComments, input.pinned);
+    'INSERT INTO posts (user_id, image_url, title, description, location, close_comments, pinned) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    input.userId,
+    input.imageUrl,
+    input.title,
+    input.description,
+    input.location,
+    input.closeComments,
+    input.pinned
+  );
   return getCreatedPost(Number(result.lastInsertRowid))!;
 }
 
@@ -337,12 +381,21 @@ export function updatePost(input: {
   userId: number;
   imageUrl: string;
   description: string;
+  location: string;
   closeComments: number;
   pinned: number;
 }): PostWithUser | undefined {
   const result = stmt(
-    'UPDATE posts SET image_url = ?, description = ?, close_comments = ?, pinned = ? WHERE id = ? AND user_id = ?'
-  ).run(input.imageUrl, input.description, input.closeComments, input.pinned, input.postId, input.userId);
+    'UPDATE posts SET image_url = ?, description = ?, location = ?, close_comments = ?, pinned = ? WHERE id = ? AND user_id = ?'
+  ).run(
+    input.imageUrl,
+    input.description,
+    input.location,
+    input.closeComments,
+    input.pinned,
+    input.postId,
+    input.userId
+  );
   if (result.changes === 0) return undefined;
   return getPostWithCounts(input.postId);
 }

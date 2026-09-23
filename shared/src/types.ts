@@ -205,6 +205,7 @@ export interface VoiceRoom {
   id: number;
   name: string; // 房间名
   description: string; // 房间简介
+  cover_url?: string | null; // 房间封面（创建时上传；老房间为 null，列表端回落占位横幅）
   creator_id: number; // 创建者用户ID（未登录访客创建为 0 占位，不做相等判断，归属以 isCreator 为准）
   created_at: string;
   creator_username?: string; // 创建者用户名快照（访客创建为"未登录-N"，改名后不变）
@@ -221,6 +222,27 @@ export interface VoiceParticipant {
   muted: boolean; // 是否关闭麦克风（听者模式同样为 true）
   listener: boolean; // 无麦克风权限、仅收听的成员
   sharing?: boolean; // 正在共享屏幕（同一时刻全房间最多一人，服务端互斥保证）
+  /**
+   * 共享方**声明的采集像素尺寸**（`width` x `height`，`getDisplayMedia` / MediaProjection
+   * 的采集分辨率，不是编码降采样后的发送分辨率）。
+   *
+   * 这是「共享画面比例」的**唯一事实来源**（同一份说明被两端各自引用：
+   * Web 见 `client/src/voice/types.ts` 的 `share-changed`，安卓见
+   * `core/data/.../model/ModelsVoice.kt` 的 `VoiceParticipantDto`）：
+   * 共享方开始共享时随 `share-start` 上行，服务端原样放进 `share-changed`
+   * 与 `joined.participants` / `peer-joined.participant`，于是观看端在**首帧到达之前**
+   * 就能把画面框按正确比例摆好 —— 否则比例只能等收到首帧后由接收探针反推，
+   * 观感就是「首帧那一刻画面跳一下」（先填满 16:9 再收成 16:10 + 左右黑边）。
+   *
+   * 兼容与语义约定（两端一致，**没有默认值**，缺省即"未声明"）：
+   *  · 可选字段：老客户端不发、老服务端不转 → 观看端一律回落到接收探针，行为与今天相同；
+   *  · 只在 `sharing` 为真的成员上、且只在 `share-start` 与房间成员信息里出现，
+   *    不为此新增任何周期性消息（服务端的 signal 通道有令牌桶，不占它）；
+   *  · 数值不合法（非正整数）等价于未声明，服务端会丢弃（见 `server/src/voice/hub.ts`）。
+   */
+  width?: number;
+  /** 采集像素高（与 `width` 成对出现；见 `width` 的完整约定） */
+  height?: number;
 }
 
 /** 语音房间文字聊天消息（对应后端 voice_room_messages 表；文本走信令 WS 实时收发，作为语音不良时的备用交流通道） */

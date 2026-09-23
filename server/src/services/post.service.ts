@@ -66,6 +66,7 @@ export async function createPost(input: {
   files: Express.Multer.File[];
   title: unknown;
   description: unknown;
+  location: unknown;
   closeComments: number;
   pinned: number;
 }): Promise<postRepo.PostWithUser> {
@@ -74,11 +75,12 @@ export async function createPost(input: {
     throw new AppError(400, '请选择图片');
   }
 
-  // multipart 文本字段校验（标题/正文长度上限）：放在压缩等磁盘副作用之前，
+  // multipart 文本字段校验（标题/正文/位置长度上限）：放在压缩等磁盘副作用之前，
   // 失败时清理 multer 已落盘的文件再返回 400，避免孤儿文件
   const parsedText = postTextSchema.safeParse({
     title: input.title || '',
     description: input.description || '',
+    location: input.location || '',
   });
   if (!parsedText.success) {
     cleanupUploadedFiles(files);
@@ -94,6 +96,7 @@ export async function createPost(input: {
     imageUrl,
     title: parsedText.data.title,
     description: parsedText.data.description,
+    location: parsedText.data.location,
     closeComments: input.closeComments,
     pinned: input.pinned,
   });
@@ -112,6 +115,7 @@ export async function updatePost(input: {
   files: Express.Multer.File[];
   keepImages: unknown;
   description: string | undefined;
+  location: unknown;
   closeComments: number;
   pinned: number;
 }): Promise<postRepo.PostWithUser> {
@@ -147,9 +151,12 @@ export async function updatePost(input: {
     throw new AppError(400, 'keepImages 包含无效图片');
   }
 
-  // 正文长度校验（编辑不涉及标题），失败清理 multer 已落盘文件后返回 400
-  const parsedText = postTextSchema.pick({ description: true }).safeParse({
+  // 正文/位置长度校验（编辑不涉及标题），失败清理 multer 已落盘文件后返回 400
+  const parsedText = postTextSchema.pick({ description: true, location: true }).safeParse({
     description: input.description ?? '',
+    // 老客户端/只改正文时不传 location → 用库里已有的值参与校验，
+    // 否则 zod 的 default('') 会把位置**静默清空**（编辑一次就丢位置）
+    location: input.location ?? post.location,
   });
   if (!parsedText.success) {
     cleanupUploadedFiles(input.files);
@@ -181,7 +188,8 @@ export async function updatePost(input: {
     postId: input.postId,
     userId: input.userId,
     imageUrl: finalImageUrl,
-    description: input.description || '',
+    description: parsedText.data.description,
+    location: parsedText.data.location,
     closeComments: input.closeComments,
     pinned: input.pinned,
   });

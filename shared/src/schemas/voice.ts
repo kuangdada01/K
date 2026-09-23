@@ -16,6 +16,13 @@ export { VOICE_MAX_ROOM_SIZE, VOICE_CHAT_MAX_LEN };
 export const createVoiceRoomSchema = z.object({
   name: z.string().trim().min(1, '房间名不能为空').max(30, '房间名最多30个字符'),
   description: z.string().trim().max(100, '房间简介最多100个字符').optional(),
+  // 封面 URL（先经 POST /api/voice/rooms/cover 上传拿到的服务端相对路径）
+  coverUrl: z
+    .string()
+    .trim()
+    .max(300, '封面地址不合法')
+    .refine((v) => v === '' || v.startsWith('/uploads/voice-covers/'), '封面地址不合法')
+    .optional(),
 });
 
 /** 创建语音房间请求体类型 */

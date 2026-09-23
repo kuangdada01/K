@@ -4,7 +4,7 @@
  * ============================================================
  * 覆盖:
  * - DELETE /api/admin/posts/:id 删帖后图片/视频/封面文件同步删除
- * - DELETE /api/admin/users/:id 删号后头像/帖子媒体/私密图片/私信图片
+ * - DELETE /api/admin/users/:id 删号后头像/帖子媒体/私信图片
  *   与验证码记录同步删除（修复：原实现只删库行，磁盘文件永久残留）
  * - 帖子不存在返回 404 且不动文件
  */
@@ -99,11 +99,10 @@ describe('管理员删帖的文件清理', () => {
 });
 
 describe('管理员删号的文件清理', () => {
-  it('删号后头像/帖子媒体/私密图片/私信图片与验证码记录同步删除', async () => {
+  it('删号后头像/帖子媒体/私信图片与验证码记录同步删除', async () => {
     const avatar = makeFile(PATHS.avatars, `ac-${uniq}-avatar.jpg`);
     const postImg = makeFile(PATHS.uploads, `ac-${uniq}-post.jpg`);
     const postVideo = makeFile(PATHS.uploads, `ac-${uniq}-post.mp4`);
-    const privateImg = makeFile(PATHS.uploadsPrivate, `ac-${uniq}-private.jpg`);
     const msgImg = makeFile(PATHS.uploadsPrivate, `ac-${uniq}-msg.jpg`);
 
     db.prepare('UPDATE users SET avatar = ? WHERE id = ?').run(
@@ -114,10 +113,6 @@ describe('管理员删号的文件清理', () => {
       userId,
       JSON.stringify([`/uploads/${path.basename(postImg)}`]),
       `/uploads/${path.basename(postVideo)}`
-    );
-    db.prepare('INSERT INTO private_images (user_id, image_url) VALUES (?, ?)').run(
-      userId,
-      path.basename(privateImg)
     );
     db.prepare('INSERT INTO messages (sender_id, receiver_id, content, image_url) VALUES (?, ?, ?, ?)').run(
       userId,
@@ -134,7 +129,7 @@ describe('管理员删号的文件清理', () => {
     const { status } = await api('DELETE', `/api/admin/users/${userId}`, adminToken);
     expect(status).toBe(200);
 
-    for (const p of [avatar, postImg, postVideo, privateImg, msgImg]) {
+    for (const p of [avatar, postImg, postVideo, msgImg]) {
       expect(fs.existsSync(p)).toBe(false);
     }
     expect(db.prepare('SELECT COUNT(*) as c FROM users WHERE id = ?').get(userId)).toEqual({ c: 0 });

@@ -36,6 +36,9 @@ import migration023 from './023-voice-room-chat';
 import migration024 from './024-voice-rooms-drop-creator-fk';
 import migration025 from './025-comments-post-parent-index';
 import migration026 from './026-voice-rooms-owner-token';
+import migration027 from './027-posts-location';
+import migration028 from './028-drop-private-images';
+import migration029 from './029-voice-room-cover';
 import type { Migration } from './helpers';
 
 export type { Migration };
@@ -69,6 +72,9 @@ export const migrations: Migration[] = [
   migration024,
   migration025,
   migration026,
+  migration027,
+  migration028,
+  migration029,
 ];
 
 /** 迁移记录表 */

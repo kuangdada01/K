@@ -14,12 +14,16 @@
  * - 客户端: [{ urls: [...STUN_SERVER_URLS] }]
  * - 服务端: [{ urls: [...STUN_SERVER_URLS] }]
  * 地址内容与顺序即线上真实下发/兜底内容，改动前需确认两端行为同步。
+ *
+ * ⚠️ 2026-02 实测（发 STUN Binding Request，2.5s 超时）：
+ * - `stun.qq.com:3478` **三个解析 IP（106.55.99.228 / 43.139.18.234 / 119.91.207.58）全部无应答**
+ *   → 已移除。悬空服务器不是"没坏处"：libwebrtc 会为它走重传退避（250→500→1000→2000ms，
+ *   合计约 3.75s），拖慢 `iceGatheringState=complete`；任何"等候选收集完成"的路径都要白等这几秒。
+ * - `stun.miwifi.com:3478` 46ms ✓、`stun.l.google.com:19302` 38~45ms ✓ 保留。
+ *
+ * 改这里的判据只有一条：**先实测**（`NetDiagnostics.kt` 里有现成的探测实现），别凭印象加。
  */
-export const STUN_SERVER_URLS = [
-  'stun:stun.qq.com:3478',
-  'stun:stun.miwifi.com:3478',
-  'stun:stun.l.google.com:19302',
-] as const;
+export const STUN_SERVER_URLS = ['stun:stun.miwifi.com:3478', 'stun:stun.l.google.com:19302'] as const;
 
 /**
  * 控制字符（除 \n 换行外）剔除正则：聊天消息入库/发送前清理，

@@ -14,12 +14,14 @@ import { z } from 'zod';
 export const POST_TITLE_MAX_LEN = 100;
 /** 帖子正文最大长度（与公告一致） */
 export const POST_DESCRIPTION_MAX_LEN = 5000;
+/** 位置最大长度（如「深圳·南山科技园」；不限制字符集，中英文都行） */
+export const POST_LOCATION_MAX_LEN = 60;
 /** 评论内容最大长度 */
 export const COMMENT_MAX_LEN = 1000;
 
 /**
- * 帖子文本字段校验（multipart 表单里的 title/description）。
- * 只 safeParse 这两个字段——multipart 请求体的其余字段（keepImages/close_comments 等）
+ * 帖子文本字段校验（multipart 表单里的 title/description/location）。
+ * 只 safeParse 这几个字段——multipart 请求体的其余字段（keepImages/close_comments 等）
  * 不能走 validateBody 全量替换，需在路由内单独校验。
  */
 export const postTextSchema = z.object({
@@ -27,6 +29,11 @@ export const postTextSchema = z.object({
   description: z
     .string()
     .max(POST_DESCRIPTION_MAX_LEN, `正文最多${POST_DESCRIPTION_MAX_LEN}个字符`)
+    .default(''),
+  location: z
+    .string()
+    .trim()
+    .max(POST_LOCATION_MAX_LEN, `位置最多${POST_LOCATION_MAX_LEN}个字符`)
     .default(''),
 });
 

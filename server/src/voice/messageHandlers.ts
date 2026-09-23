@@ -14,6 +14,7 @@
 import type WebSocket from 'ws';
 import { getRoomById } from '../repositories/voice.repo';
 import { insertVoiceChatMessage } from '../repositories/voice-chat.repo';
+import { logger } from '../lib/logger';
 import * as hub from './hub';
 import { voiceChatSchema } from '@k/shared/schemas';
 import { CONTROL_CHAR_RE, VOICE_MAX_ROOM_SIZE } from '@k/shared';
@@ -93,11 +94,38 @@ export function handleVoiceMessage(
           self: { userId: ctx.user.id, username: ctx.user.username, avatar: ctx.user.avatar },
         })
       );
+      // 「谁和谁在同一个房间」此前完全没有日志，线上排查「进房后看不见别人」时
+      // 只能靠猜（连房间号都对不上号）。这里记一条：房间号 + 成员数 + 是否访客，
+      // 一眼就能看出两人到底进的是不是同一个房间。
+      logger.info(
+        {
+          roomId,
+          userId: ctx.user.id,
+          username: ctx.user.username,
+          guest: ctx.user.id < 0,
+          existingMembers: existing.length,
+          membersNow: ctx.hub.getRoomCount(roomId),
+        },
+        '语音：加入房间'
+      );
       break;
     }
-    case 'leave':
+    case 'leave': {
+      // 先取房间号——leaveRoom 之后成员条目就没了，取不到房间号只能记 null
+      const leftRoomId = ctx.hub.getMemberRoomId(ctx.user.id);
       ctx.hub.leaveRoom(ctx.user.id);
+      if (leftRoomId !== undefined) {
+        logger.info(
+          {
+            roomId: leftRoomId,
+            userId: ctx.user.id,
+            membersNow: ctx.hub.getRoomCount(leftRoomId),
+          },
+          '语音：离开房间'
+        );
+      }
       break;
+    }
     case 'mute':
       ctx.hub.setMuted(ctx.user.id, !!msg.muted);
       break;
@@ -109,7 +137,15 @@ export function handleVoiceMessage(
       break;
     }
     case 'share-start':
-      ctx.hub.setSharing(ctx.user.id, true, msg.audio === true);
+      // width/height = 共享方声明的采集像素尺寸（可选，老客户端不发）。
+      // 随共享状态一起进成员信息与 share-changed 广播，观看端在首帧到达之前就能定下画面比例
+      // （语义见 @k/shared 的 VoiceParticipant.width）；不合法等价于未声明
+      ctx.hub.setSharing(
+        ctx.user.id,
+        true,
+        msg.audio === true,
+        ctx.hub.normalizeShareSize(msg.width, msg.height)
+      );
       break;
     case 'share-stop':
       ctx.hub.setSharing(ctx.user.id, false);

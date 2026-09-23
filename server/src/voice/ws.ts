@@ -14,12 +14,15 @@
  * - C→S: { type: 'join', roomId } / { type: 'leave' }
  *        { type: 'signal', to: userId, data } / { type: 'mute', muted }
  *        { type: 'quality', level: 'good'|'fair'|'poor' }（自报网络质量，节流广播）
- *        { type: 'share-start', audio } / { type: 'share-stop' }（屏幕共享状态，服务端互斥+抢占）
+ *        { type: 'share-start', audio, width?, height? } / { type: 'share-stop' }
+ *        （屏幕共享状态，服务端互斥+抢占；width/height = 共享方声明的**采集像素尺寸**，
+ *          可选，语义见 @k/shared 的 VoiceParticipant.width）
  *        { type: 'chat', content }（文字聊天：校验+节流后入库并广播全房间）
  * - S→C: { type: 'joined', participants } / { type: 'peer-joined', participant }
+ *        （participants/participant 里的 width/height 同上：共享者的采集尺寸，可选）
  *        { type: 'peer-left', userId } / { type: 'signal', from, data }
  *        { type: 'mute-changed', userId, muted } / { type: 'peer-quality', userId, level }
- *        { type: 'share-changed', userId, active, audio } / { type: 'share-force-stop' }
+ *        { type: 'share-changed', userId, active, audio, width?, height? } / { type: 'share-force-stop' }
  *        { type: 'chat', message } / { type: 'chat-cleared' }（房主/管理员经 REST 清空后广播）
  *        { type: 'room-closed', reason } / { type: 'error', message }
  */

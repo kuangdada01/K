@@ -6,7 +6,6 @@
  *
  * A. 读授权
  *    - 私信图片下载：非收发双方 403（routes/messages.ts）
- *    - 私密图片文件：非属主 404（routes/users.ts）
  * B. 评论端点
  *    - parentId 不存在 / 属于别的帖子 → 400（真实路由校验，非测试自算）
  *    - 删除他人评论 → 404 且行数不变
@@ -109,11 +108,10 @@ afterAll(async () => {
   }
 });
 
-describe('A. 读授权：私信图片与私密图片', () => {
+describe('A. 读授权：私信图片', () => {
   let mediaId = 0;
-  let privateImageId = 0;
 
-  it('准备：alice 给 bob 发一张私信图片，alice 存一张私密图片', () => {
+  it('准备：alice 给 bob 发一张私信图片', () => {
     const mediaName = 'msg-authz-test.jpg';
     const mediaAbs = path.join(PATHS.uploadsPrivate, mediaName);
     fs.mkdirSync(PATHS.uploadsPrivate, { recursive: true });
@@ -126,17 +124,7 @@ describe('A. 读授权：私信图片与私密图片', () => {
         .run(aliceId, bobId, mediaName).lastInsertRowid
     );
 
-    privateImageId = Number(
-      db
-        .prepare('INSERT INTO private_images (user_id, image_url) VALUES (?, ?)')
-        .run(aliceId, 'private-authz-test.jpg').lastInsertRowid
-    );
-    const privateAbs = path.join(PATHS.uploadsPrivate, 'private-authz-test.jpg');
-    fs.writeFileSync(privateAbs, 'fake-private-bytes');
-    created.push(privateAbs);
-
     expect(mediaId).toBeGreaterThan(0);
-    expect(privateImageId).toBeGreaterThan(0);
   });
 
   it('私信图片：非收发双方的第三方访问 403', async () => {
@@ -164,19 +152,6 @@ describe('A. 读授权：私信图片与私密图片', () => {
   it('私信图片：未认证 401', async () => {
     const res = await api('GET', `/api/messages/${mediaId}/media`);
     expect(res.status).toBe(401);
-  });
-
-  it('私密图片：非属主拿不到（404，不暴露存在性）', async () => {
-    const res = await api('GET', `/api/users/me/private-images/${privateImageId}/file`, bobToken);
-    expect(res.status).toBe(404);
-  });
-
-  it('私密图片：属主可下载', async () => {
-    const res = await fetch(`${base}/api/users/me/private-images/${privateImageId}/file`, {
-      headers: { Authorization: `Bearer ${aliceToken}` },
-    });
-    expect(res.status).toBe(200);
-    expect(await res.text()).toBe('fake-private-bytes');
   });
 });
 

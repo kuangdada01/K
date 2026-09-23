@@ -148,7 +148,7 @@ export function createApp(): express.Express {
 
   app.use('/api/auth', authRoutes); // 认证: 注册、登录、获取当前用户
   app.use('/api/posts', postRoutes); // 帖子: CRUD、点赞、评论
-  app.use('/api/users', userRoutes); // 用户: 资料、头像、私密图片
+  app.use('/api/users', userRoutes); // 用户: 资料、头像、帖子列表
   app.use('/api/messages', messageRoutes); // 私信: 会话列表、消息收发
   app.use('/api/friends', friendRoutes); // 好友: 关注、搜索、推荐
   app.use('/api/notifications', notificationRoutes); // 通知: 评论/回复通知

@@ -20,6 +20,8 @@ export interface VoiceRoomRow {
   id: number;
   name: string;
   description: string;
+  /** 房间封面（创建时上传的相对路径；老房间为 NULL，列表端回落占位横幅） */
+  cover_url: string | null;
   creator_id: number;
   /** 创建者快照：用户名（登录用户为用户表值，访客为占位名） */
   creator_name: string;
@@ -37,7 +39,7 @@ export interface VoiceRoomRow {
 
 /** 房间基础列（含快照创建者列，不含 creator_ip —— 但**含** owner_token，鉴权需要） */
 const ROOM_COLUMNS =
-  'id, name, description, creator_id, creator_name, creator_avatar, creator_ip, owner_token, created_at';
+  'id, name, description, cover_url, creator_id, creator_name, creator_avatar, creator_ip, owner_token, created_at';
 
 /** 行 -> 对外 VO 模型（剥离内部列；DB 列名 creator_name 映射为共享类型字段 creator_username） */
 export function toVoiceRoom(row: VoiceRoomRow): VoiceRoom {
@@ -80,6 +82,8 @@ export function getRoomById(roomId: number, db: Database = getDb()): VoiceRoomRo
 }
 
 export interface CreateVoiceRoomOptions {
+  /** 房间封面（已上传的服务端相对路径；不传为 NULL，列表端回落占位横幅） */
+  coverUrl?: string | null;
   /** 创建者用户名快照（缺省写空串，路由层应总是显式传入） */
   creatorName?: string;
   creatorAvatar?: string | null;
@@ -102,12 +106,13 @@ export function createRoom(
   const ownerToken = storedCreatorId > 0 ? null : crypto.randomBytes(24).toString('hex');
   const result = db
     .prepare(
-      `INSERT INTO voice_rooms (name, description, creator_id, creator_name, creator_avatar, creator_ip, owner_token)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO voice_rooms (name, description, cover_url, creator_id, creator_name, creator_avatar, creator_ip, owner_token)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       name,
       description,
+      opts.coverUrl ?? null,
       storedCreatorId,
       opts.creatorName ?? '',
       opts.creatorAvatar ?? null,
@@ -164,6 +169,7 @@ export function createRoomWithinLimit(
       input.name,
       input.description,
       {
+        ...(input.coverUrl !== undefined ? { coverUrl: input.coverUrl } : {}),
         ...(input.creatorName !== undefined ? { creatorName: input.creatorName } : {}),
         ...(input.creatorAvatar !== undefined ? { creatorAvatar: input.creatorAvatar } : {}),
         ...(input.creatorIp !== undefined ? { creatorIp: input.creatorIp } : {}),

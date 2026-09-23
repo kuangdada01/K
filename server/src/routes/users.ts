@@ -2,31 +2,30 @@
  * ============================================================
  * 用户路由模块 (/api/users)
  * ============================================================
- * 处理用户资料、头像上传、用户帖子列表、私密图片管理
+ * 处理用户资料、头像上传、用户帖子列表
  *
  * API 端点:
  * - GET    /api/users/:id                  - 获取用户资料（公开）
  * - PUT    /api/users/me                   - 更新个人资料（需认证）
  * - POST   /api/users/avatar               - 上传头像（需认证）
  * - GET    /api/users/:id/posts            - 获取用户帖子列表（公开）
- * - GET    /api/users/me/private-images    - 获取私密图片列表（需认证）
- * - POST   /api/users/me/private-images    - 上传私密图片（需认证）
- * - DELETE /api/users/me/private-images/:id - 删除私密图片（需认证）
+ * - GET    /api/users/:id/reposts          - 获取用户转发列表（可选认证）
+ *
+ * 「私密图片」（`/me/private-images`）已在 09-18 随该功能一起删除。
+ * 注意 `PATHS.uploadsPrivate` **不能跟着删** —— 私信图片也存在那里（见 routes/messages.ts）。
  * ============================================================
  */
 
 import { Router, Request, Response } from 'express';
 import path from 'path';
-import fs from 'fs';
 import { PATHS } from '../config';
-import { authMiddleware } from '../middleware/auth';
+import { authMiddleware, optionalAuth } from '../middleware/auth';
 import { asyncHandler, AppError } from '../middleware/error';
 import { withImages, imageFileFilter, compressImage } from '../lib/image';
 import { safeDeleteFile } from '../lib/file';
 import { validateBody } from '../validate';
 import { updateProfileSchema, pageQuerySchema, limitQuerySchema } from '@k/shared/schemas';
-import { MAX_IMAGE_BYTES } from '@k/shared';
-import { createAvatarUploader, createUploader, timestampFilename } from '../lib/upload';
+import { createAvatarUploader } from '../lib/upload';
 import * as userRepo from '../repositories/user.repo';
 import * as postRepo from '../repositories/post.repo';
 
@@ -37,22 +36,6 @@ const AVATAR_MAX = 512;
 
 /** 头像上传中间件: 限制10MB，仅允许图片格式（公开静态目录 uploads/avatars） */
 const uploadAvatar = createAvatarUploader(imageFileFilter);
-
-/**
- * 私密图片上传中间件: 大小上限见 @k/shared（与客户端校验同一个常量），仅允许图片格式
- * 存储在 uploads_private（不在静态服务范围，经 /api/users/me/private-images/:id/file 鉴权下发）
- */
-const uploadPrivate = createUploader({
-  dir: PATHS.uploadsPrivate,
-  filename: timestampFilename('pv'),
-  maxSize: MAX_IMAGE_BYTES,
-  fileFilter: imageFileFilter,
-});
-
-/** 数据库行 → 响应对象（image_url 只存文件名，响应时改写为鉴权 URL） */
-function toPrivateImageJson<T extends { id: number; image_url: string }>(img: T) {
-  return { ...img, image_url: `/api/users/me/private-images/${img.id}/file` };
-}
 
 // ============================================================
 // 用户资料端点
@@ -173,128 +156,33 @@ router.get(
   })
 );
 
-// ============================================================
-// 私密图片端点
-// ============================================================
-
 /**
- * GET /api/users/me/private-images - 获取私密图片列表
+ * GET /api/users/:id/reposts - 获取某个用户**转发**的帖子列表
  *
- * 认证: 必须
+ * 认证: 可选（`optionalAuth` —— 登录用户能看到自己的 liked / reposted 状态；
+ * 匿名请求也照常返回列表，与 `/users/:id/posts` 一样的"公开可看"）
  *
- * 返回当前用户的所有私密图片，按创建时间倒序
+ * 用途：他人主页的「转发」标签（设计稿上这一页有两个标签：帖子 / 转发）。
+ * 在此之前服务端**只有** `/api/posts/reposts/me`（"我的"），
+ * 所以客户端要么画一个点开恒为空的标签，要么干脆不画 —— 两条都不好。
+ *
+ * 参数顺序注意：本路由必须声明在 `'/:id'` 之后也没关系（Express 按注册顺序匹配，
+ * 但这两个路径段数不同，`/:id` 只吃一段），不过**必须早于任何 `/:id/xxx` 的通配写法**。
+ *
+ * 响应形状与 `/users/:id/posts` 一致（`{ posts, has_more }`）；
+ * 转发列表没有分页（硬上限截断，见 listLimits.ts），所以给的是 `has_more` 而不是 totalPages。
  */
 router.get(
-  '/me/private-images',
-  authMiddleware,
+  '/:id/reposts',
+  optionalAuth,
   asyncHandler(async (req: Request, res: Response) => {
-    const userId = req.user!.id;
-    const images = userRepo.listPrivateImages(userId);
-    res.json({ images: images.map(toPrivateImageJson) });
-  })
-);
-
-/**
- * GET /api/users/me/private-images/:id/file - 获取私密图片文件
- *
- * 认证: 必须（只能访问自己的图片）
- * 图片存储在 uploads_private，不经静态服务暴露
- */
-router.get(
-  '/me/private-images/:id/file',
-  authMiddleware,
-  asyncHandler(async (req: Request, res: Response) => {
-    const userId = req.user!.id;
-    const imageId = parseInt(req.params.id as string);
-
-    const image = userRepo.findOwnPrivateImage(imageId, userId);
-    if (!image) {
-      throw new AppError(404, '图片不存在');
+    const userId = parseInt(req.params.id as string);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new AppError(400, '用户ID无效');
     }
 
-    const filePath = path.join(PATHS.uploadsPrivate, path.basename(image.image_url));
-    if (!fs.existsSync(filePath)) {
-      throw new AppError(404, '图片不存在');
-    }
-
-    res.setHeader('Cache-Control', 'private, max-age=86400');
-    res.sendFile(filePath);
-  })
-);
-
-/**
- * POST /api/users/me/private-images - 上传私密图片
- *
- * 认证: 必须
- * 限制: 每个用户最多10张
- */
-router.post(
-  '/me/private-images',
-  authMiddleware,
-  uploadPrivate.single('image'),
-  asyncHandler(async (req: Request, res: Response) => {
-    const userId = req.user!.id;
-
-    // 检查数量限制
-    const count = userRepo.countPrivateImages(userId);
-    if (count >= 10) {
-      // multer 已保存文件，清理避免孤儿文件
-      if (req.file) safeDeleteFile(`/uploads_private/${req.file.filename}`, 'uploads_private');
-      throw new AppError(400, '最多存储10张图片');
-    }
-
-    if (!req.file) {
-      throw new AppError(400, '请选择图片');
-    }
-
-    // 压缩私密图片（heic 会转成 jpg，以返回文件名为准）
-    const finalPath = await compressImage(path.join(PATHS.uploadsPrivate, req.file.filename));
-
-    // image_url 只存文件名（响应时由 toPrivateImageJson 改写为鉴权 URL）
-    // §5.1 上限竞态: check-then-insert 之间并发插入可能突破 10 张上限，
-    // 唯一约束冲突时清理本次压缩产物并转 400（前置检查文案保持原样）
-    let image: userRepo.PrivateImageRow;
-    try {
-      image = userRepo.createPrivateImage(userId, path.basename(finalPath));
-    } catch (err) {
-      const dbErr = err as { code?: string } | null;
-      if (dbErr?.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-        safeDeleteFile(`/uploads_private/${path.basename(finalPath)}`, 'uploads_private');
-        throw new AppError(400, '私密图片最多10张');
-      }
-      throw err;
-    }
-    res.status(201).json(toPrivateImageJson(image));
-  })
-);
-
-/**
- * DELETE /api/users/me/private-images/:id - 删除私密图片
- *
- * 认证: 必须（只能删除自己的图片）
- *
- * 同时删除磁盘上的文件
- */
-router.delete(
-  '/me/private-images/:id',
-  authMiddleware,
-  asyncHandler(async (req: Request, res: Response) => {
-    const userId = req.user!.id;
-    const imageId = parseInt(req.params.id as string);
-
-    const image = userRepo.findOwnPrivateImage(imageId, userId);
-    if (!image) {
-      throw new AppError(404, '图片不存在');
-    }
-
-    // §5.1 删除顺序: 先删 DB 行成功，再删磁盘文件（原实现先删文件后删行，
-    // 删行失败会留下指向已删文件的死链）
-    userRepo.deletePrivateImage(imageId);
-
-    // 删除文件（uploads_private 目录）
-    safeDeleteFile(`/uploads_private/${path.basename(image.image_url)}`, 'uploads_private');
-
-    res.json({ message: '图片已删除' });
+    const { rows, has_more } = postRepo.listUserReposts(userId, req.user?.id);
+    res.json({ posts: rows.map((p) => withImages(p)), has_more });
   })
 );
 

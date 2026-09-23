@@ -73,3 +73,13 @@ export function createAvatarUploader(fileFilter: multer.Options['fileFilter']): 
     fileFilter,
   });
 }
+
+/** 语音房间封面上传器：公开静态目录 uploads/voice-covers（尺寸限制同头像） */
+export function createVoiceCoverUploader(fileFilter: multer.Options['fileFilter']): multer.Multer {
+  return createUploader({
+    dir: PATHS.voiceCovers,
+    filename: timestampFilename('cover'),
+    maxSize: MAX_IMAGE_BYTES,
+    fileFilter,
+  });
+}

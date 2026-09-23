@@ -152,6 +152,9 @@ describe('帖子 CRUD', () => {
       imageUrl: JSON.stringify(['/uploads/a.jpg']),
       title: 't',
       description: 'd',
+      // `location` 是**必填**（迁移 027 起 posts 有这一列；服务端所有调用点都要传）。
+      // 空串 = "这条帖子没带位置"，与列的默认值、以及 schema 的 default('') 一致。
+      location: '',
       closeComments: 0,
       pinned: 0,
     });
@@ -169,6 +172,7 @@ describe('帖子 CRUD', () => {
       userId: u,
       imageUrl: '[]',
       description: 'new',
+      location: '',
       closeComments: 0,
       pinned: 1,
     });
@@ -181,6 +185,7 @@ describe('帖子 CRUD', () => {
         userId: v,
         imageUrl: '[]',
         description: 'x',
+        location: '',
         closeComments: 0,
         pinned: 0,
       })
