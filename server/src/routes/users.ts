@@ -111,8 +111,14 @@ router.post(
     }
 
     // 压缩头像（heic 会转成 jpg，以返回文件名为准）
+    //
+    // `square: true` = 服务端直接产出**正方形**头像文件（居中裁切，见 compressImage）。
+    // 客户端一律用 `ContentScale.Crop` / `object-fit: cover` 圆裁，长方形原图虽然
+    // 观感上没问题，但每次显示都要按比例裁一遍；直接存方图则"存储形态 = 展示形态"，
+    // 不会出现"同一张头像在不同宽高比的容器里取景不一致"。
     const avatarPath = await compressImage(path.join(PATHS.avatars, req.file.filename), {
       maxWidth: AVATAR_MAX,
+      square: true,
     });
     const avatarFileName = path.basename(avatarPath);
 

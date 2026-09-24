@@ -105,3 +105,10 @@ archive/
 live.css
 # 某次命令重定向误建的空文件
 android/cd
+
+# 仓库根下的 APK 产物（android/scripts/build-apk.mjs 的收尾复制，22MB 构建生成不入库）
+/k-app-*.apk
+# 教学课件（与本项目无关的个人资料，误放在仓库根目录）
+/课件/
+# debug 源集里的调试探针（Coil 加载追踪 / 转场追踪 / 调试开关，本地取证用不入库）
+android/native/src/debug/

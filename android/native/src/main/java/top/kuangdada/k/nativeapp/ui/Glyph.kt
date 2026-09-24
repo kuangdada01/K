@@ -10,6 +10,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.StrokeCap
@@ -110,6 +111,20 @@ fun Glyph(
     kind: GlyphKind,
     modifier: Modifier = Modifier,
     size: Dp = KDimens.navIcon,
+    /**
+     * **已选中状态的实心形态**。
+     *
+     * 为什么需要它（用户实测反馈：「已收藏变为用实心」）：点赞原来就在做这件事 ——
+     * `HeartIcon` 有 `filled` 参数，未赞描边、已赞实心。而收藏/转发的两个图标是
+     * 纯 `Glyph` 描边，选中与否**只差一个颜色**，与点赞的"两态明确"不一致
+     * （`KLikeButton` 的长注释里记着旧 Web 版的同一个毛病：颜色相同、只差填充，
+     * 快速滑动时分不清自己点没点过）。
+     *
+     * 目前只有 [GlyphKind.Bookmark] 实现了实心（其它图标给 `true` 也不会有变化）——
+     * 转发是"两个半环箭头"，填充它没有视觉意义；分享是一次性动作、没有选中态。
+     * 需要时再补，不要为了一致而给所有图标硬造一个填充形状。
+     */
+    filled: Boolean = false,
 ) {
     Canvas(modifier = modifier.size(size)) {
         val s = this.size.minDimension
@@ -137,7 +152,7 @@ fun Glyph(
             /** lucide `image`：发布页「从相册选一张图作为封面」那个按钮（M6.6） */
             GlyphKind.Image -> drawLucide(LUCIDE_IMAGE, tint, s)
 
-            // lucide bookmark（书签带缺口）
+            // lucide bookmark（书签带缺口）—— 已收藏时走**实心填充**（用户要求）
             GlyphKind.Bookmark -> {
                 val p = Path().apply {
                     moveTo(o(6.5f, 3.5f).x, o(6.5f, 3.5f).y)
@@ -147,7 +162,9 @@ fun Glyph(
                     lineTo(o(6.5f, 20.5f).x, o(6.5f, 20.5f).y)
                     close()
                 }
-                drawPath(p, tint, style = stroke)
+                // 实心 = 只填不描边。描边留着会让实心书签显得比中心线大一圈
+                // （描边是骑在路径上的，填充 + 描边叠加后视觉尺寸会涨一个 strokeWidth）。
+                if (filled) drawPath(p, tint, style = Fill) else drawPath(p, tint, style = stroke)
             }
 
             // lucide repeat（两个半环箭头，表示转发）

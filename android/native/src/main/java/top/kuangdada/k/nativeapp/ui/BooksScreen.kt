@@ -35,6 +35,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalDensity
@@ -52,6 +53,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
@@ -128,6 +131,30 @@ fun BooksScreen(
     val searchFocus = remember { FocusRequester() }
     val animationsEnabled = LocalAnimationsEnabled.current
     /**
+     * 退出搜索必须**同时**做两件事，缺一件输入法就会"赖着不走"：
+     *
+     *  ① `clearFocus(force = true)`：焦点还在输入框上时，IME 是"有主"的 ——
+     *     `keyboard.hide()` 只是请求它收起，下一帧系统会因为仍有焦点而把它弹回来；
+     *  ② `keyboard.hide()`：兜一次，让 IME 在焦点刚清掉的那一帧就收到收起请求。
+     *
+     * ★ 顺序反了或只做 ① 的后果（旧代码就是**两件都没做**）：搜索框走
+     *   `AnimatedVisibility` 的 `shrinkVertically`，**动画播完之前节点一直留在组合里**，
+     *   输入框在被摘掉之前始终握着焦点 → 系统只能等节点真正 dispose
+     *   （≈ 一整段收起动画的时间，KMotion.spatial 那档）才被动收键盘。
+     *   观感就是用户报的"**取消搜索的时候输入法取消的很慢，不是立马缩回去**"。
+     *
+     * 所以退出搜索统一走 [closeSearch]：先清焦点收键盘，再收 UI（这两步在同一帧里发出去，
+     * 输入法立刻开始下行，收起动画同时开始播，两者并行、互不等待）。
+     */
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val closeSearch: () -> Unit = {
+        focusManager.clearFocus(force = true)
+        keyboard?.hide()
+        query = ""
+        searchOpen = false
+    }
+    /**
      * 头部里两处"就地展开/收起"（搜索框、分类 chip）**必须共用同一对进出场**。
      *
      * 因为它们在同一个点位上互相顶替（搜索时 chip 收起、退出搜索时 chip 回来），
@@ -158,6 +185,17 @@ fun BooksScreen(
     // 展开搜索框后把焦点交给它（键盘随之弹起；`runCatching` 兜极端时序下节点未附着）
     LaunchedEffect(searchOpen) {
         if (searchOpen) runCatching { searchFocus.requestFocus() }
+    }
+    /**
+     * 兜底：搜索**以任何方式**关闭时都确保键盘不会"挂"在屏幕上。
+     *
+     * 正常退出走 [closeSearch]（已经先清了焦点），这里管的是别的路径 ——
+     * 退出搜索后立刻切 tab、进详情、被返回手势压栈等。那些路径下焦点可能还留在
+     * 已被摘掉的节点上，系统便没人去通知 IME 收起。
+     * 第二次 `clearFocus` 是无害的幂等操作（没有焦点时什么都不做）。
+     */
+    DisposableEffect(searchOpen) {
+        onDispose { if (!searchOpen) focusManager.clearFocus(force = true) }
     }
 
     // 分类：服务端目前没有分类字段，所以用"全部 / 有封面 / 无封面"这类**可判定**的切分，
@@ -230,14 +268,11 @@ fun BooksScreen(
                             trailing = {
                                 KIconButton(
                                     icon = GlyphKind.Search,
-                                    // 圆钮就是开关：再点一次收起（并清掉关键词，不留"看起来还在搜"的状态）
+                                    // 圆钮就是开关：再点一次收起（并清掉关键词，不留"看起来还在搜"的状态）。
+                                    // 收起走 [closeSearch]：**先清焦点收键盘**再收 UI，否则输入法要等
+                                    // 收起动画播完、节点被摘掉才被动收起（用户报的"取消很慢"）。
                                     onClick = {
-                                        if (searchOpen) {
-                                            searchOpen = false
-                                            query = ""
-                                        } else {
-                                            searchOpen = true
-                                        }
+                                        if (searchOpen) closeSearch() else searchOpen = true
                                     },
                                 )
                             },
@@ -281,14 +316,11 @@ fun BooksScreen(
                                     Glyph(tint = c.textMuted, kind = GlyphKind.Search, size = KDimens.navIcon)
                                 },
                                 trailing = {
-                                    // 一键退出搜索：清词 + 收起
+                                    // 一键退出搜索：**先收键盘**（见 closeSearch 的注释），再清词 + 收起
                                     Box(
                                         modifier = Modifier
                                             .clip(CircleShape)
-                                            .clickable(onClickLabel = "退出搜索") {
-                                                query = ""
-                                                searchOpen = false
-                                            }
+                                            .clickable(onClickLabel = "退出搜索") { closeSearch() }
                                             .padding(KSpacing.xxs),
                                     ) {
                                         Glyph(tint = c.textMuted, kind = GlyphKind.Close, size = KDimens.navIcon)

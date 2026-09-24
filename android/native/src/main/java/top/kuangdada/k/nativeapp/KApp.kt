@@ -6,6 +6,10 @@ import android.util.Log
 import coil3.ImageLoader
 import coil3.PlatformContext
 import coil3.SingletonImageLoader
+import coil3.disk.DiskCache
+// `directory(File)` 是扩展函数（定义在 coil3.disk.diskCacheKt），不 import 会报
+// "actual type is 'File', but 'Path' was expected" —— 编译器只看到 `directory(Path)` 那个成员
+import coil3.disk.directory
 import top.kuangdada.k.core.data.AdminRepository
 import top.kuangdada.k.core.data.BookRepository
 import top.kuangdada.k.core.data.ComposerRepository
@@ -70,11 +74,53 @@ class KApp : Application(), SingletonImageLoader.Factory {
      * 只改 `fetcherCoroutineContext` / `decoderCoroutineContext`：**拦截器链与内存缓存不动** ——
      * 它们要留在调用方线程上"立刻返回"，否则内存里已经有的图也会被排到动画后面，
      * 列表会先空一块再补上。查看器自己的请求另外走 `ImageLoading.immediate`。
+     *
+     * ## ★★ 必须显式指定 `diskCache`（否则 Coil 3 的默认磁盘缓存是坏的）
+     *
+     * 用户反馈："**每次退出重新进 App 还是会加载自己的头像**" —— 根因就在这里。
+     *
+     * Coil 3 不配 `diskCache` 时的默认值是它的 `singletonDiskCache()`：
+     *
+     * ```
+     * DiskCache.Builder().directory(FileSystem.SYSTEM_TEMPORARY_DIRECTORY / "coil3_disk_cache")
+     * ```
+     *
+     * 而 Okio 在 **Android** 上把 `SYSTEM_TEMPORARY_DIRECTORY` 解析成
+     * `System.getProperty("java.io.tmpdir")` —— 也就是 **`/data/local/tmp`**。
+     * 那个目录属于 `shell` 用户（真机实测 `drwxrwx--x shell shell`），
+     * **App 进程根本没有写权限**，于是：
+     *
+     *  · 磁盘缓存**一次都没写成**（真机 `ls /data/local/tmp` 里查无 `coil3_disk_cache` 目录）；
+     *  · 失败还是**静默**的（Coil 不会因为缓存目录写不进去就报错）—— 内存缓存一命中就一切正常，
+     *    所以只有**冷启动**那一刀露馅：进程被杀 = 内存缓存清空 →
+     *    每一张图（头像、列表配图、封面）都得重新走网络。
+     *
+     * 表现之所以是"**只有自己的头像最明显**"：头像在聊天/发布/主页多处出现、尺寸小、加载快，
+     * "该瞬间出现却空了一下"的对比最刺眼；帖子配图有 shimmer 占位兜着，反而看不出。
+     *
+     * 修法就是钉一个**属于本 App 的**缓存目录：`context.cacheDir`
+     * （= `/data/user/0/<pkg>/cache`，系统会在空间紧张时自动回收，正合"可再生的图片缓存"这个语义）。
      */
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)
             .fetcherCoroutineContext(ImageLoading.gated)
             .decoderCoroutineContext(ImageLoading.gated)
+            .diskCache {
+                DiskCache.Builder()
+                    // 必须落在 App 自己的 cacheDir 下 —— 不能用 Okio 的临时目录（见上面那段）
+                    .directory(context.cacheDir.resolve("image_cache"))
+                    // 250MB 是 Coil 的默认值；显式写出来是为了让"缓存上限"这件事在代码里看得见
+                    .maxSizeBytes(250L * 1024 * 1024)
+                    .build()
+            }
+            // 仅 debug 包挂事件监听：确认冷启动时头像到底命中哪一层缓存
+            // （MEMORY / DISK / NETWORK）。release 包一行都不打，行为零变化。
+            //
+            // ⚠️ 不能在这里直接写 `if (BuildConfig.DEBUG) eventListenerFactory(ImageLoadTracer.Factory)`：
+            // 编 release 时 `src/debug` 的 `ImageLoadTracer` **不在 classpath 上** →
+            // `Unresolved reference`（真机实测 release 打包失败）。改成同名源集切换：
+            // debug 那份返回 true 并挂探针，release 那份是空壳常量 false。
+            .attachImageTracerIfEnabled()
             .build()
 }
 
@@ -84,6 +130,20 @@ class AppGraph(app: Context) {
     private val appContext = app.applicationContext
 
     val tokenStore: TokenStore = TokenStore(appContext)
+
+    init {
+        /**
+         * 预热身份快照（头像地址 / 昵称）。
+         *
+         * 放在这里而不是懒加载：此刻是 `Application.onCreate` 的主线程，
+         * **还没有任何一帧要画**，读盘（加密 prefs 要过 Keystore）慢一点也无所谓；
+         * 等到 `AppShell` 取值时已经是内存读取 → 首帧就能拿到头像地址。
+         *
+         * 不预热的话，冷启动进消息页会出现"**自己的头像先空/先默认人像、再变真头像**"
+         * （用户实测反馈），根因见 [TokenStore.warmIdentity] 的长注释。
+         */
+        tokenStore.warmIdentity()
+    }
 
     /** 主题偏好（跟随系统 / 浅色 / 深色）。冷启动要在 setContent 之前同步读，见 ThemePreference */
     val theme: ThemePreference = ThemePreference(appContext)

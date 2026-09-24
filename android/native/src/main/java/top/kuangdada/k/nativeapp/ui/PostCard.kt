@@ -1,5 +1,6 @@
 package top.kuangdada.k.nativeapp.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -21,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -35,7 +37,6 @@ import coil3.compose.AsyncImage
 import top.kuangdada.k.core.data.PostUi
 import top.kuangdada.k.core.designsystem.component.HeartIcon
 import top.kuangdada.k.core.designsystem.component.KLikeButton
-import top.kuangdada.k.core.designsystem.theme.KElevation
 import top.kuangdada.k.core.designsystem.theme.KDimens
 import top.kuangdada.k.core.designsystem.theme.KRadius
 import top.kuangdada.k.core.designsystem.theme.KSpacing
@@ -94,7 +95,22 @@ fun PostCard(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(KRadius.card),
         color = c.surface,
-        shadowElevation = KElevation.card,
+        /**
+         * ★ `shadowElevation` → `border`（2026-09-24，与语音房卡同一轮统一）。
+         *
+         * 阴影由 `Modifier.shadow()` 画 —— 它是**独立的 RenderNode 图层**，
+         * 与卡片自身的底色/内容**不在同一次绘制里**。这张卡在 `LazyColumn` 里，
+         * 首次组合或滚动重组合时卡片当帧就出、阴影图层要再花一两帧才栅格化
+         * → "卡片先出现、阴影**啪**地补上"（用户最初是在语音房卡上发现这个现象的，
+         * 见 `VoiceRoomsScreen.VoiceRoomCard` 的长注释）。
+         *
+         * 本工程约定本来就是「**卡片一律不要阴影**」（消息页行卡、公告卡、
+         * 语音房卡都不带）。帖子卡内容大（配图/视频封面），那股抖动平时被内容盖住，
+         * 但在**纯文字帖**（没有配图、卡片较矮）上会露出来 —— 所以一并统一掉。
+         *
+         * 边框与卡片在**同一次绘制**里 → 结构上不可能晚一步出现。
+         */
+        border = BorderStroke(1.dp, c.borderSubtle),
     ) {
         Column(
             modifier = Modifier
@@ -109,7 +125,32 @@ fun PostCard(
                 onOpenUser = onOpenUser?.let { open -> ({ open(post.post.userId) }) },
             )
 
-            // 媒体排在正文之前 —— 与设计稿一致（头像行 → 配图 → 正文 → 操作栏）
+            /**
+             * 顺序：**标题/正文 → 配图 → 关键词**（用户要求：
+             * 「首页帖子的文案放图片上面」+「关键词放图片下面文案不动」）。
+             *
+             * 即：文字（标题、正文）在图片之上，**话题胶囊（#关键词）在图片之下**。
+             * 为什么话题要单独挪到图片下面：它是"这条帖子的归类标签"，被点开是去搜同一话题的
+             * 其它帖子 —— 放在图片下面，读帖的顺序就是"标题 → 图 → 这条属于哪个话题"，
+             * 与"先看内容、再看它被归到哪儿"的直觉一致。
+             *
+             * `splitTags` 只拆一次（正文与话题胶囊吃同一份 parts），别在下面各拆一遍。
+             */
+            if (post.title.isNotBlank()) {
+                Text(
+                    text = post.title,
+                    style = KType.subtitle,
+                    color = c.textPrimary,
+                )
+            }
+            val taggedParts = remember(post.description) { splitTags(post.description) }
+            TaggedBody(
+                parts = taggedParts,
+                style = KType.body,
+                color = c.textSecondary,
+                maxLines = 6,
+            )
+
             when {
                 post.images.isNotEmpty() -> PostImageGrid(
                     images = post.images,
@@ -126,24 +167,8 @@ fun PostCard(
                 )
             }
 
-            if (post.title.isNotBlank()) {
-                Text(
-                    text = post.title,
-                    style = KType.subtitle,
-                    color = c.textPrimary,
-                )
-            }
-            if (post.description.isNotBlank()) {
-                // 正文 + 话题：话题从正文里摘出来单独一行（用户要求"跟正文隔开一点"），
-                // 并且可点 → 搜该话题的相关帖子
-                TaggedDescription(
-                    text = post.description,
-                    style = KType.body,
-                    color = c.textSecondary,
-                    maxLines = 6,
-                    onTagClick = onTagClick,
-                )
-            }
+            // 关键词：在图片**下面**（点它 → 搜该话题的相关帖子）
+            TaggedChips(parts = taggedParts, onTagClick = onTagClick)
 
             PostActions(
                 post = post,
@@ -280,14 +305,29 @@ fun Avatar(
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
-        if (url != null) {
-            AsyncImage(
-                model = url,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.size(size).clip(CircleShape),
-            )
-        } else if (glyph != null) {
+        /**
+         * ★ **兜底内容永远先画，图片盖在上面淡入**（2026-09-24 真机取证后的结构性修正）。
+         *
+         * 改之前是 `if (url != null) AsyncImage(...) else 兜底` —— 二选一。看着没问题，
+         * 但它有一个致命副作用：**`url != null` 时兜底完全不进组合树**，于是
+         * "从磁盘读 + 解码"那段窗口里 `AsyncImage` 没有任何内容可画（它没配占位图），
+         * 用户看到的就是 `Box` 的底色 —— 一个**纯色圆片**。
+         *
+         * 真机 logcat 证据（`KIMG` 探针，冷启动直奔会话）：
+         * ```
+         * 14:23:37.362  ok  source=DISK  key=k-avatar:...14461812.png   ← 首次必须读盘
+         * ```
+         * 读盘那段窗口就是用户说的"**先有占位头像，然后才变成自己头像**"。
+         *
+         * 现在的结构：兜底（人像图标 / 首字）**恒在底层**，`AsyncImage` 只在图片就绪时
+         * 画出来（Coil 默认带淡入）。于是读盘期间看到的是**有意义的人像图标**而不是空圈，
+         * 图片到了再平滑换过去 —— 与"先占位再变真图"观感完全不同。
+         *
+         * 为什么不是给 `AsyncImage` 传 `placeholder = painterResource(...)`：那要把兜底
+         * 也做成 Drawable，而兜底有两种形态（glyph / 首字）、还带主题色，做成资源不划算；
+         * 直接留在组合树里既零拷贝、又天然跟随主题。
+         */
+        if (glyph != null) {
             Glyph(tint = fgColor, kind = glyph, size = size * 0.55f)
         } else {
             // 无头像时用首字兜底（不能留白圈，否则列表看起来像没加载出来）
@@ -296,6 +336,29 @@ fun Avatar(
                 style = KType.caption,
                 fontWeight = FontWeight.SemiBold,
                 color = fgColor,
+            )
+        }
+        if (url != null) {
+            AsyncImage(
+                /**
+                 * ★ 走 [rememberAvatarRequest] 而不是直接给 `url` —— 三个原因，
+                 * 都指向同一个真机现象"**每次进页面头像都要重新加载**"：
+                 *
+                 *  1. **尺寸不同 = 缓存不同**：消息列表(48) / 聊天气泡 / 帖子卡片三处尺寸各异，
+                 *     而 Coil 的自动缓存键含请求尺寸 → 同一个人被解三遍；
+                 *  2. **转场期间被动画闸门扣住**：默认调度器是 `ImageLoading.gated`，
+                 *     而"进页面"就是一次转场 → 头像解码被推后，动画快完了才一起出现；
+                 *  3. **`Size.ORIGINAL` 会把 4K 原图整个解进内存**（真机实测一张头像解出
+                 *     `3840x2160` ≈ 33MB）—— 解码慢到肉眼可见，正是上面那段"占位窗口"的
+                 *     主要来源。现在钉成固定小尺寸（见 [AVATAR_DECODE_PX]）。
+                 *
+                 * 请求里钉了固定尺寸 + 显式内存/磁盘键 → 三处共用一条**小**缓存；调度器换成
+                 * `ImageLoading.immediate` → 转场期间照常解码。与书封/配图同一套写法。
+                 */
+                model = rememberAvatarRequest(url),
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.size(size).clip(CircleShape),
             )
         }
     }
@@ -514,7 +577,10 @@ internal fun VideoCover(
             //    放进去会出黑块或重复实例（styles.xml 里 surface_type 那个坑是同一类问题）。
             if (post.videoCoverUrl != null) {
                 AsyncImage(
-                    model = post.videoCoverUrl,
+                    // 走 rememberVideoCoverRequest（显式键 + 不让路给转场）：
+                    // 它是共享元素的源端 —— 裸 URL 会让卡片格与详情页各算一条缓存键，
+                    // 目标端第一帧就是空的（"图没飞出来"）。见该函数的长注释。
+                    model = rememberVideoCoverRequest(post.videoCoverUrl),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
@@ -548,6 +614,21 @@ internal fun VideoCover(
     }
 }
 
+/**
+ * 帖子的 5 个操作：**点赞 / 评论 / 转发 / 分享 / 收藏**。
+ *
+ * **这是全站唯一的实现**（用户要求：「详情页跟首页 5 个元素共用同一份显示出来，
+ * 而不是只显示 4 个 / 3 个」）。之前详情页有一份自己的 `ActionItem` 三连
+ * （赞 / 评论 / 收藏，走了 `Spacing.lg` 的间距、图标 20dp），首页是这一份
+ * （多了转发与分享、间距 `Spacing.md`、图标 18dp）—— 同一件事两处实现，
+ * 迟早分叉：用户这次看到的就是"详情页只有 3 个、首页有 5 个"。
+ *
+ * 现在详情页直接调这个函数（`onEdit = null` 即可，详情页没有编辑入口的需求），
+ * 尺寸/间距/顺序/选中态全站只有一处定义。
+ *
+ * @param onComment / @param onShare 为 null 时该项**仍然显示**（只是不可点）——
+ *   刻意不做"传 null 就少画一个"：那样两页又会长得不一样。
+ */
 @Composable
 internal fun PostActions(
     post: PostUi,
@@ -573,19 +654,19 @@ internal fun PostActions(
             selected = false,
             // 点评论数进详情（原来这里是空实现，点了没反应）
             onClick = { onComment?.invoke() },
-        ) { tint, _ -> Glyph(tint, GlyphKind.Chat, size = 18.dp) }
+        ) { tint, _ -> Glyph(tint, GlyphKind.Chat, size = ACTION_ICON) }
 
         ActionItem(
             label = formatCount(post.repostCount),
             selected = post.isReposted,
             onClick = onRepost,
-        ) { tint, _ -> Glyph(tint, GlyphKind.Repost, size = 18.dp) }
+        ) { tint, _ -> Glyph(tint, GlyphKind.Repost, size = ACTION_ICON) }
 
         ActionItem(
             label = formatCount(post.shareCount),
             selected = false,
             onClick = { onShare?.invoke() },
-        ) { tint, _ -> Glyph(tint, GlyphKind.Share, size = 18.dp) }
+        ) { tint, _ -> Glyph(tint, GlyphKind.Share, size = ACTION_ICON) }
 
         Spacer(Modifier.weight(1f))
 
@@ -602,15 +683,39 @@ internal fun PostActions(
             )
         }
 
-        Box(modifier = Modifier.clickable(onClick = onBookmark)) {
+        // 收藏：**已收藏画实心**（用户要求）—— 与点赞的"两态明确"对齐。
+        // 收藏没有计数（服务端 Post 里就没有这个字段），所以这里是纯图标、无 label。
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(KRadius.chip))
+                .clickable(onClick = onBookmark)
+                // 与 ActionItem 一致的触控高度，避免这一格比左边几个矮一截
+                .padding(horizontal = KSpacing.xxs, vertical = KSpacing.xs),
+        ) {
             Glyph(
                 tint = if (post.isBookmarked) c.accent else c.textSecondary,
                 kind = GlyphKind.Bookmark,
-                size = 18.dp,
+                size = ACTION_ICON,
+                filled = post.isBookmarked,
             )
         }
     }
 }
+
+/**
+ * 操作栏图标尺寸（**全站唯一来源**）。
+ *
+ * 原来首页 18dp、详情页 20dp —— 同一排图标在两个页面差两dp，切页时会觉得"跳了一下"。
+ * 用户要求「爱心图标可以大一点点」，取 20dp 作为两边共同的值。
+ *
+ * ⚠️ 点赞那颗心**不在这里**：它由 [KLikeButton] 内部持有，现在是 **28dp**（比这里大 8dp）。
+ * 这不是漏改 —— **同一 dp ≠ 同一视觉大小**，要看图形在 24 网格上的包络：
+ *   评论 18×18（圆，最饱满）、转发 16×20、分享 14×17.5、收藏 11×17、
+ *   而心是 **20×16（扁的）**，同样画布下矮一截、轮廓又比圆空 → 天生视觉更轻。
+ * 按视觉重量算，心要到 **28dp** 才追平评论（20dp），这是**上限**（30dp 会顶破这一行的高度）。
+ * 详见 `KStatus.kt` 里 `KLikeButton` 那处注释。**别为了"看起来统一"把它改回 20。**
+ */
+internal val ACTION_ICON = 20.dp
 
 @Composable
 internal fun ActionItem(

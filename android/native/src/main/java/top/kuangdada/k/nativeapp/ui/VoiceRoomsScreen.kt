@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -56,7 +57,6 @@ import top.kuangdada.k.core.designsystem.component.KButtonVariant
 import top.kuangdada.k.core.designsystem.component.KPlaceholder
 import top.kuangdada.k.core.designsystem.component.KPlaceholderKind
 import top.kuangdada.k.core.designsystem.component.KTextField
-import top.kuangdada.k.core.designsystem.theme.KElevation
 import top.kuangdada.k.core.designsystem.theme.KMotion
 import top.kuangdada.k.core.designsystem.theme.KDimens
 import top.kuangdada.k.core.designsystem.theme.KRadius
@@ -380,6 +380,21 @@ fun VoiceRoomsScreen(
  * [full] 为真时（人数已达上限）后半句改成 `textMuted` 的「已满」，**优先于「进行中」**：
  * 满员房间必然有人在，"已满"才是这张卡片点不动的原因，用户要看到的是后者。
  * 颜色沿用本页既有的弱化文字令牌，不新增视觉体系。
+ *
+ * ## ★ 为什么去掉了 `shadowElevation`（2026-09-24，用户反馈"房间周围的阴影会突然加载"）
+ *
+ * 原来是 `Surface(shadowElevation = KElevation.card)`。Compose 里 `Surface` 的阴影是由
+ * `Modifier.shadow()` 画的 —— 它是一个**独立的 RenderNode 图层**，与卡片自身的
+ * 底色 / 内容**不在同一次绘制里**。在这个列表（`LazyColumn` + `items(key)`）首次组合、
+ * 或滚动把卡片重新组合时，卡片的底色当帧就画出来了，而那个阴影图层需要**再花一两帧**
+ * 才被栅格化 → 观感就是"卡片先出现、阴影**啪**地一下补上"。
+ *
+ * 本工程的既有约定本来就是「**卡片一律不要阴影**」（消息页行卡、公告卡都不带），
+ * 这里属于遗留的例外。改成与全项目一致的做法：**`surface` 底 + 1px `borderSubtle` 收边**。
+ * 边框与卡片在**同一次绘制**里，**结构上不可能"晚一步出现"**，问题从根上消失；
+ * 也不再需要独立图层，滚动时少一次合成开销。
+ *
+ * ⚠️ 别再给它加回 `shadowElevation` —— 包括"为了层次感加一点点"。
  */
 @Composable
 private fun VoiceRoomCard(
@@ -395,7 +410,8 @@ private fun VoiceRoomCard(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(KRadius.card),
         color = c.surface,
-        shadowElevation = KElevation.card,
+        // 收边用 borderSubtle（与消息页行卡同一档）；不要阴影，见上面的长注释
+        border = BorderStroke(1.dp, c.borderSubtle),
         onClick = onClick,
     ) {
         Column(
@@ -405,7 +421,10 @@ private fun VoiceRoomCard(
             // 封面：创建时上传过的显示真实封面；老房间回落占位横幅（无封面字段时期的形态）
             if (coverUrl != null) {
                 AsyncImage(
-                    model = coverUrl,
+                    // 走 rememberRoomCoverRequest：显式缓存键 + 固定小尺寸 + 不让路给转场动画。
+                    // 裸 `model = coverUrl` 会让封面在进页面动画结束前才解码 ——
+                    // 用户看到的就是"房间周围的阴影加载了一下"（见该函数的长注释）。
+                    model = rememberRoomCoverRequest(coverUrl),
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier

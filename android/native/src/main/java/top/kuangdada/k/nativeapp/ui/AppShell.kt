@@ -189,6 +189,26 @@ fun AppShell(
     val isLoggedIn = session.isLoggedIn
 
     /**
+     * 当前用户的头像 / 昵称：**优先接口真值，其次落盘的上一份**。
+     *
+     * 为什么需要这层兜底（用户实测反馈："**私信对话页自己的头像先有占位、然后才变成自己头像**"）：
+     * 冷启动时 `authState` 先是 `Restoring`，`/auth/me` 回来之前拿不到 `LoggedIn.user`
+     * —— 直接用 `authState` 取的话就是 `null`，头像组件只能先画**默认人像图标**，
+     * 等网络往返回来才换成真头像，那一跳正好被用户看到。
+     *
+     * [SessionRepository.cachedAvatar] 是**上一次登录时落盘**的值，同一帧就读得到，
+     * 于是首帧直接就是正确头像。接口回来后这里自动切到真值（换头像因此不会被旧缓存卡住）。
+     * 未登录时 `cachedAvatar` 返回 null，不会拿上一个人的头像来渲染。
+     */
+    val myAvatarUrl = resolveUrl(
+        (authState as? SessionRepository.AuthState.LoggedIn)?.user?.avatar
+            ?: session.cachedAvatar,
+        session.api.baseUrl,
+    )
+    val myUsername = (authState as? SessionRepository.AuthState.LoggedIn)?.user?.username
+        ?: session.cachedUsername.orEmpty()
+
+    /**
      * 实时连接的生命周期：**已登录 + 在前台**才保持长连接。
      *
      * 退到后台就断开（一直挂着白耗电，服务端也有 5 条/账号的上限），回前台自动重连。
@@ -673,11 +693,10 @@ fun AppShell(
                 partnerName = page.partnerName,
                 // 对方头像由会话列表带过来（消息接口里没有头像字段）
                 partnerAvatar = page.partnerAvatar,
-                // 自己的头像取当前登录用户；未登录/无头像 → 默认人像
-                myAvatar = resolveUrl(
-                    (authState as? SessionRepository.AuthState.LoggedIn)?.user?.avatar,
-                    session.api.baseUrl,
-                ),
+                // 自己的头像取当前登录用户；未登录/无头像 → 默认人像。
+                // 走 [myAvatarUrl]（含"落盘的上一份"兜底）而不是直接读 authState ——
+                // 否则冷启动首帧是 null、要等 /auth/me 回来才出图（用户实测的"先占位再变"）
+                myAvatar = myAvatarUrl,
                 realtime = realtime,
                 onBack = { navigator.pop() },
             )
@@ -685,11 +704,9 @@ fun AppShell(
             is AppDestination.ComposerDest -> ComposerScreen(
                 composer = composer,
                 // 设计稿「发布弹层」的头像行要显示当前登录用户的头像与昵称
-                myAvatar = resolveUrl(
-                    (authState as? SessionRepository.AuthState.LoggedIn)?.user?.avatar,
-                    session.api.baseUrl,
-                ),
-                myName = (authState as? SessionRepository.AuthState.LoggedIn)?.user?.username.orEmpty(),
+                // （同样走带落盘兜底的 [myAvatarUrl]/[myUsername]）
+                myAvatar = myAvatarUrl,
+                myName = myUsername,
                 onClose = { navigator.pop() },
                 onPosted = {
                     /**
@@ -1496,6 +1513,18 @@ private data class ShellPage(
  * `inFraction` / `outFraction` 是**分母**：数字越大位移越小。
  * 新页滑入整屏的 1/4、被压下去的旧页只走 1/8 —— 两者不等速才有"层叠"感
  * （等速整屏平移是"幻灯片"，不是现代 App 的转场）。
+ *
+ * ------------------------------------------------------------
+ * ★ 2026-09-24：「进详情页闪一下」**不是**这里的问题（已排查并回退过一次改动）
+ * ------------------------------------------------------------
+ * 曾经按"页面淡入比共享元素边界弹簧快、有相位差"的假设把这里的 `fadeIn/fadeOut`
+ * 换成过一档极快的 `KMotion.pageFadeIn`。**两个方向都不成立**：
+ *  · `KMotion.effects(Default)`（k=1600）收敛 ~188ms、共享边界 `spatial(Default)`（k=700）
+ *    收敛 ~179ms —— **几乎同步**，没有相位差；
+ *  · 真正的病根在远程：[SharedElements.sharedElementIfAvailable] 的 `renderInOverlay`
+ *    被传成 `false`，导致 **"飞行那一份"压根不存在**（只活在覆盖层里），两端各自原地画。
+ *
+ * 所以这里**保持 `effects()` 不动**。改淡入速度只是把症状挪一挪，还会白白改掉转场观感。
  */
 private fun pageTransform(
     intoFromRight: Boolean,

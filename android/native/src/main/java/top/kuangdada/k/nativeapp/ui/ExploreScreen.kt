@@ -78,6 +78,8 @@ fun ExploreScreen(
 ) {
     val c = KTheme.colors
     val scope = rememberCoroutineScope()
+    // 卡片上的「分享」要拉系统分享面板（与首页卡片同一段实现）
+    val context = androidx.compose.ui.platform.LocalContext.current
     val openViewer = rememberImageViewerSimple()
     val listState = rememberLazyListState()
     // 键盘「搜索」键按下后收起键盘（结果就在下面，不收键盘会挡住）
@@ -266,6 +268,13 @@ fun ExploreScreen(
                         },
                         onClick = { onOpenPost?.invoke(post.id) },
                         onComment = onOpenPost?.let { open -> { open(post.id) } },
+                        // 分享：**之前这里没传**（`onShare` 为 null）→ 卡片上那颗分享图标
+                        // 一直是个死按钮（点了没反应）。既然操作栏要"全站共用同一份"，
+                        // 就不能留一个只在一处生效的图标 —— 与首页卡片同一段实现。
+                        onShare = {
+                            shareText(context, "$PROFILE_SHARE_BASE/post/${post.id}", "分享帖子")
+                            scope.launch { posts.markShared(post.id) }
+                        },
                         onVideoClick = onOpenVideo?.let { open -> { open(post.id) } },
                         onTagClick = onTagClick,
                         // 作者头像 / 昵称 → 这个人的主页

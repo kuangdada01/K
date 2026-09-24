@@ -239,6 +239,153 @@ fun rememberSharedCoverRequest(url: String?): ImageRequest? {
 }
 
 /**
+ * 头像的内存缓存键（**显式**）。
+ *
+ * 为什么头像也需要显式键：同一张头像会被**三个不同尺寸**的组件加载 ——
+ * 消息列表行 `avatarRow`(48) / 聊天气泡 `avatarCard` / 帖子卡片又是另一档。
+ * 不钉尺寸的话 Coil 的自动缓存键**包含请求尺寸**，三处各算各的 →
+ * 同一个人、同一张图进三个页面解三遍，**进页面必现"头像重新加载"**（用户实测反馈）。
+ *
+ * 与书封 [bookCoverMemoryCacheKey] 是同一个套路：尺寸钉 `ORIGINAL` + 键显式化，
+ * 三个尺寸就共用**一条**内存缓存，进页面直接命中、零解码。
+ */
+fun avatarMemoryCacheKey(url: String): String = "k-avatar:$url"
+
+/**
+ * 头像的 Coil 请求模型：**钉尺寸 + 显式缓存键 + 不吃动画让路**。
+ *
+ * 三个尺寸共用一条缓存（见 [avatarMemoryCacheKey]）之外，第三条同样关键：
+ * 默认调度器是 [ImageLoading.gated]，而**进页面本身就是一次转场** ——
+ * `AnimationGate` 会把转场期间新派发的取图/解码全部扣到动画结束再放行。
+ * 结果就是"进消息页时头像空一片、动画快完了才一起冒出来"，而且**只有第一次差**
+ * （第二次缓存命中、几乎同帧，看着就正常）。
+ *
+ * 这与书封、帖子配图是完全同一条病根、同一个解法（见 [rememberSharedCoverRequest] 的长注释）。
+ * 头像虽然不参与共享元素飞行，但它同样属于"页面第一帧就该有的东西"，
+ * 所以也走 [ImageLoading.immediate] 豁免。
+ *
+ * ## ★★ 尺寸钉 `Size.ORIGINAL` 是错的（2026-09-24 真机取证纠正）
+ *
+ * 头像最大的那一档是 `KDimens.avatarRow` = **48dp**（3x 屏 ≈ 144px）。而 `Size.ORIGINAL`
+ * 会让 Coil 把**原图全分辨率**解进内存 —— 真机 logcat 实测：本机两个头像分别解出
+ * `512x360` 与 **`3840x2160`**。后者是 **3840×2160×4 ≈ 33MB** 的位图：
+ *
+ *  · 解码本身要几百毫秒（比"钉死小尺寸"慢两个数量级）；
+ *  · 每次进页面都往内存缓存里塞 33MB，GC 压力直接反映成列表掉帧；
+ *  · 而画到屏幕上只有 144px，**999 倍的解码量全白做**。
+ *
+ * 钉 `Size.ORIGINAL` 的初衷是"三个尺寸共用一个键"，但那条路径不需要靠 ORIGINAL 实现 ——
+ * [avatarMemoryCacheKey] 已经把键**显式**钉住了，尺寸换成固定值反而更对：
+ * 三处用同一个固定尺寸 → 仍然共用一条缓存，且这条缓存是小的。
+ *
+ * 取值 [AVATAR_DECODE_PX] = 384px：3x 屏下 48dp 是 144px，留 2.67 倍余量给
+ * 未来"头像放大看"之类的需求，同时仍远小于任何原图（33MB → 约 0.6MB）。
+ */
+private const val AVATAR_DECODE_PX = 384
+
+@Composable
+fun rememberAvatarRequest(url: String?): ImageRequest? {
+    val context = LocalContext.current
+    return remember(url, context) {
+        url?.let {
+            ImageRequest.Builder(context)
+                .data(it)
+                // 固定小尺寸（不是 ORIGINAL —— 见上面长注释）：三处共用一条**小**缓存
+                .size(AVATAR_DECODE_PX)
+                .memoryCacheKey(avatarMemoryCacheKey(it))
+                // 磁盘缓存也钉住同一条键：换尺寸/换请求对象时不至于重下一次
+                .diskCacheKey(avatarMemoryCacheKey(it))
+                .fetcherCoroutineContext(ImageLoading.immediate)
+                .decoderCoroutineContext(ImageLoading.immediate)
+                .build()
+        }
+    }
+}
+
+/**
+ * 视频封面的内存/磁盘缓存键（**显式**）。
+ *
+ * 为什么视频封面也需要：它是**共享元素的端点**（信息流卡片 ⇄ 帖子详情页），
+ * 两端原来是裸 `AsyncImage(model = videoCoverUrl)` —— 各自按组件尺寸算缓存键，
+ * 卡片格与详情页尺寸不同 → 两条缓存 → **目标端第一帧是空的**，
+ * 而共享元素（`sharedElement`）语义要求两端各自留在原地画，第一帧空就是"图没飞出来"。
+ *
+ * 与 [bookCoverMemoryCacheKey] 完全同构（那一条也是共享元素端点）。
+ * 详情页与卡片必须都走 [rememberVideoCoverRequest] 才能保证两边同一个键。
+ */
+fun videoCoverMemoryCacheKey(url: String): String = "k-video-cover:$url"
+
+/**
+ * 视频封面的加载请求：**钉死尺寸 + 显式键 + 不让路给动画**。
+ *
+ * 与 [rememberSharedCoverRequest]（书封）同一条理由，见那个函数的详细注释：
+ * 共享元素目标端的内容必须**第一帧就有**，否则飞行途中封面是空的。
+ *
+ * 尺寸钉 `Size.ORIGINAL` 是**有意**的（与书封一致）：两端尺寸不同、但必须同键，
+ * 钉 ORIGINAL 让"同键"与"同尺寸"两件事合一，最不容易写歪。
+ * 视频封面本来就是要全屏看的图，解全尺寸并不浪费（与头像那种 48dp 小圆片不同）。
+ */
+@Composable
+fun rememberVideoCoverRequest(url: String?): ImageRequest? {
+    val context = LocalContext.current
+    return remember(url, context) {
+        url?.let {
+            ImageRequest.Builder(context)
+                .data(it)
+                .size(Size.ORIGINAL)
+                .memoryCacheKey(videoCoverMemoryCacheKey(it))
+                .fetcherCoroutineContext(ImageLoading.immediate)
+                .decoderCoroutineContext(ImageLoading.immediate)
+                .build()
+        }
+    }
+}
+
+/**
+ * 语音房封面的内存缓存键（**显式**）。
+ *
+ * 与 [avatarMemoryCacheKey] / [bookCoverMemoryCacheKey] 同一个套路：Coil 默认的缓存键
+ * **包含请求尺寸**，房间卡片（108dp 高）与将来任何别处的封面尺寸不同就是两条缓存。
+ * 钉一个显式键，让"同一张房间封面"在任何地方都命中同一条。
+ */
+fun roomCoverMemoryCacheKey(url: String): String = "k-room-cover:$url"
+
+/**
+ * 语音房封面的加载请求：**钉尺寸 + 显式缓存键 + 不吃动画让路**。
+ *
+ * 2026-09-24 用户反馈：「**语音界面房间周围的阴影也是会加载一下**」。
+ *
+ * 根因与头像/书封完全同一条：`VoiceRoomCard` 里的封面原来是裸的
+ * `AsyncImage(model = coverUrl)`，于是
+ *  ① 缓存键按组件尺寸自动算（与别处不共享）；
+ *  ② 调度器是默认的 [ImageLoading.gated]，会让路给动画 ——
+ *     而"进语音页"本身就是一次转场，封面被推到动画结束后才解码。
+ * 封面一迟到，卡片里那块 108dp 的横幅就先是空底色；卡片是 `Surface(shadowElevation)`,
+ * 封面带来的重绘正好落在阴影上 —— 观感就是"房间周围的阴影加载了一下"。
+ *
+ * 钉 108dp 高的实际像素（[VOICE_COVER_DECODE_PX]，3x 屏约 324px 宽）而不是
+ * `Size.ORIGINAL`：房间封面是横幅，原图动辄 4K，全解进内存纯浪费（同头像那条教训）。
+ */
+private const val VOICE_COVER_DECODE_PX = 512
+
+@Composable
+fun rememberRoomCoverRequest(url: String?): ImageRequest? {
+    val context = LocalContext.current
+    return remember(url, context) {
+        url?.let {
+            ImageRequest.Builder(context)
+                .data(it)
+                .size(VOICE_COVER_DECODE_PX)
+                .memoryCacheKey(roomCoverMemoryCacheKey(it))
+                .diskCacheKey(roomCoverMemoryCacheKey(it))
+                .fetcherCoroutineContext(ImageLoading.immediate)
+                .decoderCoroutineContext(ImageLoading.immediate)
+                .build()
+        }
+    }
+}
+
+/**
  * 图书卡片（设计稿 §3.3.1 图书列表）。
  *
  * 设计稿形态：**封面直出 + 两行文字，没有白底卡片、没有阴影** —— 书封本身就是卡片，

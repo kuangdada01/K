@@ -53,6 +53,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -822,6 +823,13 @@ fun ChatScreen(
     var sending by remember { mutableStateOf(false) }
     var input by remember { mutableStateOf("") }
     var replyTo by remember { mutableStateOf<MessageRepository.MessageUi?>(null) }
+    /**
+     * 输入框的焦点句柄：**点「引用」要把焦点交给它**，IME 随之弹起，用户直接就能打字。
+     *
+     * 与详情页评论框同一套做法（见 `PostDetailScreen.inputFocusRequester`）。
+     * `runCatching` 在真正的调用点上兜"节点还没附着"的极端时序，不会崩。
+     */
+    val inputFocusRequester = remember { androidx.compose.ui.focus.FocusRequester() }
     var error by remember { mutableStateOf<String?>(null) }
     var toast by remember { mutableStateOf<String?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -895,6 +903,18 @@ fun ChatScreen(
     val chatImageUrls = remember(items) { items.mapNotNull { it.imageUrl } }
     // 私密图片必须带 JWT 头，查看器与保存都靠它
     val openViewer = rememberImageViewer(topInsetPx = { 0f })
+    /**
+     * 离开这段对话时**注销它那一组图片来源**。
+     *
+     * 为什么必须清：来源表是全局的（挂在 Shell 上），气泡登记的是"这一格在窗口里的矩形"。
+     * 页面退出后这些矩形已经不作数，若留在表里，下次从别的地方用同一个键查就会拿到过期位置。
+     * （单格的 `removeToken` 在气泡被回收时也会走，但**不确定每种退出路径都会触发**——
+     * 沉浸页整页移除时格子未必逐个 dispose 完，所以这里按"整组"再兜一次，幂等无害。）
+     */
+    val viewerOrigins = LocalViewerOrigins.current
+    DisposableEffect(viewerOrigins, partnerId) {
+        onDispose { viewerOrigins?.removeChatOrigins(partnerId) }
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(c.bgPage)) {
         // 顶栏真毛玻璃：Kyant0 的 backdrop 库。用法与注意事项见 BooksScreen 同段注释
@@ -913,6 +933,34 @@ fun ChatScreen(
         val backdrop = rememberLayerBackdrop(onDraw = rememberBackdropOnDraw(pageBg))
         // 点消息列表的空白处收起键盘（输入时键盘挡着半屏内容）
         val keyboard = LocalSoftwareKeyboardController.current
+        /**
+         * 点「引用」的**唯一出口**（长按菜单那一项走这里）。
+         *
+         * 用户要求的两件事都落在这个函数里：
+         *  1. **引用后自动聚焦输入框、唤起输入法** —— 引用完就是要接着打字，
+         *     再让用户手动点一下输入框是多一步；语义与详情页点「回复」完全一致
+         *     （见 `PostDetailScreen` 的 `onReply`）。
+         *  2. **键盘已经开着时不许把它收掉** —— 长按菜单是 `Popup(focusable = true)`，
+         *     弹出时本身会抢走焦点、把 IME 收掉；所以这里**必须重新把焦点交还输入框**
+         *     并再 `show()` 一次（`requestFocus()` 在"焦点刚从别处回来"时
+         *     不一定会自己弹 IME，少数机型尤其明显）。
+         *
+         * `requestFocus()` 必须**先于** `show()`：反过来的话，系统先按"当前聚焦节点"起 IME，
+         * 那时焦点还在 Popup 上，等于白喊。
+         *
+         * `keyboard?.show()` 带 150ms 的等待：菜单刚 `dismiss` 时弹层窗口还在拆，
+         * 同一帧喊 show 会被系统忽略（表现就是"还是不弹"）。这个延迟只在"引用"这一条
+         * 用户动作上出现，看不见也不影响其它交互。
+         */
+        fun quoteMessage(target: MessageRepository.MessageUi) {
+            replyTo = target
+            runCatching { inputFocusRequester.requestFocus() }
+            scope.launch {
+                // 让菜单的退场先走完（Popup 窗口销毁是异步的），再喊起 IME
+                kotlinx.coroutines.delay(KEYBOARD_SETTLE_MS)
+                keyboard?.show()
+            }
+        }
         /**
          * 上下翻聊天记录时**也**收起键盘（用户反馈：只有"点一下"能收，翻记录时不收）。
          *
@@ -987,6 +1035,14 @@ fun ChatScreen(
                                     partnerAvatar = partnerAvatar,
                                     myAvatar = myAvatar,
                                     /**
+                                     * 这一格的来源键与下标：与下面 `openViewer` 传的
+                                     * **必须是同一套**（同一个 [chatImageOriginKey]、同一份
+                                     * `chatImageUrls` 里的下标），否则飞行起点会指到别的格子上。
+                                     */
+                                    imageOriginKey = chatImageOriginKey(partnerId),
+                                    imageOriginIndex = entry.msg.imageUrl
+                                        ?.let { u -> chatImageUrls.indexOf(u) } ?: -1,
+                                    /**
                                      * 点图片 → 全屏看图（用户反馈"聊天里的图点不开全屏"）。
                                      * 传**整段对话的图 + 这张的下标**：进去之后能左右滑着看完。
                                      * `msg.imageUrl` 是**已解析的绝对地址**（同 [chatImageUrls]），
@@ -999,12 +1055,25 @@ fun ChatScreen(
                                                 chatImageUrls,
                                                 chatImageUrls.indexOf(url).coerceAtLeast(0),
                                                 messages.imageHeaders(),
-                                                null,
+                                                /**
+                                                 * ★ 传**虚拟来源键**而不是 null（用户反馈"聊天里的图点开是直接闪现，
+                                                 * 没有详情页那种飞出来的动画"）。
+                                                 *
+                                                 * 第 4 个参数在查看器里叫 `postId`，但它真正的身份是
+                                                 * **"去来源表里查哪一组格子"的键** —— 传 null 就等于
+                                                 * `ViewerOrigins.of(null, n)` 直接返回空表，
+                                                 * 查看器按设计退化成"直接落位"（见 `ImageViewerRequest.postId` 注释）。
+                                                 *
+                                                 * 私信图片没有帖子 id，所以用 [chatImageOriginKey] 造一个
+                                                 * 落在负数区间的键：与帖子的正数 postId **共用同一张表、互不撞号**。
+                                                 * 气泡那一格也已用同一个键 `registerViewerOrigin` 登记过。
+                                                 */
+                                                chatImageOriginKey(partnerId),
                                             )
                                         }
                                     },
                                     // 引用与撤回都在长按菜单里（气泡自身不带常显操作文字）
-                                    onQuote = { replyTo = entry.msg },
+                                    onQuote = { quoteMessage(entry.msg) },
                                     onRecall = {
                                         scope.launch {
                                             val id = entry.msg.raw.id
@@ -1063,6 +1132,22 @@ fun ChatScreen(
                      * 而且它居中、真实内容却贴着底部 —— 加载完是"中间一个圈 → 底部一片气泡"，
                      * 视觉上要跳一次。骨架按真实版式铺、**贴底**，与加载完的画面是连续的。
                      */
+                    /**
+                     * ⚠️ **不要在这里加 `.padding(top = topInset)`**（用户反馈："从别人个人主页
+                     * 点私信进去，里面的提示还没有居中" —— 就是这两处）。
+                     *
+                     * 原因：`topInset` 是**顶栏高度**，而顶栏**根本不在这个 Box 里** ——
+                     * 外层 `Column` 是「顶栏 / Box(weight(1f)) / 输入栏」三行，这个 Box
+                     * 已经是"顶栏下面那一块"了。再减一次顶栏高度就是**凭空往下推**。
+                     *
+                     * 更隐蔽的是它推的量是**一半**：`align(Alignment.Center)` 先按 Box 中心
+                     * 摆好，而 `padding(top = x)` 让内容盒变高 x → 居中时内容整体下移 **x/2**。
+                     * 真机上就是"提示偏下小半格"，不是明显到一眼能说出原因的那种偏。
+                     *
+                     * 消息列表页那边（`CenteredState`）遇到过同一个问题，当时的教训是
+                     * "得按列表视口 − 顶栏量出可用高度"；但**这里压根不需要**——
+                     * 这个 Box 的边界已经排除了顶栏与输入栏，直接 `align(Center)` 就是准的。
+                     */
                     loading -> Box(Modifier.fillMaxSize().padding(top = topInset)) { ChatSkeleton() }
 
                     error != null -> KPlaceholder(
@@ -1070,14 +1155,14 @@ fun ChatScreen(
                         title = "消息加载失败",
                         description = error,
                         action = { KButton("重试", onClick = { scope.launch { loadInitial() } }) },
-                        modifier = Modifier.padding(top = topInset).align(Alignment.Center),
+                        modifier = Modifier.align(Alignment.Center),
                     )
 
                     else -> KPlaceholder(
                         kind = KPlaceholderKind.Empty,
                         title = "还没有消息",
                         description = "打个招呼吧",
-                        modifier = Modifier.padding(top = topInset).align(Alignment.Center),
+                        modifier = Modifier.align(Alignment.Center),
                     )
                 }
             }
@@ -1173,6 +1258,8 @@ fun ChatScreen(
                         placeholder = "说点什么…",
                         shape = RoundedCornerShape(KRadius.control),
                         variant = KTextFieldVariant.Inset,
+                        // 点「引用」时把焦点交给它（见 quoteMessage），IME 随之弹起
+                        focusRequester = inputFocusRequester,
                     )
                 }
                 KButton(
@@ -1471,6 +1558,19 @@ private fun ChatContextMenu(
                 }
             }
         },
+        /**
+         * ★ `focusable = true` 是**必须**的：它负责"点菜单外面就关掉"
+         * （`onDismissRequest` 只有可聚焦弹层才会收到），也负责菜单能拿到点击。
+         *
+         * 代价与对策（用户反馈："**输入法在唤醒的时候长按消息引用会退出输入法**"）：
+         * 可聚焦弹层会把焦点从输入框抢走 → IME 随之收起。**这是系统行为，弹层里改不掉**，
+         * 所以对策放在"引用"这个动作上 —— 见 `quoteMessage`：它会把焦点交还输入框
+         * 并重新 `show()` 一次，用户看到的是"键盘闪了一下又回来了"。
+         *
+         * 为什么不干脆改成 `focusable = false` 让弹层不抢焦点：那样 `onDismissRequest`
+         * 永远不会触发（点空白关不掉菜单），得自己加全屏透明遮罩层接管点击，
+         * 反而多一个"遮罩会不会挡住气泡长按"的新问题，得不偿失。
+         */
         properties = PopupProperties(focusable = true),
         onDismissRequest = onDismiss,
     ) {
@@ -1667,6 +1767,17 @@ private fun MessageBubble(
     imageHeaders: Map<String, String>,
     partnerAvatar: String?,
     myAvatar: String?,
+    /**
+     * 这一格图片的来源登记键与下标（见 [chatImageOriginKey]）。
+     *
+     * 由上层算好传进来，而不是在这里就地算 —— 因为"这段对话里的第几张"要跟
+     * 上层 `chatImageUrls`（打开查看器时用的同一份列表）严格同源，
+     * 两个地方各算各的迟早会错位。
+     *
+     * `originKey == null` 表示不登记（例如这条消息的图不在 `chatImageUrls` 里）。
+     */
+    imageOriginKey: Long? = null,
+    imageOriginIndex: Int = -1,
     /** 点图片：打开全屏查看器（图片消息才用得到） */
     onImageClick: () -> Unit,
     onQuote: () -> Unit,
@@ -1732,10 +1843,43 @@ private fun MessageBubble(
                      * 这里只负责"喊一声"，不重复实现一遍下载/落盘。
                      */
                     val mediaOpener = LocalMediaSaveOpener.current
+                    /**
+                     * 这一格的 painter：**额外 remember 一份**，只用来给来源登记读
+                     * "这张图什么比例"。
+                     *
+                     * 为什么不能复用 `SubcomposeAsyncImage` 内部那个 painter：那个在
+                     * `SubcomposeAsyncImageContent` 的 subcomposition 里，**外面拿不到**。
+                     * 而 [registerViewerOrigin] 需要 painter 来算飞行落位帧的比例
+                     * （否则退化成"铺满屏幕"再缩回，看着就是你说的"直接闪现"之后又跳一下）。
+                     *
+                     * 代价是多一份 painter 对象 —— 但 Coil 的请求**共用内存缓存**，
+                     * 同一张图不会解码两次（这也是全项目所有 `registerViewerOrigin` 的既有做法）。
+                     */
+                    val originPainter = coil3.compose.rememberAsyncImagePainter(
+                        model = coil3.request.ImageRequest.Builder(context)
+                            .data(msg.imageUrl)
+                            .httpHeaders(headers)
+                            .build(),
+                    )
                     Box(
                         modifier = Modifier
                             // 长按菜单要按图片在窗口里的真实位置定位（指针指向它）
                             .onGloballyPositioned { bubbleBounds = it.boundsInWindow() }
+                            // 登记"这一格在哪 + 取景比例 + 圆角"：全屏查看器的进出场飞行靠它。
+                            // 圆角必须与下面那行 `clip(...)` 一致（都是 KRadius.control）——
+                            // 飞行图会从这个圆角变到全屏的直角。
+                            .then(
+                                if (imageOriginKey != null && imageOriginIndex >= 0) {
+                                    Modifier.registerViewerOrigin(
+                                        postId = imageOriginKey,
+                                        index = imageOriginIndex,
+                                        painter = originPainter,
+                                        cornerRadius = KRadius.control,
+                                    )
+                                } else {
+                                    Modifier
+                                },
+                            )
                             .combinedClickable(
                                 onClick = onImageClick,
                                 onLongClick = {
@@ -1955,6 +2099,16 @@ private fun KToastInline(text: String, onDismiss: () -> Unit) {
         Text(text, style = KType.caption, color = c.textPrimary)
     }
 }
+
+/**
+ * 长按菜单退场后、再喊起输入法的等待时长。
+ *
+ * `Popup(focusable = true)` 关闭时弹层窗口是**异步拆掉**的：同一帧调
+ * `keyboard.show()` 会被系统忽略（那时焦点还没真正回到本页的输入框上），
+ * 表现就是"点了引用但键盘还是不弹"。150ms 足够让 popup 窗口销毁 + 焦点落回来，
+ * 又短到用户完全感知不到。
+ */
+private const val KEYBOARD_SETTLE_MS = 150L
 
 /**
  * 「最后一个非空值」：专门给**退场动画**用。

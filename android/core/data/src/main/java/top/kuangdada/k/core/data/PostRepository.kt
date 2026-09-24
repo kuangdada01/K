@@ -190,6 +190,74 @@ class PostRepository(private val session: SessionRepository) {
     private val lists = mutableListOf<PostList>()
 
     /**
+     * **单帖状态表**：`postId -> 这一条帖子的最新状态`。
+     *
+     * 为什么需要它（用户实测反馈：「五个元素只在首页生效在详情页不生效啊，2 套动效？
+     * 用首页的就行了，一套共用联动的」）：
+     *
+     * 详情页原来把帖子存成自己的一份 `mutableStateOf(posts.cached(postId))` 快照 ——
+     * 它**完全在 `lists` 之外**，于是 `applyToAll` 遍历所有列表也碰不到它。
+     * 结果就是单向联动：详情页 `refreshDetail` 会写回列表（所以首页跟着变），
+     * 而**首页点赞/收藏/转发，详情页那颗心纹丝不动**（连 `KLikeButton` 的弹跳/填色
+     * 都触发不了，因为它的 `liked` 参数压根没变）。
+     *
+     * 现在这里维护一份按 id 索引的状态流：详情页 `collectAsState` 它，
+     * 于是**详情页与首页读的是同一份数据**，互动一动两边同时变 —— 一套、联动。
+     *
+     * 为什么是"状态表"而不是"详情页自己 collect 所有列表"：
+     * 详情页只关心一条帖子，让它去遍历所有列表找自己那条既慢又绕；
+     * 而且"这条帖子在哪个列表里"是个偶然事实（首页/搜索/主页都可能没加载过它）。
+     */
+    private val detailStates = LinkedHashMap<Long, MutableStateFlow<PostUi?>>()
+
+    /** 取某条帖子的状态流（没有就建一个初始为空的）—— 详情页订阅它 */
+    @Synchronized
+    fun detailFlow(postId: Long): StateFlow<PostUi?> {
+        detailStates[postId]?.let { return it.asStateFlow() }
+        // 容量上限：详情页的状态流不会自己消失（订阅者走了也没人通知仓库），
+        // 一路刷下去这张表会变成一份无限增长的帖子缓存。超过上限就丢最老的 ——
+        // 丢掉的后果只是"那条帖子以后要重新种子一次"，没有正确性问题。
+        while (detailStates.size >= DETAIL_CACHE_MAX) {
+            val oldest = detailStates.keys.firstOrNull() ?: break
+            detailStates.remove(oldest)
+        }
+        return MutableStateFlow<PostUi?>(null).also { detailStates[postId] = it }.asStateFlow()
+    }
+
+    /**
+     * 往单帖状态表里推一条最新状态（[applyToAll] / [refreshDetail] 里调）。
+     *
+     * 只在**这条帖子的流已经被创建**时推 —— 没人订阅就没必要留着，
+     * 否则一个用户的浏览历史会把这张表撑成一份无限增长的帖子缓存。
+     */
+    @Synchronized
+    private fun pushDetail(postId: Long, ui: PostUi) {
+        detailStates[postId]?.value = ui
+    }
+
+    /** 让单帖状态表里那条失效（本地摘帖时调，详情页据此知道"这条没了"） */
+    @Synchronized
+    private fun clearDetail(postId: Long) {
+        detailStates[postId]?.value = null
+    }
+
+    /**
+     * **首帧种子**：把一条帖子塞进单帖状态流，让详情页进来就有内容可画。
+     *
+     * 只在**当前为空**时写 —— 详情页可能是在"流里已经有更新鲜的状态"之后才组合的
+     * （比如从详情页返回列表又立刻点进同一条），这时拿列表缓存去覆盖会把新状态写旧。
+     *
+     * @return 是否真的写进去了（调用方一般不需要，方便测试/调试）
+     */
+    @Synchronized
+    fun seedDetail(postId: Long, ui: PostUi): Boolean {
+        val flow = detailStates[postId] ?: return false
+        if (flow.value != null) return false
+        flow.value = ui
+        return true
+    }
+
+    /**
      * **内容版本号**：发帖 / 编辑 / 删帖成功时自增。
      *
      * 为什么要有它：这些动作改变的是"有哪些帖子"，而**各页面的列表是各自缓存的**
@@ -292,22 +360,41 @@ class PostRepository(private val session: SessionRepository) {
         }
     }
 
+    /**
+     * 收藏 / 取消收藏。
+     *
+     * **除了就地把标记位同步到所有列表，还要同步维护「我的收藏」那份列表的成员**：
+     * 成功收藏要把这条帖**插进去**、取消收藏要把它**摘掉**。只用 [applyToAll] 的话，
+     * 收藏页里根本不会出现刚收藏的帖子（那条帖压根不在它的 `posts` 数组里，
+     * 没有东西可改）—— 用户看到的就是"收藏完进主页没更新，必须重启 App"。
+     */
     suspend fun toggleBookmark(postId: Long): ApiResult<Boolean> {
         val target = findPost(postId) ?: return ApiResult.Failure(ApiError.Unknown("帖子不存在"))
         val next = !target.isBookmarked
         applyToAll(postId) { it.copy(post = it.post.copy(bookmarked = if (next) 1 else 0)) }
+        if (next) {
+            ensureInList(Source.Bookmarks, postId) { it.copy(post = it.post.copy(bookmarked = 1)) }
+        } else {
+            removeFromList(Source.Bookmarks, postId)
+        }
         return when (val result = request { if (next) session.api.posts.bookmark(postId) else session.api.posts.unbookmark(postId) }) {
             is ApiResult.Success -> {
                 applyToAll(postId) { it.copy(post = it.post.copy(bookmarked = result.data.bookmarked.toIntFlag())) }
                 ApiResult.Success(result.data.bookmarked)
             }
             is ApiResult.Failure -> {
+                // 回滚：标记位还原，成员也还原（收藏失败不该在收藏页里留下一条）
                 applyToAll(postId) { target }
+                if (next) removeFromList(Source.Bookmarks, postId) else Unit
                 result
             }
         }
     }
 
+    /**
+     * 转发 / 取消转发。成员同步的理由与 [toggleBookmark] 完全相同，
+     * 只是作用在「我的转发」那份列表（`Source.Reposts`）上。
+     */
     suspend fun toggleRepost(postId: Long): ApiResult<Boolean> {
         val target = findPost(postId) ?: return ApiResult.Failure(ApiError.Unknown("帖子不存在"))
         val next = !target.isReposted
@@ -318,6 +405,16 @@ class PostRepository(private val session: SessionRepository) {
                     repostCount = (ui.repostCount + if (next) 1 else -1).coerceAtLeast(0),
                 )
             )
+        }
+        if (next) {
+            // 注意：这里的 transform 只做**幂等赋值**，不做增量计算 ——
+            // `findPost` 取到的那份已经过了上面 `applyToAll` 的乐观更新（repostCount 已经 +1），
+            // 再写一次 `+1` 会变成 +2（同一份数据被更新两遍）。
+            ensureInList(Source.Reposts, postId) {
+                it.copy(post = it.post.copy(reposted = 1))
+            }
+        } else {
+            removeFromList(Source.Reposts, postId)
         }
         return when (val result = request { if (next) session.api.posts.repost(postId) else session.api.posts.unrepost(postId) }) {
             is ApiResult.Success -> {
@@ -333,6 +430,7 @@ class PostRepository(private val session: SessionRepository) {
             }
             is ApiResult.Failure -> {
                 applyToAll(postId) { target }
+                if (next) removeFromList(Source.Reposts, postId) else Unit
                 result
             }
         }
@@ -357,11 +455,16 @@ class PostRepository(private val session: SessionRepository) {
     /**
      * 详情页用：拉单条帖子的最新状态（点赞/收藏/评论数可能已被别处改过）。
      * 拉到后**回写到所有列表**，避免"详情页点了赞、退回列表还是没赞"。
+     *
+     * ⚠️ 也要直接推**单帖状态表**：深链进来时列表里没有这条帖子，
+     * `applyToAll` 的 `map` 扫过去没有可改的 → 详情页拿到的就还是旧状态。
      */
     suspend fun refreshDetail(postId: Long): ApiResult<PostUi> {
         val result = request { session.api.posts.detail(postId).post.toUi(baseUrl) }
         if (result is ApiResult.Success) {
             applyToAll(postId) { result.data }
+            // 列表里没这条时上面那行是空转，这里直接落到单帖状态（详情页订阅的正是它）
+            pushDetail(postId, result.data)
         }
         return result
     }
@@ -414,11 +517,21 @@ class PostRepository(private val session: SessionRepository) {
                 if (next.size == st.posts.size) st else st.copy(posts = next)
             }
         }
+        // 单帖状态也要清 —— 否则详情页还留着一条已经被删掉的帖子（点进来看得见、互动全失败）
+        clearDetail(postId)
     }
 
+    /**
+     * 找一条帖子的当前状态：先扫所有列表，再兜底查**单帖状态表**。
+     *
+     * 第二段兜底是必须的：详情页可能是**深链直接进来的**（通知/分享链接），
+     * 那时任何列表里都没有这条帖子 —— 只查列表的话 `toggleLike` 会直接返回
+     * "帖子不存在"，用户点了赞**没有任何反应**（连报错都因为被忽略而看不见）。
+     */
     @Synchronized
     private fun findPost(postId: Long): PostUi? =
         lists.firstNotNullOfOrNull { l -> l.snapshot().posts.firstOrNull { it.id == postId } }
+            ?: detailStates[postId]?.value
 
     @Synchronized
     private fun applyToAll(postId: Long, transform: (PostUi) -> PostUi) {
@@ -426,6 +539,49 @@ class PostRepository(private val session: SessionRepository) {
             list.mutate { st ->
                 st.copy(posts = st.posts.map { if (it.id == postId) transform(it) else it })
             }
+        }
+        // 同步单帖状态表 —— 详情页订阅的就是它（这正"一套联动"的落点）
+        detailStates[postId]?.let { flow -> flow.value?.let { flow.value = transform(it) } }
+    }
+
+    /**
+     * 把一条帖子**插到**某个 source 对应列表的最前面（该列表尚未创建 / 未加载过则什么都不做）。
+     *
+     * 为什么需要"插"这个动作（用户实测反馈：「点了收藏/转发进个人主页没更新，必须重启 App」）：
+     * [applyToAll] 只做"就地改一条**已经躺在列表里**的帖子"，而收藏/转发列表的语义是
+     * **帖子的增减** —— 收藏成功要**多出一条**，[applyToAll] 永远做不到这件事。
+     * 于是刚收藏的帖子在收藏页里根本不存在，直到重启（列表重建、重新拉接口）才出现。
+     *
+     * 判断"要不要插"用的是 `listFor` 那套 key（用户 id + source）：
+     *  · 列表还没有实例 → 不建也不插，反正用户第一次进那一页会 `loadIfEmpty()` 拉到全量；
+     *  · 有实例但 `loaded == false` → 同理不插（这一次拉取会把全量带回来，插了反而可能重复）；
+     *  · 有实例且已加载 → 插到最前（服务端也是按时间倒序，最新的在最前）。
+     */
+    @Synchronized
+    private fun ensureInList(source: Source, postId: Long, transform: (PostUi) -> PostUi) {
+        val list = listsBySource[session.tokens.userId to source] ?: return
+        val st = list.snapshot()
+        if (!st.loaded) return
+        if (st.posts.any { it.id == postId }) return
+        // 这条帖此刻不在目标列表里，所以只能从别的已加载列表里取它的最新样子
+        // （标记位刚被 applyToAll 改过，取到的一定是改完的那份）
+        val ui = findPost(postId) ?: return
+        list.mutate { it.copy(posts = listOf(transform(ui)) + it.posts) }
+    }
+
+    /**
+     * 把一条帖子从某个 source 对应列表里**摘掉**（该列表不存在则什么都不做）。
+     *
+     * 与 [ensureInList] 配对：取消收藏/取消转发之后，那条帖子就不该留在「收藏 / 转发」页里了 ——
+     * [applyToAll] 只会把它的 `bookmarked` / `reposted` 标成 0，卡片照旧留在页面上，
+     * 看起来就像"取消没生效"。
+     */
+    @Synchronized
+    private fun removeFromList(source: Source, postId: Long) {
+        val list = listsBySource[session.tokens.userId to source] ?: return
+        list.mutate { st ->
+            val next = st.posts.filterNot { it.id == postId }
+            if (next.size == st.posts.size) st else st.copy(posts = next)
         }
     }
 
@@ -443,3 +599,18 @@ private fun Boolean.toIntFlag(): Int = if (this) 1 else 0
 
 /** 搜索列表缓存上限（按关键词缓存，留最近几个就够来回切） */
 private const val SEARCH_CACHE_MAX = 8
+
+/**
+ * 单帖状态表上限。
+ *
+ * 详情页每看一条帖子就建一个状态流，而**订阅者离开时仓库收不到通知**
+ * （Compose 的 `collectAsState` 只是停止收集，不会告诉仓库"我不要了"）——
+ * 没有上限的话一路刷下去这张表就是一份无限增长的帖子缓存。
+ *
+ * ⚠️ 淘汰按**插入顺序**（`LinkedHashMap` 的迭代序），不是"最近未使用"——
+ * 所以理论上可能淘汰掉一条**仍被订阅**的流。取 32 就是为了让这件事实际不会发生：
+ * 要连续浏览 32 条不同帖子的详情页才会触发，而那时被淘汰的那条早已不在屏幕上
+ * （详情页是一次只显示一个的全屏页，不存在"同时订阅 32 条"的真实场景）。
+ * 真被淘汰了的后果也只是"那个还开着的页面不再跟随互动更新"，不会崩。
+ */
+private const val DETAIL_CACHE_MAX = 32

@@ -57,6 +57,38 @@ class SessionRepository(
     /** 是否已登录（含"本地有 token 但没校验完"的乐观情形，用于决定要不要显示入口） */
     val isLoggedIn: Boolean get() = !tokens.token.isNullOrEmpty()
 
+    /**
+     * 首帧用的头像地址（**上一次登录时落盘的那份**）。
+     *
+     * 用途：冷启动时 [state] 还是 `Restoring`、`/auth/me` 没回来，UI 拿不到 `LoggedIn.user`。
+     * 没有它的话头像组件只能先画默认人像图标、等接口回来再换 —— 用户看到的就是
+     * "**先有占位头像，然后变成自己头像**"（私信对话页里最扎眼：自己的头像每页都出现好几次）。
+     *
+     * 只作**降级/兜底**用：`authState` 一旦进入 `LoggedIn`，调用方应当优先用真值
+     * （见 `AppShell` 里的取值顺序），所以换了头像不会卡在旧图上。
+     *
+     * 未登录（没有 token）时返回 null —— 不能拿上一个人的头像去渲染。
+     */
+    val cachedAvatar: String? get() = if (isLoggedIn) tokens.avatarUrl else null
+
+    /** 同 [cachedAvatar]，首帧用的昵称 */
+    val cachedUsername: String? get() = if (isLoggedIn) tokens.username else null
+
+    /**
+     * 把用户对象里的"身份展示字段"落盘（头像 / 昵称）。
+     *
+     * 在**每一个**拿到可信用户对象的时机调用：[restore] 校验成功、登录、注册、
+     * 以及 [updateUser]（改资料/换头像后接口回传新对象）。这样落盘值总是"已知的最新"。</br>
+     *
+     * 为什么不存整个 `User` 对象（JSON）：能做但不必要 —— 现在只用到这两个字段，
+     * 存两个字符串比引一套序列化便宜；将来需要更多字段时再一起挪到统一的快照里。
+     */
+    private fun persistIdentity(user: User) {
+        tokens.userId = user.id
+        tokens.avatarUrl = user.avatar
+        tokens.username = user.username
+    }
+
     val api: KApi = KApi(
         baseUrl = resolveBaseUrl(),
         tokenStore = tokens,
@@ -80,7 +112,7 @@ class SessionRepository(
         _state.value = AuthState.Restoring
         when (val result = runCatchingApi { api.auth.me() }) {
             is ApiResult.Success -> {
-                tokens.userId = result.data.id
+                persistIdentity(result.data)
                 _state.value = AuthState.LoggedIn(result.data)
             }
             is ApiResult.Failure -> {
@@ -147,13 +179,13 @@ class SessionRepository(
     fun applyUser(user: User) {
         val current = _state.value
         if (current !is AuthState.LoggedIn) return
-        tokens.userId = user.id
+        persistIdentity(user)
         _state.value = AuthState.LoggedIn(user)
     }
 
     private fun applyAuth(response: AuthResponse) {
         tokens.token = response.token
-        tokens.userId = response.user.id
+        persistIdentity(response.user)
         _state.value = AuthState.LoggedIn(response.user)
     }
 

@@ -151,7 +151,19 @@ fun ProfileScreen(
     var tabIndex by rememberSaveable { mutableIntStateOf(0) }
     val tabTitles = remember { listOf("帖子", "转发", "收藏") }
 
+    /**
+     * 当前用户 id：**优先会话真值，其次落盘的上一份**。
+     *
+     * 为什么要这层兜底（同 `AppShell.myAvatarUrl` 的理由）：冷启动时 `authState` 先是
+     * `Restoring`、`/auth/me` 没回来，`LoggedIn.user.id` 还取不到 → 原来这里会直接
+     * `profile = null` 并**提前 return**，于是整页停在"没有资料"的状态，
+     * 连下面 `loadIfEmpty()` 都不跑 —— 用户看到的就是主页要点一下才出内容。
+     *
+     * `tokens.userId` 在**登录成功时就已落盘**（见 `TokenStore.userId`），冷启动同帧可读，
+     * 所以拿它当兜底正好。接口回来后 `authState` 变成 LoggedIn，这里的真值自然接管。
+     */
     val loggedInId = (authState as? SessionRepository.AuthState.LoggedIn)?.user?.id
+        ?: session.tokens.userId.takeIf { it > 0 && session.isLoggedIn }
 
     /**
      * 三个列表在**组合期**就从仓库取（`listFor` 是纯函数，重进主页拿到的还是同一份，

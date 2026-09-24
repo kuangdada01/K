@@ -39,6 +39,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.ui.platform.LocalDensity
@@ -80,10 +81,8 @@ import top.kuangdada.k.core.data.RealtimeClient
 import top.kuangdada.k.core.data.SessionRepository
 import top.kuangdada.k.core.data.displayMessage
 import top.kuangdada.k.core.data.isNotFound
-import top.kuangdada.k.core.designsystem.component.HeartIcon
 import top.kuangdada.k.core.designsystem.component.KButton
 import top.kuangdada.k.core.designsystem.component.KButtonVariant
-import top.kuangdada.k.core.designsystem.component.KLikeButton
 import top.kuangdada.k.core.designsystem.component.KPlaceholder
 import top.kuangdada.k.core.designsystem.component.KPlaceholderKind
 import top.kuangdada.k.core.designsystem.component.KTextField
@@ -213,8 +212,37 @@ fun PostDetailScreen(
         openViewer(images, index, pid)
     }
 
-    // 帖子：先用列表缓存顶上，随后用详情接口刷新（点赞/收藏状态可能已被别人改过）
-    var post by remember(postId) { mutableStateOf(posts.cached(postId)) }
+    /**
+     * 帖子状态 —— **订阅仓库的单帖状态流，而不是自己存一份快照**。
+     *
+     * ★ 这是「详情页与首页共用同一份、联动」的落点（用户实测反馈：
+     * 「五个元素只在首页生效在详情页不生效啊，2 套动效？用首页的就行了，一套共用联动的」）。
+     *
+     * 改之前是 `var post by remember(postId) { mutableStateOf(posts.cached(postId)) }` ——
+     * 一份**只属于这一页**的快照，完全在仓库的 `lists` 之外。于是：
+     *  · `posts.toggleLike/toggleBookmark/toggleRepost` 走 `applyToAll`，只改 `lists` 里的副本；
+     *  · 详情页读自己的 `post` → **纹丝不动**，连 `KLikeButton` 的弹跳都触发不了
+     *    （它的 `liked` 参数压根没变）；
+     *  · 唯一能更新它的路径是 `refreshDetail`（从服务端拉）→ 所以只有"别人评论"这种
+     *    服务端事件才让详情页变，**自己点的赞/收藏/转发永远不生效**；
+     *  · 更糟的是单向联动：`refreshDetail` 会写回列表，所以**详情页能影响首页、首页影响不了详情页**。
+     *
+     * 现在两页读同一个 `StateFlow`，`applyToAll` 一改两边同时变 —— 真正一套。
+     */
+    val postFlow = remember(postId) { posts.detailFlow(postId) }
+
+    /**
+     * 首帧种子：把列表缓存里那条**塞进单帖状态流**，让详情页进来就有内容。
+     *
+     * 为什么需要（而不是干等 `refreshDetail`）：深链/冷启动进来时流还是 null，
+     * 页面会先显示"帖子加载失败"再跳成真内容。仓库的 `seedDetail` 只在**当前为空**时写，
+     * 不会覆盖已经在流里的更新鲜的状态。
+     */
+    LaunchedEffect(postId) {
+        posts.cached(postId)?.let { posts.seedDetail(postId, it) }
+    }
+
+    val post by postFlow.collectAsState()
     var postError by remember(postId) { mutableStateOf<String?>(null) }
     var loadingPost by remember(postId) { mutableStateOf(post == null) }
 
@@ -322,9 +350,10 @@ fun PostDetailScreen(
         // 评论列表
         loadComments()
         // 帖子详情（拿最新的点赞/收藏/评论总数）
+        // 拉到之后由 `PostRepository.refreshDetail` 自己推给单帖状态流，这里**不要再赋值** ——
+        // 详情页的状态只有"仓库那一个来源"（见 `postFlow` 的注释）
         when (val r = posts.refreshDetail(postId)) {
             is ApiResult.Success -> {
-                post = r.data
                 if (r.data.commentCount > 0) commentTotal = r.data.commentCount
             }
             is ApiResult.Failure -> {
@@ -353,7 +382,7 @@ fun PostDetailScreen(
                 loadComments(silent = true)
                 when (val r = posts.refreshDetail(postId)) {
                     is ApiResult.Success -> {
-                        post = r.data
+                        // 同样：状态由仓库推流，这里只同步评论数
                         commentTotal = r.data.commentCount
                     }
                     is ApiResult.Failure -> Unit
@@ -440,6 +469,30 @@ fun PostDetailScreen(
                                 }
                             },
                             onComment = { toast = "在下面写评论" },
+                            /**
+                             * 转发 —— 与首页卡片 [PostActions] 里那一颗完全同源。
+                             *
+                             * 之前详情页**根本没有这个入口**（用户反馈："详情页只显示 4 个"），
+                             * 于是"看完整条帖子觉得值得转"时只能退出去、在卡片上再点一次。
+                             */
+                            onRepost = {
+                                scope.launch {
+                                    when (val r = posts.toggleRepost(postId)) {
+                                        is ApiResult.Success -> toast = if (r.data) "已转发" else "已取消转发"
+                                        is ApiResult.Failure -> toast = r.error.displayMessage
+                                    }
+                                }
+                            },
+                            /**
+                             * 分享 —— 走右上角「…」菜单里同一个系统分享（同一段链接、同一个标题）。
+                             *
+                             * `markShared` 是**服务端只做计数**（每用户每帖计一次），
+                             * 它失败不影响系统分享本身，所以不等它、也不为它报错。
+                             */
+                            onShare = {
+                                scope.launch { posts.markShared(postId) }
+                                shareText(context, "$PROFILE_SHARE_BASE/post/$postId", "分享帖子")
+                            },
                             // 打开查看器前先收键盘（见 openViewerFromContent）
                             onImageClick = openViewerFromContent,
                             // 正文视频的**全屏入口**：内联播放器右下角那个按钮。
@@ -703,9 +756,17 @@ fun PostDetailScreen(
                 .fillMaxWidth()
                 // 顶栏毛玻璃（统一写法，见 rememberTopBarGlass）。
                 // 必须挂在 kTopBar（状态栏避让）的**左侧**：玻璃矩形才含状态栏那一条（顺序铁律）
+                //
+                // ★ 2026-09-24：**转场期间降级成纯色**（canBlur 临时给 false）。
+                // 为什么：配图飞行那一端改回 `renderInOverlayDuringTransition = true`（见
+                // SingleDetailImage 的注释）后，**飞行期间页面里那一格不留内容**（内容在覆盖层里飞）
+                // —— 若顶栏此刻还在做真模糊，它采样到的就是一块空白 → "玻璃变纯色"（09-23 的老症状）。
+                // 与其为了玻璃而牺牲飞行的观感，不如让**顶栏在转场这 200ms 里就用纯色**
+                // （`frostedSolid` 本来就是它低版本/无模糊时的降级形态，观感统一），
+                // 转场结束再恢复模糊 —— 用户看不到"玻璃突变"，因为它从头到尾都是同一块浅色。
                 .then(
                     rememberTopBarGlass(
-                        canBlur = canBlur,
+                        canBlur = canBlur && !isPageTransitioning(),
                         backdrop = backdrop,
                         blurRadius = KGlassBlurRadius,
                         tint = frostedTint,
@@ -853,6 +914,8 @@ private fun PostDetailBody(
     onLike: () -> Unit,
     onBookmark: () -> Unit,
     onComment: () -> Unit,
+    onRepost: () -> Unit,
+    onShare: () -> Unit,
     onImageClick: (List<String>, Int, Long?) -> Unit,
     onVideoClick: () -> Unit,
     /** 点正文里的 #话题 → 搜该话题的相关帖子 */
@@ -938,16 +1001,28 @@ private fun PostDetailBody(
             }
         }
 
+        /**
+         * 正文与话题**分开摆**（用户要求「详情页关键词也放图片视频下方」）——
+         * 与首页卡片 [PostCard] 完全同一套顺序：正文在上、**关键词在图片/视频下面**。
+         *
+         * 注意这里**不能再用 `TaggedDescription`**：那是"正文 + 胶囊"打包在一起的组合版，
+         * 会把胶囊顶到图片上方。要拆成 `TaggedBody`（只正文）与 `TaggedChips`（只胶囊）两块，
+         * 中间隔着配图/视频。
+         *
+         * `splitTags` 只算一次，两块吃同一份 [TaggedParts]（各自再 `remember` 一次会是两份
+         * 一模一样的解析结果，白算）。
+         */
+        val taggedParts = remember(post.description) { splitTags(post.description) }
+
         if (post.title.isNotBlank()) {
             Text(post.title, style = KType.subtitle, color = c.textPrimary)
         }
         if (post.description.isNotBlank()) {
-            // 详情页不截断正文（列表卡片才截断）；话题摘出来单独一行且可点搜索
-            TaggedDescription(
-                text = post.description,
+            // 详情页不截断正文（列表卡片才截断）
+            TaggedBody(
+                parts = taggedParts,
                 style = KType.body,
                 color = c.textPrimary,
-                onTagClick = onTagClick,
             )
         }
 
@@ -1065,7 +1140,9 @@ private fun PostDetailBody(
                      */
                     if (post.videoCoverUrl != null) {
                         AsyncImage(
-                            model = post.videoCoverUrl,
+                            // 与卡片端同一个键（rememberVideoCoverRequest）—— 共享元素两端
+                            // 必须同键同尺寸，否则目标端第一帧是空的。见该函数的长注释。
+                            model = rememberVideoCoverRequest(post.videoCoverUrl),
                             contentDescription = null,
                             contentScale = ContentScale.Crop,
                             modifier = Modifier
@@ -1100,31 +1177,38 @@ private fun PostDetailBody(
             }
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(KSpacing.lg),
-        ) {
-            ActionItem(
-                label = formatCount(post.likeCount),
-                selected = post.isLiked,
-                onClick = onLike,
-            ) { tint, _ -> HeartIcon(tint, filled = post.isLiked, size = 20.dp) }
+        /**
+         * 关键词（话题胶囊）：放在**配图 / 视频下面**（用户要求，与首页卡片同一顺序）。
+         * 只在真有话题时才有内容（`TaggedChips` 自己会因空列表而不画）。
+         */
+        TaggedChips(parts = taggedParts, onTagClick = onTagClick)
 
-            ActionItem(
-                label = formatCount(post.commentCount),
-                selected = false,
-                onClick = onComment,
-            ) { tint, _ -> Glyph(tint, GlyphKind.Chat, size = 20.dp) }
-
-            ActionItem(
-                // 收藏**没有计数**：服务端 Post 里就没有这个字段（列表卡片同样是纯图标），
-                // 设计稿上的 48 是设计稿自拟的数字，不能拿它去编一个不存在的计数。
-                label = "",
-                selected = post.isBookmarked,
-                onClick = onBookmark,
-            ) { tint, _ -> Glyph(tint, GlyphKind.Bookmark, size = 20.dp) }
-        }
+        /**
+         * 操作栏：**直接复用首页那张卡片的同一份实现**（[PostActions]）。
+         *
+         * 用户要求：「详情页跟首页 5 个元素共用同一份显示出来，而不是只显示 4 个」。
+         *
+         * 改之前这里是一份**自己的三连**（赞 / 评论 / 收藏，间距 `Spacing.lg`、图标 20dp），
+         * 而首页那份是五连（赞 / 评论 / 转发 / 分享 / 收藏，间距 `Spacing.md`、图标 18dp）——
+         * 同一件事两处实现，于是详情页少了转发与分享两个入口，
+         * 连图标尺寸与间距都和首页对不上（切页时那一排会"跳一下"）。
+         *
+         * 现在两页走同一个函数：顺序、间距、图标尺寸（[ACTION_ICON]）、选中态
+         * （点赞实心心 / 转发 accent / 收藏实心）全站只有一处定义。
+         *
+         * `onEdit = null`：详情页没有"卡片上直接编辑"的入口（编辑在右上角「…」里，
+         * 那是帖子自己的动作菜单，与列表上的杂物不是一回事）。
+         */
+        PostActions(
+            post = post,
+            onLike = onLike,
+            onBookmark = onBookmark,
+            onRepost = onRepost,
+            onComment = onComment,
+            onShare = onShare,
+            canEdit = false,
+            onEdit = null,
+        )
     }
 }
 
@@ -1181,17 +1265,10 @@ private fun DetailImageGrid(
                             // 共享元素：与卡片网格里同一 index 的那一格对齐（卡片 ↔ 详情那条飞行）。
                             // 全屏查看器不参与这条 key —— 它的飞行由 ViewerOrigins 自己算。
                             //
-                            // zIndex(1f)：renderInOverlay=false（见 SingleDetailImage 的长注释）后
-                            // 飞行那份画在本 item 的层级里，后续 item（分隔线/评论区）会盖住它
-                            // 向下飞的那一段 —— 抬到兄弟之上，观感与覆盖层版一致。
-                            .zIndex(1f)
-                            .sharedElementIfAvailable(
-                                postImageKey(postId, globalIndex),
-                                imageFlightClip,
-                                // 飞行留在页面里画：不留白，顶栏毛玻璃全程有内容可采样
-                                //（"进详情立刻上滑 → 顶栏纯色 1s"的修复，见该参数的长注释）
-                                renderInOverlay = false,
-                            )
+                            // ★ 2026-09-24：与 SingleDetailImage 一致，**不传 renderInOverlay**
+                            // （= true，走覆盖层）。理由与取证数据见 SingleDetailImage 的注释：
+                            // `false` 会让"飞行那一份"根本不存在，两端各自原地画 → 看起来闪。
+                            .sharedElementIfAvailable(postImageKey(postId, globalIndex), imageFlightClip)
                             // 登记"这一格在哪 + 取景比例 + 圆角"，供全屏查看器的进出场飞行
                             // （圆角与下面那行 `clip(...)` 必须一致 —— 飞行图要从圆角变到全屏的直角）
                             .registerViewerOrigin(postId, globalIndex, painter, KRadius.row)
@@ -1258,14 +1335,38 @@ private fun SingleDetailImage(
              * 证据与修法见 [ViewerOrigins] 的类注释。两端高度规则不同（卡片按原比例、
              * 详情页封顶 3:1）这件事依旧成立 —— `sharedElement` 一样会把**边界**插值过去。
              */
-            .zIndex(1f)
-            // 飞行留在页面里画（renderInOverlay = false，理由见 SharedElements.sharedElementIfAvailable
-            // 的参数注释）：旧版飞行那份进覆盖层、页面里这一格**留白** —— "一进详情就快速上滑长图"
-            // 会把留白推到顶栏正下方，顶栏毛玻璃折射空白 = 一条纯色，1s 后弹簧落定才"突然变回玻璃"
-            //（用户 2026-09-23 实测录像 + 逐帧取证）。页面内飞行后源层全程有内容，玻璃不再断档；
-            // 顺带飞行图天然画在顶栏之下，imageFlightClip 的"快速上滑压顶栏"场景也随之消失。
-            // zIndex(1f)：飞行那份画在 item 层级，别被后续 item（分隔线/评论区）压住。
-            .sharedElementIfAvailable(sharedKey, imageFlightClip, renderInOverlay = false)
+            // （注：这里曾挂 `.zIndex(1f)` —— 那是"页面内飞行"时期的补丁，让飞行那份不被
+            //  后续 item 压住。改回覆盖层后飞行那份画在页面之上，zIndex 已无意义，故移除。）
+            /**
+             * ★★ 2026-09-24：**改回 `renderInOverlay = true`**（即不传该参数）。
+             *
+             * 先说被推翻的旧结论：09-23 为了让"进详情后立刻上滑长图"时顶栏毛玻璃不断档，
+             * 把这一端改成 `renderInOverlay = false`（页面内飞行）。代价当时没看出来 ——
+             * **`sharedElement` 语义下，"飞行的那一份"只存在于覆盖层**：
+             * `SharedElementEntry.shouldRenderInOverlay` 里 `renderInOverlayDuringTransition`
+             * 是必经条件，一关掉它就恒 false → **根本没有任何东西在飞**。
+             * （库源码 1.12.1 `SharedElementEntry.kt` 226-238 行的 `shouldRenderInOverlay` /
+             *   `shouldRenderInPlace` 两个判据，已逐条核对。）
+             *
+             * 真机取证（`KFLY` 探针，2026-09-24 15:25:19 那次 Push）：
+             * ```
+             * 19.316  转场开始
+             * 19.360  img-card   draw#2 size=1216x1621   ← 卡片在自己位置画
+             * 19.364  img-detail f=0    size≈1216x1769   ← 详情页也在自己位置画
+             * 19.377  img-card   draw#3
+             * 19.383  img-card   draw#4                  ← 两端一路交替画到转场结束
+             * ```
+             * 即：屏幕上**同时存在两份完整的图**（卡片一份、详情一份），中间那 200ms
+             * 既没有"一份图从卡片飞到详情"，又叠着页面淡入 —— 用户看到的就是"闪一下"。
+             *
+             * 顺带排除的两个假设（都有数据）：目标端 painter **第 0 帧就已就绪**
+             * （`intrinsicSize=1920x2560`，不是 NaN）→ 不是"首帧无内容"；
+             * `ratio` 全程 0.75、`h100` 全程 1768.7 → 也不是"占位比例重排"。
+             *
+             * 副作用（顶栏毛玻璃折射留白）已由**顶栏在转场期间降级为纯色**兜住，
+             * 见本页 `rememberTopBarGlass(canBlur = canBlur && !isPageTransitioning(), …)`。
+             */
+            .sharedElementIfAvailable(sharedKey, imageFlightClip)
             // 登记"这一格在哪 + 取景比例 + 圆角"，供全屏查看器的进出场飞行（M5.2 / M5.5）
             // 圆角与下面那行 `clip(...)` 必须一致
             .registerViewerOrigin(postId, 0, painter, KRadius.row)

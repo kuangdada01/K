@@ -207,21 +207,29 @@ fun Modifier.declareSharedPeer(key: Any): Modifier {
  *        顶栏那一端要传 [topBarOverlayClip]，见那里的长注释。
  *        ⚠️ 只在 [renderInOverlay] = true 时有意义——元素不进覆盖层就无所谓裁剪。
  * @param renderInOverlay 对应库的 `renderInOverlayDuringTransition`（默认 true = 飞行那份画进
- *        `SharedTransitionLayout` 的覆盖层、**原地留白**）。
+ *        `SharedTransitionScope` 的覆盖层、**原地留白**）。
  *
- *        **2026-09-23 起详情页配图这一端传 false**（"页面内飞行"）。为什么（用户实测录像 +
- *        逐帧取证，见 probe-flight / probe-rec）：详情页顶栏的毛玻璃源是**本页自己的内容列**，
- *        而飞行期间那一格在页面里**不画** → 长图帖"一进详情就快速上滑"会把这块留白正好推到
- *        顶栏下面 → 玻璃折射一片空白 = 一条纯色，直到弹簧落定（长图 bounds 变化大，可达 1s+）
- *        那一格恢复绘制才"突然变回玻璃"。与 2026-09-23 胶囊"从纯色变回玻璃"同病根——
- *        胶囊能靠"源层上移包住覆盖层"修，顶栏采样本页源会**自引用崩溃**，只能让那一格
- *        压根不留白。副作用全是好的：元素跟着页面转场一起滑（更连贯）、飞行图天然画在
- *        顶栏之下（[topBarOverlayClip] 的"快速上滑压顶栏"场景随之消失）。
- *        代价：飞行中那份画在 LazyColumn 的 item 层级，可能被相邻 item 压 ——
- *        调用方需要的话在 sharedElement 之前挂 `Modifier.zIndex(1f)` 兜住。
+ *        ⚠️⚠️ **2026-09-24：不要给 `sharedElement` 传 `false`**（帖子里配图与视频封面都曾误传过）。
+ *        库源码 1.12.1（`SharedElementEntry.kt` 226-238）写得明确：
+ *        ```
+ *        shouldRenderInOverlay = shouldRenderAtAll && boundsTransformIsActive && isEnabled &&
+ *                                renderInOverlayDuringTransition && (isTransitionActive || isMutating)
+ *        shouldRenderInPlace   = !boundsTransformIsActive || (!shouldRenderInOverlay && shouldRenderAtAll)
+ *        ```
+ *        而 `sharedElement` 的 `renderOnlyWhenVisible = true` → 源端的 `shouldRenderAtAll` 在飞行期为
+ *        false（内容改由"飞行那份"提供）。**一旦 `renderInOverlayDuringTransition = false`：
+ *        `shouldRenderInOverlay` 恒为 false → "飞行那份"根本不存在**，只剩目标端在原地画。
+ *        结果 = 屏幕上同时有两份图（源端位置一份 + 目标端位置一份），没有任何东西在飞。
+ *        真机逐帧取证（`KFLY` 探针）就是这个形状：`img-card draw#2..27` 与 `img-detail f=0..26`
+ *        **一路交替**，直到转场结束 —— 用户描述为"进详情页闪一下"。
  *
- * 注：库里的参数名是 `clipInOverlayDuringTransition`（不是 `overlayClip` —— 名字差一点就会
- * `NAMED_PARAMETER_NOT_FOUND` 编译失败），这里对外仍叫 `overlayClip`，因为它就是"覆盖层里的裁剪"。
+ *        09-23 之所以传 `false`，是想让"进详情后立刻上滑长图"时顶栏毛玻璃有内容可采样
+ *        （页面里那格不留白）。**正确的修法是让顶栏在转场期间降级成纯色**（
+ *        `rememberTopBarGlass(canBlur = canBlur && !isPageTransitioning(), …)`，见 PostDetailScreen），
+ *        而不是牺牲飞行本身。
+ *
+ *        库里的参数名是 `clipInOverlayDuringTransition`（不是 `overlayClip` —— 名字差一点就会
+ *        `NAMED_PARAMETER_NOT_FOUND` 编译失败），这里对外仍叫 `overlayClip`，因为它就是"覆盖层里的裁剪"。
  */
 @Composable
 fun Modifier.sharedElementIfAvailable(

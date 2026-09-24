@@ -53,6 +53,28 @@ data class ViewerOrigin(
 private data class ViewerOriginKey(val postId: Long, val index: Int)
 
 /**
+ * 私信对话的**虚拟来源键**。
+ *
+ * 来源表的键本来叫 `postId`（它诞生于帖子配图），但它的真实身份其实是
+ * "**这一组格子属于哪个可滚动的图片序列**"。私信图片没有帖子 id，却同样需要
+ * "从哪一格飞出来"的几何（用户反馈：聊天里的图点开是直接闪现、没有详情页那种动画）。
+ *
+ * 这里把它映射到**负数区间**：帖子 id 在服务端恒为正，所以负数绝不会与帖子撞号 ——
+ * 两者共用同一张来源表、各自的 key 空间互不干涉。做法与 `postImageKey` 把
+ * "帖子 + 第几张"编成一个字符串是同一个思路：**一个稳定的、可复用的身份**。
+ *
+ * @param partnerId 聊天的对方用户 id（同一段对话一册来源；换人自然换表）。
+ */
+fun chatImageOriginKey(partnerId: Long): Long = -partnerId
+
+/** 清掉某段对话的全部来源登记（离开聊天页时调用，避免表里留下无主矩形） */
+fun ViewerOrigins.removeChatOrigins(partnerId: Long) {
+    // 逐张撤不掉（不知道对方发了几张图），所以直接按 key 扫一遍表。
+    // 粒度是"整组来源"，与"格子离开组合"那个 removeToken（单格粒度）互补。
+    removePost(chatImageOriginKey(partnerId))
+}
+
+/**
  * 来源表。由 AppShell 持有（一处创建、一处读取），页面里的缩略格写入。
  *
  * ## 为什么每个 key 下有**多个槽位**（而不是"一个 key 一条记录"）
@@ -163,6 +185,17 @@ class ViewerOrigins {
             list.removeAll { s -> s.token === token }
             if (list.isEmpty()) it.remove()
         }
+    }
+
+    /**
+     * 整组来源一起撤（某个 key 下的**所有**下标）。
+     *
+     * 与 [removeToken] 的分工：那个是"某一个格子走了"（粒度 = 单格，靠身份令牌），
+     * 这个是"这组图整个不作数了"（粒度 = 组，靠 key）—— 例如离开聊天页时，
+     * 那一段对话的格子全部注销，但当下**不知道对方发过几张**，逐个 removeToken 做不到。
+     */
+    internal fun removePost(postId: Long) {
+        slots.keys.removeAll { it.postId == postId }
     }
 
     /** 取某条帖子的全部来源（与 images 同序，量不到矩形的位置为 null） */
