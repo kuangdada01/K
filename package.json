@@ -15,7 +15,7 @@
     "build": "npm run build --prefix shared && npm run build --prefix server && npm run build --prefix client",
     "typecheck": "npm run build --prefix shared && npm run typecheck --prefix shared && npm run typecheck --prefix server && npm run typecheck --prefix client && tsc --noEmit -p tsconfig.e2e.json",
     "lint": "npm run lint --prefix shared && npm run lint --prefix server && npm run lint --prefix client",
-    "test": "npm test --prefix server && npm test --prefix client",
+    "test": "npm test --prefix shared && npm test --prefix server && npm test --prefix client",
     "e2e": "playwright test",
     "install:all": "npm install",
     "test:client": "npm run test --prefix client",

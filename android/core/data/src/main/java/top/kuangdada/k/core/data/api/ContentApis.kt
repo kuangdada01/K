@@ -176,3 +176,22 @@ interface VoiceApi {
     @DELETE("api/voice/rooms/{id}/messages")
     suspend fun clearRoomMessages(@Path("id") roomId: Long): top.kuangdada.k.core.data.model.SimpleSuccess
 }
+
+/**
+ * 云端朗读（`POST /api/tts`，见 `server/src/routes/tts.ts`）。
+ *
+ * 与 Web 端 `useChatTTS` 的云端通道**同一个接口、同一套语义**：
+ * 请求体只带文本与音色 key，服务端换 Key 后转发 StepFun，直接回音频字节。
+ *
+ * 两个必须注意的点：
+ *  1. 响应是 **`audio/mpeg` 二进制**（不是 JSON），所以返回 `ResponseBody` 自己取字节 —— 
+ *     交给 JSON converter 会因内容不是 JSON 而解析失败（同 `BookApi` 章节内容那条注释）。
+ *  2. 失败时服务端回的是 JSON 错误信封 `{ error }`（400/429/502/503），
+ *     Retrofit 会抛 `HttpException`，`mapErrorFromThrowable` 能把里面的文案取出来给用户看
+ *     （与 Web 端把 `data.error` 弹 toast 同口径）。
+ */
+interface TtsApi {
+
+    @POST("api/tts")
+    suspend fun speak(@Body body: top.kuangdada.k.core.data.model.TtsRequest): ResponseBody
+}

@@ -167,6 +167,15 @@ object DeepLink {
                     AppDestination.ChatDest(id, rest.substringAfter(':', "").ifBlank { null })
                 } else null
             }
+            /**
+             * `post:123` → 帖子详情。
+             *
+             * 与 **URL 形态 `/post/:id` 刻意不同**：那条路径在 Web 里是"首页 + 定位到该帖"，
+             * 原生首页还没实现滚动定位，所以 URL 形态仍降级到首页（见类注释的"已知降级"）；
+             * 而通知栏点进来的语义是**明确要看这一条**，直接开详情页才是对的。
+             */
+            s.startsWith("post:") -> s.removePrefix("post:").toLongOrNull()
+                ?.takeIf { it > 0 }?.let { AppDestination.PostDetailDest(it) }
             else -> null
         }
     }

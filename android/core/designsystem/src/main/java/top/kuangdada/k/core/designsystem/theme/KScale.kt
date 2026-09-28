@@ -109,6 +109,16 @@ object KDimens {
     /** 弹层顶栏圆钮（图书详情的返回/更多） */
     val iconButton = 36.dp
 
+    /**
+     * 确认弹窗（[top.kuangdada.k.nativeapp.ui.KAlertDialog]）的**最大**宽度。
+     *
+     * 与 Web 端 `components/ui/ConfirmDialog` 和 `AppUpdatePrompt` 的 `width: 360px`
+     * （`max-width: 85vw`）对齐 —— 双端同一套设计语言，弹窗宽度不该各写一个数。
+     * 手机竖屏下实际宽度由左右各 [KSpacing.md] 的屏幕边距决定（390 宽屏 → 358），
+     * 只有平板/横屏这类更宽的窗口才会收在这个上限上。
+     */
+    val dialogMaxWidth = 360.dp
+
     /** 页头圆形图标按钮（首页右上角「搜索」）—— 设计稿实测 38px */
     val headerIconButton = 38.dp
 

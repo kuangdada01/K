@@ -69,6 +69,10 @@ enum class KButtonVariant {
  *   设计稿登录按钮是「全宽 + 圆角 10」，不是胶囊。
  * @param compact 紧凑尺寸：内边距与最小高度各收一档（设计稿「发布弹层」顶栏的
  *   「发布」实测 58×35，常规尺寸会是 70×44）。**默认 false，不影响既有调用方。**
+ * @param minHeight 可选，覆盖按钮的最小高（`compact=false` 时默认 44dp）。
+ *   要与旁边某元素**严格等高**的场景用它（聊天输入栏的「发送」= 输入框的 40dp）；
+ *   注意内容（文字 + 内边距）若比它高，按钮仍会被内容撑开 —— 配 `compact = true`
+ *   的紧凑内边距一起用才压得住。
  */
 @Composable
 fun KButton(
@@ -81,6 +85,7 @@ fun KButton(
     compact: Boolean = false,
     leading: (@Composable RowScope.() -> Unit)? = null,
     cornerRadius: Dp = KRadius.pill,
+    minHeight: Dp? = null,
 ) {
     val c = KTheme.colors
     val interaction = remember { MutableInteractionSource() }
@@ -131,7 +136,7 @@ fun KButton(
     Row(
         modifier = modifier
             .scale(scale)
-            .defaultMinSize(minHeight = if (compact) KDimens.compactControl else KDimens.minTouchTarget)
+            .defaultMinSize(minHeight = minHeight ?: if (compact) KDimens.compactControl else KDimens.minTouchTarget)
             .clip(shape)
             .background(bg)
             .then(if (border != null) Modifier.border(BorderStroke(1.dp, border), shape) else Modifier)

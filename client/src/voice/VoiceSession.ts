@@ -18,6 +18,7 @@
  */
 
 import { CONTROL_CHAR_RE, STUN_SERVER_URLS } from '@k/shared';
+import type { ChessGameClientMsg, ChessGameServerMsg } from '@k/shared';
 import { getVoiceIceServers } from '../api/voice';
 import { showToast } from '../components/ui/Toast';
 import { checkVoiceCapabilities, describeMissing } from '../lib/compat';
@@ -419,6 +420,21 @@ export class VoiceSession {
     return true;
   }
 
+  /**
+   * 发送对战象棋消息（game-* 前缀，走同一信令 WS）。
+   * 客户端只上报"意图"（邀请/走子/认输/求和），合法性由服务端权威校验。
+   */
+  sendChessMessage(msg: ChessGameClientMsg): void {
+    if (this.destroyed || !this.roomId) return;
+    if (!this.signaling.isOpen()) return;
+    this.send(msg);
+  }
+
+  /** 当前会话身份（服务端可能经 joined.self 校正访客的占位 id；对局席位判定用） */
+  getSelfUserId(): number {
+    return this.self.userId;
+  }
+
   private handleServerMessage(msg: VoiceServerMessage): void {
     switch (msg.type) {
       case 'joined': {
@@ -543,8 +559,14 @@ export class VoiceSession {
         if (msg.message) showToast(msg.message);
         this.teardown('error', msg.message);
         break;
-      default:
+      default: {
+        // 对战象棋（game-* 前缀）：服务端权威对局消息统一转交上层 chess 状态。
+        // 其余未知类型保持静默忽略（旧客户端容忍新消息的同一约定）。
+        if (typeof msg.type === 'string' && msg.type.startsWith('game-')) {
+          this.cb.onChessMessage?.(msg as ChessGameServerMsg);
+        }
         break;
+      }
     }
   }
 

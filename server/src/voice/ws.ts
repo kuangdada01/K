@@ -18,12 +18,15 @@
  *        （屏幕共享状态，服务端互斥+抢占；width/height = 共享方声明的**采集像素尺寸**，
  *          可选，语义见 @k/shared 的 VoiceParticipant.width）
  *        { type: 'chat', content }（文字聊天：校验+节流后入库并广播全房间）
+ *        { type: 'game-*', ... }（房间对战象棋：邀请/走子/认输/求和，
+ *          形状见 @k/shared 的 ChessGameClientMsg，服务端权威校验）
  * - S→C: { type: 'joined', participants } / { type: 'peer-joined', participant }
  *        （participants/participant 里的 width/height 同上：共享者的采集尺寸，可选）
  *        { type: 'peer-left', userId } / { type: 'signal', from, data }
  *        { type: 'mute-changed', userId, muted } / { type: 'peer-quality', userId, level }
  *        { type: 'share-changed', userId, active, audio, width?, height? } / { type: 'share-force-stop' }
  *        { type: 'chat', message } / { type: 'chat-cleared' }（房主/管理员经 REST 清空后广播）
+ *        { type: 'game-*', ... }（对局广播/定点消息，形状见 @k/shared 的 ChessGameServerMsg）
  *        { type: 'room-closed', reason } / { type: 'error', message }
  */
 
@@ -40,6 +43,7 @@ import { guestIds } from './guest-ids';
 import { voiceTickets } from './tickets';
 import { tryAcquire, release, countFor, type VoiceConnKind } from './ip-connections';
 import { handleVoiceMessage, type VoiceWs } from './messageHandlers';
+import { chessGames } from './game/chessGameManager';
 
 /** 心跳间隔（客户端需在 30s 内响应 pong，超时断开） */
 const HEARTBEAT_MS = 30_000;
@@ -209,7 +213,7 @@ export function attachVoiceWs(server: Server): WebSocketServer {
       } catch {
         return;
       }
-      handleVoiceMessage({ user, ws, hub, insertVoiceChatMessage }, msg);
+      handleVoiceMessage({ user, ws, hub, insertVoiceChatMessage, chess: chessGames }, msg);
     });
   });
 

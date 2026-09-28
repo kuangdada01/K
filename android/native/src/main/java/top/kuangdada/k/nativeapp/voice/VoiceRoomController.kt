@@ -1,6 +1,7 @@
 package top.kuangdada.k.nativeapp.voice
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -16,10 +17,20 @@ import top.kuangdada.k.core.data.VoiceRepository
 import top.kuangdada.k.core.data.VoiceSignalingClient
 import top.kuangdada.k.core.data.displayMessage
 import top.kuangdada.k.core.data.dayDividerText
+import top.kuangdada.k.core.data.model.ChessServerMsg
 import top.kuangdada.k.core.data.model.VoiceInbound
 import top.kuangdada.k.core.data.model.VoiceInboundType
 import top.kuangdada.k.core.data.model.VoiceParticipantDto
 import top.kuangdada.k.core.data.model.VoiceRoom
+
+/**
+ * 日志标签。
+ *
+ * 这个类原来一行日志都没有 —— 但"麦克风到底有没有真的关掉"这类问题**没法靠读代码回答**
+ * （音轨是 WebRTC 内部对象，运行时才知道）。留一个标签，后续同一个类里的取证都归到它下面，
+ * `adb logcat -s KVoiceRoom KVoiceSession` 就能把一条动作的完整链路拉出来。
+ */
+private const val TAG = "KVoiceRoom"
 
 /**
  * ============================================================
@@ -85,6 +96,14 @@ class VoiceRoomController(
         val roomName: String = "",
         val selfUserId: Long = 0,
         val selfUsername: String = "",
+        /**
+         * 自己的头像地址（绝对 URL）。
+         *
+         * 来源是 `joined` 消息里的 `self.avatar` —— 服务端**校正后**的身份里带着它。
+         * 不收这一项，房间页给自己构造那张麦位卡时就只能填 null，
+         * 于是"别人都有头像、只有我是个默认人像"（用户实测反馈过）。
+         */
+        val selfAvatarUrl: String? = null,
         val peers: List<PeerUi> = emptyList(),
         /**
          * 正在说话的成员（含自己）—— 麦位**边框点亮**用（M6）。
@@ -145,6 +164,20 @@ class VoiceRoomController(
 
     private val _state = MutableStateFlow(State(roomName = room.name))
     val state: StateFlow<State> = _state.asStateFlow()
+
+    /**
+     * 房间对战象棋（设计见 `docs/voice-chess-plan.md`，实现对齐 Web 端 `useChessGame`）。
+     *
+     * 单独一个 StateFlow 而不是并进 [State]：对局状态只在"棋盘面板"一个地方消费，
+     * 而 [State] 每变一次（说话灯亮灭、音频接通计数…）都会让整个房间页重组 ——
+     * 把棋盘状态塞进去会让那些高频字段带着整块棋盘一起重建。
+     *
+     * 上行经 [signaling] 转发：连接是进房才建的，所以这里必须是**函数**而不是连接引用。
+     */
+    val chess = ChessGameController(
+        selfUserId = { myId },
+        send = { msg -> signaling?.sendChess(msg) },
+    )
 
     private var signaling: VoiceSignalingClient? = null
     private var session: VoiceSession? = null
@@ -297,6 +330,8 @@ class VoiceRoomController(
 
                 override fun onMessage(message: VoiceInbound) = handleInbound(message)
 
+                override fun onChessMessage(message: ChessServerMsg) = chess.onMessage(message)
+
                 override fun onServerError(message: String) {
                     _state.update { it.copy(error = message) }
                 }
@@ -304,7 +339,10 @@ class VoiceRoomController(
 
             // 5) join（连上之后由 onState(Connected) 触发；这里等一小会儿再发，
             //    或者直接发 —— OkHttp 会排队到连接建立。直接发更简单且不引入定时器）
-            client.join(room.id, listener = listener)
+            //
+            // `muted` 要一起带上：进房那几秒就能点闭麦，那时信令还没连上、`setMuted` 发不出去，
+            // 只发 join 的话服务端会记成"在麦"（别人的麦位卡是绿点）—— 详见 [VoiceSignalingClient.join]。
+            client.join(room.id, listener = listener, muted = !micEnabled)
             voiceSession.setJoined(true)
         }
     }
@@ -324,7 +362,13 @@ class VoiceRoomController(
                 val self = message.self
                 if (self != null) {
                     myId = self.userId
-                    _state.update { it.copy(selfUserId = self.userId, selfUsername = self.username) }
+                    _state.update {
+                        it.copy(
+                            selfUserId = self.userId,
+                            selfUsername = self.username,
+                            selfAvatarUrl = voice.avatarUrl(self.avatar),
+                        )
+                    }
                 }
                 val existing = message.participants.filter { it.userId != myId }
                 // 进房时若已有人在共享：从他的成员信息里直接读出声明的采集尺寸，
@@ -508,6 +552,10 @@ class VoiceRoomController(
 
     fun toggleMic() {
         micEnabled = !micEnabled
+        // 「闭麦到底生效了没有」要能在真机上取证（用户实测提出）：这一行 + VoiceSession
+        // 里那行"音轨=…"合起来就是完整链条 —— 点了没有 / 会话还没建（session==null，
+        // 此时这次点击只会改 UI 状态、音轨没动）/ 音轨关没关，一眼能分。
+        Log.i(TAG, "切换麦克风：micEnabled=$micEnabled 会话=${session != null} 信令=${signaling != null}")
         session?.setMicEnabled(micEnabled)
         // 录制侧也要知道：闭麦时自己的声音不能进录制（与 Web 版 setMutedGate 语义一致）
         session?.recorder?.setSelfMuted(!micEnabled)
@@ -804,6 +852,9 @@ class VoiceRoomController(
         runCatching { VoiceForegroundService.stop(context) }
         signaling = null
         session = null
+        // 象棋状态随连接一起清掉：不清的话下次进别的房间会看到上一个房间的残局，
+        // 而且"等待对方应答"横幅会挂在那儿（那条邀请早已随离房作废）
+        chess.reset()
         // 退房：所有"正在说话"的灯一起收掉（页面马上就销毁了，但状态要干净）
         _state.update { it.copy(phase = Phase.Closed, speakingUserIds = emptySet()) }
         scope.cancel()

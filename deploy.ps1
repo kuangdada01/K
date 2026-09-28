@@ -66,7 +66,12 @@ $APK_LOCAL = ""
 $APK_NAME = ""
 $APK_SHA = ""
 $versionFile = Join-Path $PSScriptRoot "android\version.properties"
-$apkOut = Join-Path $PSScriptRoot "android\app\build\outputs\apk\release\app-release.apk"
+# ⚠️ 原生重写后应用模块是 `:native`（不是 `:app`）—— 这里曾长期指向旧的
+# `android/app/build/outputs/apk/release/app-release.apk`，文件早就不存在，
+# 于是每次都走"未找到 Gradle 输出的 APK"分支**静默跳过上传**，
+# 结果是服务器上 /apk/ 目录一直空着、App 里"立即更新"下到的是 SPA 兜底的 index.html
+# （09-27 实测）。
+$apkOut = Join-Path $PSScriptRoot "android\native\build\outputs\apk\release\native-release.apk"
 if (Test-Path $versionFile) {
     # 版本号单一来源：android/version.properties（不再从 build.gradle 里抠字符串）
     $versionName = (Select-String -Path $versionFile -Pattern '^versionName\s*=\s*(.+)$').Matches.Groups[1].Value.Trim()

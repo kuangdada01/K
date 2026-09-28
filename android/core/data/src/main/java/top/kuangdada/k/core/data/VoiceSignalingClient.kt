@@ -4,14 +4,21 @@ import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import top.kuangdada.k.core.data.model.ChessClientMsg
+import top.kuangdada.k.core.data.model.ChessServerMsg
 import top.kuangdada.k.core.data.model.VoiceInbound
 import top.kuangdada.k.core.data.model.VoiceOutbound
 import top.kuangdada.k.core.data.model.VoiceOutboundType
+import top.kuangdada.k.core.data.model.decodeChessServerMsg
+import top.kuangdada.k.core.data.model.encodeChessClientMsg
 
 /**
  * ============================================================
@@ -41,6 +48,18 @@ class VoiceSignalingClient(
 
         /** 收到一条下行消息 */
         fun onMessage(message: VoiceInbound)
+
+        /**
+         * 收到一条**对局象棋**消息（`game-` 前缀）。
+         *
+         * 与 [onMessage] 分开走：`game-*` 的载荷与信令毫无交集（席位/棋钟/被吃子/记谱
+         * 都是嵌套结构），硬塞进 [VoiceInbound] 那个"宽松信封"只会把两边都搞乱。
+         * 分流点在 [onMessage] 里按前缀做，解码形状见
+         * [top.kuangdada.k.core.data.model.ChessServerMsg]。
+         *
+         * 默认空实现：只有房间页关心对局，不需要所有实现都写一遍。
+         */
+        fun onChessMessage(message: ChessServerMsg) = Unit
 
         /** 服务端给了 error 文案（不是连接层错误） */
         fun onServerError(message: String)
@@ -90,6 +109,25 @@ class VoiceSignalingClient(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                // 对局象棋：`game-` 前缀在服务端是**统一转发**给 chessGameManager 的
+                // （messageHandlers.ts 的 default 分支），客户端也照同样的规则分流。
+                // 顺序很重要：必须先判前缀 —— `game-error` 的 `message` 是**字符串**，
+                // 而 VoiceInbound.message 期望的是聊天对象，走下面那条会在解码时抛异常
+                // 被 runCatching 吞成 null，整条消息静默丢失。
+                //
+                // 只解 `type` 一个字段（不整条解两次）：服务端 `JSON.stringify` 是紧凑格式，
+                // 但"用字符串 contains 匹配"会依赖它永不带空格 —— 这里按 JSON 解析取字段，
+                // 与格式无关。
+                val type = runCatching {
+                    KJson.parseToJsonElement(text).jsonObject["type"]?.jsonPrimitive?.contentOrNull
+                }.getOrNull()
+                if (type != null && type.startsWith("game-")) {
+                    val chess = decodeChessServerMsg(text)
+                    if (chess != null) {
+                        this@VoiceSignalingClient.listener?.onChessMessage(chess)
+                    }
+                    return
+                }
                 val inbound = runCatching {
                     KJson.decodeFromString(VoiceInbound.serializer(), text)
                 }.getOrNull() ?: return
@@ -127,8 +165,23 @@ class VoiceSignalingClient(
 
     // ---- 便捷方法（把 type + 字段的对应关系固定在这里，避免调用方写错） ----
 
-    fun join(roomId: Long, listener: Boolean = false) = send(
-        VoiceOutbound(type = VoiceOutboundType.Join, roomId = roomId, listener = listener)
+    /**
+     * 进房。
+     *
+     * [muted] **要跟着 join 一起发**，不能只靠进来之后再补一条 `mute`：
+     * 客户端在"正在连接语音服务"那几秒里就能点闭麦（那时 `signaling` 还没建好，
+     * `setMuted` 发不出去），只发 join 的话服务端记的是"此人在麦" ——
+     * 别人的麦位卡是绿点、说话灯还会为他点亮，而本地音轨其实已经关了。
+     * 服务端的 join 分支本来就认 `msg.muted`（`messageHandlers` 里 `muted: !!msg.muted || listener`），
+     * 带上它就一次到位。
+     */
+    fun join(roomId: Long, listener: Boolean = false, muted: Boolean = false) = send(
+        VoiceOutbound(
+            type = VoiceOutboundType.Join,
+            roomId = roomId,
+            listener = listener,
+            muted = muted,
+        )
     )
 
     fun leave() = send(VoiceOutbound(type = VoiceOutboundType.Leave))
@@ -151,6 +204,18 @@ class VoiceSignalingClient(
     fun chat(content: String) = send(
         VoiceOutbound(type = VoiceOutboundType.Chat, content = content)
     )
+
+    /**
+     * 发一条**对局象棋**上行消息（`game-*`）。
+     *
+     * 走同一条 WebSocket、同一个 `send` 队列：服务端按 `game-` 前缀把它转给
+     * chessGameManager，不需要任何额外建连或鉴权。
+     */
+    fun sendChess(message: ChessClientMsg): Boolean {
+        val ws = socket ?: return false
+        val body = runCatching { encodeChessClientMsg(message) }.getOrNull() ?: return false
+        return ws.send(body)
+    }
 
     fun close() {
         socket?.close(1000, "client close")

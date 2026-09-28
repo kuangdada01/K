@@ -1,12 +1,20 @@
 #!/usr/bin/env node
 /**
  * ============================================================
- * 共享的 Gradle 调用环境（JDK 21 定位 + Windows .bat 处理）
+ * 共享的 Gradle 调用环境（JDK 定位 + Windows .bat 处理）
  * ============================================================
  * 为什么单独成一个模块：出包（`build-apk.mjs`）与跑单测（`run-gradle.mjs`）**必须是同一套
  * JDK 与同一种调用方式** —— 否则会出现"打包能过、单测跑不起来"这类只在一边暴露的问题。
  *
- * JDK 必须是 21：Android Studio 自带的 JBR 是 25，本工程的 Gradle 9.1 用不了。
+ * JDK：**Android Studio 自带的 JBR**（本机装在 `D:/Android/Android Studio/jbr`，实测 25.0.2）。
+ * 早先这里钉的是"必须是 JDK 21"，但本机从来就没有独立 JDK 21，而 `:core:data` 的
+ * `jvmToolchain(25)` 也要求 25 —— 详见该 build.gradle 里的长注释（25 只是跑编译器的 JDK，
+ * 字节码目标仍由 compileOptions 钉在 Java 21）。实测 25 出包与单测都正常。
+ *
+ * ⚠️ 2026-09-26：候选表里原来那三条路径（`~/.jdks/jbr-21.0.11`、
+ * `C:/Program Files/Android/Android Studio/jbr`、`C:/Program Files/Java/jdk-21`）
+ * 在本机**全部不存在** → `npm run android:test` 直接报"找不到 JDK 21"。
+ * 真正的 JBR 在 D 盘，已补进候选表；换机请按本机实际安装位置调整。
  */
 
 import { spawnSync } from 'node:child_process';
@@ -20,11 +28,12 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 export const androidDir = resolve(scriptDir, '..');
 export const isWindows = process.platform === 'win32';
 
-/** JDK 21 候选路径（顺序即优先级） */
+/** JDK 候选路径（顺序即优先级；第一条是环境变量，便于临时覆盖） */
 const JDK_CANDIDATES = [
   process.env.JAVA_HOME,
-  'C:/Users/25359/.jdks/jbr-21.0.11',
+  'D:/Android/Android Studio/jbr',
   'C:/Program Files/Android/Android Studio/jbr',
+  'C:/Users/25359/.jdks/jbr-21.0.11',
   'C:/Program Files/Java/jdk-21',
 ];
 
@@ -45,7 +54,7 @@ export function resolveJavaHome() {
 export function runGradle(tasks, options = {}) {
   const javaHome = resolveJavaHome();
   if (!javaHome) {
-    console.error('[gradle] 找不到 JDK 21。请设置 JAVA_HOME 指向 JDK 21 后重试。');
+    console.error('[gradle] 找不到可用的 JDK。请设置 JAVA_HOME 指向 Android Studio 自带的 JBR 后重试。');
     process.exit(1);
   }
 

@@ -5,6 +5,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -31,6 +33,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,15 +49,19 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
 import coil3.size.Size
 import top.kuangdada.k.core.data.ThemePreference
 import top.kuangdada.k.core.data.model.BookSummary
 import top.kuangdada.k.core.designsystem.theme.KElevation
+import top.kuangdada.k.core.designsystem.theme.KColors
 import top.kuangdada.k.core.designsystem.theme.KDimens
 import top.kuangdada.k.core.designsystem.theme.KMotion
 import top.kuangdada.k.core.designsystem.theme.KRadius
@@ -614,8 +621,8 @@ fun KSectionSpacer() {
  * 轻量提示条（M2 的过渡形态）。
  *
  * 位置刻意抬到**导航胶囊之上**（`navScrollPadding`）—— 放在屏幕最底部会被悬浮胶囊盖住，
- * 用户看不到任何反馈。M4 会抽成带队列的全局 Toast 宿主（现在的形态是"一次只显示一条，
- * 1.8 秒后自动消失"，多来源同时触发会互相覆盖）。
+ * 用户看不到任何反馈。样式走主题令牌（`surfaceRaised` 底 + `borderSubtle` 描边 + 主题文字色），
+ * 深浅主题自动翻转 —— 与系统 Toast（黑底白字的固定样式）刻意不同，那才是"不符合主题"的根源。
  */
 @Composable
 fun KToast(
@@ -640,6 +647,221 @@ fun KToast(
         }
     }
 }
+
+/**
+ * ============================================================
+ * 全局 Toast 宿主（把 [KToast] 从"每页各挂一个"升级成"Shell 挂一个、处处能弹"）
+ * ============================================================
+ * 此前各页面都是自己 `var toast by remember…` + 手动摆一个 [KToast]；
+ * 而**非 Compose 回调**（下载广播、蓝牙回调之类）要提示时只能用 `android.widget.Toast`
+ * —— 那是系统黑框样式，跟主题完全脱节。现在 Shell 顶层挂一个 [KToastHost]
+ * 并 provide [LocalToast]，任何层级（含非 Compose 回调）一行 `toast.show("…")` 即可。
+ *
+ * 与系统 Toast 的行为差异要说明：**同一条新的会顶掉旧的**（一次只显示一条），
+ * 1.8 秒自动消失 —— 这本就是 [KToast] 的既有语义，全局化后保持不变。
+ */
+class KToastState {
+    var text by mutableStateOf<String?>(null)
+        private set
+
+    /** 弹一条提示；1.8 秒后自动消失，期间再弹会顶掉前一条 */
+    fun show(text: String) {
+        this.text = text
+    }
+
+    fun dismiss() {
+        text = null
+    }
+}
+
+/** 任何层级读取的全局弹提示入口（Shell 已 provide；未挂宿主时显式报错，别静默吞） */
+val LocalToast = staticCompositionLocalOf<KToastState> {
+    error("KToastHost 未挂载：请在 AppShell 顶层 provide LocalToast")
+}
+
+@Composable
+fun rememberKToastState(): KToastState = remember { KToastState() }
+
+/**
+ * 全局 Toast 的绘制点：挂 Shell 最上层覆盖区，贴底居中（[KToast] 自己留导航胶囊的高度）。
+ */
+@Composable
+fun KToastHost(state: KToastState, modifier: Modifier = Modifier) {
+    val text = state.text
+    if (text != null) {
+        KToast(text = text, onDismiss = state::dismiss, modifier = modifier)
+    }
+}
+
+/**
+ * ============================================================
+ * 确认弹窗（KAlertDialog）—— 与 Web 端 `components/ui/ConfirmDialog` 同一套外观
+ * ============================================================
+ * 2026-09-28 推倒重做。v0.1.8 那版只把 M3 默认壳的圆角从 28dp 收到 18dp、换了底色与字色，
+ * **布局仍是 M3 的「标题左上、按钮右下」** —— 真机上几乎看不出与系统默认弹窗的区别，
+ * 用户反馈「还是这样没有变化」。能被看见的差异是**布局差异**，不是 10dp 的圆角。
+ *
+ * 现在这套（对齐 Web 端 `ConfirmDialog` / `AppUpdatePrompt`）：
+ *   · **居中排版**：标题与说明都压在卡片中轴线上；
+ *   · **底部两个通栏实心按钮、上下排列**（确认在上、取消在下）——
+ *     用户 09-28 明确要求「不要左右并排」；顺序与 Web 端 `AppUpdatePrompt` 的竖排按钮一致；
+ *   · [KRadius.sheet] 24dp 圆角 + `surface` 底 + `borderSubtle` 描边，与全 App 的卡片同一套语言；
+ *   · 说明可走 [text]（纯文本）或 [textContent]（富文本，如更新弹窗的「当前版本 + 更新说明」）。
+ *
+ * 按钮由本组件统一渲染（**不接受 slot**）：8 处弹窗此前各自拼按钮，尺寸/配色/间距必然漂移；
+ * 收口成 [KDialogTone] 三态之后，「取消」不可能在某处长得跟别处不一样。
+ *
+ * @param confirmText 确认键文案（「删除」/「清空」/「认输」/「立即更新」…）
+ * @param dismissText 取消键文案。默认「取消」，语义词因场景而异（更新弹窗是「以后再说」、
+ *   象棋认输是「继续下」）—— 只换字，不改位置与样式。
+ * @param danger 确认键是否走 danger 实心（删除/清空/认输这类不可逆操作为 true）
+ * @param confirmEnabled 确认键可用性（如「删除中…」期间置灰）
+ * @param dismissEnabled 取消键可用性（删除进行中时两个键一起置灰，避免中途关掉弹窗）
+ */
+@Composable
+fun KAlertDialog(
+    title: String,
+    onDismissRequest: () -> Unit,
+    confirmText: String,
+    modifier: Modifier = Modifier,
+    /** 正文（纯文本场景）；与 [textContent] 二选一 */
+    text: String? = null,
+    /** 正文（富文本场景）；与 [text] 二选一 */
+    textContent: (@Composable () -> Unit)? = null,
+    dismissText: String = "取消",
+    danger: Boolean = false,
+    confirmEnabled: Boolean = true,
+    dismissEnabled: Boolean = true,
+    // onConfirm 放最后：调用方可以用尾随 lambda
+    onConfirm: () -> Unit,
+) {
+    val c = KTheme.colors
+    val shape = RoundedCornerShape(KRadius.sheet)
+    // usePlatformDefaultWidth = false：M3 默认把弹窗宽度钉死在 280dp，塞不下并排的两个等宽按钮
+    //（Web 端是 360px）。关掉之后窗口宽 MATCH_PARENT、**高仍是内容高** —— 所以点卡片上下方
+    // 依然落在窗口之外，`onDismissRequest` 的「点遮罩关闭」不受影响（这是本改动唯一的坑）。
+    Dialog(
+        onDismissRequest = onDismissRequest,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Column(
+            modifier = modifier
+                .padding(horizontal = KSpacing.md)
+                .widthIn(max = KDimens.dialogMaxWidth)
+                .fillMaxWidth()
+                .clip(shape)
+                .background(c.surface)
+                .border(1.dp, c.borderSubtle, shape)
+                .padding(KSpacing.xl),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = title,
+                style = KType.subtitle,
+                color = c.textPrimary,
+                textAlign = TextAlign.Center,
+            )
+            when {
+                textContent != null -> {
+                    Spacer(Modifier.height(KSpacing.sm))
+                    textContent()
+                }
+                text != null -> {
+                    Spacer(Modifier.height(KSpacing.sm))
+                    Text(
+                        text = text,
+                        style = KType.body,
+                        color = c.textSecondary,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+            Spacer(Modifier.height(KSpacing.lg))
+            // 上下排列（用户 09-28 明确要求「不要左右并排」）：确认在上、取消在下 ——
+            // 与 Web 端 AppUpdatePrompt 的 `flex-direction: column` 同一顺序（主操作在前，退出在后）。
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(KSpacing.xs),
+            ) {
+                KDialogButton(
+                    text = confirmText,
+                    onClick = onConfirm,
+                    modifier = Modifier.fillMaxWidth(),
+                    tone = if (danger) KDialogTone.Danger else KDialogTone.Accent,
+                    enabled = confirmEnabled,
+                )
+                KDialogButton(
+                    text = dismissText,
+                    onClick = onDismissRequest,
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = dismissEnabled,
+                )
+            }
+        }
+    }
+}
+
+/** 弹窗按钮的语义三态（对齐 Web 端 ConfirmDialog / AppUpdatePrompt 的三套按钮配色） */
+private enum class KDialogTone { Neutral, Accent, Danger }
+
+/**
+ * 弹窗里的通栏按钮（上下排列，各自占满弹窗内容宽度）。
+ *
+ * 三个态对应 Web 端三种按钮：中性（`--bg-hover` 底的「取消」）、主色实心（`--accent` 底的
+ * 「立即更新」）、危险实心（`--danger` 底的「删除/清空」）。文字色一律由本函数决定，
+ * 调用方只挑语义 —— 否则「危险按钮到底用红字还是白字」这种事会散落到 8 个调用点里。
+ */
+@Composable
+private fun KDialogButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tone: KDialogTone = KDialogTone.Neutral,
+    enabled: Boolean = true,
+) {
+    val c = KTheme.colors
+    val bg: Color
+    val fg: Color
+    if (!enabled) {
+        bg = c.disabledSurface
+        fg = c.textMuted
+    } else {
+        when (tone) {
+            KDialogTone.Neutral -> {
+                bg = c.surfaceSubtle
+                fg = c.textPrimary
+            }
+            KDialogTone.Accent -> {
+                bg = c.accent
+                fg = c.onAccent
+            }
+            KDialogTone.Danger -> {
+                bg = c.danger
+                fg = c.onSolidDanger
+            }
+        }
+    }
+    Box(
+        modifier = modifier
+            .heightIn(min = KDimens.minTouchTarget)
+            .clip(RoundedCornerShape(KRadius.control))
+            .background(bg)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text = text, style = KType.bodyStrong, color = fg)
+    }
+}
+
+/**
+ * 实心 `danger` 底上的文字色 —— [KColors.onAccent] 那条「反相」规则的延伸。
+ *
+ * 按主题反相是**必须**的，不是偏好：浅色 danger 是深红 #A84A40，配近白字 5.7:1 ✓；
+ * 深色 danger 是亮红 #E0586B，同一白字只有 3.6:1（不达 AA 4.5:1），必须换深字 5.2:1 ✓。
+ * 写死白字 = 深色主题下一处静默的可读性缺陷（与 accent 用 [KColors.onAccent] 同因）。
+ */
+private val KColors.onSolidDanger: Color
+    get() = if (isLight) Color(0xFFFDF7F6) else Color(0xFF1A0F12)
 
 /**
  * 主题模式选择行（跟随系统 / 浅色 / 深色）。

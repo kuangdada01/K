@@ -15,12 +15,13 @@
  */
 
 import { memo, useState } from 'react';
-import { Headphones, MicOff, MonitorUp, Volume2 } from 'lucide-react';
+import { Headphones, MicOff, MonitorUp, Swords, Volume2 } from 'lucide-react';
 import Avatar from '../ui/Avatar';
 import VolumeSlider from '../ui/VolumeSlider';
 import type { VoiceParticipant } from '../../types';
 import type { VoiceQualityLevel } from '../../voice/VoiceSession';
 import styles from '../../pages/VoicePage.module.css';
+import chessStyles from './chess/chess.module.css';
 
 function MemberCard({
   participant,
@@ -29,6 +30,8 @@ function MemberCard({
   quality,
   onVolume,
   getVolume,
+  chessIdle,
+  onInviteChess,
 }: {
   participant: VoiceParticipant;
   speaking: boolean;
@@ -36,6 +39,10 @@ function MemberCard({
   quality: VoiceQualityLevel;
   onVolume: (userId: number, v: number) => void;
   getVolume: (userId: number) => number;
+  /** 房间内没有进行中的对局/邀请时为 true（此时显示"对弈"入口） */
+  chessIdle?: boolean;
+  /** 发起对战象棋邀请（对局进行中不传，入口隐藏） */
+  onInviteChess?: (userId: number) => void;
 }) {
   const [volume, setVolume] = useState(() => Math.min(1, getVolume(participant.userId)));
   const qualityLabel = quality === 'good' ? '良好' : quality === 'fair' ? '不良' : '差';
@@ -74,6 +81,16 @@ function MemberCard({
             }}
           />
         </div>
+      )}
+      {!isSelf && chessIdle && onInviteChess && (
+        <button
+          className={chessStyles.cardInviteBtn}
+          title={`邀请 ${participant.username} 对弈象棋`}
+          onClick={() => onInviteChess(participant.userId)}
+        >
+          <Swords size={12} />
+          对弈
+        </button>
       )}
     </div>
   );

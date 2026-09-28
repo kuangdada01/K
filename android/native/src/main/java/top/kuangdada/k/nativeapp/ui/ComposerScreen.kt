@@ -51,6 +51,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
@@ -72,6 +73,7 @@ import top.kuangdada.k.core.data.isAcceptableVideoName
 import top.kuangdada.k.core.data.resolveUrl
 import top.kuangdada.k.core.designsystem.component.KButton
 import top.kuangdada.k.core.designsystem.component.KButtonVariant
+import top.kuangdada.k.core.designsystem.component.KEmojiPanel
 import top.kuangdada.k.core.designsystem.component.KTextField
 import top.kuangdada.k.core.designsystem.component.KTextFieldVariant
 import top.kuangdada.k.core.designsystem.theme.KRadius
@@ -131,14 +133,11 @@ private val VIDEO_STATUS_POLL_INTERVAL_MS = 2500L
 /** 转码等待上限：超过就提示用户"仍在处理"，不再无限转圈（服务端队列是串行的） */
 private const val VIDEO_TRANSCODE_TIMEOUT_MS = 5 * 60 * 1000L
 
-/** 表情面板（设计稿要求"表情直接在正文框里选"，所以面板画在卡片内部） */
-private val COMPOSER_EMOJIS = listOf(
-    "😀", "😄", "😁", "😆", "😅", "😂", "🙂", "😉",
-    "😊", "😍", "🥰", "😘", "😜", "🤔", "🤗", "😎",
-    "😭", "😢", "😅", "😳", "🥺", "😴", "🤯", "😱",
-    "👍", "👎", "👏", "🙏", "💪", "🤝", "✌️", "👌",
-    "❤️", "🔥", "🎉", "✨", "⭐", "💡", "📌", "✅",
-)
+/**
+ * 表情清单**不在这里定义**：发布页曾私藏一份 40 个的 `COMPOSER_EMOJIS`（与私信聊天、
+ * Web 端三方都不一样，还有个重复的 😅），已删除。现在三端同源走设计系统的
+ * `KEmojis`（71 个）+ `KEmojiPanel`，加表情只改那一处。
+ */
 
 /**
  * 编辑已有帖子时要带进来的内容。
@@ -196,6 +195,8 @@ fun ComposerScreen(
     var showLocationPicker by remember { mutableStateOf(false) }
     var closeComments by remember { mutableStateOf(false) }
     var showEmojiPanel by remember { mutableStateOf(false) }
+    /** 键盘句柄：开表情面板时收键盘（面板在正文卡片里，不需要和 IME 抢半屏） */
+    val keyboard = LocalSoftwareKeyboardController.current
     var showCommentsPanel by remember { mutableStateOf(false) }
     var tip by remember { mutableStateOf<String?>(null) }
     var submitting by remember { mutableStateOf(false) }
@@ -668,29 +669,15 @@ fun ComposerScreen(
                     )
 
                     if (showEmojiPanel) {
-                        Column(verticalArrangement = Arrangement.spacedBy(KSpacing.xxs)) {
-                            COMPOSER_EMOJIS.chunked(8).forEach { row ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.spacedBy(KSpacing.xxs),
-                                ) {
-                                    row.forEach { emoji ->
-                                        Box(
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .height(34.dp)
-                                                .clip(RoundedCornerShape(KRadius.chip))
-                                                .clickable { insertAtCursor(emoji) },
-                                            contentAlignment = Alignment.Center,
-                                        ) {
-                                            Text(emoji, style = KType.subtitle)
-                                        }
-                                    }
-                                    // 最后一行不足 8 个：补空位，保持列宽一致
-                                    repeat(8 - row.size) { Spacer(Modifier.weight(1f)) }
-                                }
-                            }
-                        }
+                        // 与私信聊天（MessagesScreen）、Web 端 EmojiPicker **同一套**
+                        // （KEmojiPanel：71 个表情 / 8 列 / 按下 accentSoft 高亮）。
+                        // 设计稿的两条要求原样保留：
+                        //  · 面板画在正文卡片**内部**（"表情直接在正文框里选"）——
+                        //    放在这个 Column 里就满足，KEmojiPanel 的 surface 底与卡片同色，无接缝；
+                        //  · 插入落在**光标处**（onPick 转交 insertAtCursor，不是追加到末尾）——
+                        //    这是发布页与聊天的唯一区别：聊天是单行流，正文是富文本编辑位。
+                        // 面板选完不关（与聊天一致）：连发几个表情不用每发一次重开。
+                        KEmojiPanel(onPick = { insertAtCursor(it) })
                     }
 
                     Row(
@@ -703,7 +690,13 @@ fun ComposerScreen(
                                 .size(28.dp)
                                 .clip(RoundedCornerShape(percent = 50))
                                 .background(c.surfaceSunken)
-                                .clickable { showEmojiPanel = !showEmojiPanel },
+                                .clickable {
+                                    showEmojiPanel = !showEmojiPanel
+                                    // 开面板 = 这一会儿在选表情，不需要键盘：不收的话
+                                    // 键盘占半屏、imePadding 把正文卡片挤扁，面板和正文
+                                    // 互相抢地方（与私信聊天 ChatScreen 同一处理）
+                                    if (showEmojiPanel) keyboard?.hide()
+                                },
                             contentAlignment = Alignment.Center,
                         ) {
                             Text("😊", style = KType.body)
@@ -893,58 +886,34 @@ fun ComposerScreen(
          * 与消息页「清空聊天记录」用同一套 `AlertDialog` 写法（含确认键的 danger 文字色）。
          */
         if (confirmDelete && editing != null && onDeleteRequest != null) {
-            AlertDialog(
+            KAlertDialog(
+                title = "删除帖子",
+                text = "这条帖子会被永久删除，它的评论、点赞和图片视频也一并清除，且不可恢复。",
+                confirmText = if (deleting) "删除中…" else "删除",
+                danger = true,
+                confirmEnabled = !deleting,
+                dismissEnabled = !deleting,
                 onDismissRequest = { if (!deleting) confirmDelete = false },
-                title = { Text("删除帖子", style = KType.subtitle, color = c.textPrimary) },
-                text = {
-                    Text(
-                        "这条帖子会被永久删除，它的评论、点赞和图片视频也一并清除，且不可恢复。",
-                        style = KType.body,
-                        color = c.textSecondary,
-                    )
-                },
-                confirmButton = {
-                    Text(
-                        text = if (deleting) "删除中…" else "删除",
-                        style = KType.bodyStrong,
-                        color = c.danger,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(KRadius.control))
-                            .clickable(enabled = !deleting) {
-                                scope.launch {
-                                    deleting = true
-                                    error = null
-                                    when (val r = onDeleteRequest(editing.id)) {
-                                        // 成功：交回调用方退出到主页并刷新列表
-                                        is ApiResult.Success -> {
-                                            confirmDelete = false
-                                            onDeleted()
-                                        }
-                                        // 失败：留住页面，把服务端文案显示在表单里，
-                                        // 并把弹窗关掉 —— 否则用户对着一个"删除"按钮反复点也看不出发生了什么
-                                        is ApiResult.Failure -> {
-                                            confirmDelete = false
-                                            error = r.error.displayMessage
-                                        }
-                                    }
-                                    deleting = false
-                                }
+                onConfirm = {
+                    scope.launch {
+                        deleting = true
+                        error = null
+                        when (val r = onDeleteRequest(editing.id)) {
+                            // 成功：交回调用方退出到主页并刷新列表
+                            is ApiResult.Success -> {
+                                confirmDelete = false
+                                onDeleted()
                             }
-                            .padding(horizontal = KSpacing.sm, vertical = KSpacing.xs),
-                    )
+                            // 失败：留住页面，把服务端文案显示在表单里，
+                            // 并把弹窗关掉 —— 否则用户对着一个"删除"按钮反复点也看不出发生了什么
+                            is ApiResult.Failure -> {
+                                confirmDelete = false
+                                error = r.error.displayMessage
+                            }
+                        }
+                        deleting = false
+                    }
                 },
-                dismissButton = {
-                    Text(
-                        text = "取消",
-                        style = KType.body,
-                        color = c.textMuted,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(KRadius.control))
-                            .clickable(enabled = !deleting) { confirmDelete = false }
-                            .padding(horizontal = KSpacing.sm, vertical = KSpacing.xs),
-                    )
-                },
-                containerColor = c.surface,
             )
         }
     }

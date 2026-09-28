@@ -8,6 +8,7 @@
  */
 
 import type { VoiceChatMessage, VoiceParticipant } from '../types';
+import type { ChessGameServerMsg } from '@k/shared';
 
 export type VoiceStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'ended';
 
@@ -51,7 +52,9 @@ export type VoiceServerMessage =
   | { type: 'chat'; message: VoiceChatMessage }
   | { type: 'chat-cleared' }
   | { type: 'room-closed'; reason?: string }
-  | { type: 'error'; message?: string };
+  | { type: 'error'; message?: string }
+  /** 房间对战象棋（game-* 前缀，服务端权威；形状唯一来源在 @k/shared） */
+  | ChessGameServerMsg;
 
 /** 屏幕共享质量档位（极清 = 1080p60；mesh 上行 = 观看数 × 码率，人多建议降档） */
 export type ShareQuality = '1080p60' | '1080p30' | '720p30';
@@ -132,4 +135,6 @@ export interface VoiceSessionCallbacks {
   onChatMessage: (message: VoiceChatMessage) => void;
   /** 聊天记录被房主/管理员清空（本地列表应即时清空） */
   onChatCleared: () => void;
+  /** 房间对战象棋消息（game-* 前缀：邀请/走子/终局/快照等；不订阅则跳过） */
+  onChessMessage?: (msg: ChessGameServerMsg) => void;
 }

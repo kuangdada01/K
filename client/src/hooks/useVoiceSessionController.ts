@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { VoiceSession, NOISE_REDUCTION_KEY, MUSIC_MODE_KEY } from '../voice/VoiceSession';
 import type { VoiceStatus, VoiceQualityLevel, ShareQuality, ShareStats } from '../voice/VoiceSession';
+import { useChessGame } from '../voice/chess/useChessGame';
 import { showToast } from '../components/ui/Toast';
 import type { VoiceChatMessage, VoiceParticipant } from '../types';
 
@@ -66,6 +67,13 @@ export function useVoiceSessionController(
   const [shareMuted, setShareMuted] = useState(true);
   const [shareStats, setShareStats] = useState<ShareStats | null>(null);
   const sessionRef = useRef<VoiceSession | null>(null);
+  // ---- 房间对战象棋（服务端权威；本 hook 只做状态桥接，见 voice/chess/useChessGame） ----
+  const chess = useChessGame({
+    getSelfUserId: () => sessionRef.current?.getSelfUserId() ?? 0,
+    send: (msg) => sessionRef.current?.sendChessMessage(msg),
+  });
+  // join 闭包里只引用稳定成员（onChessMessage 是 useCallback([]) 产物，首帧即定型）
+  const chessOnMessage = chess.onChessMessage;
   const autoJoinTriedRef = useRef(false);
   /** 当前会话是否以「已登录身份」建立（用于区分登录过期与访客场景） */
   const authSessionRef = useRef(false);
@@ -83,7 +91,12 @@ export function useVoiceSessionController(
 
   const clearSavedRoom = useCallback(() => sessionStorage.removeItem(ACTIVE_ROOM_KEY), []);
 
-  /** 会话侧状态复位（聊天状态由 chatActions().reset() 负责，见 join/leave 调用点） */
+  /** 会话侧状态复位（聊天状态由 chatActions().reset() 负责，见 join/leave 调用点；
+   *  对局状态经 ref 调 chess.reset —— resetState 引用必须保持稳定，同步走 effect） */
+  const chessResetRef = useRef(chess.reset);
+  useEffect(() => {
+    chessResetRef.current = chess.reset;
+  }, [chess.reset]);
   const resetState = useCallback(() => {
     setStatus('idle');
     setParticipants([]);
@@ -97,6 +110,7 @@ export function useVoiceSessionController(
     setShareStream(null);
     setShareAudio(false);
     setShareStats(null);
+    chessResetRef.current();
   }, []);
 
   // chatActions 是调用方（VoiceContext）每渲染新建的函数，直接进依赖数组会让
@@ -174,6 +188,8 @@ export function useVoiceSessionController(
           onChatMessage: (message) => chatActionsRef.current().onChatMessage(message),
           // 房间聊天被创建者/管理员清空：本地同步清空（游标保留，后续只追新）
           onChatCleared: () => chatActionsRef.current().onChatCleared(),
+          // 对战象棋：game-* 前缀消息（邀请/走子/终局/快照）统一进 chess 状态
+          onChessMessage: chessOnMessage,
         }
       );
       sessionRef.current = session;
@@ -192,7 +208,7 @@ export function useVoiceSessionController(
         showToast('无法启动语音，请检查浏览器是否支持麦克风');
       });
     },
-    [user, clearSavedRoom, resetState]
+    [user, clearSavedRoom, resetState, chessOnMessage]
   );
 
   const leave = useCallback(() => {
@@ -369,6 +385,7 @@ export function useVoiceSessionController(
     shareSharpText,
     shareMuted,
     shareStats,
+    chess,
     join,
     leave,
     toggleMute,

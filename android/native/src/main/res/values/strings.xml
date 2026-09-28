@@ -15,4 +15,24 @@
       `%1$s` 之外的字面 `%` 不需要转义（这里只有一个占位符）。
     -->
     <string name="k_share_fullscreen_hint">%1$s 的共享 · 双击退出全屏</string>
+
+    <!-- ================= 社交通知（新私信 / 互动 / 公告） ================= -->
+    <!-- 渠道名会出现在系统设置的「通知」页里，所以写用户看得懂的话，不写技术名词 -->
+    <string name="notify_channel_messages">新消息</string>
+    <string name="notify_channel_messages_desc">收到私信时提醒（有横幅与提示音）</string>
+    <string name="notify_channel_activity">互动与公告</string>
+    <string name="notify_channel_activity_desc">有人评论、回复你，或发布新公告时提醒</string>
+
+    <!-- 拉不到昵称 / 内容摘要时的兜底文案（网络失败也要能弹出一条有意义的话） -->
+    <string name="notify_fallback_sender">新消息</string>
+    <string name="notify_fallback_preview">给你发来一条消息</string>
+
+    <!-- 互动动作：与 NotificationDto.type 一一对应（comment = 评论帖子，reply = 回复评论） -->
+    <string name="notify_action_comment">评论了你的帖子</string>
+    <string name="notify_action_reply">回复了你的评论</string>
+    <!-- 服务端以后新增 type 时用的兜底，宁可笼统也不说错 -->
+    <string name="notify_action_generic">与你互动了</string>
+
+    <string name="notify_announcement_title">新公告</string>
+    <string name="notify_announcement_fallback">发布了一条新公告</string>
 </resources>

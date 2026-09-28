@@ -354,41 +354,21 @@ fun AdminScreen(
          * 分散写的话，将来加第五个操作很容易漏掉弹窗（这正是本轮要修的问题）。
          */
         pending?.let { p ->
-            AlertDialog(
+            KAlertDialog(
+                title = p.title,
+                text = p.message,
+                confirmText = p.confirmText,
+                danger = true,
                 onDismissRequest = { pending = null },
-                title = { Text(p.title, style = KType.subtitle, color = c.textPrimary) },
-                text = { Text(p.message, style = KType.body, color = c.textSecondary) },
-                confirmButton = {
-                    Text(
-                        text = p.confirmText,
-                        style = KType.bodyStrong,
-                        color = c.danger,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(KRadius.control))
-                            .clickable {
-                                pending = null
-                                scope.launch {
-                                    when (val r = p.run(repo)) {
-                                        is ApiResult.Success -> { toast = p.doneText; load() }
-                                        is ApiResult.Failure -> toast = r.error.displayMessage
-                                    }
-                                }
-                            }
-                            .padding(horizontal = KSpacing.sm, vertical = KSpacing.xs),
-                    )
+                onConfirm = {
+                    pending = null
+                    scope.launch {
+                        when (val r = p.run(repo)) {
+                            is ApiResult.Success -> { toast = p.doneText; load() }
+                            is ApiResult.Failure -> toast = r.error.displayMessage
+                        }
+                    }
                 },
-                dismissButton = {
-                    Text(
-                        text = "取消",
-                        style = KType.body,
-                        color = c.textMuted,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(KRadius.control))
-                            .clickable { pending = null }
-                            .padding(horizontal = KSpacing.sm, vertical = KSpacing.xs),
-                    )
-                },
-                containerColor = c.surface,
             )
         }
     }

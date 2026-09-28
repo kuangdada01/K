@@ -11,6 +11,9 @@
  * - DELETE /api/voice/rooms/:id            - 删除房间（创建者或管理员，在线成员会被请出）
  * - GET    /api/voice/rooms/:id/messages   - 聊天记录（游标分页 before_id/after_id/limit）
  * - DELETE /api/voice/rooms/:id/messages   - 清空聊天记录（权限同删除房间，在线成员收 chat-cleared）
+ * - GET    /api/voice/rooms/:id/games      - 终局留档列表（before_id/limit 分页）
+ * - GET    /api/voice/rooms/:id/games/:gameId - 单局复盘数据（棋谱 + 中文记谱）
+ * - GET    /api/voice/chess/stats/:userId  - 用户象棋战绩（跨房间聚合）
  * - GET    /api/voice/ice                  - WebRTC ICE 服务器配置
  *
  * 认证策略:
@@ -29,6 +32,7 @@ import { validateBody } from '../validate';
 import * as voiceRepo from '../repositories/voice.repo';
 import type { VoiceRoomRow } from '../repositories/voice.repo';
 import * as voiceChatRepo from '../repositories/voice-chat.repo';
+import * as voiceGameRepo from '../repositories/voice-game.repo';
 import { getSafeUser } from '../repositories/user.repo';
 import * as voiceHub from '../voice/hub';
 import { guestIds } from '../voice/guest-ids';
@@ -333,6 +337,78 @@ router.delete(
     voiceChatRepo.deleteRoomMessages(roomId);
     voiceHub.broadcast(roomId, { type: 'chat-cleared' });
     res.json({ success: true });
+  })
+);
+
+/**
+ * GET /api/voice/rooms/:id/games - 房间终局留档列表（复盘入口）
+ *
+ * 认证: 可选（无效 token 静默跳过，游客可读）。
+ * 游标分页: before_id 向更早翻页；limit 默认 20、上限 50。房间不存在 404。
+ * 行内不含棋谱（轻量）；单局棋谱走 /:gameId。
+ */
+router.get(
+  '/rooms/:id/games',
+  optionalAuth,
+  roomMessagesLimiter,
+  asyncHandler(async (req: Request, res: Response) => {
+    const roomId = Number(req.params.id);
+    if (!Number.isInteger(roomId)) throw new AppError(400, '参数错误');
+    const room = voiceRepo.getRoomById(roomId);
+    if (!room) throw new AppError(404, '房间不存在');
+
+    const limitRaw = Number(req.query.limit ?? 20);
+    const limit = Number.isInteger(limitRaw) ? Math.min(Math.max(limitRaw, 1), 50) : 20;
+    const beforeId = parseCursor(req.query.before_id, 'before_id');
+
+    const { games, has_more } = voiceGameRepo.listRoomGames(roomId, {
+      ...(beforeId !== undefined ? { beforeId } : {}),
+      limit,
+    });
+    res.json({ games, has_more });
+  })
+);
+
+/**
+ * GET /api/voice/rooms/:id/games/:gameId - 单局完整复盘数据（棋谱 + 记谱）
+ *
+ * 认证: 可选。房间或对局不存在返回 404。
+ */
+router.get(
+  '/rooms/:id/games/:gameId',
+  optionalAuth,
+  roomMessagesLimiter,
+  asyncHandler(async (req: Request, res: Response) => {
+    const roomId = Number(req.params.id);
+    const gameId = String(req.params.gameId ?? '');
+    if (!Number.isInteger(roomId) || !gameId) throw new AppError(400, '参数错误');
+    const room = voiceRepo.getRoomById(roomId);
+    if (!room) throw new AppError(404, '房间不存在');
+    const game = voiceGameRepo.getVoiceGame(roomId, gameId);
+    if (!game) throw new AppError(404, '对局不存在');
+    res.json({
+      game: {
+        ...game,
+        moves: JSON.parse(game.moves) as unknown,
+        notations: JSON.parse(game.notations) as unknown,
+      },
+    });
+  })
+);
+
+/**
+ * GET /api/voice/chess/stats/:userId - 用户象棋战绩（跨房间聚合）
+ *
+ * 认证: 可选（公开读）。userId 非法返回 400。返回 { stats: { wins, losses, draws, total } }。
+ */
+router.get(
+  '/chess/stats/:userId',
+  optionalAuth,
+  roomMessagesLimiter,
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = Number(req.params.userId);
+    if (!Number.isInteger(userId)) throw new AppError(400, '参数错误');
+    res.json({ stats: voiceGameRepo.getUserGameStats(userId) });
   })
 );
 

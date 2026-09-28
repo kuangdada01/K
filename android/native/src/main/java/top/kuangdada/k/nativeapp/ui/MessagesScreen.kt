@@ -1,6 +1,11 @@
 package top.kuangdada.k.nativeapp.ui
 
 import android.content.ClipData
+import android.content.Context
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.animation.AnimatedVisibility
@@ -17,6 +22,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,7 +39,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -55,6 +63,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -62,10 +71,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Rect
@@ -87,8 +98,10 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.contentDescription
@@ -109,8 +122,13 @@ import coil3.compose.SubcomposeAsyncImageContent
 // httpHeaders 是扩展函数（定义在 coil3.network.ImageRequestsKt），不 import 会报
 // "Unresolved reference 'httpHeaders' on receiver of type ImageRequest.Builder"
 import coil3.network.httpHeaders
+import java.io.File
 import kotlin.math.roundToInt
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import top.kuangdada.k.core.data.AdminRepository
 import top.kuangdada.k.core.data.ApiError
 import top.kuangdada.k.core.data.ApiResult
@@ -119,9 +137,13 @@ import top.kuangdada.k.core.data.RealtimeClient
 import top.kuangdada.k.core.data.SessionRepository
 import top.kuangdada.k.core.data.dayDividerText
 import top.kuangdada.k.core.data.displayMessage
+import top.kuangdada.k.core.data.image.ImageCompressor
 import top.kuangdada.k.core.data.timeGapMillis
 import top.kuangdada.k.core.designsystem.component.KButton
 import top.kuangdada.k.core.designsystem.component.KButtonVariant
+import top.kuangdada.k.core.designsystem.component.KEmojiButton
+import top.kuangdada.k.core.designsystem.component.KEmojiPanel
+import top.kuangdada.k.core.designsystem.component.KEmojiPanelHeight
 import top.kuangdada.k.core.designsystem.component.KPlaceholder
 import top.kuangdada.k.core.designsystem.component.KListSkeleton
 import top.kuangdada.k.core.designsystem.component.KPlaceholderKind
@@ -139,6 +161,7 @@ import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 import top.kuangdada.k.core.designsystem.theme.KType
 import top.kuangdada.k.core.designsystem.theme.LocalAnimationsEnabled
+import top.kuangdada.k.nativeapp.notify.SocialNotifier
 import top.kuangdada.k.nativeapp.ui.viewer.rememberImageViewer
 
 /**
@@ -836,6 +859,80 @@ fun ChatScreen(
     var confirmClear by remember { mutableStateOf(false) }
 
     /**
+     * 发送图片（用户要求：聊天输入栏加发图功能）。
+     *
+     * 用系统 Photo Picker（`PickVisualMedia.ImageOnly`）而不是自绘相册：
+     * 零存储权限，用户能拿到"最近/相册/文件"全部来源 —— 与发帖页选图同一条
+     * 流水线：拷进 cacheDir（选择器的读权限是**临时的**）→ [ImageCompressor]
+     * 本地压一道（失败回退原图，压缩是优化、绝不能变成"发不出图"）→
+     * multipart 的 `image` 字段上传（服务端 content/image 至少其一即可）。
+     *
+     * 行为对齐微信：**选完立即作为独立消息发出**，输入框里正在打的字不动；
+     * 引用条开着的话图片消息也带上引用，发出即消费（与文字发送同语义）。
+     *
+     * 上传期间复用 [sending]：发送按钮显示"…"，发图按钮忽略再次点击。
+     * 选择器回调必须注册在组合作用域（它随页面存活，不会丢结果）。
+     */
+    val context = LocalContext.current
+    val pickChatImage = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            sending = true
+            try {
+                val file = withContext(Dispatchers.IO) {
+                    copyUriToCache(context, uri)?.let { raw ->
+                        ImageCompressor.compressFile(context, raw)?.also { raw.delete() } ?: raw
+                    }
+                }
+                when {
+                    file == null -> toast = "读取图片失败，请重试"
+                    else -> when (
+                        val r = messages.send(
+                            partnerId,
+                            "",
+                            image = file,
+                            quotedMessageId = replyTo?.raw?.id,
+                        )
+                    ) {
+                        is ApiResult.Success -> {
+                            items = items + r.data
+                            replyTo = null
+                            // reverseLayout 下新消息是 index 0：主动滚一次（与文字发送同）
+                            listState.animateScrollToItem(0)
+                        }
+                        is ApiResult.Failure -> toast = r.error.displayMessage
+                    }
+                }
+            } finally {
+                sending = false
+            }
+        }
+    }
+
+    /**
+     * 表情面板开合（用户要求：私信聊天加表情功能）。
+     *
+     * 面板是**内联在输入栏下方**的（不是 Popup）：它与输入栏同属一列，
+     * 开合只推挤这一列的高度，消息列表的位置不受影响；Popup 则要自己算位置、
+     * 还要处理点外面关闭，在沉浸态页面里更容易和顶栏浮层打架。
+     */
+    var emojiOpen by remember { mutableStateOf(false) }
+    /**
+     * 输入框的聚焦态。聚焦 = 要打字 → 面板给键盘让位，但**不是立刻撤** ——
+     * 立刻撤的话面板先消失、输入栏先掉到屏幕底、再被升起的键盘顶回来，
+     * 正是用户反馈的"点表情再点输入框，输入框从底下抬起，不自然"。
+     * 让位走下面「键盘/表情交换区」的**等高交接**（等键盘升到面板等高才收面板）。
+     *
+     * 走 [MutableInteractionSource] 而不是给 KTextField 包 onFocusChanged：
+     * 组件本身不暴露焦点回调，但它的 `interactionSource` 参数就是为这种
+     * "调用方要自己读聚焦态"的场景留的口子（见 KTextField 的文档）。
+     */
+    val inputInteraction = remember { MutableInteractionSource() }
+    val inputFocused by inputInteraction.collectIsFocusedAsState()
+
+    /**
      * @param silent 静默刷新：**不显示骨架**。有缓存时走这条 —— 内容已经在屏幕上了，
      *   再闪一下骨架反而像"消息被重新加载了一遍"。
      */
@@ -852,7 +949,52 @@ fun ChatScreen(
         loading = false
     }
 
+    /**
+     * 用户是否**主动拖动过**这个列表。
+     *
+     * 一旦拖过就不再自动贴底 —— 否则用户正在翻历史时会被新消息硬拽回底部。
+     * 写入点复用下面那个已经在监听 `interactions` 的 collect（它本来用于"拖列表时收键盘"）。
+     */
+    var userDragged by remember { mutableStateOf(false) }
+
+    /**
+     * 进入这个会话：先用进程内缓存铺一屏、再静默刷新。
+     *
+     * ★ "贴底"**不在这里做**，见下面那个 `LaunchedEffect(items, userDragged)`。
+     */
     LaunchedEffect(partnerId) { loadInitial(silent = items.isNotEmpty()) }
+
+    /**
+     * 把列表保持在底部（`reverseLayout` 下 index 0 就是最新一条）。
+     *
+     * ★ 判据是**"用户还没主动滚动过"**，而不是"只在拉完首屏钉一次"——
+     * 上一版就是后者，用户复测**仍然不贴底**。原因是这个页面的首屏数据**多段到达**：
+     *   ① 进页面先铺进程内缓存 → ② `loadInitial` 静默刷新的结果整体替换 →
+     *   ③ 之后 SSE 还会再来一次。
+     * 每次替换都会让 LazyColumn 重新测量，而滚动锚点锚的是"当时那个 item"——
+     * 后面几段一到，锚点就漂了。只钉第 ② 步，第 ③ 步照样漂回去。
+     *
+     * 更关键的是**时机**：旧写法要等 `loadInitial()`（一次网络往返）返回才钉，
+     * 而用户从"点进会话"到"网络返回"这段时间看到的位置就是错的；他若在这期间
+     * 顺手往上滑一下（很自然会这么做），之后也没人再把列表拉回底部了。
+     *
+     * 所以改成"用户没动手之前**一直**贴底"，用户一拖就让位。
+     * 用 `scrollToItem`（瞬时）而不是动画：这里要的就是"首帧就在底部"，
+     * 动画反而会让用户看到列表自己滑一下。
+     */
+    LaunchedEffect(items, userDragged) {
+        if (!userDragged && items.isNotEmpty()) {
+            listState.scrollToItem(0)
+        }
+    }
+
+    /**
+     * 进会话 = 这条消息已经看到了：把它的通知栏提醒撤掉。
+     *
+     * `autoCancel` 只覆盖"**点了那条通知**进来"这一条路径 —— 从消息列表点进来、
+     * 或从他人主页点私信进来时，那条通知会一直挂在通知栏，看着像"还没读"。
+     */
+    LaunchedEffect(partnerId) { SocialNotifier.clearMessage(context, partnerId) }
 
     /**
      * 本地改动（发送 / 撤回 / 清空 / 翻页）也**回写缓存**。
@@ -901,7 +1043,16 @@ fun ChatScreen(
      * 气泡自己一直用的是 `msg.imageUrl`，所以缩略图正常、全屏那张却挂 —— 两个字段不是一回事。
      */
     val chatImageUrls = remember(items) { items.mapNotNull { it.imageUrl } }
+    // 点消息列表的空白处收起键盘（输入时键盘挡着半屏内容）
+    val keyboard = LocalSoftwareKeyboardController.current
     // 私密图片必须带 JWT 头，查看器与保存都靠它
+    //
+    // **看图前收键盘**（2026-09-25 反馈：打字时点聊天里的图片，键盘压在
+    // 全屏查看器上面，层级错乱）：IME 是系统窗口，**永远盖在应用内容之上**，
+    // 查看器是本窗口内的覆盖层、盖不过它 —— 所以打开查看器前把键盘收掉
+    // （见 onImageClick）。**关闭后不自动弹回**（同日反馈"退出不用再启用"）：
+    // 看完图回到聊天页是安静的，要打字再点输入框 —— 与"发图按钮从相册回来
+    // 键盘自动弹回"是两条刻意不同的路径。
     val openViewer = rememberImageViewer(topInsetPx = { 0f })
     /**
      * 离开这段对话时**注销它那一组图片来源**。
@@ -931,8 +1082,8 @@ fun ChatScreen(
         // 采样 shell 那层会自引用（无限递归 → 原生崩溃），所以这里只用页面级的源；
         // 细节与理由见 rememberTopBarGlass 的注释。
         val backdrop = rememberLayerBackdrop(onDraw = rememberBackdropOnDraw(pageBg))
-        // 点消息列表的空白处收起键盘（输入时键盘挡着半屏内容）
-        val keyboard = LocalSoftwareKeyboardController.current
+        // 焦点管理器：开表情面板时**清掉输入框焦点**（见 KEmojiButton 的 onClick）
+        val focusManager = LocalFocusManager.current
         /**
          * 点「引用」的**唯一出口**（长按菜单那一项走这里）。
          *
@@ -975,7 +1126,11 @@ fun ChatScreen(
          */
         LaunchedEffect(listState) {
             listState.interactionSource.interactions.collect { interaction ->
-                if (interaction is DragInteraction.Start) keyboard?.hide()
+                if (interaction is DragInteraction.Start) {
+                    // 用户动手了：从此不再自动贴底（判据见 ChatScreen 里 userDragged 的注释）
+                    userDragged = true
+                    keyboard?.hide()
+                }
             }
         }
         // 顶栏的实际高度：列表的 contentPadding.top 按它让位 —— 滚到最顶上时最老的消息
@@ -988,6 +1143,91 @@ fun ChatScreen(
         val density = LocalDensity.current
         val topBarPx = if (measuredTopBarPx > 0) measuredTopBarPx else estimatedTopBarPx
         val topInset = with(density) { topBarPx.toDp() }
+
+        /**
+         * ============================================================
+         * 键盘 / 表情面板「交换区」（QQ/微信式原地换位）
+         * ============================================================
+         * 输入栏下面的那片地方由两样东西轮流占据：键盘（系统窗口，盖在应用之上）
+         * 或表情面板。老实现的两处别扭都出在"两边各自动画、谁也不管谁"：
+         *
+         *  · 面板开着点输入框：面板先瞬间撤掉 → 输入栏掉到屏幕底 → 键盘再把它
+         *    顶起来（用户反馈的"输入框从底下抬起，不自然"）；
+         *  · 键盘开着点笑脸：键盘收起与面板展开各走各的，输入栏先降后升。
+         *
+         * QQ/微信的做法是**面板与键盘等高、原地互换、输入栏纹丝不动**，照搬：
+         *
+         *  1. 面板高度 = 上一次键盘的全高（还没弹过键盘时退回 240dp + 导航栏）；
+         *  2. 交换区高度 = max(IME 高, 面板高×展开比例, 导航栏高)。输入栏永远贴在
+         *     交换区顶上，所以切换瞬间交换区高度不变，输入栏就不动；
+         *  3. 面板→键盘：聚焦后面板**不撤**，等 IME 升到面板等高（键盘把面板完全
+         *    盖住）才收 —— 全程输入栏不动；IME 根本不来（实体键盘等）由
+         *    [IME_HANDOFF_TIMEOUT_MS] 兜底正常收起；
+         *  4. 键盘→面板：面板**瞬时**占满交换区（此刻 IME 还没降完，max 取面板高），
+         *    键盘向下滑走正好把面板露出来，输入栏同样不动。
+         *
+         * 为什么自己驱动展开比例、不用 AnimatedVisibility：交换区高度要拿
+         * 面板的**实时高度**参与 max() 运算，AnimatedVisibility 只动画自己的子节点，
+         * 外面拿不到中间值。
+         */
+        val animationsEnabled = LocalAnimationsEnabled.current
+        val imeBottomPx = WindowInsets.ime.getBottom(density)
+        val navBottomPx = WindowInsets.navigationBars.getBottom(density)
+        /** 键盘最近一次的**全高**（升起动画取最大值即终值）；面板与其等高才能原地换位 */
+        var lastImeBottomPx by rememberSaveable { mutableIntStateOf(0) }
+        /**
+         * IME 高度的**镜像状态**。交接等待用 snapshotFlow 观察它，而
+         * `WindowInsets.ime` 的 getter 本身是 @Composable 的、不能在
+         * snapshotFlow 里直接读，所以每次重组后在这里把组合里算出的值回写进来。
+         */
+        var imeBottomState by remember { mutableIntStateOf(0) }
+        SideEffect {
+            imeBottomState = imeBottomPx
+            if (imeBottomPx > lastImeBottomPx) lastImeBottomPx = imeBottomPx
+        }
+
+        // 面板全高与 IME 全高同口径（都含导航栏那一条），网格内容再自己避让导航栏
+        val panelHeightPx = if (lastImeBottomPx > 0) {
+            lastImeBottomPx
+        } else {
+            navBottomPx + with(density) { KEmojiPanelHeight.toPx() }.roundToInt()
+        }
+        val panelGridHeightDp = with(density) { (panelHeightPx - navBottomPx).toDp() }
+
+        /** 面板展开比例 0..1：0 = 收起，1 = 与键盘等高占满交换区 */
+        val panelFraction = remember { Animatable(0f) }
+        LaunchedEffect(emojiOpen) {
+            if (emojiOpen) {
+                if (!animationsEnabled) {
+                    panelFraction.snapTo(1f)
+                } else {
+                    // 从键盘状态打开 → 瞬时占位（键盘滑走露出面板）；平时从底边长出
+                    panelFraction.snapTo(if (imeBottomPx > 0) 1f else 0f)
+                    panelFraction.animateTo(1f, KMotion.spatialBounded<Float>())
+                }
+            } else {
+                if (!animationsEnabled) panelFraction.snapTo(0f)
+                else panelFraction.animateTo(0f, KMotion.spatialBounded<Float>())
+            }
+        }
+
+        // 交换区高度：键盘 / 面板 / 导航栏三者取大。输入栏贴在它顶上，切换瞬间不跳。
+        val exchangeZoneDp = with(density) {
+            maxOf(
+                imeBottomPx,
+                navBottomPx,
+                (panelHeightPx * panelFraction.value).roundToInt(),
+            ).toDp()
+        }
+
+        // 聚焦输入框而面板还开着 → 交接：等键盘升到面板等高再收面板（见上面总注释）
+        LaunchedEffect(inputFocused) {
+            if (!inputFocused || !emojiOpen) return@LaunchedEffect
+            withTimeoutOrNull(IME_HANDOFF_TIMEOUT_MS) {
+                snapshotFlow { imeBottomState }.first { it >= panelHeightPx }
+            }
+            emojiOpen = false
+        }
 
         Column(
             modifier = Modifier
@@ -1005,7 +1245,14 @@ fun ChatScreen(
                         state = listState,
                         modifier = Modifier
                             .fillMaxSize()
-                            .pointerInput(Unit) { detectTapGestures { keyboard?.hide() } },
+                            // 点列表空白处：收键盘**并收起表情面板** —— 两个都挡内容，
+                            // 用户点这里就是想说"我要看消息/我要打字了"
+                            .pointerInput(Unit) {
+                                detectTapGestures {
+                                    keyboard?.hide()
+                                    emojiOpen = false
+                                }
+                            },
                         /**
                          * **reverseLayout**：最新一条是列表的 index 0、天然贴在底部。
                          *
@@ -1051,6 +1298,11 @@ fun ChatScreen(
                                     onImageClick = {
                                         val url = entry.msg.imageUrl
                                         if (!url.isNullOrBlank()) {
+                                            // 看图前收键盘（IME 是系统窗口，会盖在查看器上，
+                                            // 见 openViewer 的注释）；关掉查看器后**不**自动
+                                            // 弹回（2026-09-25 反馈"退出不用再启用"），要打字
+                                            // 用户自己会点输入框
+                                            keyboard?.hide()
                                             openViewer(
                                                 chatImageUrls,
                                                 chatImageUrls.indexOf(url).coerceAtLeast(0),
@@ -1238,60 +1490,188 @@ fun ChatScreen(
                 }
             }
 
-            // 输入栏（设计稿「消息对话」）：白/深卡片条 + 凹陷底输入框 + 发送按钮。
-            // 圆角统一成**详情页那一档**（KRadius.control 小圆角），不再是胶囊 ——
-            // 两处输入条看起来要像同一个组件（用户要求）。
-            Row(
+            /**
+             * 输入区 = 输入栏 + 键盘/表情交换区，整体挂在一层 surface 底里。
+             *
+             * 导航栏避让不再挂在 Column 上：交换区高度已经把导航栏算进 max() 里 ——
+             * 面板开着时避让挂面板内容上、谁都不开时交换区自己就等于导航栏高，
+             * 输入栏照样停在安全区之上（机制见上面「交换区」总注释）。
+             *
+             * background 与输入栏同色（surface）：交换区不管被谁占着，底下露出来的
+             * 都是输入栏的底色，不会闪出一道页面底的细边。
+             */
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(c.surface)
-                    .navigationBarsPadding()
-                    .imePadding()
-                    .padding(horizontal = KSpacing.md, vertical = KSpacing.sm),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(KSpacing.sm),
+                    .background(c.surface),
             ) {
-                Box(modifier = Modifier.weight(1f)) {
-                    KTextField(
-                        value = input,
-                        onValueChange = { input = it },
-                        placeholder = "说点什么…",
-                        shape = RoundedCornerShape(KRadius.control),
-                        variant = KTextFieldVariant.Inset,
-                        // 点「引用」时把焦点交给它（见 quoteMessage），IME 随之弹起
-                        focusRequester = inputFocusRequester,
+                // 输入栏（设计稿「消息对话」）：凹陷底输入框 + 发送按钮。
+                // 圆角统一成**详情页那一档**（KRadius.control 小圆角），不再是胶囊 ——
+                // 两处输入条看起来要像同一个组件（用户要求）。
+                // 不再挂 imePadding：键盘高度已并入交换区，这里再挂会多让出一条导航栏
+                // （ime 全高含导航栏，叠加等于把导航栏让了两次）。
+                // 垂直留白收一档（sm → xs），配合输入框矮一档（40dp，见 KTextField 调用）：
+                // 用户反馈"输入框高度小一点、上下留白间隙也小一点"。
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = KSpacing.md, vertical = KSpacing.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(KSpacing.sm),
+                ) {
+                    // 表情 + 发图紧贴成一排（间距 0）：用户多轮反馈"继续缩小间距"，
+                    // 触控盒最终收成 32dp（图标 20dp，四周各留 6dp）——两颗钮的图标
+                    // 间隙只剩 12dp。触控目标远小于 44dp 指南值，是用户明确选的紧凑取舍。
+                    // 外层的 spacedBy 只管这一排与输入框/发送键的间隙。
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // 表情开关（笑脸）：点亮态 = 面板正开着
+                        KEmojiButton(
+                            active = emojiOpen,
+                            boxSize = 32.dp,
+                            onClick = {
+                                emojiOpen = !emojiOpen
+                                if (emojiOpen) {
+                                    // 开面板 = 收起键盘，并**清掉输入框焦点**：
+                                    //  · 键盘此刻还没降，交换区的 max() 会取面板高顶住输入栏，
+                                    //    键盘滑走正好露出面板 —— 输入栏全程不动（见「交换区」总注释）；
+                                    //  · 不收键盘的话 IME 占着半屏，面板直接被顶到屏幕外；
+                                    //  · 不清焦点的话聚焦态的交接规则会把面板在下次焦点
+                                    //    变化时秒收，连点笑脸关闭时的退场动画也没了。
+                                    keyboard?.hide()
+                                    focusManager.clearFocus()
+                                }
+                            },
+                        )
+                        // 发图按钮（系统相册选一张、选完直接发出）：与表情钮同一套
+                        // 32dp 紧凑触控盒 + 按下反馈（accentSoft 底 / accent 前景），
+                        // 图标就地用 lucide image 几何（Glyph），不引外部资产。
+                        val imageInteraction = remember { MutableInteractionSource() }
+                        val imagePressed by imageInteraction.collectIsPressedAsState()
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(RoundedCornerShape(KRadius.pill))
+                                .background(if (imagePressed) c.accentSoft else Color.Transparent)
+                                .clickable(
+                                    interactionSource = imageInteraction,
+                                    indication = null,
+                                    onClick = {
+                                        // 收键盘 + **清掉焦点**再去选图（2026-09-25 第三轮
+                                        // 反馈的最终形态）：焦点不在了，从相册回来（无论选没
+                                        // 选）系统都不会自动把 IME 弹起来 —— 之前"保留焦点
+                                        // 让系统弹回"的版本，返回那一刻键盘重新升起，用户
+                                        // 反馈"太突兀"。要打字就再点一下输入框。
+                                        keyboard?.hide()
+                                        focusManager.clearFocus()
+                                        if (sending) {
+                                            // 上一张还在传：multipart 并发两条容易乱序且看不清进度
+                                            toast = "正在发送，请稍候"
+                                        } else {
+                                            pickChatImage.launch(
+                                                PickVisualMediaRequest(
+                                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                                )
+                                            )
+                                        }
+                                    },
+                                )
+                                .semantics { contentDescription = "发送图片" },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Glyph(
+                                tint = if (imagePressed || sending) c.accent else c.textSecondary,
+                                kind = GlyphKind.Image,
+                                size = KDimens.navIcon,
+                            )
+                        }
+                    }
+                    Box(modifier = Modifier.weight(1f)) {
+                        KTextField(
+                            value = input,
+                            onValueChange = { input = it },
+                            placeholder = "说点什么…",
+                            shape = RoundedCornerShape(KRadius.control),
+                            variant = KTextFieldVariant.Inset,
+                            // 矮一档（40dp，默认 44）：用户反馈"输入框高度小一点"，
+                            // 上下留白同步收窄（见外层 Row 的 vertical = xs）。
+                            // 高度约束压不住组件内部的 defaultMinSize，必须从这里传。
+                            minHeight = 40.dp,
+                            // 点「引用」时把焦点交给它（见 quoteMessage），IME 随之弹起
+                            focusRequester = inputFocusRequester,
+                            // 聚焦态同时喂给上面的 inputFocused（聚焦 = 面板向键盘交接让位）
+                            interactionSource = inputInteraction,
+                        )
+                    }
+                    KButton(
+                        text = if (sending) "…" else "发送",
+                        // 与输入框同一档圆角（详情页评论输入条同款）
+                        cornerRadius = KRadius.control,
+                        // **等高**（2026-09-25 反馈：发送按钮比文字框高）：40dp 与输入框
+                        // 的 minHeight 一致；compact 的紧凑内边距（垂直 8dp）保证文字
+                        // 内容塞得进 40dp —— 不配它按钮会被内容撑回 44dp
+                        compact = true,
+                        minHeight = 40.dp,
+                        onClick = {
+                            if (input.isBlank()) {
+                                toast = "不能发空消息"
+                                return@KButton
+                            }
+                            scope.launch {
+                                sending = true
+                                val quoted = replyTo?.raw?.id
+                                when (val r = messages.send(partnerId, input.trim(), quotedMessageId = quoted)) {
+                                    is ApiResult.Success -> {
+                                        items = items + r.data
+                                        input = ""
+                                        replyTo = null
+                                        // 发出去的消息在 reverseLayout 里是 index 0：
+                                        // 主动滚一次，避免用户翻了旧消息后看不到自己刚发的那条
+                                        listState.animateScrollToItem(0)
+                                    }
+                                    is ApiResult.Failure -> toast = r.error.displayMessage
+                                }
+                                sending = false
+                            }
+                        },
+                        // 设计稿里空输入时发送按钮也是实心 accent（不置灰）；
+                        // 空内容点它由上面的 input.isBlank() 分支给一句提示，不会发出空消息。
+                        enabled = !sending,
                     )
                 }
-                KButton(
-                    text = if (sending) "…" else "发送",
-                    // 与输入框同一档圆角（详情页评论输入条同款）
-                    cornerRadius = KRadius.control,
-                    onClick = {
-                        if (input.isBlank()) {
-                            toast = "不能发空消息"
-                            return@KButton
-                        }
-                        scope.launch {
-                            sending = true
-                            val quoted = replyTo?.raw?.id
-                            when (val r = messages.send(partnerId, input.trim(), quotedMessageId = quoted)) {
-                                is ApiResult.Success -> {
-                                    items = items + r.data
-                                    input = ""
-                                    replyTo = null
-                                    // 发出去的消息在 reverseLayout 里是 index 0：
-                                    // 主动滚一次，避免用户翻了旧消息后看不到自己刚发的那条
-                                    listState.animateScrollToItem(0)
-                                }
-                                is ApiResult.Failure -> toast = r.error.displayMessage
-                            }
-                            sending = false
-                        }
-                    },
-                    // 设计稿里空输入时发送按钮也是实心 accent（不置灰）；
-                    // 空内容点它由上面的 input.isBlank() 分支给一句提示，不会发出空消息。
-                    enabled = !sending,
-                )
+
+                /**
+                 * 键盘 / 表情交换区（QQ/微信式原地换位，机制见上面总注释）：
+                 * 输入栏贴在它顶上，高度 = max(IME, 面板×展开比例, 导航栏)。
+                 *
+                 * 面板按展开比例裁在区内、**底边对齐**：展开时从屏幕底边向上长出、
+                 * 收起时缩回底边 —— 与老实现的 expandFrom/shrinkTowards=Bottom 观感
+                 * 一致，但高度参与了 max() 运算，面板↔键盘切换时输入栏不再跳。
+                 *
+                 * 面板内容自带导航栏避让：面板全高与 IME 全高同口径（都含导航栏
+                 * 那一条），网格在内容层再让一次导航栏，手势条不会压住最后一排表情。
+                 */
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(exchangeZoneDp)
+                        .clipToBounds(),
+                    contentAlignment = Alignment.BottomCenter,
+                ) {
+                    if (panelFraction.value > 0f) {
+                        KEmojiPanel(
+                            onPick = { emoji ->
+                                // 追加到末尾（与 Web 端 onSelect 同语义）。面板**选完不关**：
+                                // 连发几个表情是常见操作，关掉每发一个都要重开一次
+                                // （Web 端选了即关是桌面端习惯，移动端不照搬）
+                                input += emoji
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding(),
+                            height = panelGridHeightDp,
+                        )
+                    }
+                }
             }
         }
 
@@ -1349,59 +1729,39 @@ fun ChatScreen(
         }
 
         if (toast != null) {
-            // 聊天页是沉浸态，没有胶囊要避让，直接放在输入栏之上
-            Box(modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp)) {
+            // 聊天页是沉浸态，没有胶囊要避让，直接放在输入栏之上。
+            // 让位跟着交换区走：键盘开着躲键盘、面板开着连面板一起躲（老实现只算了
+            // 固定 240dp 的面板，键盘开着时提示其实压在键盘底下看不见）
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 96.dp + exchangeZoneDp),
+            ) {
                 KToastInline(text = toast!!, onDismiss = { toast = null })
             }
         }
 
         // 清空聊天记录（顶栏「…」）：不可撤销，所以必须二次确认
         if (confirmClear) {
-            AlertDialog(
+            KAlertDialog(
+                title = "清空聊天记录",
+                text = "与「${partnerName?.ifBlank { null } ?: "用户$partnerId"}」的全部消息会被删除，且不可恢复。",
+                confirmText = "清空",
+                danger = true,
                 onDismissRequest = { confirmClear = false },
-                title = { Text("清空聊天记录", style = KType.subtitle, color = c.textPrimary) },
-                text = {
-                    Text(
-                        "与「${partnerName?.ifBlank { null } ?: "用户$partnerId"}」的全部消息会被删除，且不可恢复。",
-                        style = KType.body,
-                        color = c.textSecondary,
-                    )
-                },
-                confirmButton = {
-                    Text(
-                        "清空",
-                        style = KType.bodyStrong,
-                        color = c.danger,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(KRadius.control))
-                            .clickable {
-                                confirmClear = false
-                                scope.launch {
-                                    when (val r = messages.clearConversation(partnerId)) {
-                                        is ApiResult.Success -> {
-                                            items = emptyList()
-                                            hasMore = false
-                                            toast = "已清空"
-                                        }
-                                        is ApiResult.Failure -> toast = r.error.displayMessage
-                                    }
-                                }
+                onConfirm = {
+                    confirmClear = false
+                    scope.launch {
+                        when (val r = messages.clearConversation(partnerId)) {
+                            is ApiResult.Success -> {
+                                items = emptyList()
+                                hasMore = false
+                                toast = "已清空"
                             }
-                            .padding(horizontal = KSpacing.sm, vertical = KSpacing.xs),
-                    )
+                            is ApiResult.Failure -> toast = r.error.displayMessage
+                        }
+                    }
                 },
-                dismissButton = {
-                    Text(
-                        "取消",
-                        style = KType.body,
-                        color = c.textMuted,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(KRadius.control))
-                            .clickable { confirmClear = false }
-                            .padding(horizontal = KSpacing.sm, vertical = KSpacing.xs),
-                    )
-                },
-                containerColor = c.surface,
             )
         }
     }
@@ -2109,6 +2469,39 @@ private fun KToastInline(text: String, onDismiss: () -> Unit) {
  * 又短到用户完全感知不到。
  */
 private const val KEYBOARD_SETTLE_MS = 150L
+
+/**
+ * 聚焦输入框后等 IME 升到表情面板等高的**交接超时**。
+ *
+ * 正常路径里 IME 三百毫秒左右就升到位，交接早就完成了；这个超时只兜
+ * "IME 根本不会来"的场景（实体键盘、输入法被系统禁掉等）：到点按普通收起
+ * 处理，面板自己缩回去，不会把输入栏永远架在半空。
+ */
+private const val IME_HANDOFF_TIMEOUT_MS = 600L
+
+/**
+ * Photo Picker 返回的 `content://` 拷进 cacheDir，返回落地的临时文件。
+ *
+ * 为什么必须拷：选择器给的是**临时读权限**，直接持有 uri 等"选完图放一会儿
+ * 再上传"时会读不到（SecurityException）。与 ComposerScreen 的 copyToCache
+ * 同一套做法 —— 那边是文件私有的 helper（composer/ 子目录），这里聊天单独
+ * 一份（chat/ 子目录），互不干扰也不必为 6 行 IO 去抽公共模块。
+ *
+ * 文件名固定带 `.jpg`：multipart 文件名要过服务端的扩展名白名单
+ * （imageFileFilter），而压缩器产物本来就是 jpg；GIF / 小图走原图回退时
+ * 内容不是 jpg，但服务端收到后会用 sharp 统一再压一遍，不影响展示。
+ *
+ * @return 落地文件；拷贝失败（权限提前失效、磁盘满等）返回 null
+ */
+private fun copyUriToCache(context: Context, uri: Uri): File? = runCatching {
+    val dir = File(context.cacheDir, "chat").apply { mkdirs() }
+    val target = File(dir, "chat_${System.currentTimeMillis()}_${(0..9999).random()}.jpg")
+    val input = context.contentResolver.openInputStream(uri) ?: return@runCatching null
+    input.use { source ->
+        target.outputStream().use { source.copyTo(it) }
+    }
+    target
+}.getOrNull()
 
 /**
  * 「最后一个非空值」：专门给**退场动画**用。

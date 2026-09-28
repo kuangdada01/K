@@ -179,10 +179,11 @@ export function createRoomWithinLimit(
   })();
 }
 
-/** 删除房间（连同其聊天记录一起清掉） */
+/** 删除房间（连同其聊天记录、对局留档一起清掉） */
 export function deleteRoom(roomId: number, db: Database = getDb()): boolean {
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM voice_room_messages WHERE room_id = ?').run(roomId);
+    db.prepare('DELETE FROM voice_room_games WHERE room_id = ?').run(roomId);
     const result = db.prepare('DELETE FROM voice_rooms WHERE id = ?').run(roomId);
     return result.changes > 0;
   });

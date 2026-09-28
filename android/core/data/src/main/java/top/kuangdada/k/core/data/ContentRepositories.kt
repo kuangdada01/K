@@ -10,6 +10,7 @@ import top.kuangdada.k.core.data.model.BookChapter
 import top.kuangdada.k.core.data.model.BookDetail
 import top.kuangdada.k.core.data.model.BookSummary
 import top.kuangdada.k.core.data.model.CreateRoomRequest
+import top.kuangdada.k.core.data.model.TtsRequest
 import top.kuangdada.k.core.data.model.UpdateProfileRequest
 import top.kuangdada.k.core.data.model.User
 import top.kuangdada.k.core.data.model.UserProfile
@@ -365,10 +366,28 @@ class VoiceRepository(
             }
         }
 
+    /**
+     * 云端朗读合成（`POST /api/tts`，见 server/src/routes/tts.ts）。
+     *
+     * 返回**音频字节**（mp3），由调用方（`ChatReader`）落成临时文件交给 `MediaPlayer` 播。
+     * 为什么不在这里直接播：播放器生命周期要跟页面走（退出房间必须立刻停），
+     * 仓库层是无状态的网络层，掺进播放器会让"谁负责释放"变得含糊。
+     *
+     * 权限/费用口径与 Web 端完全一致：接口本身允许游客（房间支持未登录访客），
+     * 所以服务端按「登录用户 30 次/分、游客 6 次/分/IP」限流 —— 429 的文案会原样带给用户。
+     */
+    suspend fun speakCloud(text: String, voiceKey: String): ApiResult<ByteArray> =
+        withContext(Dispatchers.IO) {
+            try {
+                ApiResult.Success(session.api.tts.speak(TtsRequest(text = text, voice = voiceKey)).bytes())
+            } catch (t: Throwable) {
+                ApiResult.Failure(mapErrorFromThrowable(t))
+            }
+        }
+
     /** 便捷：建一个信令客户端（封装 baseUrl 与 token 取值） */
     fun signalingClient(): VoiceSignalingClient =
         VoiceSignalingClient(baseUrl = baseUrl, tokenProvider = { session.tokens.token })
-
     /**
      * 当前是否已登录（决定 WS 用一次性票据还是以访客身份连）。
      * **返回 token 本身而不是布尔**，因为调用方通常紧接着要用它做判断依据。

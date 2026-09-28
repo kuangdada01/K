@@ -55,6 +55,13 @@ const envSchema = z.object({
   VOICE_TURN_URL: z.string().optional(),
   VOICE_TURN_USERNAME: z.string().optional(),
   VOICE_TURN_CREDENTIAL: z.string().optional(),
+  // 云端朗读（StepFun StepAudio TTS，见 routes/tts.ts）。
+  // STEP_API_KEY 是**只存在于服务端**的密钥：前端只调 /api/tts，浏览器永远看不到它。
+  // 未配置时 /api/tts 返回 503，朗读开关的「云端音色」选项不可用（系统语音不受影响）。
+  STEP_API_KEY: z.string().optional(),
+  // 复刻音色 ID 覆盖（默认 voice-tone-UfTMTasMym，即「邓紫棋」）。音色换绑走这里，
+  // 不需要改代码、也不需要动前端（前端只认共享包里的 key：dengziqi）
+  TTS_VOICE_DENGZIQI: z.string().optional(),
   // App 更新检测：配置后 /api/app/version 返回最新版本信息（未配置则视为无更新）
   APP_VERSION: z.string().optional(),
   APP_APK_URL: z.string().optional(),

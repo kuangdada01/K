@@ -20,6 +20,7 @@ import { AudioWaveform, Circle, LogOut, Mic, MicOff, MonitorUp, Music, Volume2 }
 import { useAuth } from '../../context/AuthContext';
 import { useVoice, useVoiceRealtime } from '../../context/VoiceContext';
 import VoiceShareStage from '../../components/VoiceShareStage';
+import ChessGamePanel from '../../components/voice/chess/ChessGamePanel';
 import MemberCard from '../../components/voice/MemberCard';
 import VolumeSlider from '../../components/ui/VolumeSlider';
 import { isOwnedGuestRoom } from '../../voice/roomOwnership';
@@ -72,6 +73,19 @@ export default function VoiceRoomView({ rooms }: { rooms: VoiceRoom[] }) {
     [setPeerVolume]
   );
 
+  // ---- 对战象棋：成员卡上的邀请入口（空闲时可用；面板插在共享舞台下方） ----
+  // 快捷邀请固定发起者执红（先行、可预期；协议另支持 black/random 供后续 UI 扩展）
+  const chess = voice.chess;
+  const chessIdle = !chess.showPanel;
+  const inviteUser = chess.inviteUser;
+  const handleInviteChess = useCallback(
+    (userId: number) => {
+      const target = voice.participants.find((p) => p.userId === userId);
+      inviteUser(userId, target?.username ?? '对方', 'red');
+    },
+    [voice.participants, inviteUser]
+  );
+
   return (
     <div className={styles.page}>
       <div className={styles.roomHeader}>
@@ -91,6 +105,10 @@ export default function VoiceRoomView({ rooms }: { rooms: VoiceRoom[] }) {
       {/* 屏幕共享舞台（16:9，可全屏）：有人共享时显示在成员网格上方 */}
       {voice.share && <VoiceShareStage />}
 
+      {/* 对战象棋面板：固定位于屏幕共享下方、成员网格上方。
+          空闲时只渲染一条窄入口条（对局记录入口），不占空间 */}
+      <ChessGamePanel />
+
       <div className={styles.memberGrid}>
         {voice.participants.map((p) => (
           <MemberCard
@@ -101,6 +119,8 @@ export default function VoiceRoomView({ rooms }: { rooms: VoiceRoom[] }) {
             quality={realtime.peerQuality[p.userId] ?? 'good'}
             onVolume={handlePeerVolume}
             getVolume={voice.getPeerVolume}
+            chessIdle={chessIdle}
+            onInviteChess={handleInviteChess}
           />
         ))}
       </div>

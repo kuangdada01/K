@@ -43,6 +43,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import top.kuangdada.k.core.designsystem.component.KButton
 import top.kuangdada.k.core.designsystem.component.KButtonVariant
+import top.kuangdada.k.core.designsystem.component.KEmojiButton
+import top.kuangdada.k.core.designsystem.component.KEmojiPanel
 import top.kuangdada.k.core.designsystem.component.KLikeButton
 import top.kuangdada.k.core.designsystem.component.KNavCapsule
 import top.kuangdada.k.core.designsystem.component.KNavItem
@@ -80,6 +82,8 @@ fun StyleGuideScreen() {
     var liked2 by remember { mutableStateOf(true) }
     var search by remember { mutableStateOf("") }
     var focusedInput by remember { mutableStateOf("正在输入…") }
+    // 表情选择器（样式指南条目要能把面板开出来看，开关状态留在本屏）
+    var emojiOpen by remember { mutableStateOf(false) }
 
     // 外层壳：主题开关放在最上面（切一下就能看全部组件翻转）
     Column(
@@ -162,6 +166,20 @@ fun StyleGuideScreen() {
                 Box(Modifier.weight(1f)) { KPlaceholder(KPlaceholderKind.Empty) }
                 Box(Modifier.weight(1f)) { KPlaceholder(KPlaceholderKind.Error) }
             }
+        }
+
+        Section("三 · 核心组件 · 表情选择器（私信聊天 / 评论输入条复用）") {
+            Text(
+                text = "笑脸钮 + 8 列表情面板（71 个，与 Web 端同一份清单）。\n" +
+                    "点面板里的表情 = 往输入框末尾追加；面板选完不关，可连发。",
+                style = KType.caption,
+                color = c.textMuted,
+            )
+            Spacer(Modifier.height(KSpacing.xs))
+            KEmojiButton(active = emojiOpen, onClick = { emojiOpen = !emojiOpen })
+            Spacer(Modifier.height(KSpacing.xs))
+            // 面板高度压到 160：样式指南是长页，240dp 会把后面的条目顶出老远
+            KEmojiPanel(onPick = { }, height = 160.dp)
         }
 
         Section("四 · 导航胶囊（悬浮 · 5 项 · 文字标签回归）") {

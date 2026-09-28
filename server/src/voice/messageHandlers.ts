@@ -1,14 +1,16 @@
 /**
  * ============================================================
- * 语音信令消息处理（8 类 C→S 消息的纯逻辑）
+ * 语音信令消息处理（8 类基础 C→S 消息 + game-* 对局消息的纯逻辑）
  * ============================================================
  * 从 voice/ws.ts 的连接生命周期（认证/心跳/断开清理）中拆出，
  * 每个 case 的处理体与拆分前逐字节一致（错误文案、节流间隔、
  * 信令令牌桶参数、静默忽略分支、broadcast 目标均不变）。
  *
  * 依赖注入约定：hub 与 insertVoiceChatMessage 经 ctx 传入（纯函数、
- * 可独立测试）；连接级状态（lastChatAt / signalTokens / signalLastRefill）
- * 挂在 ctx.ws（VoiceWs）上，随连接生命周期释放，语义与拆分前一致。
+ * 可独立测试）；连接级状态（lastChatAt / signalTokens / signalLastRefill /
+ * lastGameMoveAt）挂在 ctx.ws（VoiceWs）上，随连接生命周期释放。
+ * 对局消息（game-* 前缀）在 default 分支统一转发 ctx.chess
+ * （server/src/voice/game/chessGameManager.ts）。
  */
 
 import type WebSocket from 'ws';
@@ -17,7 +19,8 @@ import { insertVoiceChatMessage } from '../repositories/voice-chat.repo';
 import { logger } from '../lib/logger';
 import * as hub from './hub';
 import { voiceChatSchema } from '@k/shared/schemas';
-import { CONTROL_CHAR_RE, VOICE_MAX_ROOM_SIZE } from '@k/shared';
+import { CONTROL_CHAR_RE, GAME_MOVE_MIN_INTERVAL_MS, VOICE_MAX_ROOM_SIZE } from '@k/shared';
+import type { ChessGameManager, ChessUser } from './game/chessGameManager';
 
 /** 文字聊天发送节流（每条消息间隔下限，防刷屏；状态挂在连接上，断开即释放） */
 const CHAT_THROTTLE_MS = 400;
@@ -42,23 +45,27 @@ export type VoiceWs = WebSocket & {
   /** 信令令牌桶状态（见 SIGNAL_BURST/SIGNAL_REFILL_PER_SEC） */
   signalTokens?: number;
   signalLastRefill?: number;
+  /** 对局走子节流（见 GAME_MOVE_MIN_INTERVAL_MS） */
+  lastGameMoveAt?: number;
 };
 
 /**
- * 处理一条入站信令（对应 ws.ts 中 ws.on('message') 的 8 类 switch）。
+ * 处理一条入站信令（对应 ws.ts 中 ws.on('message') 的 switch）。
  *
  * @param ctx.user  已解析的认证用户（登录用户或访客负数 id；见 ws.ts 认证段）
  * @param ctx.ws    当前连接（节流/限流状态挂在此连接上）
  * @param ctx.hub   语音房间内存状态中心（广播/定点转发/成员态）
  * @param ctx.insertVoiceChatMessage 聊天消息入库（chat 分支使用）
+ * @param ctx.chess 对战象棋管理器（game-* 前缀消息分发 + join 快照推送）
  * @param msg       按 case 内窄化校验的原始消息（JSON.parse 产物）
  */
 export function handleVoiceMessage(
   ctx: {
-    user: { id: number; username: string; avatar: string | null };
+    user: ChessUser;
     ws: VoiceWs;
     hub: typeof hub;
     insertVoiceChatMessage: typeof insertVoiceChatMessage;
+    chess: ChessGameManager;
   },
   msg: { type?: string; [key: string]: unknown } | undefined
 ): void {
@@ -108,6 +115,9 @@ export function handleVoiceMessage(
         },
         '语音：加入房间'
       );
+      // 对局进行中：向新加入者（含断线重连的棋手、观战者）推送棋局快照，
+      // 棋手重连同时取消断线宽限
+      ctx.chess.handleJoined(roomId, ctx.user.id);
       break;
     }
     case 'leave': {
@@ -198,7 +208,24 @@ export function handleVoiceMessage(
       ctx.hub.sendToUser(to, { type: 'signal', from: ctx.user.id, data: msg.data });
       break;
     }
-    default:
+    default: {
+      // 对战象棋：game-* 前缀统一交由对局管理器（校验/状态机见 game/chessGameManager.ts）；
+      // game-move 是回合驱动的低频消息，连接级最小间隔只兜底异常刷帧
+      const type = msg?.type;
+      if (typeof type === 'string' && type.startsWith('game-')) {
+        if (type === 'game-move') {
+          const now = Date.now();
+          if (
+            ctx.ws.lastGameMoveAt !== undefined &&
+            now - ctx.ws.lastGameMoveAt < GAME_MOVE_MIN_INTERVAL_MS
+          ) {
+            return;
+          }
+          ctx.ws.lastGameMoveAt = now;
+        }
+        ctx.chess.handleMessage(ctx.user, ctx.ws, msg as { type: string } & Record<string, unknown>);
+      }
       break;
+    }
   }
 }

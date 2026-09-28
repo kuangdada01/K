@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
@@ -21,6 +22,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import top.kuangdada.k.core.designsystem.theme.KMotion
+import top.kuangdada.k.core.designsystem.theme.KSpacing
 
 /**
  * ============================================================
@@ -204,7 +206,9 @@ fun Modifier.declareSharedPeer(key: Any): Modifier {
  * 按 [key] 参与共享元素转场；**不在共享元素上下文里时原样返回 `this`**。
  *
  * @param overlayClip 飞行期间在覆盖层里的裁剪。默认 [NoOverlayClip]（不裁）。
- *        顶栏那一端要传 [topBarOverlayClip]，见那里的长注释。
+ *        **只有"页面自己有毛玻璃顶栏"的那一端**才传 [rememberTopBarFlightClip]
+ *        （详情 / 图书 / 消息）。列表卡片那端必须保持不裁 —— 传了会把卡片顶部切成白带，
+ *        理由与逐帧取证见那里的长注释。
  *        ⚠️ 只在 [renderInOverlay] = true 时有意义——元素不进覆盖层就无所谓裁剪。
  * @param renderInOverlay 对应库的 `renderInOverlayDuringTransition`（默认 true = 飞行那份画进
  *        `SharedTransitionScope` 的覆盖层、**原地留白**）。
@@ -286,10 +290,13 @@ val NoOverlayClip: SharedTransitionScope.OverlayClip = object : SharedTransition
  * 滑动；`renderInSharedTransitionScopeOverlay` 会丢掉父层的转场变换，页面一滑顶栏就会"钉住"）。
  * 覆盖层永远在页面之上，所以只剩"裁掉飞行元素越界的那一条"这一条路。
  *
- * ⚠️ 只挂在**详情页那一端**：飞行期间真正在覆盖层里画的是**目标端**那一份
- * （库的 `shouldRenderAtAll = boundsAnimation.target`，而 `target` = 这一页正在**进场**）。
- * 进详情页时目标端是详情页 → 用这里的裁剪；返回信息流时目标端是卡片那端（[NoOverlayClip]）
- * → 退出方向一点不受影响。
+ * ⚠️⚠️ **只挂在「页面自己有毛玻璃顶栏」的那一端**（详情 / 消息 / 图书）。
+ * 2026-09-25 曾按"库只取目标端那一份、所以返回方向要挂卡片那端"把它也挂到了信息流卡片上
+ * —— **那是错的，已在 2026-09-26 撤销**：信息流这一页根本没有顶栏可保护，而覆盖层里那一份
+ * 一旦被裁掉顶部，被切走的那一段就会露出"页面层里空着的那一格"（`sharedElement` 飞行期两端
+ * 原地都不画）→ **卡片顶部一条 337px 的白带，持续到整趟转场结束**（用户："1s 后恢复"）。
+ * 反过来，不裁的时候覆盖层里那一份正好把空着的那一格盖住 = 看起来才正常。
+ * 详见 `PostCard` 里 `PostImageGrid` 的那段注释与逐帧取证。
  *
  * ⚠️⚠️ **每次调用都新建 `Path`**（不学库的 `ShapeBasedClip` 复用同一个对象）：
  * 库把 `getClipPath` 的返回值**存进条目、留到同一帧的 `drawInOverlay` 才用**
@@ -298,9 +305,28 @@ val NoOverlayClip: SharedTransitionScope.OverlayClip = object : SharedTransition
  * 前一个元素就会被按别人的矩形裁掉。详情页里配图 / 视频封面本来就共用同一份裁剪，
  * 所以这里必须无状态。代价只是飞行期间每帧多几个 `Path` 分配，可忽略。
  *
- * @param topBarBottomPx 顶栏底边（窗口像素）。返回 0 = 不避让（顶栏还没量出来）。
+ * ★★ 2026-09-25：**不能因为"还没量到"就退化成不裁**。
+ * 用户录像（`Record_2026-09-25-21-09-42`）逐帧量化取证：
+ *  · `3.180~3.200s`：进入详情后**快速上滑**时，顶栏下沿被吃掉一截（深色起点 303 → 225）。
+ *    那一帧用的是详情页那端的 clip，但它读的实测值还没到位就 `return null` → 同样不裁。
+ *    ★ 这一条是**真的**，也正是 `fallbackPx` 存在的原因。
+ *  · `2.700~2.720s`（**返回**方向，顶栏那一条带 202 → 58）：当时判为"覆盖层里那一份盖住了顶栏"，
+ *    于是 09-25 把裁剪也挂到了卡片那一端 —— **2026-09-26 撤销了这个改动**，因为：
+ *    ① 那一帧也可能只是**顶栏玻璃正常地把"滚动到栏下的深色配图"照出来**（顶栏文字是深色，
+ *       压在深色玻璃上自然"看不见"），与覆盖层无关；
+ *    ② 而挂上之后造成的白带（见上）**远比它严重**。
+ * "慢慢滑就没事"的原因：配图飞行要 ~0.2s 才落地，慢滑时它在飞行期间基本走不到顶栏底下；
+ * 快甩一定会撞上，于是只有快滑才看得见。
+ *
+ * @param topBarBottomPx 顶栏底边（窗口像素）——**实测值**，返回 0 表示还没量到（首帧 / 转场起步）。
+ * @param fallbackPx 实测值不可用时的兜底（设计常量，见 [kTopBarHeightEstimatePx]）。
+ *        ★ 必须有兜底：`return null` 的库语义是"**这个元素不需要裁剪**"，
+ *        而"顶栏高度还没量到"是另一件事 —— 两者混在一起就等于飞行起步那几帧完全不裁。
  */
-fun topBarOverlayClip(topBarBottomPx: () -> Float): SharedTransitionScope.OverlayClip =
+fun topBarOverlayClip(
+    topBarBottomPx: () -> Float,
+    fallbackPx: () -> Float = { 0f },
+): SharedTransitionScope.OverlayClip =
     object : SharedTransitionScope.OverlayClip {
         override fun getClipPath(
             sharedContentState: SharedTransitionScope.SharedContentState,
@@ -308,8 +334,10 @@ fun topBarOverlayClip(topBarBottomPx: () -> Float): SharedTransitionScope.Overla
             layoutDirection: LayoutDirection,
             density: Density,
         ): Path? {
-            val top = topBarBottomPx()
-            // 不避让、或元素整个在顶栏之下：不裁（返回 null 最省，也保证"没越过顶栏时逐像素不变"）
+            val measured = topBarBottomPx()
+            val top = if (measured > 0f) measured else fallbackPx()
+            // 拿不到任何值、或元素整个在顶栏之下：不裁
+            //（返回 null 最省，也保证"没越过顶栏时逐像素不变"）
             if (top <= 0f || bounds.top >= top) return null
             // 库要求返回的 Path 在 SharedTransitionScope 坐标系里（= 窗口坐标），
             // 所以直接用 bounds 的横向范围 + 顶栏底边，而不是"本地坐标 + 平移"。
@@ -318,6 +346,36 @@ fun topBarOverlayClip(topBarBottomPx: () -> Float): SharedTransitionScope.Overla
             }
         }
     }
+
+/**
+ * 「配图 / 视频封面飞行时不许压到顶栏」那条裁剪的**统一取用入口**。
+ *
+ * ⚠️ **只给「页面自己有毛玻璃顶栏」的那一端用**（详情 / 消息 / 图书）。
+ * 信息流卡片那一端**不要用**：那一页没有顶栏，裁了只会切出白带（见 [topBarOverlayClip] 的注释）。
+ *
+ * 详情页那端传实测值（`topBarBottomPx`）；实测值还没到位时用设计常量兜底 ——
+ * 2026-09-25 录像取证过的那个坑：旧写法在 `topPx <= 0`（首帧/转场起步还没量到）时
+ * `return null`，而 `null` 的库语义是"**这个元素不需要裁剪**"，两者混在一起 =
+ * 进详情后快速上滑时顶栏下沿被配图吃掉一截（深色起点 303 → 225）。
+ *
+ * ⚠️ 实例必须稳定（`remember`）：`SharedElementEntry.overlayClip` 是可变状态，
+ * 每次重组换个实例都会让库更新一遍（与 `rememberTopBarGlass` / 胶囊玻璃同一个坑）。
+ * 所以实测值走 `rememberUpdatedState`（拿 State 本体，不是当 `remember` 的键），
+ * 绘制期读到的一定是"那一刻"的值，而实例永远只有一份。
+ *
+ * @param measuredPx 实测的顶栏底边（窗口像素）；给 0 或不传 = 用设计常量。
+ */
+@Composable
+fun rememberTopBarFlightClip(measuredPx: () -> Float = { 0f }): SharedTransitionScope.OverlayClip {
+    // 兜底用设计常量：顶栏垂直位置全站唯一来源（状态栏 + kTopBar 上边距 + 行高 + 下边距），
+    // 所以"没量到"时它就是最好的近似。真实值一旦非 0 立刻接管（精确到 px）。
+    val fallbackPx = kTopBarHeightEstimatePx(bottomPadding = KSpacing.xs)
+    val measuredState = rememberUpdatedState(measuredPx)
+    val fallbackState = rememberUpdatedState(fallbackPx)
+    return remember {
+        topBarOverlayClip({ measuredState.value() }, { fallbackState.value.toFloat() })
+    }
+}
 
 /**
  * 按 [key] 参与共享元素转场；**不在共享元素上下文里时原样返回 `this`**。

@@ -367,6 +367,23 @@ fun Avatar(
 @Composable
 private fun PostImageGrid(images: List<String>, onClick: ((Int) -> Unit)?, postId: Long) {
     val c = KTheme.colors
+    /**
+     * ⚠️ 这里**故意不传 overlayClip**（飞行的那一份不裁）。
+     *
+     * 2026-09-26 真机取证：信息流这一页**根本没有顶栏**，所以"防飞行图压顶栏"的裁剪在这端
+     * 没有任何东西可保护，反而是**它自己造出了一个 bug** —— 返回时覆盖层里那一份被裁掉顶部
+     * （裁到 `kTopBarHeightEstimatePx` ≈ 状态栏+44dp = 337px），而这一格在页面层里是空的
+     * （`sharedElement` 飞行期两端原地都不画），于是**卡片顶部露出 337px 白带**，一直持续到
+     * 整趟转场结束（用户："1s 后恢复"；实测稳态 0.2s 起就有、1.45s 已恢复）。
+     *
+     * 逐帧取证（`.workbuddy/tmp/repro2/d015_1.png` vs 同页面稳态）：
+     *   · 白带 [0,336]，配图内容从 338 开始；而**对齐检验 dy=0**（MAD 4.4）→
+     *     内容没有被平移，只是顶部 337px 被切掉；左右沿完全一致（110 / 1326）→ 也没缩放。
+     *   · 337 正好 = `kTopBarHeightEstimatePx(KSpacing.xs)`（状态栏 183px + 44dp=154px）。
+     *
+     * 反过来说：不裁的时候，覆盖层里那一份**正好把"空着的那一格"盖住** —— 这才是它看起来正常的原因。
+     * 所以列表这一端（以及任何"页面自己没有毛玻璃顶栏"的一端）必须保持 [NoOverlayClip]。
+     */
     // 长按任意一格 = 存这一张（点还是原来的"打开"）
     val saveMedia = rememberMediaSave()
     // 单图 = **整卡宽、按原图比例完整显示**（设计稿首页卡片的通栏「帖子配图」块；
@@ -503,6 +520,7 @@ internal fun VideoCover(
     val c = KTheme.colors
     val side = KGridWidth()
     val videoKey = postVideoKey(post.id)
+    // 同上：视频封面那条飞行也不裁（信息流没有顶栏，裁了只会切出白带，见 PostImageGrid 的注释）
 
     /**
      * 这条视频的共享元素**正在飞**吗（卡片 ↔ 详情页那条）。

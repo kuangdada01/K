@@ -10,6 +10,7 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.spring
+
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -21,6 +22,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+
 
 /**
  * ============================================================
@@ -152,6 +154,17 @@ object KMotion {
      * 该接口唯一的抽象方法叫 `createAnimationSpec(initialBounds, targetBounds)`
      * （实测自 animation 1.12.1 的字节码，**不叫 `transform`**），写成显式重写
      * 对"它到底是不是 Kotlin `fun interface`"零依赖，改版本时也不会突然编译不过。
+     *
+     * ★★ 2026-09-25：这里**试过两次分档，都回退了**（用户实测："快速上滑图片弹簧动画不自然"
+     * → 先按"尺寸是否变化"给 `snap()` → 用户："还是有跳帧一样"（更糟，见下）
+     * → 再按"距离 < 48px"给硬弹簧 → 用户："不行更差了，改回去"）。
+     *
+     * 结论（不要再重复这两条路）：
+     *   · `snap()` 不能用于"滚动引起的重新匹配" —— 库的重新匹配**不是每帧都发生**，
+     *     瞬移会把攒下的位移一次性怼过去 = 看着像"跳了一帧"；
+     *   · 也不能在滚动时换成**更硬的弹簧** —— 它同样会跟得更"急"、观感更突兀。
+     * 现状（= 用户接受的那一版）：**整条边界动画就是一条柔和弹簧**，不再分档。
+     * 要再动它，先拿到用户对"哪个动作、看到什么"的逐帧录像 —— 光靠推导会一直返工。
      */
     val boundsTransform: BoundsTransform = object : BoundsTransform {
         override fun createAnimationSpec(

@@ -52,8 +52,19 @@ class RealtimeClient(private val session: SessionRepository) {
         val from: Long? = null,
         /** 私信事件里的接收者 id */
         val to: Long? = null,
+        /**
+         * 撤回事件里"被撤回的那条消息 id"。
+         *
+         * ⚠️ 服务端的撤回走的是**同一个 `message` 事件类型**
+         * （`{ from, to, recalled }`，见 `services/message.service.ts`），
+         * 所以通知栏必须能把它和新消息区分开 —— 否则"对方撤回一条消息"
+         * 会在通知栏提示成"对方给你发了一条消息"。
+         */
+        val recalled: Long? = null,
     ) {
         val isMessage: Boolean get() = type == "message"
+        /** 真正的**新消息**（排除撤回）：通知栏只认这个，不认 [isMessage] 本身 */
+        val isNewMessage: Boolean get() = type == "message" && recalled == null
         val isNotification: Boolean get() = type == "notification"
         val isAnnouncement: Boolean get() = type == "announcement"
     }

@@ -1,5 +1,6 @@
 package top.kuangdada.k.nativeapp.download
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,8 +16,39 @@ import org.junit.Test
  *
  * 断言走 `AppUpdater.isNewer`（对外的入口）而不是直接走 `VersionCompare`：
  * 这样连"转发没接错"也一起钉住了。
+ *
+ * 2026-09-27 追加：**版本检测地址的前缀**（真机事故 —— 见
+ * [AppUpdater.Companion.versionEndpointUrl] 的注释）。
  */
 class AppUpdaterTest {
+
+    // ---------------------------------------------------------------
+    // 版本检测地址：必须带 /api
+    // ---------------------------------------------------------------
+
+    /**
+     * ★ 线上事故回归（用户："我 app 版本是 0.1.1 怎么没有推送更新弹出给我"）：
+     * 手工拼地址时漏了 `/api`，请求打到站点根的 `/app/version` —— 服务端的 SPA 兜底
+     * 把这条"没命中静态文件、又不带扩展名"的路径回成了 index.html（200 + text/html），
+     * Json 解析失败被当成"检测失败"静默吞掉，用户永远等不到更新提示，服务端连 404 都没有。
+     */
+    @Test
+    fun `版本检测地址必须带 api 前缀`() {
+        assertEquals(
+            "https://www.kuangdada.top/api/app/version",
+            AppUpdater.versionEndpointUrl("https://www.kuangdada.top"),
+        )
+        // baseUrl 末尾有没有斜杠都要拼出同一条地址（不能出现 `//api` 或缺斜杠）
+        assertEquals(
+            "https://www.kuangdada.top/api/app/version",
+            AppUpdater.versionEndpointUrl("https://www.kuangdada.top/"),
+        )
+        // 自定义服务器（端口/局域网）同样成立；服务端那侧一律是 `<host>/api/...`
+        assertEquals(
+            "http://192.168.1.5:3000/api/app/version",
+            AppUpdater.versionEndpointUrl("http://192.168.1.5:3000"),
+        )
+    }
 
     // ---------------------------------------------------------------
     // 基本：同版本不更新、小版本递增要更新

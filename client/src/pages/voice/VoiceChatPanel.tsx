@@ -6,12 +6,14 @@
  * - 聊天列表（自动滚动、上翻查看历史不打扰、加载更早消息）
  * - 发送（回车/按钮；isComposing 守卫）、清空（创建者/管理员）
  * - 朗读开关与点击消息朗读（useChatTTS，含两处 P2 修复）
+ * - 朗读音色下拉：系统语音 / 云端复刻音色（走服务端 /api/tts，密钥不出服务端）
  * 样式复用 VoicePage.module.css（与拆分前同一份 CSS，视觉零变化）。
  * ============================================================
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { Eraser, MessageSquareText, Volume2 } from 'lucide-react';
+import { TTS_CLOUD_VOICES, TTS_SYSTEM_VOICE_KEY } from '@k/shared';
 import { useVoice, useVoiceChat } from '../../context/VoiceContext';
 import { clearVoiceRoomMessages } from '../../api/voice';
 import { showToast } from '../../components/ui/Toast';
@@ -97,15 +99,38 @@ export default function VoiceChatPanel({
             disabled={!tts.ttsSupported}
             title={
               !tts.ttsSupported
-                ? '当前浏览器不支持朗读'
+                ? '当前浏览器不支持朗读，可把音色切换为云端音色'
                 : tts.ttsEnabled
                   ? '关闭新消息自动朗读'
-                  : '开启新消息自动朗读（自动识别中英文）'
+                  : '开启新消息自动朗读（音色见右侧下拉）'
             }
           >
             <Volume2 size={13} />
             <span>{tts.ttsEnabled ? '朗读开' : '朗读'}</span>
           </button>
+          {/* 朗读音色下拉（紧挨朗读按钮右侧）：
+              系统语音 = 浏览器自带合成，零成本；云端音色 = 服务端代理到 StepFun，
+              前端只发音色 key（共享包清单），API Key 与厂商音色 ID 都在服务端。
+              系统语音不可用的残缺内核上该选项置灰，用户仍可切到云端音色朗读。 */}
+          <select
+            className={styles.ttsVoiceSelect}
+            value={tts.voiceKey}
+            onChange={(e) => tts.setVoiceKey(e.target.value)}
+            aria-label="朗读音色"
+            title="选择朗读音色"
+          >
+            <option
+              value={TTS_SYSTEM_VOICE_KEY}
+              disabled={!tts.systemTtsSupported && tts.voiceKey !== TTS_SYSTEM_VOICE_KEY}
+            >
+              {tts.systemTtsSupported ? '系统语音' : '系统语音（不支持）'}
+            </option>
+            {TTS_CLOUD_VOICES.map((v) => (
+              <option key={v.key} value={v.key}>
+                {v.label}
+              </option>
+            ))}
+          </select>
           {canClearChat && (
             <button
               className={styles.chatClearBtn}

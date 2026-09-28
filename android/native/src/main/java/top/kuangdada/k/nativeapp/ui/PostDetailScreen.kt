@@ -13,17 +13,22 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalFocusManager
@@ -49,7 +54,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.animation.AnimatedVisibility
@@ -59,6 +67,7 @@ import androidx.compose.animation.fadeOut
 import top.kuangdada.k.core.designsystem.theme.LocalAnimationsEnabled
 import androidx.compose.animation.core.Animatable
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
@@ -71,8 +80,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import top.kuangdada.k.core.data.ApiResult
 import top.kuangdada.k.core.data.CommentRepository
 import top.kuangdada.k.core.data.PostRepository
@@ -83,6 +95,9 @@ import top.kuangdada.k.core.data.displayMessage
 import top.kuangdada.k.core.data.isNotFound
 import top.kuangdada.k.core.designsystem.component.KButton
 import top.kuangdada.k.core.designsystem.component.KButtonVariant
+import top.kuangdada.k.core.designsystem.component.KEmojiButton
+import top.kuangdada.k.core.designsystem.component.KEmojiPanel
+import top.kuangdada.k.core.designsystem.component.KEmojiPanelHeight
 import top.kuangdada.k.core.designsystem.component.KPlaceholder
 import top.kuangdada.k.core.designsystem.component.KPlaceholderKind
 import top.kuangdada.k.core.designsystem.component.KTextField
@@ -184,11 +199,14 @@ fun PostDetailScreen(
      * 为什么需要它（用户实测反馈）：**从首页点配图进详情页后立刻快速上滑**，配图会整条
      * 压住顶栏、滚停才"重新显示"。飞行那一份画在覆盖层里，而覆盖层永远在页面（含顶栏）之上。
      *
-     * 用 `remember` 固定实例：`SharedElementEntry.overlayClip` 是可变状态，每次重组换个实例
-     * 都会让库更新一遍（与 `rememberTopBarGlass` / 胶囊玻璃同一个坑）。
-     * 读的是 ref（`topBarBottomPx`）而不是值：裁剪发生在绘制期，要拿"那一刻"的真实高度。
+     * ★ 2026-09-25：改走 [rememberTopBarFlightClip] —— 实测值没到位时用设计常量兜底，
+     * 不再出现"首帧/转场起步那几帧完全不裁"的窗口（录像 3.180~3.200s 就是那个窗口）。
+     *
+     * ⚠️ 2026-09-26：**只挂在这一端**（库取的是"正在进场那一页"的裁剪 = 进详情时就是本页）。
+     * 09-25 曾以为"返回方向要挂卡片那端"，结果切出一条 337px 白带、持续整趟转场 —— 已撤销，
+     * 详见 `PostCard.PostImageGrid` 里的逐帧取证。
      */
-    val imageFlightClip = remember { topBarOverlayClip { topBarBottomPx.floatValue } }
+    val imageFlightClip = rememberTopBarFlightClip { topBarBottomPx.floatValue }
     // 原生图片查看器（点配图 → 全屏可缩放/翻页），与首页同一套
     val openViewer = rememberImageViewerSimple(topInsetPx = { topBarBottomPx.floatValue })
 
@@ -328,6 +346,14 @@ fun PostDetailScreen(
     var sending by remember { mutableStateOf(false) }
     var replyTo by remember { mutableStateOf<CommentRepository.CommentUi?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
+    /**
+     * 表情面板开合 + 输入框聚焦态 —— 与聊天页（MessagesScreen「交换区」总注释）
+     * 同一套联动：聚焦 = 要打字，面板向键盘**等高交接**；点表情钮 = 收键盘 +
+     * 清焦点 + 面板占住键盘原来的位置（输入栏全程不动）。
+     */
+    var emojiOpen by remember { mutableStateOf(false) }
+    val inputInteraction = remember { MutableInteractionSource() }
+    val inputFocused by inputInteraction.collectIsFocusedAsState()
     val clipboard = LocalClipboard.current
     val context = LocalContext.current
 
@@ -413,11 +439,125 @@ fun PostDetailScreen(
         var measuredTopBarPx by remember { mutableIntStateOf(0) }
         val topBarPx = if (measuredTopBarPx > 0) measuredTopBarPx else estimatedTopBarPx
         val topInset = with(LocalDensity.current) { topBarPx.toDp() }
+
+        /**
+         * 键盘 / 表情面板「交换区」—— 机制与聊天页完全同款（完整推导见
+         * MessagesScreen ChatScreen 内的同名注释块），要点：
+         *
+         *  · 面板高 = 上一次键盘的全高（等高才能原地换位、输入栏不动）；
+         *  · 交换区高度 = max(IME 高, 面板高×展开比例, 导航栏高)，输入栏贴在它顶上；
+         *  · 面板→键盘：聚焦后等 IME 升到面板等高才收面板（IME 一直不来按超时兜底）；
+         *  · 键盘→面板：面板瞬时占位，键盘滑走露出面板。
+         */
+        val density = LocalDensity.current
+        val imeBottomPx = WindowInsets.ime.getBottom(density)
+        val navBottomPx = WindowInsets.navigationBars.getBottom(density)
+        var lastImeBottomPx by rememberSaveable { mutableIntStateOf(0) }
+        // 交接等待用 snapshotFlow 观察 IME 高度；而 WindowInsets.ime 的 getter 本身
+        // 是 @Composable 的、不能在 snapshotFlow 里直接读，这里重组后回写镜像
+        var imeBottomState by remember { mutableIntStateOf(0) }
+        SideEffect {
+            imeBottomState = imeBottomPx
+            if (imeBottomPx > lastImeBottomPx) lastImeBottomPx = imeBottomPx
+        }
+
+        // 面板全高与 IME 全高同口径（都含导航栏那一条），网格内容再自己避让导航栏
+        val panelHeightPx = if (lastImeBottomPx > 0) {
+            lastImeBottomPx
+        } else {
+            navBottomPx + with(density) { KEmojiPanelHeight.toPx() }.roundToInt()
+        }
+        val panelGridHeightDp = with(density) { (panelHeightPx - navBottomPx).toDp() }
+
+        val panelFraction = remember { Animatable(0f) }
+        val animationsEnabled = LocalAnimationsEnabled.current
+        LaunchedEffect(emojiOpen) {
+            if (emojiOpen) {
+                if (!animationsEnabled) {
+                    panelFraction.snapTo(1f)
+                } else {
+                    // 从键盘状态打开 → 瞬时占位（键盘滑走露出面板）；平时从底边长出
+                    panelFraction.snapTo(if (imeBottomPx > 0) 1f else 0f)
+                    panelFraction.animateTo(1f, KMotion.spatialBounded<Float>())
+                }
+            } else {
+                if (!animationsEnabled) panelFraction.snapTo(0f)
+                else panelFraction.animateTo(0f, KMotion.spatialBounded<Float>())
+            }
+        }
+
+        val exchangeZoneDp = with(density) {
+            maxOf(
+                imeBottomPx,
+                navBottomPx,
+                (panelHeightPx * panelFraction.value).roundToInt(),
+            ).toDp()
+        }
+
+        // 聚焦输入框而面板还开着 → 交接：等键盘升到面板等高再收面板
+        LaunchedEffect(inputFocused) {
+            if (!inputFocused || !emojiOpen) return@LaunchedEffect
+            withTimeoutOrNull(IME_HANDOFF_TIMEOUT_MS) {
+                snapshotFlow { imeBottomState }.first { it >= panelHeightPx }
+            }
+            emojiOpen = false
+        }
+
+        /**
+         * 顶栏玻璃**常开**（2026-09-25 用户拍板："纯色突然变磨砂很突兀，一进来就要磨砂"）。
+         *
+         * 此前两轮方案都是"特定阶段降级成纯色"（09-24：转场期间；09-25：转场 +
+         * 滚动期间），但**降级本身正是用户看到的那次突变** —— 纯色与 0.85 味膜的
+         * 玻璃，在长图帖（顶栏底下就是彩色大图）上肉眼可辨；KFLY 探针同时证明
+         * 滚动全程不掉帧，症状是观感切换、不是掉帧。
+         *
+         * 已知代价（用户接受）：进场飞行的几百毫秒里，配图那一格在录制层里是
+         * 空白（飞行那份画在覆盖层上），玻璃采样到的是页底色 —— 顶栏这短短一瞬
+         * "看起来像纯色"，飞行结束、内容落位后自然变磨砂。那是内容飞进来的自然
+         * 观感，不是顶栏自己的状态翻转；此后任何阶段都不再切换。
+         */
+
+        /**
+         * ★ 2026-09-26：**转场那一下（约 330ms）不接受滚动，也不接受点击**。
+         *
+         * 用户取证（进详情页后**瞬间上滑** → 配图"有一帧突然位移，过后就正常"）：
+         * 四帧逐像素量出来 —— **配图左右沿完全一致（33/837）、上沿一致（206），只有下沿差 14px**，
+         * 而**图以下的内容（胶囊 / 操作栏 / 评论 / 输入条）逐像素不动**。
+         * 即页面布局没变，是 `sharedElement` **飞行那一份**比它的落位位置低了约 14px
+         * （≈ 17 设备 px ≈ 1000px/s 时**一帧**的滚动量）。
+         *
+         * 机理：飞行期间画在屏幕上的是覆盖层里那一份副本，它的目标是"配图在页面里的位置"。
+         * 页面一边滚、目标一边动，而 lookahead 那一路总是**晚一帧**，于是残差恒为一帧；
+         * 入口转场（`spatial(Fast)` ≈ 330ms）一结束，**库到点硬切回页面那一份，不管边界动画
+         * 收没收敛** —— 落地那一帧就把这一帧的差跳出来。
+         *
+         * 为什么不是改弹簧：残差主要来自"目标滞后一帧"，不是弹簧滞后。这与 09-25 两次
+         * `boundsTransform` 分档都"越改越差"完全一致 —— 那两条路已封，别再试。
+         * 唯一能归零的办法是**让目标别动**：转场期间这一段不接受手势。
+         *
+         * ⚠️ 只锁 `userScrollEnabled` **不够，而且会引入新问题**（09-26 用户实测踩到：
+         * "点开就滑会触发打开图片功能"）：关掉滚动后那个拖动手势**没人消费**，
+         * 而 `detectTapGestures`（`combinedClickable` 用的就是它）判"点击"的条件只有一条 ——
+         * "按下后抬起、中途没人消费"（`waitForUpOrCancellation()` 只查 `isConsumed`，**不看位移**）
+         * → 一次上滑被当成"点了配图" → 弹出全屏查看器。
+         * 所以这里同时挂 [pageGestureBarrier]，在 **Initial 阶段**把指针事件吃掉：
+         * 需要它挡住的正是"手势落到配图/顶栏按钮上"这条漏。
+         *
+         * 代价（已与用户确认后选定）：这 330ms 内的一切手势都会被忽略，要等转场结束再操作 ——
+         * 与 iOS `push` 转场的行为一致。**转场结束后一切照旧。**
+         */
+        val scrollLocked = isPageTransitioning()
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 // 玻璃源：栏的兄弟节点，且在栏之前绘制
-                .then(if (canBlur) Modifier.layerBackdrop(backdrop) else Modifier),
+                // backdrop 源层**恒挂**（canBlur 只看系统能力）：KFLY 实测（2026-09-25
+                // 20:19）把源层挂到 glassReady 上，会让"退出转场起步帧"从 41ms 恶化到
+                // 58ms —— 大 Column 的修饰符交换恰好落在转场起步帧上。录制本身的
+                // 逐帧成本实测很低（滚动中 0 次 >40ms），恒挂是更便宜的选择。
+                .then(if (canBlur) Modifier.layerBackdrop(backdrop) else Modifier)
+                // 转场期间吃掉所有指针事件（理由见上面 `scrollLocked` 的长注释）
+                .then(if (scrollLocked) Modifier.pageGestureBarrier() else Modifier),
         ) {
 
             val current = post
@@ -436,11 +576,21 @@ fun PostDetailScreen(
 
                 else -> LazyColumn(
                     state = listState,
+                    // 转场那 330ms 不接受滚动：理由见上面 `scrollLocked` 的长注释
+                    // （飞行那一份的目标会滞后一帧，转场一结束就硬切 → 落地那一帧跳一下）
+                    userScrollEnabled = !scrollLocked,
                     // 点正文/评论区的空白处收起键盘（输入框聚焦时挡内容）
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
-                        .pointerInput(Unit) { detectTapGestures { keyboard?.hide() } },
+                        .pointerInput(Unit) {
+                            // 点评论列表空白处：收键盘**并收起表情面板**（与聊天页同款
+                            // —— 用户点这里就是想看内容/要打字，两个挡界面的都该让路）
+                            detectTapGestures {
+                                keyboard?.hide()
+                                emojiOpen = false
+                            }
+                        },
                     contentPadding = PaddingValues(
                         start = KSpacing.md,
                         end = KSpacing.md,
@@ -626,17 +776,37 @@ fun PostDetailScreen(
 
             // 输入条与正文之间用一条分隔线隔开（与聊天页同款交互）
             HorizontalDivider(color = c.borderSubtle)
-            // 输入条（与聊天页同款：白/深卡片条 + 凹陷底药丸 + 药丸发送按钮）
+            // 输入条（与聊天页同款：白/深卡片条 + 凹陷底药丸 + 药丸发送按钮；
+            // 高度也对齐聊天页 —— 输入框 40dp、上下留白 8dp、发送键等高 40dp）。
+            // 不再挂 navigationBarsPadding/imePadding：导航栏与键盘高度都并入
+            // 下面的交换区（见上面交换区注释），两处重复挂会多让出一条。
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(c.surface)
-                    .navigationBarsPadding()
-                    .imePadding()
-                    .padding(horizontal = KSpacing.md, vertical = KSpacing.sm),
+                    .padding(horizontal = KSpacing.md, vertical = KSpacing.xs),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(KSpacing.sm),
             ) {
+                // 表情开关（笑脸）：与聊天页同款 32dp 紧凑盒。开面板 = 收键盘 +
+                // 清焦点，面板瞬时占住键盘原来的位置（交换区 max() 顶住输入栏，
+                // 全程不动）；聚焦输入框时面板再向键盘等高交接。
+                KEmojiButton(
+                    active = emojiOpen,
+                    boxSize = 32.dp,
+                    onClick = {
+                        // 未登录与输入框同一条规则：点它就是"要评论"，先引导登录
+                        if (!isLoggedIn) {
+                            onRequireLogin()
+                            return@KEmojiButton
+                        }
+                        emojiOpen = !emojiOpen
+                        if (emojiOpen) {
+                            keyboard?.hide()
+                            focusManager.clearFocus()
+                        }
+                    },
+                )
                 Box(modifier = Modifier.weight(1f)) {
                     KTextField(
                         value = input,
@@ -646,6 +816,10 @@ fun PostDetailScreen(
                         variant = KTextFieldVariant.Inset,
                         // 点「回复」时把焦点交给它（见 onReply），IME 随之弹起
                         focusRequester = inputFocusRequester,
+                        // 聚焦态喂给上面的 inputFocused（聚焦 = 面板向键盘交接让位）
+                        interactionSource = inputInteraction,
+                        // 与聊天页同款 40dp 高（组件默认 44，外层高度约束压不住）
+                        minHeight = 40.dp,
                         /**
                          * 回复谁：**写在输入框里**（灰字前缀），而不是单独占一行。
                          *
@@ -689,6 +863,10 @@ fun PostDetailScreen(
                     enabled = !sending,
                     // 圆角与输入框一致（小圆角），不再是胶囊
                     cornerRadius = KRadius.control,
+                    // 与输入框等高（40dp，2026-09-25 与聊天页对齐时加）；
+                    // compact 的紧凑内边距保证文字内容塞得进 40dp
+                    compact = true,
+                    minHeight = 40.dp,
                     onClick = {
                         if (!isLoggedIn) {
                             onRequireLogin()
@@ -745,6 +923,36 @@ fun PostDetailScreen(
                     },
                 )
             }
+
+            /**
+             * 键盘 / 表情交换区（与聊天页同款，机制见上面的总注释）：
+             * 输入栏贴在它顶上，高度 = max(IME, 面板×展开比例, 导航栏)。
+             *
+             * 面板按展开比例裁在区内、**底边对齐**：展开时从屏幕底边向上长出、
+             * 收起时缩回底边；高度参与了 max() 运算，面板↔键盘切换时输入栏不动。
+             * 面板内容自带导航栏避让（面板全高与 IME 全高同口径，都含导航栏那一条）。
+             */
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(exchangeZoneDp)
+                    .clipToBounds(),
+                contentAlignment = Alignment.BottomCenter,
+            ) {
+                if (panelFraction.value > 0f) {
+                    KEmojiPanel(
+                        onPick = { emoji ->
+                            // 追加到末尾（与聊天页同语义）。面板**选完不关**：
+                            // 连发几个表情是常见操作
+                            input += emoji
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding(),
+                        height = panelGridHeightDp,
+                    )
+                }
+            }
         }
 
         // 顶栏浮层（毛玻璃）：返回 | 帖子 | 「…」。正文/评论从它底下穿过。
@@ -757,16 +965,22 @@ fun PostDetailScreen(
                 // 顶栏毛玻璃（统一写法，见 rememberTopBarGlass）。
                 // 必须挂在 kTopBar（状态栏避让）的**左侧**：玻璃矩形才含状态栏那一条（顺序铁律）
                 //
-                // ★ 2026-09-24：**转场期间降级成纯色**（canBlur 临时给 false）。
-                // 为什么：配图飞行那一端改回 `renderInOverlayDuringTransition = true`（见
-                // SingleDetailImage 的注释）后，**飞行期间页面里那一格不留内容**（内容在覆盖层里飞）
-                // —— 若顶栏此刻还在做真模糊，它采样到的就是一块空白 → "玻璃变纯色"（09-23 的老症状）。
-                // 与其为了玻璃而牺牲飞行的观感，不如让**顶栏在转场这 200ms 里就用纯色**
-                // （`frostedSolid` 本来就是它低版本/无模糊时的降级形态，观感统一），
-                // 转场结束再恢复模糊 —— 用户看不到"玻璃突变"，因为它从头到尾都是同一块浅色。
+                // ★ 2026-09-25：**常开，不再有任何降级**（用户拍板"一进来就要磨砂"）。
+                // 09-24 曾把转场期间降成纯色、09-25 上午又加了滚动降级 —— KFLY 探针证明
+                // 掉帧只发生在转场起步（与玻璃无关），而"纯色↔磨砂"的切换本身在长图帖上
+                // 肉眼可辨（顶栏底下就是彩色大图），那才是用户看到的"突变"。
+                // 代价（用户接受）：进场飞行期间配图格在录制层是空白，玻璃采样到页底色、
+                // 短暂"像纯色"，内容落位后自然变磨砂 —— 见上面玻璃常开的注释。
+                // ★ 2026-09-25 晚：**不要**在玻璃下垫不透明底色（曾经加过，已撤）。
+                // 加它的初衷是"玻璃某帧没画时别变透明"，但那个前提后来被证伪（"顶栏消失"的真因是
+                // 飞行图压在栏上，已由两端 `topBarOverlayClip` 解决）。而垫了底色之后，**返回**时
+                // 离场页这条栏会在信息流顶上划过一条**不透明的浅色横带**（用户："返回首页有顶栏残留"）。
                 .then(
                     rememberTopBarGlass(
-                        canBlur = canBlur && !isPageTransitioning(),
+                        // ★ 2026-09-25 晚试过「离场期间不画背景」——**没解决问题，已撤**（用户实测：
+                        // 返回首页那条浅色横带照旧，且图片/视频帖都会触发）。留下的结论：
+                        // 那道横带**不是这条栏的背景**画的，别再往这个方向改。
+                        canBlur = canBlur,
                         backdrop = backdrop,
                         blurRadius = KGlassBlurRadius,
                         tint = frostedTint,
@@ -849,46 +1063,20 @@ fun PostDetailScreen(
             val isReplyTarget = commentList.any { item ->
                 item.id != pendingDeleteId && item.replies.any { it.id == pendingDeleteId }
             }
-            AlertDialog(
+            KAlertDialog(
+                title = "删除评论",
+                text = if (isReplyTarget) {
+                    "这条回复会被删除，且不可恢复。"
+                } else {
+                    "这条评论及其下的回复都会被删除，且不可恢复。"
+                },
+                confirmText = "删除",
+                danger = true,
                 onDismissRequest = { confirmDeleteCommentId = null },
-                title = { Text("删除评论", style = KType.subtitle, color = c.textPrimary) },
-                text = {
-                    Text(
-                        if (isReplyTarget) {
-                            "这条回复会被删除，且不可恢复。"
-                        } else {
-                            "这条评论及其下的回复都会被删除，且不可恢复。"
-                        },
-                        style = KType.body,
-                        color = c.textSecondary,
-                    )
+                onConfirm = {
+                    confirmDeleteCommentId = null
+                    performDeleteComment(pendingDeleteId)
                 },
-                confirmButton = {
-                    Text(
-                        "删除",
-                        style = KType.bodyStrong,
-                        color = c.danger,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(KRadius.control))
-                            .clickable {
-                                confirmDeleteCommentId = null
-                                performDeleteComment(pendingDeleteId)
-                            }
-                            .padding(horizontal = KSpacing.sm, vertical = KSpacing.xs),
-                    )
-                },
-                dismissButton = {
-                    Text(
-                        "取消",
-                        style = KType.body,
-                        color = c.textMuted,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(KRadius.control))
-                            .clickable { confirmDeleteCommentId = null }
-                            .padding(horizontal = KSpacing.sm, vertical = KSpacing.xs),
-                    )
-                },
-                containerColor = c.surface,
             )
         }
 
@@ -1213,6 +1401,34 @@ private fun PostDetailBody(
 }
 
 /**
+ * 转场那几百毫秒里**吃掉这一页的所有指针事件**（在 `Initial` 阶段消费）。
+ *
+ * 为什么不能只靠 `userScrollEnabled = false`（09-26 用户实测踩到的新问题：
+ * "点开就滑会触发打开图片功能"）：关掉滚动之后那个拖动手势**没有任何人消费**，
+ * 而 `detectTapGestures`（`combinedClickable` 的底层）判定"点击"的条件只有一条 ——
+ * **按下之后抬起、且中途没有节点消费过**。它的 `waitForUpOrCancellation()` 只检查
+ * `isConsumed`，**完全不看位移**，所以"上滑 600px"照样会被判成"点了配图"，
+ * 于是弹出全屏查看器。
+ *
+ * 消费点选在 `Initial` 阶段是有讲究的：Compose 的三趟派发顺序是
+ * `Initial`（父 → 子）→ `Main`（子 → 父）→ `Final`（父 → 子）。
+ * 在 `Initial` 里消费，等于**在列表项、内部 scrollable、顶栏按钮之前**就把事件标记成已消费，
+ * 它们在自己的 `Main` 阶段看到 `isConsumed = true` 会自行取消
+ * （`detectTapGestures` 走 `awaitFirstDown(requireUnconsumed = true)` / `waitForUpOrCancellation`；
+ * 滚动走 `awaitPointerSlopOrCancellation`）。
+ * 反过来若在 `Main` 阶段消费，列表项已经先拿到事件了 —— 压不住点击。
+ *
+ * 只挂在页面的根容器上（一处覆盖全页：配图、九宫格、视频封面、顶栏按钮、操作栏、评论行）。
+ */
+private fun Modifier.pageGestureBarrier(): Modifier = this.pointerInput(Unit) {
+    awaitPointerEventScope {
+        while (true) {
+            awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+        }
+    }
+}
+
+/**
  * 详情页配图：**1 张 → 按原图比例完整显示（不裁切）**；2 张 → 两列方块；
  * 3 张及以上 → 三列方块网格（方块是"缩略图墙"的既定形态，点开可看全图）。
  *
@@ -1260,32 +1476,43 @@ private fun DetailImageGrid(
                     // 用现成的 painter 就不会多解一次码。
                     val painter =
                         coil3.compose.rememberAsyncImagePainter(model = rememberThumbRequest(url))
-                    Box(
-                        modifier = Modifier
-                            // 共享元素：与卡片网格里同一 index 的那一格对齐（卡片 ↔ 详情那条飞行）。
-                            // 全屏查看器不参与这条 key —— 它的飞行由 ViewerOrigins 自己算。
-                            //
-                            // ★ 2026-09-24：与 SingleDetailImage 一致，**不传 renderInOverlay**
-                            // （= true，走覆盖层）。理由与取证数据见 SingleDetailImage 的注释：
-                            // `false` 会让"飞行那一份"根本不存在，两端各自原地画 → 看起来闪。
-                            .sharedElementIfAvailable(postImageKey(postId, globalIndex), imageFlightClip)
-                            // 登记"这一格在哪 + 取景比例 + 圆角"，供全屏查看器的进出场飞行
-                            // （圆角与下面那行 `clip(...)` 必须一致 —— 飞行图要从圆角变到全屏的直角）
-                            .registerViewerOrigin(postId, globalIndex, painter, KRadius.row)
-                            .size(cell)
-                            .clip(RoundedCornerShape(KRadius.row))
-                            .background(c.accentSoft)
-                            .combinedClickable(
-                                onClick = { onClick(images, globalIndex, postId) },
-                                onLongClick = { saveMedia(url, MediaKind.Image) },
-                            ),
-                    ) {
-                        Image(
+                    // 外层 = 兜底 + 裁切，**不属于共享元素**：飞行期间共享元素整棵子树都不画，
+                    // 兜底挂在里面会被一起吞掉（见 SingleDetailImage 里的长注释）
+                    Box(modifier = Modifier.clip(RoundedCornerShape(KRadius.row))) {
+                        // 兜底与图片同色调（理由见 MediaCellBackdrop 的长注释）
+                        MediaCellBackdrop(
                             painter = painter,
-                            contentDescription = null,
+                            fallback = c.accentSoft,
                             contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier.matchParentSize(),
                         )
+                        Box(
+                            modifier = Modifier
+                                // 共享元素：与卡片网格里同一 index 的那一格对齐（卡片 ↔ 详情那条飞行）。
+                                // 全屏查看器不参与这条 key —— 它的飞行由 ViewerOrigins 自己算。
+                                //
+                                // ★ 2026-09-24：与 SingleDetailImage 一致，**不传 renderInOverlay**
+                                // （= true，走覆盖层）。理由与取证数据见 SingleDetailImage 的注释：
+                                // `false` 会让"飞行那一份"根本不存在，两端各自原地画 → 看起来闪。
+                                .sharedElementIfAvailable(postImageKey(postId, globalIndex), imageFlightClip)
+                                // 登记"这一格在哪 + 取景比例 + 圆角"，供全屏查看器的进出场飞行
+                                // （圆角与下面那行 `clip(...)` 必须一致 —— 飞行图要从圆角变到全屏的直角）
+                                .registerViewerOrigin(postId, globalIndex, painter, KRadius.row)
+                                .size(cell)
+                                .clip(RoundedCornerShape(KRadius.row))
+                                .background(c.accentSoft)
+                                .combinedClickable(
+                                    onClick = { onClick(images, globalIndex, postId) },
+                                    onLongClick = { saveMedia(url, MediaKind.Image) },
+                                ),
+                        ) {
+                            Image(
+                                painter = painter,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
                     }
                 }
             }
@@ -1319,6 +1546,17 @@ private fun SingleDetailImage(
     val naturalHeight = width / ratio
     val maxHeight = width * 3f
     val height = naturalHeight.coerceAtMost(maxHeight)
+    // ★★ 外层 Box = 「兜底 + 裁切」，**它不属于共享元素**。
+    // 为什么必须分两层：共享元素在飞行期间**整棵子树都不画**（库的 `shouldRenderInPlace = false`），
+    // 兜底若挂在里面会被一起吞掉 —— 页面层里这一格依旧是个洞，顶栏玻璃照样在"落地那一帧"换质感。
+    Box(modifier = Modifier.clip(RoundedCornerShape(KRadius.row))) {
+        // 兜底 = 这张图自己的模糊副本（与图片同色调才不会再"换质感"，见 MediaCellBackdrop 的长注释）
+        MediaCellBackdrop(
+            painter = painter,
+            fallback = c.accentSoft,
+            contentScale = if (naturalHeight > maxHeight) ContentScale.Fit else ContentScale.FillWidth,
+            modifier = Modifier.matchParentSize(),
+        )
     Box(
         modifier = Modifier
             /**
@@ -1363,8 +1601,9 @@ private fun SingleDetailImage(
              * （`intrinsicSize=1920x2560`，不是 NaN）→ 不是"首帧无内容"；
              * `ratio` 全程 0.75、`h100` 全程 1768.7 → 也不是"占位比例重排"。
              *
-             * 副作用（顶栏毛玻璃折射留白）已由**顶栏在转场期间降级为纯色**兜住，
-             * 见本页 `rememberTopBarGlass(canBlur = canBlur && !isPageTransitioning(), …)`。
+             * 副作用（顶栏毛玻璃在飞行期间采样到空白格）已由**玻璃常开**接受：
+             * 飞行那几百毫秒顶栏看起来像纯色，内容落位后自然变磨砂 ——
+             * 见本页 `rememberTopBarGlass(canBlur = canBlur, …)` 的注释（2026-09-25）。
              */
             .sharedElementIfAvailable(sharedKey, imageFlightClip)
             // 登记"这一格在哪 + 取景比例 + 圆角"，供全屏查看器的进出场飞行（M5.2 / M5.5）
@@ -1377,14 +1616,15 @@ private fun SingleDetailImage(
                 onClick = onClick,
                 onLongClick = { saveMedia(url, MediaKind.Image) },
             ),
-    ) {
-        Image(
-            painter = painter,
-            contentDescription = null,
-            // 未被封顶时 FillWidth 正好等于原始比例（等于没裁切）；封顶时才 Fit
-            contentScale = if (naturalHeight > maxHeight) ContentScale.Fit else ContentScale.FillWidth,
-            modifier = Modifier.fillMaxSize(),
-        )
+        ) {
+            Image(
+                painter = painter,
+                contentDescription = null,
+                // 未被封顶时 FillWidth 正好等于原始比例（等于没裁切）；封顶时才 Fit
+                contentScale = if (naturalHeight > maxHeight) ContentScale.Fit else ContentScale.FillWidth,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 
@@ -1467,6 +1707,13 @@ private const val DELETED_ROW_ANIM_MS = 260L
  * 但等少了就白等。
  */
 private const val KEYBOARD_SETTLE_MS = 300L
+
+/**
+ * 聚焦输入框后等 IME 升到表情面板等高的**交接超时**（与聊天页同款语义）：
+ * 正常路径 IME 三百毫秒左右就升到位；这个超时只兜"IME 根本不会来"的场景
+ * （实体键盘等），到点按普通收起处理，不会把输入栏永远架在半空。
+ */
+private const val IME_HANDOFF_TIMEOUT_MS = 600L
 
 @Composable
 private fun CommentRow(

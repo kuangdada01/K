@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import top.kuangdada.k.core.designsystem.theme.KDimens
 import top.kuangdada.k.core.designsystem.theme.KRadius
@@ -72,6 +73,9 @@ enum class KTextFieldVariant { Outlined, Inset, Plain }
  *   多行框（个人简介这类）要"空着也留 2 行"时**必须用它**：
  *   给外层容器加高度（`height`/`heightIn`/`requiredHeight`）都没用 ——
  *   `BasicTextField` 内部按自己的内容与 `minLines` 撑高，不看外面的高度约束。
+ * @param minHeight 可选。容器最小高，默认 [KDimens.minTouchTarget]（44dp）。
+ *   同样的道理：外层高度约束压不住内部的 `defaultMinSize`，要矮一档的输入条
+ *   （聊天输入栏 40dp）必须从这里传。只影响 Inset/Outlined 的容器，Plain 无容器不受影响。
  */
 @Composable
 fun KTextField(
@@ -93,6 +97,7 @@ fun KTextField(
     trailing: (@Composable () -> Unit)? = null,
     interactionSource: MutableInteractionSource? = null,
     minLines: Int = 1,
+    minHeight: Dp = KDimens.minTouchTarget,
 ) {
     KTextFieldContainer(
         isEmpty = value.isEmpty(),
@@ -106,6 +111,7 @@ fun KTextField(
         leading = leading,
         trailing = trailing,
         sharedInteraction = interactionSource,
+        minHeight = minHeight,
     ) { interaction ->
         BasicTextField(
             value = value,
@@ -152,6 +158,7 @@ fun KTextField(
     trailing: (@Composable () -> Unit)? = null,
     interactionSource: MutableInteractionSource? = null,
     minLines: Int = 1,
+    minHeight: Dp = KDimens.minTouchTarget,
 ) {
     KTextFieldContainer(
         isEmpty = value.text.isEmpty(),
@@ -165,6 +172,7 @@ fun KTextField(
         leading = leading,
         trailing = trailing,
         sharedInteraction = interactionSource,
+        minHeight = minHeight,
     ) { interaction ->
         BasicTextField(
             value = value,
@@ -204,6 +212,8 @@ private fun KTextFieldContainer(
     trailing: (@Composable () -> Unit)?,
     /** 调用方要自己读聚焦态时传进来（见 `KTextField` 的 `interactionSource` 参数） */
     sharedInteraction: MutableInteractionSource?,
+    /** 容器最小高（见 `KTextField` 的 `minHeight` 参数） */
+    minHeight: Dp,
     field: @Composable (MutableInteractionSource) -> Unit,
 ) {
     val c = KTheme.colors
@@ -251,7 +261,7 @@ private fun KTextFieldContainer(
                                 if (borderWidth > 0.dp) Modifier.border(borderWidth, borderColor, shape)
                                 else Modifier
                             )
-                            .defaultMinSize(minHeight = KDimens.minTouchTarget)
+                            .defaultMinSize(minHeight = minHeight)
                             .padding(
                                 horizontal = KSpacing.md,
                                 // Inset 是细长药丸（设计稿实测 44dp 高），垂直内边距要收一档，

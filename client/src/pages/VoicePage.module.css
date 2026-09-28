@@ -332,6 +332,13 @@
 
 .controlBar {
   position: fixed;
+  /*
+   * 水平位置：
+   *  · 移动端（≤768px）：按**视口**居中 —— 那边侧栏变成底部悬浮胶囊、.main-content
+   *    占满视口，视口中心就是内容列的中心，这样是对的；
+   *  · 桌面端：见下面 `@media (min-width: 769px)` 的覆盖 —— 那边左侧有 220px 侧栏，
+   *    两个"中心"不是同一个，必须换成和 .page 一样的基准（否则整体偏左 124px）。
+   */
   left: 50%;
   transform: translateX(-50%);
   bottom: calc(24px + var(--safe-area-bottom, 0px));
@@ -349,6 +356,37 @@
      显式上限留 24px 边距，配合按钮 flex-shrink:0 + 滑条 flex-shrink:1 兜底 */
   max-width: calc(100vw - 24px);
   z-index: 10;
+}
+
+/*
+ * 桌面端：控制栏与内容列的**卡片左沿对齐**。
+ *
+ * 原来的 `left: 50%` 是按**视口**居中，而 `.page`（max-width 860 + margin 0 auto）
+ * 是按 `.main-content`（被左侧栏挤到右边的那块）居中 —— 两个基准差
+ * (侧栏 220 + 间距 28) / 2 = 124px，于是控制栏整体偏左、和「文字聊天」卡片对不齐
+ * （实测中心差 -124px，右沿差 -114px；量法见 .workbuddy/tmp/voice-bar-align.mjs）。
+ *
+ * 这里把「卡片列的左沿」直接算出来，四段依次是：
+ *   ① .app-layout 的左边距（它在 body 里居中，宽 min(1320px, 100% - 32px)）
+ *   ② + 侧栏 + 间距           → .main-content 的左边界
+ *   ③ + (main 宽 - 列宽) / 2  → .page 带 max-width 居中后的左边界
+ *   ④ + 20px（.page 的左右内边距）→ 卡片左沿
+ * 宽度上限钉成「卡片那一列的宽」，保证它永远不会比卡片宽、探出右边界。
+ *
+ * ⚠️ 这几段与 `.app-layout` / `.main-content` / `.page` 的常量是**同源的**，
+ * 改那三处要一起改（1320px / 16px / 28px / 860px / 20px 只写在这一处注释里）。
+ */
+@media (min-width: 769px) {
+  .controlBar {
+    --k-gutter: max(16px, (100% - 1320px) / 2);
+    --k-main-left: calc(var(--k-gutter) + 220px + 28px);
+    --k-main-w: calc(100% - var(--k-main-left) - var(--k-gutter));
+    --k-col-w: min(860px, var(--k-main-w));
+    left: calc(var(--k-main-left) + (var(--k-main-w) - var(--k-col-w)) / 2 + 20px);
+    /* 已经用 left 定位，不能再叠一层 -50% 平移 */
+    transform: none;
+    max-width: calc(var(--k-col-w) - 40px);
+  }
 }
 
 /* 控制栏内所有按钮：不收缩、文字不换行（窄视口时由滑条先收缩让位，
@@ -640,6 +678,36 @@
 
 .ttsOff:hover:not(:disabled) {
   filter: brightness(0.95);
+}
+
+/* 朗读音色下拉（朗读按钮右侧）：与朗读/清空按钮同高，保持头部一排控件齐平。
+   原生 select 无法完全自定义，只做尺寸/配色对齐；max-width 防长音色名把标题挤走 */
+.ttsVoiceSelect {
+  max-width: 108px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-btn-secondary, var(--bg-secondary));
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    filter 0.15s;
+}
+
+.ttsVoiceSelect:hover {
+  filter: brightness(0.97);
+}
+
+.ttsVoiceSelect:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ttsVoiceSelect:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .chatList {

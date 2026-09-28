@@ -7,6 +7,7 @@
 
 import api from './http';
 import { getRoomOwnerToken } from '../voice/roomOwnership';
+import type { ChessMove } from '@k/shared';
 import type { VoiceChatMessage, VoiceRoom } from '../types';
 
 /**
@@ -84,4 +85,56 @@ export function clearVoiceRoomMessages(roomId: number): Promise<{ success: boole
   return api
     .delete(`/voice/rooms/${roomId}/messages`, { headers: ownerTokenHeader(roomId) })
     .then((r) => r.data);
+}
+
+// ---- 对战象棋：终局留档 / 战绩（复盘与战绩展示用） ----
+
+/** 终局留档列表行（不含棋谱） */
+export interface VoiceGameSummary {
+  id: number;
+  room_id: number;
+  game_id: string;
+  red_name: string;
+  black_name: string;
+  result: 'red-win' | 'black-win' | 'draw';
+  reason: string;
+  move_count: number;
+  started_at: string;
+  ended_at: string;
+}
+
+/** 单局复盘数据（含棋谱与中文记谱） */
+export interface VoiceGameDetail extends VoiceGameSummary {
+  red_user_id: number;
+  black_user_id: number;
+  moves: ChessMove[];
+  notations: string[];
+}
+
+/** 用户象棋战绩（跨房间聚合） */
+export interface ChessUserStats {
+  wins: number;
+  losses: number;
+  draws: number;
+  total: number;
+}
+
+/** 房间终局留档列表（before_id 向更早翻页） */
+export function listRoomGames(
+  roomId: number,
+  beforeId?: number
+): Promise<{ games: VoiceGameSummary[]; has_more: boolean }> {
+  return api
+    .get(`/voice/rooms/${roomId}/games`, { params: beforeId !== undefined ? { before_id: beforeId } : {} })
+    .then((r) => r.data);
+}
+
+/** 单局复盘数据 */
+export function getRoomGame(roomId: number, gameId: string): Promise<{ game: VoiceGameDetail }> {
+  return api.get(`/voice/rooms/${roomId}/games/${gameId}`).then((r) => r.data);
+}
+
+/** 用户象棋战绩 */
+export function getChessStats(userId: number): Promise<{ stats: ChessUserStats }> {
+  return api.get(`/voice/chess/stats/${userId}`).then((r) => r.data);
 }

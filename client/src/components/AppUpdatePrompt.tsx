@@ -8,6 +8,10 @@
  * 功能:
  * - 仅原生宿主内生效（isNative()），Web 端静默
  * - 通过桥 getAppInfo() 读取当前安装版本，与 /api/app/version 对比
+ *   （⚠️ 这里 `api.get('/app/version')` 的路径**不带** `/api` —— axios 实例的
+ *   baseURL 就是 `/api`。手工拼绝对地址时必须自己带上 `/api`：原生端
+ *   `AppUpdater` 就是照抄这行注释漏了前缀，请求打到站点根被 SPA 兜底成 index.html，
+ *   于是"永远没有更新提示"，见 `android/.../download/AppUpdater.kt` 的 ENDPOINT 注释）
  * - 版本号语义化比较（0.2.0 > 0.1.9）
  * - 点「立即更新」用系统浏览器打开 APK 下载链接
  * - 点「以后再说」本地记住跳过的版本号，同一版本只提示一次

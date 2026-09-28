@@ -64,6 +64,7 @@ import top.kuangdada.k.core.data.VoiceRepository
 import top.kuangdada.k.core.data.resolveUrl
 import top.kuangdada.k.core.data.model.BookChapter
 import top.kuangdada.k.core.data.model.BookDetail
+import top.kuangdada.k.nativeapp.notify.SocialNotifier
 import top.kuangdada.k.core.data.model.VoiceRoom
 import top.kuangdada.k.core.designsystem.component.KButton
 import top.kuangdada.k.core.designsystem.component.KNavCapsule
@@ -209,17 +210,36 @@ fun AppShell(
         ?: session.cachedUsername.orEmpty()
 
     /**
-     * 实时连接的生命周期：**已登录 + 在前台**才保持长连接。
+     * App 是否在前台。
      *
-     * 退到后台就断开（一直挂着白耗电，服务端也有 5 条/账号的上限），回前台自动重连。
-     * 退出登录时 [RealtimeClient.runLoop] 自己会结束。
+     * 用途只有一个：**通知栏提醒只在不前台时发**（见下面那段的注释）。
+     * 与实时连接共用同一个生命周期观察者，不额外挂一个 observer。
+     */
+    var appInForeground by remember { mutableStateOf(true) }
+
+    /**
+     * 实时连接的生命周期：**登录着就保持长连接**。
+     *
+     * ⚠️ 这里与改动前**刻意不同**：以前 `ON_STOP` 会 `realtime.stop()`（理由是"挂着白耗电"），
+     * 但那样 App 一退到后台就收不到任何事件 —— 通知栏提醒也就无从谈起
+     * （用户要求"App 在后台时能收到通知"）。现在只在两处真正断开：
+     *
+     *  · **登出**：`RealtimeClient.runLoop` 自己发现没有 token 就结束循环；
+     *  · **这个组合离开**（Activity 销毁 / App 被划掉）：下面的 `onDispose`。
+     *
+     * 代价是后台常挂一条 SSE：客户端只会建一条连接，服务端上限 5 条/账号，
+     * 其余端仍可用、不会互踢；画面不可见时除了 25s 一次的心跳没有任何流量。
+     * 仍需"被划掉后也能收"的话得接厂商推送通道（本项目尚未接入）。
      */
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, isLoggedIn) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             when (event) {
-                androidx.lifecycle.Lifecycle.Event.ON_START -> if (isLoggedIn) realtime.start(scope)
-                androidx.lifecycle.Lifecycle.Event.ON_STOP -> realtime.stop()
+                androidx.lifecycle.Lifecycle.Event.ON_START -> {
+                    appInForeground = true
+                    if (isLoggedIn) realtime.start(scope)
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> appInForeground = false
                 else -> Unit
             }
         }
@@ -228,6 +248,116 @@ fun AppShell(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             realtime.stop()
+        }
+    }
+
+    // ==================================================================
+    // 通知栏提醒（新私信 / 互动 / 公告）
+    // ==================================================================
+
+    val notifyContext = LocalContext.current
+
+    /**
+     * Android 13+ 需要 `POST_NOTIFICATIONS` **运行时权限**，这里只主动问一次。
+     *
+     * 为什么把"问过"记在 prefs 里而不是每次冷启动都 launch：Android 在用户拒绝两次后
+     * 不再弹系统框，反复调只会拿到一串无意义的空回调。用户之后想开可以去系统设置。
+     *
+     * 注：Manifest 里**早就**声明过这条权限（语音房前台服务的通知也一直受它管），
+     * 但代码从没申请过 —— 所以 Android 13+ 上连语音房那条保活通知其实也一直不显示。
+     */
+    val notifyPrefs = remember(notifyContext) {
+        notifyContext.getSharedPreferences("k_notify", android.content.Context.MODE_PRIVATE)
+    }
+    val notifPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { /* 拒绝不影响任何功能，只是收不到通知栏提醒 */ }
+
+    /**
+     * 上一次是否处于登录态。
+     *
+     * 用来区分「**真的登出了**」和「冷启动时登录态还没恢复完」——
+     * `authState` 的初值是 `Restoring`，那会儿 `isLoggedIn` 同样是 false。
+     * 不区分的话，每次冷启动都会把上次遗留的通知无故抹掉：
+     * 用户只是打开 App 看一眼首页，通知就没了。
+     */
+    var wasLoggedIn by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isLoggedIn) {
+        if (!isLoggedIn) {
+            // 只有"从登录态掉下来"才算真登出。冷启动那次不动通知。
+            if (wasLoggedIn) {
+                // 清掉上一个账号留下的通知栏提醒（换人登录后不该看到别人的消息摘要）。
+                // 注意 [SocialNotifier.clearAll] 是 cancelAll —— 会连带清掉语音房那条保活通知；
+                // 退登本来就该结束通话，且它的前台服务在需要时会重建通知，不会留下
+                // "服务在跑却没有通知"的假死态。
+                SocialNotifier.clearAll(notifyContext)
+            }
+            return@LaunchedEffect
+        }
+        wasLoggedIn = true
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@LaunchedEffect
+        if (SocialNotifier.hasPermission(notifyContext)) return@LaunchedEffect
+        if (notifyPrefs.getBoolean("asked", false)) return@LaunchedEffect
+        notifyPrefs.edit().putBoolean("asked", true).apply()
+        notifPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    /**
+     * 收到事件 → 落一条系统通知。
+     *
+     * **只在不前台时发**：前台时页面自己会刷出内容、底部导航也有未读角标，
+     * 再弹一次通知栏等于同一件事说两遍（用户正在看的那条会话尤其烦人）。
+     *
+     * 摘要走**已有的只读列表接口**，不新开接口、也不改服务端：
+     *  · 私信 → `conversations()` 的 `username` + `last_message`
+     *    （服务端已把图片消息拼成占位文案）。**绝不能用 `history()`** —— 那个接口
+     *    **有副作用**，会把对方发来的消息标记成已读（`listMessageHistory` 里就这么写的），
+     *    拿它取摘要会静默吃掉未读。
+     *  · 互动 → `notifications()` 的第一条（列表按时间倒序）。
+     *  · 公告 → `myAnnouncements()` 的第一条。
+     *
+     * 拉取失败就退化成通用文案：通知栏宁可少说一句，也不能因一次网络抖动就不提醒。
+     */
+    LaunchedEffect(realtime, isLoggedIn, myUserId) {
+        if (!isLoggedIn) return@LaunchedEffect
+        realtime.events.collect { event ->
+            if (appInForeground) return@collect
+            when {
+                // 只提醒"发给我的"：服务端对**收发双方**都推 `message`，所以自己发的
+                // （`to != me`）要在 `isNewMessage` 之上再筛一次；撤回也走同一个事件类型。
+                event.isNewMessage && myUserId > 0L && event.to == myUserId -> {
+                    val partnerId = event.from ?: return@collect
+                    val conv = messages.conversations()
+                        .let { if (it is ApiResult.Success) it.data else emptyList() }
+                        .firstOrNull { it.raw.partnerId == partnerId }
+                    SocialNotifier.notifyMessage(
+                        context = notifyContext,
+                        partnerId = partnerId,
+                        name = conv?.raw?.username,
+                        preview = conv?.raw?.lastMessage,
+                    )
+                }
+                event.isNotification -> {
+                    val latest = messages.notifications()
+                        .let { if (it is ApiResult.Success) it.data else emptyList() }
+                        .firstOrNull()
+                    SocialNotifier.notifyInteraction(
+                        context = notifyContext,
+                        fromName = latest?.raw?.fromUsername,
+                        type = latest?.raw?.type.orEmpty(),
+                        content = latest?.raw?.content,
+                        // 事件里的 post_id 更可信（它对应"刚发生的这一次"），拿不到才退回列表首条
+                        postId = event.postId ?: latest?.raw?.postId,
+                    )
+                }
+                event.isAnnouncement -> {
+                    val latest = admin.myAnnouncements()
+                        .let { if (it is ApiResult.Success) it.data else emptyList() }
+                        .firstOrNull()
+                    SocialNotifier.notifyAnnouncement(notifyContext, latest?.title)
+                }
+            }
         }
     }
 
@@ -1072,8 +1202,15 @@ fun AppShell(
      *
      * `LocalImageViewerOpener` 不必外提：读它的是页面里的缩略格，而查看器自己**是被打开的那一个**。
      */
+    /**
+     * ★ 全局轻提示必须提供在**最外层**（理由与 [LocalMediaSaveOpener] 同一条注释）：
+     * 弹提示的来源既有页面、也有覆盖层和**非 Compose 回调**（下载广播等）——
+     * 之前这些地方只能用系统黑框 Toast，观感与主题脱节（2026-09-27 用户要求统一）。
+     */
+    val toastState = rememberKToastState()
     CompositionLocalProvider(
         LocalMediaSaveOpener provides { target -> mediaSaveTarget = target },
+        LocalToast provides toastState,
     ) {
     Box(modifier = Modifier.fillMaxSize()) {
     SharedTransitionLayout(
@@ -1467,6 +1604,29 @@ fun AppShell(
                 )
             }
         }
+
+        /**
+         * 覆盖态 5：全局轻提示宿主（画在所有覆盖层之上、贴底居中）。
+         * [KToast] 自己会把高度抬到导航胶囊之上，这里不用再管层级与位置。
+         */
+        KToastHost(
+            state = toastState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth(),
+        )
+
+        /**
+         * 覆盖态 4：App 自更新提示（09-27 用户要求）。
+         *
+         * 它是 [AlertDialog] —— 自己另开一个窗口，所以**放在哪个位置都不影响层级**，
+         * 放在这里只是"和别的覆盖态待在一起"，方便下次找。
+         *
+         * 为什么挂在 Shell 顶层而不是某个页面里：它要能在**任何页面**上弹出来
+         * （用户可能在信息流、语音房甚至登录页上冷启动），而且检测的时机是
+         * "冷启动 + 回到前台"，与当前在哪一页无关。
+         */
+        UpdatePromptHost()
     }
     }
 
@@ -1546,13 +1706,18 @@ private fun pageTransform(
      * 顺带一提，"两页对着分开"本身也不对：标准做法是新旧两页**同向移动**、旧页退得稍慢。
      */
     val sign = if (intoFromRight) 1 else -1
-    val enter = slideInHorizontally(animationSpec = KMotion.spatial()) { full ->
+    // ★ 2026-09-25：页面转场整体换 **Fast 档**（滑 1200 / 淡 2400，~350ms 收尾）。
+    // 用户录屏取证（Record_2026-09-25-20-37）：Default 档弹簧的 ~600-800ms 收尾被
+    // 进详情首秒的掉帧拉长成 2-3s —— 两页叠影（旧页没淡完、新页半透明）持续整个
+    // 窗口，顶栏半透明压在首页内容上，就是"顶栏渲染变慢"的观感。转场越短，
+    // 叠影窗口越小，掉帧的暴露也同比缩小。
+    val enter = slideInHorizontally(animationSpec = KMotion.spatial(KMotion.Preset.Fast)) { full ->
         sign * (full / inFraction)
-    } + fadeIn(KMotion.effects())
-    val exit = slideOutHorizontally(animationSpec = KMotion.spatial()) { full ->
+    } + fadeIn(KMotion.effects(KMotion.Preset.Fast))
+    val exit = slideOutHorizontally(animationSpec = KMotion.spatial(KMotion.Preset.Fast)) { full ->
         // 注意取负：旧页退向与进场相反的一侧
         -sign * (full / outFraction)
-    } + fadeOut(KMotion.effects())
+    } + fadeOut(KMotion.effects(KMotion.Preset.Fast))
     return enter togetherWith exit
 }
 

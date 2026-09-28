@@ -113,9 +113,36 @@ echo CLIENT_DEPLOY_DONE
     checks = [
         ("首页可访问", "curl -skL -o /dev/null -w 'page(%{http_code}) ' http://127.0.0.1/; curl -s -o /dev/null -w 'health(%{http_code})' http://127.0.0.1:3000/api/health", lambda o: "page(200)" in o and "health(200)" in o),
         ("新 index.html 时间戳", "stat -c '%y' /var/www/k/client/dist/index.html", None),
-        ("新 CSS 含 statsBar 类", "grep -l 'statsBar' /var/www/k/client/dist/assets/*.css 2>/dev/null | head -1", lambda o: o.strip() != ""),
-        ("APK 仍在 dist/apk", "ls -la /var/www/k/client/dist/apk/ 2>/dev/null | grep -c apk", lambda o: o.strip() != "0"),
+        # index.html 引用的每个 assets 文件都必须真的在盘上（漏传一个 chunk = 白屏）。
+        # 这里原来是 `grep -l 'statsBar'`：那只是某一次改动的类名，与本次部署毫无关系，
+        # 也发现不了"少传了一个文件"这类真问题（而且 lazy chunk 的 CSS 根本不在 index.html 里）。
+        (
+            "index.html 引用的资源都存在",
+            "cd /var/www/k/client/dist && miss=0; "
+            "for f in $(grep -oE 'assets/[A-Za-z0-9._-]+' index.html | sort -u); do "
+            '[ -f "$f" ] || { echo "MISSING $f"; miss=1; }; done; '
+            "[ $miss -eq 0 ] && echo ALL_PRESENT",
+            lambda o: "ALL_PRESENT" in o,
+        ),
     ]
+    # ★ 更新链路的关键校验：远端 `.env` 里 `APP_APK_URL` 指向的那个包必须**真的在盘上**。
+    #
+    # 这里原来只数了 `dist/apk/` 有几个文件，还把它注释成"历史遗留目录、本来就是空的" ——
+    # 于是"APK 从没传上去"这件事一直没人发现：`/api/app/version` 照样返回 200，
+    # App 里点「立即更新」下到的是 SPA 兜底的 index.html（09-27 实测）。
+    # 现在改成硬校验（MISSING 即 FAIL）：版本接口指向的包不存在 = 更新按钮是坏的。
+    checks.append(
+        (
+            "更新接口指向的 APK 在盘上",
+            "u=$(grep -m1 '^APP_APK_URL=' /var/www/k/.env | cut -d= -f2-); "
+            "if [ -z \"$u\" ]; then echo 'APP_APK_URL 未配置（跳过）'; else "
+            "f=/var/www/k/client/dist${u#*kuangdada.top}; "
+            "[ -f \"$f\" ] && stat -c 'ON_DISK %s bytes' \"$f\" || echo \"MISSING $f\"; fi; "
+            "echo \"dist/apk 共 $(ls -1 /var/www/k/client/dist/apk/ 2>/dev/null | wc -l) 个文件\"",
+            lambda o: "MISSING" not in o,
+        )
+    )
+
     all_ok = True
     for title, cmd, cond in checks:
         _, out, err = c.exec_command(cmd, timeout=60)
@@ -126,6 +153,7 @@ echo CLIENT_DEPLOY_DONE
         if cond and not cond(o):
             all_ok = False
             print(f"[FAIL] {title}")
+
     c.close()
     print("\n[VERIFY] " + ("PASS" if all_ok else "FAIL"))
     return 0 if all_ok else 1

@@ -282,6 +282,34 @@ describe('WS 信令全链路', () => {
     await waitFor(alice, () => false, 100).catch(() => {});
   });
 
+  it('join 自带 muted 就当场记成闭麦（"连接中就点了闭麦"那条路依赖它）', async () => {
+    const room = voiceRepo.createRoom(aliceId, '测试房', '', { creatorName: 'alice' });
+    const alice = await connect(aliceToken);
+    send(alice, { type: 'join', roomId: room.id });
+    await waitFor(alice, (m) => m.type === 'joined');
+
+    // bob 直接带着 muted 进房，**不再补发一条 mute** ——
+    // 安卓端在"正在连接语音服务"那几秒里点了闭麦就是这条路径：
+    // 那时信令还没连上、单独发不出去，所以状态必须能挂在 join 上。
+    const bob = await connect(bobToken);
+    const peerJoinedP = waitFor(alice, (m) => m.type === 'peer-joined');
+    send(bob, { type: 'join', roomId: room.id, muted: true });
+    expect((await peerJoinedP).participant).toMatchObject({ userId: bobId, muted: true });
+
+    // 后进来的人从 participants 里看到的 bob 也必须是闭麦（否则他的麦位卡是绿点）
+    const carol = await connect(carolToken);
+    const carolJoinedP = waitFor(carol, (m) => m.type === 'joined');
+    send(carol, { type: 'join', roomId: room.id });
+    const bobEntry = (await carolJoinedP).participants.find((p: { userId: number }) => p.userId === bobId);
+    expect(bobEntry?.muted).toBe(true);
+
+    // 清场
+    send(carol, { type: 'leave' });
+    send(bob, { type: 'leave' });
+    send(alice, { type: 'leave' });
+    await waitFor(alice, () => false, 100).catch(() => {});
+  });
+
   it('加入不存在的房间被拒绝', async () => {
     const ws = await connect(aliceToken);
     send(ws, { type: 'join', roomId: 99999 });

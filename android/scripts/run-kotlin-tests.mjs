@@ -246,7 +246,7 @@ if (testClasses.length === 0) {
 
 const javaHome = resolveJavaHome();
 if (!javaHome) {
-  console.error('[kotlin-test] 找不到 JDK 21');
+  console.error('[kotlin-test] 找不到可用的 JDK（见 gradle-env.mjs 的候选表，或设置 JAVA_HOME）');
   process.exit(1);
 }
 const java = join(javaHome, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');

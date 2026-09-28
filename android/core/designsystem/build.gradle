@@ -23,7 +23,11 @@ android {
 }
 
 kotlin {
-    jvmToolchain(21)
+    // 工具链 25：本机只有 Android Studio 自带的 JBR 25（没有独立 JDK 21），
+    // 钉 21 会直接失败在 "Cannot find a Java installation matching languageVersion=21"。
+    // 25 只是**跑编译器的 JDK** —— 字节码目标仍由 compileOptions 钉在 Java 21
+    // （AGP 把 Java target 传给 Kotlin，实测产物 class 为 v65）；换机若只有 21，改回即可。
+    jvmToolchain(25)
 }
 
 tasks.configureEach { t ->

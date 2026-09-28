@@ -16,6 +16,7 @@ import top.kuangdada.k.core.data.api.FriendsApi
 import top.kuangdada.k.core.data.api.MessageApi
 import top.kuangdada.k.core.data.api.NotificationsApi
 import top.kuangdada.k.core.data.api.PostApi
+import top.kuangdada.k.core.data.api.TtsApi
 import top.kuangdada.k.core.data.api.UserApi
 import top.kuangdada.k.core.data.api.VoiceApi
 import java.util.concurrent.TimeUnit
@@ -115,6 +116,8 @@ class KApi(
     /** 关注（server/src/routes/friends.ts）：他人主页的关注按钮与关注状态 */
     val friends: FriendsApi = retrofit.create(FriendsApi::class.java)
     val voice: VoiceApi = retrofit.create(VoiceApi::class.java)
+    /** 云端朗读（`/api/tts`）：房间文字聊天的「朗读」云端音色，与 Web 端同一接口 */
+    val tts: TtsApi = retrofit.create(TtsApi::class.java)
     val messages: MessageApi = retrofit.create(MessageApi::class.java)
     val composer: ComposerApi = retrofit.create(ComposerApi::class.java)
     val events: EventApi = retrofit.create(EventApi::class.java)

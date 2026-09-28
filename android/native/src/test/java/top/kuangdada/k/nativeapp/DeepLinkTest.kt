@@ -179,6 +179,19 @@ class DeepLinkTest {
     }
 
     @Test
+    fun `通知里的 post 编码形态直达详情页`() {
+        // 互动通知（有人评论 / 回复）点进来要落在**那条帖子**上。
+        // 与 URL 形态 `/post/123` **刻意不同**：那条在 Web 里是"首页 + 定位到该帖"，
+        // 原生首页还没实现滚动定位，所以 URL 形态仍降级到首页（见 DeepLink 类注释的
+        // "已知降级"）；而通知点进来的语义是"明确要看这一条"，必须直达详情页。
+        assertEquals(AppDestination.PostDetailDest(123), path("post:123"))
+        assertEquals(AppDestination.Home, path("https://www.kuangdada.top/post/123"))
+
+        assertNull(path("post:abc"))
+        assertNull(path("post:0"))
+    }
+
+    @Test
     fun `编码形态非法值返回 null（不能误判成路由）`() {
         assertNull(path("voice:abc"))
         assertNull(path("voice:0"))

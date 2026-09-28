@@ -164,7 +164,7 @@ UI 与状态层：
 
 ```
 client/src/pages/voice/               # VoiceRoomList / VoiceRoomView / VoiceChatPanel
-client/src/hooks/useChatTTS.ts        # 聊天朗读（speakingRef 置位 + onend 令牌守卫修复）
+client/src/hooks/useChatTTS.ts        # 聊天朗读（音色下拉：系统语音 / 云端复刻音色；令牌守卫修复）
 client/src/hooks/useVoiceSessionController.ts + useVoiceChatStore.ts   # 会话控制器/聊天 store
 client/src/hooks/useCanvasVideoRenderer.ts + useFullscreenImmersive.ts # 共享舞台渲染/全屏沉浸
 client/src/music/MusicEngine.ts       # 音乐播放引擎（audio 元素生命周期/自切歌）
@@ -182,6 +182,7 @@ client/src/music/MusicEngine.ts       # 音乐播放引擎（audio 元素生命�
 | 画面或声音偶发缺失/协商失败          | `voice/mesh/meshManager.ts` + `meshPeer.ts`                                                                          |
 | 聊天消息重复/丢消息/翻页错           | `hooks/useVoiceChatStore.ts`                                                                                         |
 | 朗读不播/高亮错乱                    | `hooks/useChatTTS.ts`                                                                                                |
+| 云端朗读 502/503、音色不对或没声音   | `server/src/routes/tts.ts`（Key/音色 ID 只在服务端；`TTS_VOICE_DENGZIQI` 换绑）                                      |
 | 房间列表/控制栏/成员卡片             | `pages/voice/*`                                                                                                      |
 | 音乐不切歌/播放当前曲目无声          | `music/MusicEngine.ts`                                                                                               |
 | 全屏/沉浸/小窗异常                   | `useFullscreenImmersive.ts` / `useCanvasVideoRenderer.ts`                                                            |
@@ -191,6 +192,8 @@ client/src/music/MusicEngine.ts       # 音乐播放引擎（audio 元素生命�
 | 弱网偶发失败（是否该重试）           | `client/src/api/retry.ts`（只 GET/HEAD + 无响应/502-504；超时/取消/写操作不重试）                                    |
 | 列表「少了行」或徽标数字偏小         | `server/src/lib/listLimits.ts`（硬上限 500 + `has_more`；未读数走独立 COUNT）                                        |
 | 崩溃白屏                             | `client/src/components/ErrorBoundary.tsx`（+ `main.tsx` 的 `onUncaughtError`）                                       |
+| 收不到通知栏提醒（私信/互动/公告）   | `native/.../notify/SocialNotifier.kt`（渠道 + 运行时权限）；事件接线在 `AppShell`（**只在不前台时发**）              |
+| 点进私信会话没停在最新消息           | `native/.../ui/MessagesScreen.kt`（`ChatScreen` 进入时显式 `scrollToItem(0)`，别只靠 reverseLayout 的隐式锚定）      |
 
 排查套路：现象归类 → 跑对应模块单测（`npx vitest run src/voice/<模块>`）→ 看注入回调边界（`ScreenShareSink`/`MeshManagerOptions`/`AudioGraphOptions`）。网页端与 APK 是同一份 Web 代码，能网页复现的问题优先浏览器 DevTools 定位。
 
@@ -252,6 +255,13 @@ SMTP_HOST=smtp.qq.com
 SMTP_PORT=465
 SMTP_USER=your-email@qq.com
 SMTP_PASS=your-smtp-auth-code
+
+# 云端朗读（房间文字聊天「朗读」的云端音色，StepFun StepAudio 2.5 TTS）
+# ⚠️ 服务端密钥：只放在 .env，绝不能进前端代码/仓库 —— 前端只调同源 /api/tts
+# 未配置时 /api/tts 返回 503，云端音色选项不可用（系统语音不受影响）
+# STEP_API_KEY=your-stepfun-api-key
+# 音色 ID 覆盖（默认 voice-tone-UfTMTasMym，即复刻音色「邓紫棋」）
+# TTS_VOICE_DENGZIQI=voice-tone-UfTMTasMym
 ```
 
 > 以上仅为常用子集；完整可配置项（反代信任 `TRUST_PROXY`、ffmpeg 路径、TURN 中继、App 更新检测等）见 `.env.example` 内的逐项注释。
@@ -312,7 +322,12 @@ M4 第 19 项移除了旧的 `:app` 宿主模块与 `assets/web`。方案、决�
 - 系统：系统分享面板、深链（站内链接 / 「分享到 K」）、通知点击跳回所在语音房
 - 语音房：WebRTC 网格音频（回声消除/降噪/增益走 WebRTC 内建链）、屏幕共享、全房间混音录制、
   前台服务保活（`mediaPlayback|microphone|mediaProjection`）、成员网络质量指示
+- 房间文字聊天朗读：标题行右侧「朗读」开关 + **音色下拉**（系统 TTS / 云端复刻音色「邓紫棋」）；
+  云端走服务端 `/api/tts`（**Key 不出服务端**），点某一条消息可单独朗读（不受开关限制）
 - 隐私：生物识别解锁私密文件夹（最多 10 张，走 `/api/users/me/private-images`）
+- 消息通知：收到私信 / 评论回复 / 新公告时弹通知栏提醒（**仅 App 不在前台时**，前台页面自己有角标，
+  不重复打扰）；点通知直达对应会话或帖子；首次启动申请 `POST_NOTIFICATIONS`（只问一次）。
+  为保证后台能收，SSE 长连接改为**登录即保持**（原先退到后台就断开）
 - 观测：`ApplicationExitInfo` 退出原因、首帧耗时；debug 包可用 `NETTEST` 触发进程内网络诊断
 
 - 产物：`android/native/build/outputs/apk/release/native-release.apk`（脚本会打印体积与 sha256）
@@ -427,6 +442,7 @@ docker run -p 3000:3000 \
 | `/api/music`         | 音乐列表                                                                                   |
 | `/api/events`        | SSE 实时事件流（私信/通知/公告）                                                           |
 | `/api/voice`         | 语音房间（创建/加入、WebSocket 信令 `/api/voice/ws`；房主操作用 `X-Voice-Owner-Token` 头） |
+| `/api/tts`           | 房间文字聊天的云端朗读（代理 StepFun TTS；**API Key 只在服务端**，返回 `audio/mpeg`）      |
 | `/api/app/version`   | App 更新检测（配置 `APP_VERSION`/`APP_APK_URL` 后返回最新版本）                            |
 | `/api/health`        | 健康检查（含 `SELECT 1` 数据库探针，失败返回 503）                                         |
 

@@ -31,6 +31,17 @@ class RealtimeEventTest {
     }
 
     @Test
+    fun `撤回事件 不是新消息`() {
+        // 撤回走的正是**同一个 message 事件类型**（message.service.ts 的 recallMessage），
+        // 只多一个 `recalled`。通知栏只认 isNewMessage —— 否则"对方撤回一条消息"
+        // 会在通知栏提示成"对方给你发了一条消息"。
+        val e = parse("""{"type":"message","from":7,"to":42,"recalled":88}""")
+        assertTrue(e.isMessage)
+        assertTrue(!e.isNewMessage)
+        assertEquals(88L, e.recalled)
+    }
+
+    @Test
     fun `新通知 带 comment_id 与 post_id`() {
         val e = parse("""{"type":"notification","comment_id":99,"post_id":12}""")
         assertTrue(e.isNotification)

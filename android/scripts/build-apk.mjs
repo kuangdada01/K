@@ -10,14 +10,15 @@
  *
  * 为什么要有这个脚本：
  * 1. 构建前必须先 `client/dist` → `assets/web`（否则打进去的是旧页面）；
- * 2. **JDK 必须是 21**：Android Studio 自带的 JBR 是 25，老 Gradle 用不了；
- *    本机固定的 `C:/Users/25359/.jdks/jbr-21.0.11` 由这里兜底，免去每次手设 JAVA_HOME；
+ * 2. **JDK 交给 gradle-env.mjs 定位**（Android Studio 自带的 JBR，本机在
+ *    `D:/Android/Android Studio/jbr`）；这条注释原来写的是"必须是 21"，
+ *    但本机从来没有独立 JDK 21，`resolveJavaHome` 的候选表已经改成按实际路径找。
  * 3. 顺带打印产物路径、体积、sha256（发版要写进 .env 的 APP 更新信息）。
  */
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { androidDir, isWindows, resolveJavaHome, runGradle } from './gradle-env.mjs';
@@ -47,7 +48,7 @@ function run(command, commandArgs, cwd) {
 
 const javaHome = resolveJavaHome();
 if (!javaHome) {
-  console.error('[build-apk] 找不到 JDK 21。请设置 JAVA_HOME 指向 JDK 21 后重试。');
+  console.error('[build-apk] 找不到可用的 JDK。请设置 JAVA_HOME 指向 Android Studio 自带的 JBR 后重试。');
   process.exit(1);
 }
 childEnv.JAVA_HOME = javaHome;
@@ -86,5 +87,25 @@ console.log(`  产物: ${artifact}`);
 console.log(`  体积: ${sizeMb} MB`);
 console.log(`  sha256: ${sha256}`);
 if (buildType === 'release') {
-  console.log(`  发布名: k-app-${versionName}-release.apk`);
+  const publishName = `k-app-${versionName}-release.apk`;
+  console.log(`  发布名: ${publishName}`);
+
+  /**
+   * 顺手投到「待发布的 web 静态目录」：`client/public/apk/`。
+   *
+   * 为什么必须在这一步做：App 的「立即更新」走的是
+   * `https://www.kuangdada.top/apk/<发布名>`，而那个路径由 express 从
+   * `client/dist/apk/` 提供 —— 也就是**必须在 `npm run build --prefix client` 之前**
+   * 把包放进 `client/public/apk/`（Vite 会把 public/ 原样拷进 dist/）。
+   * 漏了这一步的表现（09-27 实测踩到）：`/api/app/version` 正常返回新版本，
+   * App 里点「立即更新」下到的是一个 1.4 KB 的 HTML（SPA 兜底页），装不上。
+   *
+   * 只复制、不删除：同名包被本次构建覆盖，历史版本的包留着不影响（`/apk/` 不在任何清单里）。
+   */
+  const publicApkDir = join(root, 'client', 'public', 'apk');
+  mkdirSync(publicApkDir, { recursive: true });
+  const published = join(publicApkDir, publishName);
+  copyFileSync(artifact, published);
+  console.log(`  已投放到待发布目录: ${published}`);
+  console.log('  （接着跑 `npm run build --prefix client` 即可把它带进 dist/apk/）');
 }

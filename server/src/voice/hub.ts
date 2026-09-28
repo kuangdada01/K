@@ -36,6 +36,45 @@ export interface VoiceMember {
 const rooms = new Map<number, Map<number, VoiceMember>>();
 
 /**
+ * 成员移除原因：
+ * - left：主动离开（leave 消息）
+ * - replaced：被同账号新连接顶掉 / 转移房间（joinRoom 先移除旧成员）
+ * - disconnected：连接断开（close/error 清理）
+ */
+export type MemberRemovedReason = 'left' | 'replaced' | 'disconnected';
+
+/**
+ * 成员移除监听：房间内玩法（如对战象棋）靠它感知离房/断线/顶号，
+ * 以做判负与断线宽限。返回退订函数。
+ */
+const memberRemovedListeners = new Set<
+  (roomId: number, userId: number, reason: MemberRemovedReason) => void
+>();
+
+export function onMemberRemoved(
+  listener: (roomId: number, userId: number, reason: MemberRemovedReason) => void
+): () => void {
+  memberRemovedListeners.add(listener);
+  return () => {
+    memberRemovedListeners.delete(listener);
+  };
+}
+
+/** 房间关闭监听（房主删房时对局随之终止）；返回退订函数 */
+const roomClosedListeners = new Set<(roomId: number) => void>();
+
+export function onRoomClosed(listener: (roomId: number) => void): () => void {
+  roomClosedListeners.add(listener);
+  return () => {
+    roomClosedListeners.delete(listener);
+  };
+}
+
+function fireMemberRemoved(roomId: number, userId: number, reason: MemberRemovedReason): void {
+  for (const listener of memberRemovedListeners) listener(roomId, userId, reason);
+}
+
+/**
  * 校验客户端声明的采集尺寸（`share-start` 的 width/height）。
  *
  * 服务端对信令是**零业务校验直转**的，但这两个数会被写进所有观看端（含后进房者）的房间成员信息
@@ -122,7 +161,7 @@ export function getOccupancy(): Map<number, number> {
  * 返回加入前的既有成员列表（新加入者据此向他们逐一发起 offer）。
  */
 export function joinRoom(roomId: number, member: VoiceMember): VoiceParticipant[] {
-  removeMember(member.userId);
+  removeMember(member.userId, 'replaced');
   let room = rooms.get(roomId);
   if (!room) {
     room = new Map();
@@ -136,11 +175,11 @@ export function joinRoom(roomId: number, member: VoiceMember): VoiceParticipant[
 
 /** 主动离开当前所在房间（广播 peer-left） */
 export function leaveRoom(userId: number): void {
-  removeMember(userId);
+  removeMember(userId, 'left');
 }
 
 /** 内部移除：按 userId 找到并删除，清空房间时顺带删除 Map 条目 */
-function removeMember(userId: number): void {
+function removeMember(userId: number, reason: 'left' | 'replaced'): void {
   for (const [roomId, room] of rooms) {
     const m = room.get(userId);
     if (!m) continue;
@@ -152,6 +191,7 @@ function removeMember(userId: number): void {
       // （成员对象已随 room.delete 消失，声明的采集尺寸不需要单独清）
       if (m.sharing) broadcastShareStop(roomId, userId);
     }
+    fireMemberRemoved(roomId, userId, reason);
     return;
   }
 }
@@ -167,6 +207,7 @@ export function removeBySocket(ws: WebSocket): void {
         broadcast(roomId, { type: 'peer-left', userId: uid });
         if (m.sharing) broadcastShareStop(roomId, uid);
       }
+      fireMemberRemoved(roomId, uid, 'disconnected');
       return;
     }
   }
@@ -279,6 +320,7 @@ export function setQuality(userId: number, level: 'good' | 'fair' | 'poor'): voi
 export function closeRoom(roomId: number, reason: string): void {
   const room = rooms.get(roomId);
   if (!room) return;
+  for (const listener of roomClosedListeners) listener(roomId);
   for (const m of room.values()) {
     rawSend(m.ws, { type: 'room-closed', reason });
     m.ws.close(4003, reason);

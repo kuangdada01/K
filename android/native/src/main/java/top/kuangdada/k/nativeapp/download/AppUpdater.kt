@@ -69,7 +69,7 @@ class AppUpdater(context: Context) {
      * 后者集成方通常也只记日志（更新检测失败不该打扰用户）。
      */
     suspend fun fetchVersionInfo(): ApiResult<VersionInfo> = withContext(Dispatchers.IO) {
-        val url = baseUrl.trimEnd('/') + ENDPOINT
+        val url = versionEndpointUrl(baseUrl)
         var connection: HttpURLConnection? = null
         try {
             connection = (URL(url).openConnection() as HttpURLConnection).apply {
@@ -91,7 +91,20 @@ class AppUpdater(context: Context) {
                 return@withContext ApiResult.Failure(mapHttp(code, body))
             }
             val body = connection.inputStream.use { it.readBytes().decodeToString() }
-            val dto = parseVersionDto(body)
+            val dto = try {
+                parseVersionDto(body)
+            } catch (t: Throwable) {
+                // ★ 打到这里几乎只有一个原因：**地址不对，被 SPA 兜底成了首页 HTML**。
+                //   服务端对"没命中静态文件、又不带扩展名"的路径一律回 index.html（200），
+                //   所以拿不到 404 —— 这个失败在用户侧就是"永远等不到更新提示"，极难发现。
+                //   本仓库真实踩过：`/app/version` 少了 `/api`（见 [versionEndpointUrl]）。
+                Log.w(
+                    TAG,
+                    "版本接口返回的不是 JSON（$url）——检查地址是否漏了 /api。" +
+                        "响应开头: ${body.take(80)}"
+                )
+                return@withContext ApiResult.Failure(ApiError.Parse("服务端返回的数据格式异常", t))
+            }
             ApiResult.Success(
                 VersionInfo(
                     latestVersion = dto.version?.trim()?.takeIf { it.isNotEmpty() },
@@ -136,8 +149,24 @@ class AppUpdater(context: Context) {
     companion object {
         private const val TAG = "KAppUpdater"
 
-        /** 与 KApi 把 baseUrl 规范成"以 / 结尾"的语义对齐，这里直接拼相对段 */
-        private const val ENDPOINT = "app/version"
+        /**
+         * 版本检测端点（**含 `/api` 前缀**）。
+         *
+         * ★★ 这里踩过一次线上坑，别再把 `/api` 去掉（2026-09-27 用户报「版本是 0.1.1 怎么没提示更新」）：
+         *
+         * `baseUrl` 是**站点根**（`BuildConfig.DEFAULT_SERVER_URL = "https://www.kuangdada.top"`，
+         * 不含 `/api`）—— Retrofit 的服务接口因此都写成 `@GET("api/voice/rooms")` 这种带前缀的形式。
+         * 本类不用 Retrofit（见文件头注释），手工拼地址时漏了 `/api`，于是请求打到
+         * `https://www.kuangdada.top/app/version`：**服务端的 SPA 兜底把没有扩展名的未命中路径
+         * 回成了 index.html（200 text/html）**，Json 解析失败 → `ApiError.Parse` →
+         * 更新检测"静默失败"，表现为**用户永远等不到更新提示**，服务端日志里连一条 404 都没有。
+         *
+         * 回归用例：`AppUpdaterTest.版本检测地址必须带 api 前缀`。
+         */
+        private const val ENDPOINT = "/api/app/version"
+
+        /** 版本检测的完整地址（纯函数，便于单测钉住前缀 —— 线上就是这么错掉的） */
+        internal fun versionEndpointUrl(baseUrl: String): String = baseUrl.trimEnd('/') + ENDPOINT
 
         private const val CONNECT_TIMEOUT_MS = 10_000
         private const val READ_TIMEOUT_MS = 15_000

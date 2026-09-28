@@ -5,6 +5,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.snap
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -51,6 +52,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -68,6 +72,8 @@ import top.kuangdada.k.core.data.VoiceRepository
 import top.kuangdada.k.core.data.model.VoiceRoom
 import kotlinx.coroutines.launch
 import top.kuangdada.k.core.data.ApiResult
+import top.kuangdada.k.core.data.CHAT_TTS_CLOUD_VOICES
+import top.kuangdada.k.core.data.CHAT_TTS_SYSTEM_VOICE_KEY
 import top.kuangdada.k.core.data.displayMessage
 import top.kuangdada.k.core.designsystem.component.KBreathRing
 import top.kuangdada.k.core.designsystem.component.KButton
@@ -105,6 +111,11 @@ import top.kuangdada.k.nativeapp.voice.rememberChatReader
  * 语义色沿用设计稿 §3.4：状态点 `success`（在麦）/ `danger`（闭麦）/ `textMuted`（只听/空位）。
  * 麦位卡上**不再放**「在麦/闭麦/只听」文字与网络质量文字 —— 设计稿的卡只有头像和名字，
  * 状态由点的颜色表达（网络质量本身是成员自报的，挂在小卡上也很吵）。
+ *
+ * ⚠️ **偏离设计稿的一处（用户实测要求）**：控制栏的麦克风按钮**闭麦时是 `danger` 实心（红）**，
+ * 设计稿写的是 surface + 描边。理由是那一排本来就有好几个 surface + 描边的静态钮（降噪/共享），
+ * 闭麦混在里面只像"没点亮、暂时不可用"，而它实际是"我现在说不出话"。
+ * 麦位卡上的闭麦状态点用 `danger`，按钮与它现在同色 —— 两处说的是同一件事。
  */
 @Composable
 fun VoiceRoomScreen(
@@ -129,7 +140,17 @@ fun VoiceRoomScreen(
 ) {
     val c = KTheme.colors
     val context = androidx.compose.ui.platform.LocalContext.current
+    // 提示走全局主题化 Toast（Shell 层的 KToastHost），替代系统黑框样式
+    val toast = LocalToast.current
     val state by controller.state.collectAsState()
+    /**
+     * 对局象棋的状态（单独一个 StateFlow，不进 [state]）。
+     *
+     * 这里只用来回答一个问题：**现在能不能显示成员卡上的「对弈」入口**
+     * （[chessIdle]）。棋盘面板自己会再 collect 一次 —— 那边的重组代价大得多，
+     * 不该被信令层的高频字段（说话灯、音频接通计数）带着一起重建。
+     */
+    val chessUi by controller.chess.state.collectAsState()
     var input by remember { mutableStateOf("") }
     /**
      * 是否**正在**全屏观看别人的屏幕共享（用户要求"手机能全屏别人的共享"）。
@@ -239,15 +260,32 @@ fun VoiceRoomScreen(
     var roomMenuOpen by remember { mutableStateOf(false) }
     /** 删除房间的二次确认（破坏性操作，同上写法） */
     var confirmDeleteRoom by remember { mutableStateOf(false) }
-    /** 删除失败等需要一句话反馈的场景（房内没有常驻 toast 位，就地起一个） */
-    var deleteToast by remember { mutableStateOf<String?>(null) }
+    /**
+     * 需要说一句话给用户听的地方（删除房间失败 / 对局提示）。
+     * 房内没有常驻 toast 位，就地起一个 —— **两处共用一个**：各起一个会叠在一起。
+     */
+    var pageToast by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-    /** 聊天朗读（设计稿右上角的「朗读」开关）：只念**新收到**的消息，不念历史、不念自己 */
-    val chatReader = rememberChatReader()
+    // 对局象棋的提示（对方拒绝邀请/求和/悔棋、非法走子被拒…）：
+    // 对齐 Web 端 useChessGame 里的 showToast，文案本身就是服务端给的可读原因
+    LaunchedEffect(Unit) {
+        controller.chess.messages.collect { pageToast = it }
+    }
+    /**
+     * 聊天朗读（设计稿右上角的「朗读」开关 + 音色下拉）：只念**新收到**的消息，
+     * 不念历史、不念自己；点某一条可手动念（不受开关限制，与 Web 端同口径）。
+     *
+     * 音色下拉里有「系统语音」与云端复刻音色（走服务端 `/api/tts`，Key 不出服务端）；
+     * 云端失败时由朗读器回调这里提示（对齐 Web 端的 showToast），复用页内那个 toast 位。
+     */
+    val chatReader = rememberChatReader(voice)
+    LaunchedEffect(chatReader) {
+        chatReader.onMessage = { pageToast = it }
+    }
     val lastChat = state.chat.lastOrNull()
     LaunchedEffect(lastChat?.id) {
         val m = lastChat ?: return@LaunchedEffect
-        if (m.live && !m.isMine) chatReader.speak(m.username, m.content)
+        if (m.live && !m.isMine) chatReader.speakIncoming(m.id, m.username, m.content)
     }
 
     // 录制计时（与 Web 版的"已录秒数"一致；只在 interval 回调里更新，避免渲染期读时钟）
@@ -338,7 +376,7 @@ fun VoiceRoomScreen(
     fun enterPip() {
         val activity = context as? android.app.Activity ?: return
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) {
-            android.widget.Toast.makeText(context, "系统版本不支持小窗", android.widget.Toast.LENGTH_SHORT).show()
+            toast.show("系统版本不支持小窗")
             return
         }
         val ratio = controller.remoteVideoAspect().takeIf { it > 0.05f } ?: (16f / 9f)
@@ -349,7 +387,7 @@ fun VoiceRoomScreen(
             activity.enterPictureInPictureMode(params)
         }.getOrDefault(false)
         if (!ok) {
-            android.widget.Toast.makeText(context, "当前无法进入小窗（系统可能已禁用）", android.widget.Toast.LENGTH_SHORT).show()
+            toast.show("当前无法进入小窗（系统可能已禁用）")
         }
     }
 
@@ -462,7 +500,9 @@ fun VoiceRoomScreen(
                 val me = VoiceRoomController.PeerUi(
                     userId = state.selfUserId,
                     username = state.selfUsername.ifBlank { "我" },
-                    avatarUrl = null,
+                    // 自己的头像来自 `joined` 的 self.avatar（服务端校正后的身份）。
+                    // 这里曾经写死 null，表现就是"房间里只有我没头像"（用户实测反馈）。
+                    avatarUrl = state.selfAvatarUrl,
                     muted = !state.micEnabled,
                     listener = false,
                     sharing = state.selfSharing,
@@ -473,6 +513,14 @@ fun VoiceRoomScreen(
                     add(me)
                     addAll(state.peers)
                 }
+                /**
+                 * 房间里此刻"没有对局、没有待应答邀请" → 成员卡上显示「对弈」入口。
+                 *
+                 * 判据与 Web 端 `chessIdle` 完全相同（那边是 `!game && !invite && !outgoing`）：
+                 * 对局进行中或已有未决邀请时**不画**入口 —— 否则点了只会拿到一句
+                 * "本房间已有对局进行中 / 已有待处理的邀请"，是典型的"看着能点其实不能点"。
+                 */
+                val chessIdle = !chessUi.showPanel
                 // 有人进/出时，整块麦位区的高度变化走弹簧（M6）而不是"一行突然长出来"。
                 // 注意这**不是**座位级的入场动画：座位是"固定列的 Row 里有多少画多少"，
                 // 有人进来会把后面的人挤动 —— 那需要固定麦位数（服务端给）或改成 lazy 网格，
@@ -501,6 +549,12 @@ fun VoiceRoomScreen(
                                         peer = seat,
                                         isSelf = seat.userId == state.selfUserId,
                                         speaking = seat.userId in state.speakingUserIds,
+                                        // 只有"别人 + 当前空闲"才给对弈入口（Web 端 MemberCard 同判据）
+                                        onChallenge = if (seat.userId != state.selfUserId && chessIdle) {
+                                            { controller.chess.inviteUser(seat.userId, seat.username, "red") }
+                                        } else {
+                                            null
+                                        },
                                         modifier = Modifier.width(seatWidth),
                                     )
                                 }
@@ -603,6 +657,14 @@ fun VoiceRoomScreen(
                     }
                 }
 
+                // ---- 对战象棋（**屏幕共享舞台正下方**，与 Web 端 `VoiceRoomView` 的插点一致）----
+                // 面板自己在"无对局、无邀请、无待应答"时返回空 —— 那一档什么都不占，
+                // 所以这里可以无条件调用，不需要外面再写一遍同样的判据。
+                ChessGamePanel(
+                    chess = controller.chess,
+                    selfUserId = state.selfUserId,
+                )
+
                 // ---- 文字聊天（设计稿「文字聊天」卡片：标题 + 朗读 + 清空 / 消息行 / 输入行）----
                 RoomChatPanel(
                     messages = state.chat,
@@ -646,14 +708,24 @@ fun VoiceRoomScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(horizontal = KSpacing.md, vertical = KSpacing.sm),
+                    // 用户要求「下面的按钮上升一点」：底边距比顶边距多一档（sm → lg），
+                    // 整排按钮离屏幕底边（导航栏）高 8dp，与上方聊天卡片的间距不变
+                    .padding(start = KSpacing.md, end = KSpacing.md, top = KSpacing.sm, bottom = KSpacing.lg),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // 麦克风：在麦用 accent 实心，闭麦用 surface + border
+                /**
+                 * 麦克风：**在麦 = accent 实心；闭麦 = danger 实心（红）**。
+                 *
+                 * 原来是"闭麦 = surface + 描边"——与「降噪」（常亮）以外的静态按钮长得一样，
+                 * 而这一排的其它钮本来就是 surface + 描边，于是**闭麦看起来只是"没点亮"**。
+                 * 用户实测反馈要"闭麦变红"：说不出话是这一排里最要紧的一件事，
+                 * 得用一个不需要学习的信号（实心红）说出来 —— 见 [VoiceControlButton] 的 `muted`。
+                 */
                 ControlSlot {
                     VoiceControlButton(
                         icon = GlyphKind.Mic,
                         active = state.micEnabled,
+                        muted = !state.micEnabled,
                         onClick = { controller.toggleMic() },
                         contentDescription = if (state.micEnabled) "关闭麦克风" else "打开麦克风",
                     )
@@ -764,42 +836,16 @@ fun VoiceRoomScreen(
          * 用同一套 `AlertDialog` 写法，含确认键的 danger 文字色）。
          */
         if (confirmClearChat) {
-            AlertDialog(
+            KAlertDialog(
+                title = "清空聊天记录",
+                text = "确定清空本房间的全部聊天记录吗？清空后不可恢复。",
+                confirmText = "清空",
+                danger = true,
                 onDismissRequest = { confirmClearChat = false },
-                title = { Text("清空聊天记录", style = KType.subtitle, color = c.textPrimary) },
-                text = {
-                    Text(
-                        text = "确定清空本房间的全部聊天记录吗？清空后不可恢复。",
-                        style = KType.body,
-                        color = c.textSecondary,
-                    )
+                onConfirm = {
+                    confirmClearChat = false
+                    controller.clearChat()
                 },
-                confirmButton = {
-                    Text(
-                        text = "清空",
-                        style = KType.bodyStrong,
-                        color = c.danger,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(KRadius.pill))
-                            .clickable {
-                                confirmClearChat = false
-                                controller.clearChat()
-                            }
-                            .padding(horizontal = KSpacing.sm, vertical = KSpacing.xxs),
-                    )
-                },
-                dismissButton = {
-                    Text(
-                        text = "取消",
-                        style = KType.body,
-                        color = c.textSecondary,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(KRadius.pill))
-                            .clickable { confirmClearChat = false }
-                            .padding(horizontal = KSpacing.sm, vertical = KSpacing.xxs),
-                    )
-                },
-                containerColor = c.surface,
             )
         }
 
@@ -809,54 +855,28 @@ fun VoiceRoomScreen(
          * 语音房列表回来时会重拉，房间自然消失。
          */
         if (confirmDeleteRoom) {
-            AlertDialog(
+            KAlertDialog(
+                title = "删除房间",
+                text = "房间「${room.name}」会被删除，房内成员会被请出，且不可恢复。",
+                confirmText = "删除",
+                danger = true,
                 onDismissRequest = { confirmDeleteRoom = false },
-                title = { Text("删除房间", style = KType.subtitle, color = c.textPrimary) },
-                text = {
-                    Text(
-                        text = "房间「${room.name}」会被删除，房内成员会被请出，且不可恢复。",
-                        style = KType.body,
-                        color = c.textSecondary,
-                    )
+                onConfirm = {
+                    confirmDeleteRoom = false
+                    scope.launch {
+                        when (val r = voice.deleteRoom(room.id)) {
+                            is ApiResult.Success -> onBack()
+                            is ApiResult.Failure -> pageToast = r.error.displayMessage
+                        }
+                    }
                 },
-                confirmButton = {
-                    Text(
-                        text = "删除",
-                        style = KType.bodyStrong,
-                        color = c.danger,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(KRadius.pill))
-                            .clickable {
-                                confirmDeleteRoom = false
-                                scope.launch {
-                                    when (val r = voice.deleteRoom(room.id)) {
-                                        is ApiResult.Success -> onBack()
-                                        is ApiResult.Failure -> deleteToast = r.error.displayMessage
-                                    }
-                                }
-                            }
-                            .padding(horizontal = KSpacing.sm, vertical = KSpacing.xxs),
-                    )
-                },
-                dismissButton = {
-                    Text(
-                        text = "取消",
-                        style = KType.body,
-                        color = c.textSecondary,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(KRadius.pill))
-                            .clickable { confirmDeleteRoom = false }
-                            .padding(horizontal = KSpacing.sm, vertical = KSpacing.xxs),
-                    )
-                },
-                containerColor = c.surface,
             )
         }
 
-        deleteToast?.let { msg ->
+        pageToast?.let { msg ->
             KToast(
                 text = msg,
-                onDismiss = { deleteToast = null },
+                onDismiss = { pageToast = null },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
@@ -882,6 +902,14 @@ private fun VoiceSeatCard(
     peer: VoiceRoomController.PeerUi,
     isSelf: Boolean,
     speaking: Boolean,
+    /**
+     * 「对弈」入口（非 null 才画）。
+     *
+     * 与 Web 端 `MemberCard` 同一个门控：**自己不给、房间有对局/未决邀请时不给**
+     * （见调用点 `chessIdle` 的注释）。点击 → 向该成员发起象棋邀请，发起者固定执红
+     * （Web 端快捷邀请也是这个口径，见 `docs/voice-chess-plan.md` 的一期差异说明）。
+     */
+    onChallenge: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val c = KTheme.colors
@@ -957,7 +985,30 @@ private fun VoiceSeatCard(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
+            /**
+             * 左右各留一档内边距（4dp）。
+             *
+             * 加在**文字上**而不是卡片上：麦位卡只有约 65dp 宽、头像就占 48dp，
+             * 给整张卡加左右内边距会在窄屏（360dp 档）上把头像挤到裁切。
+             * 只收窄文字的可排宽度，正好做到用户要的"两边留点空白、超出隐藏"。
+             */
+            modifier = Modifier.padding(horizontal = KSpacing.xxs),
         )
+        // 「对弈」：邀请这位成员下一盘象棋。
+        // 只用描边胶囊 + 文字（房间控制条那几个是圆形图标钮，这里塞不下图标 ——
+        // 麦位卡只有 ~60dp 宽，加图标必然换行）。字色 accent 表达"可点的动作"，
+        // 与「朗读 / 清空」那两个标题行小按钮同一套视觉语言。
+        if (onChallenge != null) {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(KRadius.pill))
+                    .border(1.dp, c.accentBorder, RoundedCornerShape(KRadius.pill))
+                    .clickable { onChallenge() }
+                    .padding(horizontal = KSpacing.xs, vertical = 1.dp),
+            ) {
+                Text("对弈", style = KType.tiny, color = c.accent, maxLines = 1)
+            }
+        }
     }
 }
 
@@ -985,6 +1036,8 @@ private fun RoomChatPanel(
 ) {
     val c = KTheme.colors
     val listState = rememberLazyListState()
+    /** 音色下拉是否展开（与房间「…」菜单同一套 DropdownMenu 写法） */
+    var voiceMenuOpen by remember { mutableStateOf(false) }
 
     // 新消息到达自动滚到最新（不然用户看到的是最旧的几条，会以为消息发不出去）
     LaunchedEffect(messages.size) {
@@ -999,7 +1052,7 @@ private fun RoomChatPanel(
             .padding(KSpacing.md),
         verticalArrangement = Arrangement.spacedBy(KSpacing.xs),
     ) {
-        // ---- 标题行：图标 + 标题 + 朗读开关 + 清空 ----
+        // ---- 标题行：图标 + 标题 + 朗读开关 + 音色下拉 + 清空 ----
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -1012,12 +1065,51 @@ private fun RoomChatPanel(
                 icon = GlyphKind.Volume,
                 label = if (reader.enabled) "朗读开" else "朗读",
                 active = reader.enabled,
-                enabled = reader.supported,
+                // 系统引擎不可用且当前选的还是系统语音时置灰；切到云端音色即可用
+                enabled = reader.ttsSupported,
                 onClick = { reader.toggle() },
             )
+            // 朗读音色下拉（紧挨朗读按钮右侧，与 Web 端 VoiceChatPanel 的位置一致）：
+            // 系统语音（零成本）/ 云端复刻音色（走服务端 /api/tts，Key 与厂商音色 ID 都在服务端）。
+            // 系统语音不可用的机型上那一项标「不支持」但**不置灰整个下拉** ——
+            // 否则用户切不到云端音色（Web 端同样是"选项置灰、下拉可用"）。
+            Box {
+                ChatHeaderButton(
+                    icon = null,
+                    // 「▾」是文字不是图标：设计系统的图标表与 lucide 一一校验过，不为一个箭头开新图标
+                    label = "${reader.voiceLabel} ▾",
+                    active = false,
+                    enabled = true,
+                    onClick = { voiceMenuOpen = true },
+                )
+                DropdownMenu(
+                    expanded = voiceMenuOpen,
+                    onDismissRequest = { voiceMenuOpen = false },
+                    containerColor = c.surfaceRaised,
+                    shape = RoundedCornerShape(KRadius.control),
+                ) {
+                    ChatMenuItem(
+                        text = if (reader.systemSupported) "系统语音" else "系统语音（不支持）",
+                        color = if (reader.voiceKey == CHAT_TTS_SYSTEM_VOICE_KEY) c.accent else c.textPrimary,
+                    ) {
+                        voiceMenuOpen = false
+                        reader.chooseVoice(CHAT_TTS_SYSTEM_VOICE_KEY)
+                    }
+                    CHAT_TTS_CLOUD_VOICES.forEach { v ->
+                        ChatMenuItem(
+                            text = v.label,
+                            color = if (reader.voiceKey == v.key) c.accent else c.textPrimary,
+                        ) {
+                            voiceMenuOpen = false
+                            reader.chooseVoice(v.key)
+                        }
+                    }
+                }
+            }
             if (canClear) {
                 ChatHeaderButton(
-                    icon = GlyphKind.More,
+                    // 用户要求：清空左边不要三个点（原 GlyphKind.More 的 ⋯），只留文字
+                    icon = null,
                     label = "清空",
                     active = false,
                     enabled = true,
@@ -1080,10 +1172,13 @@ private fun RoomChatPanel(
  *
  * 形态照设计稿：**胶囊描边 + 图标 + 文字**，开启时用 accentSoft 高亮。
  * 不可用（如系统没有 TTS 引擎）时整体降透明度并吞掉点击 —— 与 Web 端 `disabled` 同语义。
+ *
+ * `icon` 可为 null：用户要求「清空左边三个点不要」—— 「清空」只留文字，
+ * 图标（[GlyphKind.More] 的 ⋯）去掉后按钮仍保留 pill 描边与点击语义。
  */
 @Composable
 private fun ChatHeaderButton(
-    icon: GlyphKind,
+    icon: GlyphKind?,
     label: String,
     active: Boolean,
     enabled: Boolean,
@@ -1106,7 +1201,9 @@ private fun ChatHeaderButton(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
-        Glyph(tint = fg, kind = icon, size = 13.dp)
+        if (icon != null) {
+            Glyph(tint = fg, kind = icon, size = 13.dp)
+        }
         Text(label, style = KType.tiny, color = fg)
     }
 }
@@ -1116,6 +1213,9 @@ private fun ChatHeaderButton(
  *
  * 点一行 = 朗读这一条（与 Web 端 `onClick={() => tts.handleSpeakMessage(m)}` 同一语义）——
  * 所以即使"新消息自动朗读"关着，也能手动念一条。
+ *
+ * ⚠️ 可点判据是 [ChatReader.ttsSupported]（**当前所选音色**能不能用），不是"系统引擎在不在"：
+ * 系统引擎不可用但选了云端音色时，这里必须仍然可点（Web 端同口径）。
  */
 @Composable
 private fun ChatMessageRow(
@@ -1124,12 +1224,20 @@ private fun ChatMessageRow(
     modifier: Modifier = Modifier,
 ) {
     val c = KTheme.colors
+    // 正在念的这条：整行高亮 + 名字后标「合成中…」。
+    // 云端首段有 2~5 秒静默期，缺了这个反馈用户会以为"点了没反应"而反复点 ——
+    // 2026-09-28 的事故（11 秒 20+ 次请求把上游并发槽打满）就是这么来的。
+    // 再点一下这一条 = 停止（与 Web 端 handleSpeakMessage 同口径）。
+    val speaking = reader.speakingMsgId == msg.id
     Row(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(KRadius.row))
-            .clickable(enabled = reader.supported) { reader.speak(msg.username, msg.content) }
-            .padding(vertical = 1.dp),
+            .background(if (speaking) c.accentSoft else Color.Transparent)
+            .clickable(enabled = reader.ttsSupported) {
+                reader.speak(msg.id, msg.username, msg.content)
+            }
+            .padding(horizontal = KSpacing.xs, vertical = 2.dp),
         horizontalArrangement = Arrangement.spacedBy(KSpacing.xs),
     ) {
         Avatar(url = msg.avatarUrl, name = msg.username, size = 26.dp, glyph = GlyphKind.User)
@@ -1148,6 +1256,10 @@ private fun ChatMessageRow(
                 if (msg.timeText.isNotBlank()) {
                     Text(msg.timeText, style = KType.tiny, color = c.textMuted)
                 }
+                // 只有"等云端返回"这一段才显示；出声之后高亮还在（表示这条正在念）
+                if (speaking && reader.synthesizing) {
+                    Text("合成中…", style = KType.tiny, color = c.accent)
+                }
             }
             Text(
                 text = msg.content,
@@ -1156,6 +1268,17 @@ private fun ChatMessageRow(
             )
         }
     }
+}
+
+/**
+ * 控制栏里的一格：**占满 1/5 宽、内容居中**（见控制栏那段注释）。
+ *
+ * 抽出来是为了让"5 个平均分布"这件事只有一处实现 —— 以后加减按钮只用加/删一格，
+ * 不用每处重复写 `weight` 与对齐方式。
+ */
+@Composable
+private fun RowScope.ControlSlot(content: @Composable () -> Unit) {
+    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) { content() }
 }
 
 /**
@@ -1168,18 +1291,10 @@ private fun ChatMessageRow(
  * 代价是"这个钮是什么"要靠语义与图标本身回答，所以每个按钮都补了
  * [contentDescription]（读屏可读、长按也能看到系统提示）；录制中额外叠一个秒数
  * [badge] —— 那是状态而不是标签，设计稿没有它，但"正在录"必须看得出来。
- */
-/**
- * 控制栏里的一格：**占满 1/5 宽、内容居中**（见控制栏那段注释）。
  *
- * 抽出来是为了让"5 个平均分布"这件事只有一处实现 —— 以后加减按钮只用加/删一格，
- * 不用每处重复写 `weight` 与对齐方式。
+ * 注：这段 KDoc 原先**悬在 [ControlSlot] 上面**（连着两个 KDoc，Kotlin 只认紧邻的那个），
+ * 等于按钮自己的说明从来没人看得到 —— 顺手挪回它该在的位置。
  */
-@Composable
-private fun RowScope.ControlSlot(content: @Composable () -> Unit) {
-    Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) { content() }
-}
-
 @Composable
 private fun VoiceControlButton(
     icon: GlyphKind,
@@ -1187,6 +1302,15 @@ private fun VoiceControlButton(
     onClick: () -> Unit,
     contentDescription: String,
     danger: Boolean = false,
+    /**
+     * **闭麦警示态**：实心 `danger` 底 + `onAccent` 图标，并在图标上叠一道斜杠（用户实测要求"闭麦变红"）。
+     *
+     * 为什么不复用 [danger]（录制中）：那一个是 `dangerSoft` 底 + `danger` 图标 + 呼吸环，
+     * 底色近乎浅灰 —— 在这一排里读作"浅色按钮"，表达不出"我现在说不出话"。
+     * 而"实心红 = 我这个麦克风是关的"是行业里最不需要学习的形状（会议软件都对得上）。
+     * 两个都是红，但一个实心一个浅底，且录制那边还有呼吸环与秒数角标，不会混。
+     */
+    muted: Boolean = false,
     /** 叠在按钮下缘的状态角标（目前只有录制秒数） */
     badge: String? = null,
     /**
@@ -1200,11 +1324,14 @@ private fun VoiceControlButton(
 ) {
     val c = KTheme.colors
     val bg = when {
+        // 闭麦优先于其它一切：它是"我说不出话"这个事实，不能被别的语义盖住
+        muted -> c.danger
         danger -> c.dangerSoft
         active -> c.accent
         else -> c.surface
     }
     val fg = when {
+        muted -> c.onAccent
         danger -> c.danger
         active -> c.onAccent
         else -> c.textPrimary
@@ -1225,7 +1352,8 @@ private fun VoiceControlButton(
                 .clip(CircleShape)
                 .background(bg)
                 .then(
-                    if (!active && !danger) {
+                    // 描边只属于"未激活的浅底按钮"那一档；闭麦是实心红，再套一圈浅色描边就脏了
+                    if (!active && !danger && !muted) {
                         Modifier.border(1.dp, c.borderStrong, CircleShape)
                     } else {
                         Modifier
@@ -1237,6 +1365,29 @@ private fun VoiceControlButton(
             contentAlignment = Alignment.Center,
         ) {
             Glyph(tint = fg, kind = icon, size = KDimens.navIcon)
+            if (muted) {
+                /**
+                 * 闭麦再叠一道斜杠（lucide `mic-off` 的读法）。
+                 *
+                 * 只靠底色说话，对色觉障碍的用户等于没说；而"带斜杠的麦克风"是唯一
+                 * 不需要学习的写法 —— Web 端这一格用的也是 `MicOff` 图标。
+                 *
+                 * 画在**图标自己的 20dp 画布**上（与 [Glyph] 同尺寸），斜线两端各留 10%
+                 * 内缩：lucide 的斜杠是 24 网格里的 2→22，这里等比缩下来正好压满图标框，
+                 * 再大就会顶到圆形按钮的内沿。线宽**取 24 网格里的 2**（= Glyph 的描边宽度），
+                 * 不然斜杠会比麦克风本身粗一圈。
+                 */
+                Canvas(modifier = Modifier.size(KDimens.navIcon)) {
+                    val inset = size.minDimension * 0.1f
+                    drawLine(
+                        color = fg,
+                        start = Offset(inset, inset),
+                        end = Offset(size.width - inset, size.height - inset),
+                        strokeWidth = size.minDimension * (2f / 24f),
+                        cap = StrokeCap.Round,
+                    )
+                }
+            }
         }
         if (badge != null) {
             Text(

@@ -29,6 +29,7 @@ import announcementRoutes from './routes/announcements'; // 公告路由: /api/a
 import bookRoutes from './routes/books'; // 图书路由: /api/books
 import musicRoutes from './routes/music'; // 音乐列表: /api/music
 import voiceRoutes from './routes/voice'; // 语音房间路由: /api/voice
+import ttsRoutes from './routes/tts'; // 云端朗读代理: /api/tts（Key 只在服务端）
 import eventRoutes from './routes/events'; // SSE 事件流: /api/events
 import metaRoutes from './routes/meta'; // 系统元信息: /api/health、/api/app/version
 
@@ -157,6 +158,7 @@ export function createApp(): express.Express {
   app.use('/api/books', bookRoutes); // 图书: 书籍列表、详情、章节内容
   app.use('/api/music', musicRoutes); // 音乐: 音乐文件列表
   app.use('/api/voice', voiceRoutes); // 语音: 房间 CRUD、ICE 配置（信令走 /api/voice/ws）
+  app.use('/api/tts', ttsRoutes); // 朗读: 文字聊天的云端音色合成（代理 StepFun，Key 不出服务端）
   app.use('/api/events', eventRoutes); // SSE: 实时事件流
 
   // ============================================================
@@ -173,6 +175,20 @@ export function createApp(): express.Express {
 
   /** 判断是否为 Vite 构建的带哈希文件名（可长缓存，immutable） */
   const HASHED_ASSET_RE = /[a-zA-Z0-9_-]{8,}\.(js|css|woff2?|ttf|png|jpe?g|gif|svg|webp)$/;
+
+  /**
+   * 「看起来是文件、而不是前端路由」的路径（带已知扩展名）。
+   *
+   * 只用于 SPA 兜底**之前**的拦截。前端路由表（`/post/:id`、`/books/:id/read`、
+   * `/profile/:id` …）一律不带扩展名，所以按扩展名拦不会误伤深链。
+   *
+   * 反例（09-27 实测踩到）：APK 没传上服务器时，`GET /apk/k-app-0.1.0-release.apk`
+   * 会落进下面的兜底，返回 **200 + `text/html` 的 1.4 KB 网页** ——
+   * 系统下载器把它存成"安装包"，用户点了安装才发现是坏的，
+   * 而服务端日志里连一条 404 都没有（"包没传上去"这个事实被完全掩盖）。
+   */
+  const ASSET_EXT_RE =
+    /\.(apk|aab|zip|ipa|dmg|exe|msi|js|mjs|css|map|json|txt|xml|pdf|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf|mp3|mp4|m4a|webm|wav|bin)$/i;
 
   /**
    * 提供前端静态文件（HTML、CSS、JS、图片等）
@@ -205,8 +221,15 @@ export function createApp(): express.Express {
    * SPA 路由回退（Express 5 通配符语法 /*splat）
    * 所有未匹配 API 的请求都返回 index.html
    * 由前端路由（react-router-dom）处理具体页面
+   *
+   * ⚠️ **静态资源不在此列**：带扩展名的路径没被 express.static 命中，就只能是真的不存在
+   * （见 [ASSET_EXT_RE] 的注释）。若也回退成 index.html，缺文件会伪装成 200 成功。
    */
-  app.get('/*splat', (_req, res) => {
+  app.get('/*splat', (req, res) => {
+    if (ASSET_EXT_RE.test(req.path)) {
+      res.status(404).type('text/plain').send('Not Found');
+      return;
+    }
     res.sendFile(path.join(clientDist, 'index.html'));
   });
 

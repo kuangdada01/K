@@ -13,6 +13,7 @@
  */
 
 import { Response } from 'express';
+import { logger } from './lib/logger';
 
 /** 订阅者表: userId → 该用户的 SSE 响应集合 */
 const subscribers = new Map<number, Set<Response>>();
@@ -63,6 +64,16 @@ export function subscribe(userId: number, res: Response): void {
   }
   list.add(res);
 
+  /**
+   * ★ 诊断：把每条连接的**存活时长**量出来。
+   *
+   * 排查"App 退到后台就收不到通知"时，头号嫌疑是"长连接在后台保不住"——
+   * 而 nginx 只在连接**关闭**时写一条 access log，看不出它活了 5 秒还是 5 分钟。
+   * 这里直接量出来，日志里一眼就能判定。
+   */
+  const openedAt = Date.now();
+  logger.info({ userId, connections: list.size }, 'SSE 订阅');
+
   // 心跳保持连接
   const ping = setInterval(() => {
     try {
@@ -79,6 +90,10 @@ export function subscribe(userId: number, res: Response): void {
       set.delete(res);
       if (set.size === 0) subscribers.delete(userId);
     }
+    logger.info(
+      { userId, aliveSec: Math.round((Date.now() - openedAt) / 1000), rest: set?.size ?? 0 },
+      'SSE 断开'
+    );
   });
 }
 
@@ -89,7 +104,17 @@ export function subscribe(userId: number, res: Response): void {
  */
 export function notifyUser(userId: number, type: string, data: Record<string, unknown> = {}): void {
   const list = subscribers.get(userId);
-  if (!list || list.size === 0) return;
+  if (!list || list.size === 0) {
+    /**
+     * ★ 用户不在线 = 这条推送**永久丢失**（没有离线补偿，见本文件顶部说明）。
+     *
+     * "收不到通知"的排查里这是最关键的一条日志：它直接区分
+     * 「服务端压根没推出去」和「推到了、但客户端没弹」——
+     * 少了它，两边都会认为是对方的问题。
+     */
+    logger.info({ userId, type }, 'SSE 推送时无在线连接（事件已丢弃）');
+    return;
+  }
   const payload = `data: ${JSON.stringify({ type, ...data })}\n\n`;
   for (const res of list) {
     try {
@@ -98,6 +123,7 @@ export function notifyUser(userId: number, type: string, data: Record<string, un
       /* 忽略单个失败连接 */
     }
   }
+  logger.info({ userId, type, connections: list.size }, 'SSE 推送完成');
 }
 
 /** 向所有在线用户推送事件（如全体公告） */

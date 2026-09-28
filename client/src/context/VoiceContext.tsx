@@ -25,6 +25,7 @@ import {
   type VoiceShareState,
 } from '../hooks/useVoiceSessionController';
 import { useVoiceChatStore } from '../hooks/useVoiceChatStore';
+import type { ChessController } from '../voice/chess/useChessGame';
 import type { VoiceStatus, VoiceQualityLevel, ShareQuality, ShareStats } from '../voice/VoiceSession';
 import type { VoiceChatMessage, VoiceParticipant } from '../types';
 
@@ -70,6 +71,8 @@ export interface VoiceContextValue {
   /** 接收端共享声音开关（默认静音，符合自动播放策略） */
   shareMuted: boolean;
   toggleShareMuted: () => void;
+  /** 房间对战象棋（状态 + 动作；服务端权威，见 voice/chess/useChessGame） */
+  chess: ChessController;
   // 文字聊天字段（messages/chatHasMore/chatLoadingMore/sendChat/loadMoreChat/liveMessage）
   // 已移到 VoiceChatContext，通过 useVoiceChat() 获取——每条聊天消息到达都会更新它们，
   // 若留在主 value 会连带全站订阅者重渲染。
@@ -161,6 +164,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       toggleShareSharpText: sessionController.toggleShareSharpText,
       shareMuted: sessionController.shareMuted,
       toggleShareMuted: sessionController.toggleShareMuted,
+      chess: sessionController.chess,
     }),
     [
       sessionController.status,
@@ -190,6 +194,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       sessionController.toggleShareSharpText,
       sessionController.shareMuted,
       sessionController.toggleShareMuted,
+      sessionController.chess,
     ]
   );
 

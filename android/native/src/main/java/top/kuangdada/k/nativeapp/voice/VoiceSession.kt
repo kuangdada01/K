@@ -348,6 +348,11 @@ class VoiceSession(
     fun setMicEnabled(enabled: Boolean) {
         localAudioTrack?.setEnabled(enabled)
         selfMicEnabled = enabled
+        // 闭麦"有没有真的生效"从代码上读不出来（音轨是不是被真关掉了、就地能不能读到）——
+        // 而它是房间功能的基石，必须能在真机上取证。打一行**读回来**的实际值：
+        // 只看"请求=false"是自证，看 `音轨=` 才是证据（音轨为 null 时说明这件事压根没落地）。
+        // 用 Log.i 不用 Log.d：ColorOS 会压 debug 级日志（见 VoiceRoomController 里的同款教训）。
+        Log.i(TAG, "麦克风开关：请求=$enabled 音轨=${localAudioTrack?.enabled()}")
         // 闭麦时立刻收掉自己那格的说话状态（不等保持期）—— 否则"已闭麦还在亮"很怪
         if (!enabled && selfSpeakingGate.reset()) listener?.onSelfSpeaking(false)
     }
