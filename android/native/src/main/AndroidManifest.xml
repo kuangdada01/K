@@ -58,14 +58,6 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
-      保存图片到相册：API 29+ 走 MediaStore 不需要权限，**但 27–28 需要**。
-      maxSdkVersion=28 让它在新系统上不出现（也不会被用户看到"存储权限"这种吓人的请求）。
-    -->
-    <uses-permission
-        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
-
-    <!--
       ⚠️ **刻意不声明 `REQUEST_INSTALL_PACKAGES`**（2026-09-28，v0.1.11 起）。
 
       这里原来是有的 —— App 内自更新（DownloadManager 下载 apk → 拉起系统安装器）需要它。

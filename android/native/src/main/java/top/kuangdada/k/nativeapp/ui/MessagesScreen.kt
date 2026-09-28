@@ -21,6 +21,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.DragInteraction
+import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -68,6 +69,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -85,6 +87,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
@@ -110,6 +113,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -844,7 +848,13 @@ fun ChatScreen(
     var hasMore by remember { mutableStateOf(cachedHistory?.second ?: false) }
     var loading by remember { mutableStateOf(cachedHistory == null) }
     var sending by remember { mutableStateOf(false) }
-    var input by remember { mutableStateOf("") }
+    /**
+     * 输入内容。**刻意用 MutableState 而不是 `var input by`**：组合期唯一读它的地方
+     * 是 [ChatInputField] 内部的 `input.value`（KTextField 的 value）—— 读取被圈在
+     * 那个最小作用域里，打字时只有输入框重组，整页 body（含消息 LazyColumn）不动。
+     * 其余对它的读写全在事件回调里（发送/选表情），事件期读取不参与组合。
+     */
+    val input = remember { mutableStateOf("") }
     var replyTo by remember { mutableStateOf<MessageRepository.MessageUi?>(null) }
     /**
      * 输入框的焦点句柄：**点「引用」要把焦点交给它**，IME 随之弹起，用户直接就能打字。
@@ -1171,19 +1181,29 @@ fun ChatScreen(
          * 外面拿不到中间值。
          */
         val animationsEnabled = LocalAnimationsEnabled.current
-        val imeBottomPx = WindowInsets.ime.getBottom(density)
-        val navBottomPx = WindowInsets.navigationBars.getBottom(density)
+        // ★ 2026-09-28 重组优化：组合期**只捕获 insets 对象、不读值**。
+        // 老实现在根作用域读 `WindowInsets.ime.getBottom()` —— 等于让整页订阅 IME 高度，
+        // 键盘每一帧动画（120Hz 约 36 帧）都把整页 body（含消息 LazyColumn 的 item DSL）
+        // 重组一遍。现在值改由 [exchangeZoneHeight] / [exchangeZoneBottomInset] 在
+        // layout 期读取，每帧只重布局交换区那一个节点，不进 composition。
+        val ime = WindowInsets.ime
+        val nav = WindowInsets.navigationBars
+        val navBottomPx = nav.getBottom(density)
         /** 键盘最近一次的**全高**（升起动画取最大值即终值）；面板与其等高才能原地换位 */
         var lastImeBottomPx by rememberSaveable { mutableIntStateOf(0) }
         /**
-         * IME 高度的**镜像状态**。交接等待用 snapshotFlow 观察它，而
-         * `WindowInsets.ime` 的 getter 本身是 @Composable 的、不能在
-         * snapshotFlow 里直接读，所以每次重组后在这里把组合里算出的值回写进来。
+         * IME 高度的**镜像状态**（面板↔键盘交接等待用，见下面 LaunchedEffect(inputFocused)）。
+         * 老实现靠"每次重组回写"喂它，根作用域因此被迫订阅 IME；现在改由下面的
+         * snapshotFlow 在 IME 变化时直接喂 —— 组合期零参与。
          */
         var imeBottomState by remember { mutableIntStateOf(0) }
-        SideEffect {
-            imeBottomState = imeBottomPx
-            if (imeBottomPx > lastImeBottomPx) lastImeBottomPx = imeBottomPx
+        LaunchedEffect(density) {
+            // snapshotFlow 里读 insets 的底层快照状态：变化只触发这里重新发射，
+            // 不触发任何重组（捕获的 ime/nav 是 WindowInsetsHolder 里的稳定单例）
+            snapshotFlow { ime.getBottom(density) }.collect {
+                imeBottomState = it
+                if (it > lastImeBottomPx) lastImeBottomPx = it
+            }
         }
 
         // 面板全高与 IME 全高同口径（都含导航栏那一条），网格内容再自己避让导航栏
@@ -1201,8 +1221,9 @@ fun ChatScreen(
                 if (!animationsEnabled) {
                     panelFraction.snapTo(1f)
                 } else {
-                    // 从键盘状态打开 → 瞬时占位（键盘滑走露出面板）；平时从底边长出
-                    panelFraction.snapTo(if (imeBottomPx > 0) 1f else 0f)
+                    // 从键盘状态打开 → 瞬时占位（键盘滑走露出面板）；平时从底边长出。
+                    // 事件期读取（effect 只在 emojiOpen 变化时跑一次），不订阅 IME
+                    panelFraction.snapTo(if (ime.getBottom(density) > 0) 1f else 0f)
                     panelFraction.animateTo(1f, KMotion.spatialBounded<Float>())
                 }
             } else {
@@ -1211,14 +1232,9 @@ fun ChatScreen(
             }
         }
 
-        // 交换区高度：键盘 / 面板 / 导航栏三者取大。输入栏贴在它顶上，切换瞬间不跳。
-        val exchangeZoneDp = with(density) {
-            maxOf(
-                imeBottomPx,
-                navBottomPx,
-                (panelHeightPx * panelFraction.value).roundToInt(),
-            ).toDp()
-        }
+        // 交换区高度（键盘/面板/导航栏三者取大）不再在组合期算 —— 见
+        // ExchangeZone.kt：消费它的两个节点（下面的交换区 Box 与 toast 让位）
+        // 都改用布局期读取的 modifier，动画期间整页不再重组。
 
         // 聚焦输入框而面板还开着 → 交接：等键盘升到面板等高再收面板（见上面总注释）
         LaunchedEffect(inputFocused) {
@@ -1273,12 +1289,22 @@ fun ChatScreen(
                         ),
                         verticalArrangement = Arrangement.spacedBy(KSpacing.xs),
                     ) {
-                        items(entries.asReversed(), key = { it.key }) { entry ->
+                        items(
+                            entries.asReversed(),
+                            key = { it.key },
+                            // 日期分隔条与气泡两种形态混排：声明槽位类型，滚动回收时
+                            // 跨同类型复用（快速翻长会话历史少付一次组合成本）
+                            contentType = { if (it is ChatEntry.Day) "day" else "bubble" },
+                        ) { entry ->
                             when (entry) {
                                 is ChatEntry.Day -> DayDivider(entry.text)
                                 is ChatEntry.Bubble -> MessageBubble(
                                     msg = entry.msg,
-                                    imageHeaders = messages.imageHeaders(),
+                                    // 按图记忆（不按 messages 记）：鉴权头只在 token 变化时才变，
+                                    // 而这个 item 的外层作用域重组高频（比如根作用域一次刷新就
+                                    // 重跑整个 item DSL）—— 不记忆的话每条可见气泡都拿到新 Map
+                                    // 实例、参数不等、全体跟着重组
+                                    imageHeaders = remember(entry.msg.imageUrl) { messages.imageHeaders() },
                                     partnerAvatar = partnerAvatar,
                                     myAvatar = myAvatar,
                                     /**
@@ -1586,16 +1612,9 @@ fun ChatScreen(
                         }
                     }
                     Box(modifier = Modifier.weight(1f)) {
-                        KTextField(
-                            value = input,
-                            onValueChange = { input = it },
+                        ChatInputField(
+                            input = input,
                             placeholder = "说点什么…",
-                            shape = RoundedCornerShape(KRadius.control),
-                            variant = KTextFieldVariant.Inset,
-                            // 矮一档（40dp，默认 44）：用户反馈"输入框高度小一点"，
-                            // 上下留白同步收窄（见外层 Row 的 vertical = xs）。
-                            // 高度约束压不住组件内部的 defaultMinSize，必须从这里传。
-                            minHeight = 40.dp,
                             // 点「引用」时把焦点交给它（见 quoteMessage），IME 随之弹起
                             focusRequester = inputFocusRequester,
                             // 聚焦态同时喂给上面的 inputFocused（聚焦 = 面板向键盘交接让位）
@@ -1612,17 +1631,17 @@ fun ChatScreen(
                         compact = true,
                         minHeight = 40.dp,
                         onClick = {
-                            if (input.isBlank()) {
+                            if (input.value.isBlank()) {
                                 toast = "不能发空消息"
                                 return@KButton
                             }
                             scope.launch {
                                 sending = true
                                 val quoted = replyTo?.raw?.id
-                                when (val r = messages.send(partnerId, input.trim(), quotedMessageId = quoted)) {
+                                when (val r = messages.send(partnerId, input.value.trim(), quotedMessageId = quoted)) {
                                     is ApiResult.Success -> {
                                         items = items + r.data
-                                        input = ""
+                                        input.value = ""
                                         replyTo = null
                                         // 发出去的消息在 reverseLayout 里是 index 0：
                                         // 主动滚一次，避免用户翻了旧消息后看不到自己刚发的那条
@@ -1634,7 +1653,7 @@ fun ChatScreen(
                             }
                         },
                         // 设计稿里空输入时发送按钮也是实心 accent（不置灰）；
-                        // 空内容点它由上面的 input.isBlank() 分支给一句提示，不会发出空消息。
+                        // 空内容点它由上面的 input.value.isBlank() 分支给一句提示，不会发出空消息。
                         enabled = !sending,
                     )
                 }
@@ -1653,7 +1672,9 @@ fun ChatScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(exchangeZoneDp)
+                        // 布局期读取交换区高度（max(IME, 面板×比例, 导航栏)，见 ExchangeZone.kt）
+                        // —— 键盘/面板动画期间这里只重布局，不重组整页
+                        .exchangeZoneHeight(density, ime, nav, panelHeightPx) { panelFraction.value }
                         .clipToBounds(),
                     contentAlignment = Alignment.BottomCenter,
                 ) {
@@ -1663,7 +1684,7 @@ fun ChatScreen(
                                 // 追加到末尾（与 Web 端 onSelect 同语义）。面板**选完不关**：
                                 // 连发几个表情是常见操作，关掉每发一个都要重开一次
                                 // （Web 端选了即关是桌面端习惯，移动端不照搬）
-                                input += emoji
+                                input.value += emoji
                             },
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1735,7 +1756,8 @@ fun ChatScreen(
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = 96.dp + exchangeZoneDp),
+                    // 布局期让位（交换区高 + 96dp），与老 `.padding(bottom = …)` 视觉一致
+                    .exchangeZoneBottomInset(density, ime, nav, panelHeightPx, { panelFraction.value }, 96.dp),
             ) {
                 KToastInline(text = toast!!, onDismiss = { toast = null })
             }
@@ -2064,6 +2086,39 @@ private class ChatMenuShape(
         val merged = Path().apply { op(rectPath, triPath, PathOperation.Union) }
         return Outline.Generic(merged)
     }
+}
+
+/**
+ * 聊天输入框：**把对 [input] 的读取圈进这个最小作用域**。
+ *
+ * KTextField 的 `value` 在这里读 —— 打字时只有这一小块重组。若直接在 ChatScreen
+ * 根作用域传 `value = input`，每敲一个字符都会让整页 body（含消息 LazyColumn 的
+ * item DSL）跟着重组。发送/引用等处对 [input] 的读取都在事件回调里（事件期读取
+ * 不参与组合），不受此影响。
+ *
+ * 参数刻意收窄：shape/variant/minHeight 是聊天页的固定样式，收进来而不是透传，
+ * 调用点就不必每次把样式常量重新摆一遍。
+ */
+@Composable
+private fun ChatInputField(
+    input: MutableState<String>,
+    placeholder: String,
+    focusRequester: FocusRequester,
+    interactionSource: MutableInteractionSource,
+) {
+    KTextField(
+        value = input.value,
+        onValueChange = { input.value = it },
+        placeholder = placeholder,
+        shape = RoundedCornerShape(KRadius.control),
+        variant = KTextFieldVariant.Inset,
+        // 矮一档（40dp，默认 44）：用户反馈"输入框高度小一点"，上下留白同步收窄
+        //（见输入条 Row 的 vertical = xs）。高度约束压不住组件内部的 defaultMinSize，
+        // 必须从这里传。
+        minHeight = 40.dp,
+        focusRequester = focusRequester,
+        interactionSource = interactionSource,
+    )
 }
 
 /** 日期分隔条：居中、muted 小字（设计稿「今天 14:32」） */

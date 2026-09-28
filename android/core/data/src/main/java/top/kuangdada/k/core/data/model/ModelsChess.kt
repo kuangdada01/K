@@ -2,6 +2,7 @@ package top.kuangdada.k.core.data.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import top.kuangdada.k.core.data.KJson
 import top.kuangdada.k.core.data.chess.ChessMove
 import top.kuangdada.k.core.data.chess.ChessSide
@@ -342,6 +343,14 @@ data class ChessRematchMsg(val gameId: String) : ChessClientMsg
  */
 fun decodeChessServerMsg(text: String): ChessServerMsg? =
     runCatching { KJson.decodeFromString(ChessServerMsg.serializer(), text) }.getOrNull()
+
+/**
+ * 同上的 **JsonElement 版**：调用方已经把整条消息 parse 成 [JsonElement] 用来分流
+ * `type`（见 VoiceSignalingClient.onMessage 的单次解析说明），这里直接从元素解码，
+ * 不再把字符串 parse 第二遍 —— 棋类消息高频（走子/棋钟），省的是真开销。
+ */
+fun decodeChessServerMsg(element: JsonElement): ChessServerMsg? =
+    runCatching { KJson.decodeFromJsonElement(ChessServerMsg.serializer(), element) }.getOrNull()
 
 /** 编一条 C→S 对局消息（`type` 由 sealed 的类判别字段自动带上） */
 fun encodeChessClientMsg(msg: ChessClientMsg): String =

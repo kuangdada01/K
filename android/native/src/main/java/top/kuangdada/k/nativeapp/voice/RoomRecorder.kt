@@ -10,6 +10,9 @@ import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 /**
  * ============================================================
@@ -240,12 +243,17 @@ class RoomRecorder(
     // ---------------------------------------------------------------
 
     /**
-     * 开始录制。
+     * 开始录制。**挂起函数：能力探测 + MediaCodec configure/start 都在 Default 线程**
+     * （低端机合计可达上百毫秒，别卡点击调用方的主线程 —— 2026-09-28 审查项）。
+     *
+     * @param caps 能力探测结果，**必传**：调用方若已探测过必须复用，
+     *   `MediaCodecList(REGULAR_CODECS)` 枚举一次上百毫秒，探两次就是两倍。
      * @return 出错时返回错误文案，成功返回 null
      */
-    fun start(): String? {
+    suspend fun start(caps: Capabilities): String? = withContext(Dispatchers.Default) { startNow(caps) }
+
+    private fun startNow(caps: Capabilities): String? {
         if (started) return null
-        val caps = capabilities()
         format = caps.format
 
         val dir = outputDir()
@@ -286,15 +294,37 @@ class RoomRecorder(
         return null
     }
 
-    /** 停止并结算文件；返回最终文件（失败为 null） */
-    fun stop(): File? {
+    /**
+     * 停止并结算文件；返回最终文件（失败为 null）。
+     *
+     * **挂起函数：join 与 muxer 结算都放在 Default 线程**。编码线程收尾最坏要等数秒
+     * （长录制 + 低端机编码器慢），主线程同步 join 会把 UI 整个冻住（ANR 阈值 5s 边缘）
+     * —— 2026-09-28 审查发现的历史阻塞点。
+     *
+     * `NonCancellable` 是给「退房顺带停录」兜底：控制器退房时会 cancel 自己的 scope，
+     * 若无此标记，收尾会被中途取消 —— m4a 缺了 moov 原子就是坏文件，录了一小时的东西
+     * 打不开。所以就算调用方的协程被取消，结算也必须跑完。
+     */
+    suspend fun stop(): File? = withContext(NonCancellable + Dispatchers.Default) { stopNow() }
+
+    /** 同步停止（只由 [stop] 在后台线程调用）：调用线程会被 join 阻塞，**不要在主线程调** */
+    private fun stopNow(): File? {
         if (!started) return null
         stopRequested = true
         encodeThread?.join(5_000)
         encodeThread = null
-        started = false
+        return finalizeRecording(encoder)
+    }
 
-        val enc = encoder
+    /**
+     * muxer 结算 + 状态回调，**收尾的唯一入口**（[stopNow] 与编码线程的限时自动停止共用）。
+     *
+     * 幂等保障：谁先到谁结算 —— 结算时把 [encoder] 置空、[started] 置 false，后到的一方
+     * （用户手动 stop 撞上自动停止）拿到 null encoder，只空结账、不会对已 release 的
+     * muxer 二次 finish。
+     */
+    private fun finalizeRecording(enc: RoomEncoder?): File? {
+        started = false
         encoder = null
         val file = outputFile
         val finalFile = enc?.finish(file)
@@ -306,6 +336,7 @@ class RoomRecorder(
     private fun encodeLoop() {
         val enc = encoder ?: return
         val maxSecondsSamples = sampleRate.toLong() * MAX_SECONDS * channels
+        var autoStopped = false
         try {
             while (!stopRequested) {
                 val ready = availableSamples()
@@ -315,6 +346,7 @@ class RoomRecorder(
                 }
                 if (consumedSamples > maxSecondsSamples) {
                     Log.w(TAG, "达到单次录制上限（${MAX_SECONDS}s），自动停止")
+                    autoStopped = true
                     break
                 }
                 val chunk = minOf(ready, sampleRate.toLong() * channels / 5).toInt() // 每次最多 200ms
@@ -330,6 +362,12 @@ class RoomRecorder(
             Log.e(TAG, "录制编码失败", t)
         } finally {
             runCatching { enc.drain() }
+        }
+        if (autoStopped) {
+            // ★ 限时自动停止必须在这里就地结算：此刻就在编码线程上，不能走 stop()——
+            //   那会 join 自己、白等 5 秒。老实现只 break 不结算，muxer 永远没 finalize
+            //   （m4a 缺 moov 原子），录满一小时得到的是打不开的坏文件。
+            finalizeRecording(enc)
         }
     }
 }

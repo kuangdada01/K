@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -83,13 +84,18 @@ fun Modifier.kShimmer(shape: Shape = RoundedCornerShape(KRadius.row)): Modifier 
     // 两套主题的"深浅方向"是反的，所以这里按 isLight 取，而不是写死两个颜色令牌。
     val base = c.surfaceSunken
     val highlight = if (c.isLight) c.surface else c.surfaceRaised
+    // 颜色 list remember（2026-09-28 审查项）：动画期间 drawBehind 每帧执行，
+    // 老实现每帧都新建一个 List。Brush 本体仍要每帧重建（start/end 随 progress 变），
+    // 但 list 分配归零。每块骨架一条 InfiniteTransition 保持不变 —— 共享需要改
+    // modifier 签名把 progress 下传，收益（动画驱动本就在绘制期、无重组）配不上改动。
+    val shimmerColors = remember(base, highlight) { listOf(base, highlight, base) }
     return clip(shape).drawBehind {
         val p = progress.value
         val band = size.width * 0.45f
         val center = -band + (size.width + band * 2f) * p
         drawRect(
             Brush.linearGradient(
-                colors = listOf(base, highlight, base),
+                colors = shimmerColors,
                 start = Offset(center - band, 0f),
                 end = Offset(center + band, 0f),
             ),

@@ -2,9 +2,13 @@ package top.kuangdada.k.nativeapp.voice
 
 import android.content.Context
 import android.util.Log
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
@@ -126,11 +130,26 @@ class VoiceSession(
     /** 采集观测 sink（只用于记录真实帧数；停止共享时摘掉） */
     private var frameProbe: org.webrtc.VideoSink? = null
 
+    /**
+     * 会话级轮询作用域：共享出站/接收统计、说话检测三个轮询统一挂在这里。
+     *
+     * 为什么不用裸 `CoroutineScope(Dispatchers.IO).launch`：那样协程没有异常处理器，
+     * 循环体里任何逃逸的异常都会走进程默认 handler **直接崩掉整个 App**。这些循环
+     * 会跨线程读连接表/门限表，历史上正是 CME 的来源 —— 表已全部换成并发容器，
+     * 这里再用 handler 兜一层：万一还有意外异常，只记日志，不崩进程。
+     */
+    private val probeScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.IO +
+            CoroutineExceptionHandler { _, t ->
+                Log.w(TAG, "轮询协程异常退出（已拦截，不影响房间）", t)
+            }
+    )
+
     /** 共享出站统计轮询（只在共享期间活着，用于定位"糊"是发送端还是接收端） */
     private var shareStatsJob: Job? = null
 
-    /** 接收侧视频探针（轨道 -> sink）：removePeer/stop 时要摘掉，否则留下指向已释放轨道的回调 */
-    private val receiveProbes = mutableListOf<Pair<org.webrtc.VideoTrack, org.webrtc.VideoSink>>()
+    /** 接收侧视频探针（轨道 -> sink）：removePeer/stop 时要摘掉，否则留下指向已释放轨道的回调。信令线程增删、主线程清，读写并发容器 */
+    private val receiveProbes = CopyOnWriteArrayList<Pair<org.webrtc.VideoTrack, org.webrtc.VideoSink>>()
 
     /** 接收侧统计轮询（每次共享只跑一个） */
     private var receiveStatsJob: Job? = null
@@ -144,8 +163,12 @@ class VoiceSession(
      */
     private var speakingJob: Job? = null
 
-    /** 每个远端的说话门限状态机（对端离开时移除） */
-    private val speakingGates = mutableMapOf<Long, SpeakingGate>()
+    /**
+     * 每个远端的说话门限状态机（对端离开时移除）。
+     * 跨线程访问：说话检测在 IO 轮询里 getOrPut/remove，对端离开在信令线程 remove，
+     * stop 在主线程 clear —— 必须 Concurrent，否则 CME 打崩轮询协程。
+     */
+    private val speakingGates = ConcurrentHashMap<Long, SpeakingGate>()
 
     /** 自己那一路的说话状态机 */
     private val selfSpeakingGate = SpeakingGate()
@@ -154,8 +177,8 @@ class VoiceSession(
     @Volatile
     private var selfMicEnabled: Boolean = true
 
-    /** 已连接的远端音频轨（含共享系统声音）：接收侧静音开关要逐个 setEnabled */
-    private val remoteAudioTracks = mutableListOf<org.webrtc.AudioTrack>()
+    /** 已连接的远端音频轨（含共享系统声音）：接收侧静音开关要逐个 setEnabled。信令线程 add、主线程开关/清，读写并发容器 */
+    private val remoteAudioTracks = CopyOnWriteArrayList<org.webrtc.AudioTrack>()
 
     /** 接收音频是否开启（观看端的声音图标）；默认开 */
     @Volatile
@@ -181,14 +204,18 @@ class VoiceSession(
      */
     private var eglContextProvider: () -> EglBase.Context? = { null }
 
-    /** 每个远端一条连接 */
-    private val peers = mutableMapOf<Long, PeerConnection>()
+    /**
+     * 每个远端一条连接。
+     * 跨线程访问：增删在信令线程（peerFor/removePeer），读在 IO 轮询（说话检测/接收统计）
+     * 与主线程（stop 清理）—— 必须 Concurrent，否则 CME 直接打崩轮询协程（真实闪退源）。
+     */
+    private val peers = ConcurrentHashMap<Long, PeerConnection>()
 
-    /** 已挂 sink 的远端音轨 id（去重，避免叠加播放导致回声） */
-    private val remoteTrackIds = mutableSetOf<String>()
+    /** 已挂 sink 的远端音轨 id（去重，避免叠加播放导致回声）。信令线程增删、主线程清 */
+    private val remoteTrackIds: MutableSet<String> = ConcurrentHashMap.newKeySet()
 
-    /** 远端音轨的持有者（用于把"有声音了"映射回 userId，UI 好画说话态） */
-    private val trackOwner = mutableMapOf<String, Long>()
+    /** 远端音轨的持有者（用于把"有声音了"映射回 userId，UI 好画说话态）。同上，跨线程 */
+    private val trackOwner = ConcurrentHashMap<String, Long>()
 
     private var listener: Listener? = null
     private var started = false
@@ -496,7 +523,7 @@ class VoiceSession(
         /** 自动纠偏状态：连续 2 次"帧率 < 45 且受限原因是 cpu/other"才降，且一次会话只降一次 */
         var cpuStrike = 0
         var downgraded = false
-        shareStatsJob = CoroutineScope(Dispatchers.IO).launch {
+        shareStatsJob = probeScope.launch {
             while (localVideoTrack != null) {
                 delay(3000)
                 // 异步收集：回调是主线程/信令线程来的，用 CompletableDeferred 等一次。
@@ -842,7 +869,7 @@ class VoiceSession(
         var lastBytes = 0L
         var lastAt = 0L
         var dumpedKeys = false
-        receiveStatsJob = CoroutineScope(Dispatchers.IO).launch {
+        receiveStatsJob = probeScope.launch {
             while (true) {
                 delay(5000)
                 val pcs = peers.values.toList()
@@ -982,12 +1009,12 @@ class VoiceSession(
         if (speakingJob?.isActive == true) return
         var dumpedInboundKeys = false
         var dumpedSourceKeys = false
-        speakingJob = CoroutineScope(Dispatchers.IO).launch {
+        speakingJob = probeScope.launch {
             while (true) {
                 delay(SpeakingGate.POLL_MS)
                 val now = android.os.SystemClock.uptimeMillis()
-                // 连接表在信令线程上增删，这里是 IO 线程：拷贝时可能撞上并发修改（CME），
-                // 撞上就跳过这一轮（150ms 后还有下一轮），不能让它把轮询协程打死
+                // 连接表已是 ConcurrentHashMap（信令线程增删、这里读），快照天然无 CME；
+                // runCatching 只是对 WebRTC 之外的意外再兜一层，别让轮询协程死掉
                 val snapshot = runCatching { peers.toMap() }.getOrDefault(emptyMap())
                 if (snapshot.isEmpty()) {
                     // 房里没人了：把所有灯收掉（连接都关了，也就没统计可查）

@@ -590,7 +590,9 @@ class PostRepository(private val session: SessionRepository) {
             try {
                 ApiResult.Success(block())
             } catch (t: Throwable) {
-                ApiResult.Failure(mapError(t))
+                // mapErrorFromThrowable（不是 mapError）：裸 mapError 没有 HttpException 分支，
+                // 服务端的 429 限流/403 封禁文案会落成英文技术串，与其他仓库口径不一致
+                ApiResult.Failure(mapErrorFromThrowable(t))
             }
         }
 }

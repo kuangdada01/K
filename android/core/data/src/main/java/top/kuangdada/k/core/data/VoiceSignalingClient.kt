@@ -75,12 +75,24 @@ class VoiceSignalingClient(
     var state: State = State.Idle
         private set
 
-    private val client: OkHttpClient = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        // 20s 无任何帧就当连接已死（服务端 30s ping 一次；比它短一点能更早发现）
-        .pingInterval(20, TimeUnit.SECONDS)
-        .readTimeout(0, TimeUnit.MILLISECONDS) // WebSocket 长连接不能有读超时
-        .build()
+    /**
+     * 共享 OkHttp client（companion 单例）。老实现是实例字段 —— 每次进房 new 一个，
+     * :core:data 里一度有 4 份独立 client，连接池/TLS 会话/线程池全部不复用
+     * （2026-09-28 审查项）。信令 WebSocket 的超时/ping 参数全项目只有这一种口径，
+     * 共享是安全的。
+     */
+    private val client: OkHttpClient get() = CLIENT
+
+    companion object {
+        private val CLIENT: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(15, TimeUnit.SECONDS)
+                // 20s 无任何帧就当连接已死（服务端 30s ping 一次；比它短一点能更早发现）
+                .pingInterval(20, TimeUnit.SECONDS)
+                .readTimeout(0, TimeUnit.MILLISECONDS) // WebSocket 长连接不能有读超时
+                .build()
+        }
+    }
 
     /**
      * 建连。
@@ -102,6 +114,10 @@ class VoiceSignalingClient(
         val url = "$wsScheme://$host/api/voice/ws$query"
 
         val request = Request.Builder().url(url).build()
+        // 二次 connect 前先掐掉旧连接：不 cancel 的话旧 WebSocket 泄漏，
+        // 占着服务端"同 IP 连接数"的配额（当前调用方恰好每次重建实例规避了它，
+        // 但契约上是隐患 —— 2026-09-28 审查项）
+        socket?.cancel()
         socket = client.newWebSocket(request, object : WebSocketListener() {
 
             override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -115,21 +131,22 @@ class VoiceSignalingClient(
                 // 而 VoiceInbound.message 期望的是聊天对象，走下面那条会在解码时抛异常
                 // 被 runCatching 吞成 null，整条消息静默丢失。
                 //
-                // 只解 `type` 一个字段（不整条解两次）：服务端 `JSON.stringify` 是紧凑格式，
-                // 但"用字符串 contains 匹配"会依赖它永不带空格 —— 这里按 JSON 解析取字段，
-                // 与格式无关。
-                val type = runCatching {
-                    KJson.parseToJsonElement(text).jsonObject["type"]?.jsonPrimitive?.contentOrNull
-                }.getOrNull()
+                // ★ 单次解析（2026-09-28 审查项）：老实现先 parse 一遍取 `type` 分流、
+                //   命中后**再从字符串**完整 decode 一遍 —— SDP/ICE/棋类载荷有数 KB，
+                //   高频交换时解析开销翻倍。现在 parse 一次成 JsonObject，两条分支都
+                //   从同一个元素解码（decodeFromJsonElement）。
+                val root = runCatching { KJson.parseToJsonElement(text).jsonObject }.getOrNull()
+                    ?: return
+                val type = root["type"]?.jsonPrimitive?.contentOrNull
                 if (type != null && type.startsWith("game-")) {
-                    val chess = decodeChessServerMsg(text)
+                    val chess = decodeChessServerMsg(root)
                     if (chess != null) {
                         this@VoiceSignalingClient.listener?.onChessMessage(chess)
                     }
                     return
                 }
                 val inbound = runCatching {
-                    KJson.decodeFromString(VoiceInbound.serializer(), text)
+                    KJson.decodeFromJsonElement(VoiceInbound.serializer(), root)
                 }.getOrNull() ?: return
                 if (inbound.type == "error" || inbound.errorText != null) {
                     this@VoiceSignalingClient.listener?.onServerError(

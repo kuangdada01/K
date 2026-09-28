@@ -86,6 +86,16 @@ android {
         }
     }
 
+    // 资源语言限定：AndroidX/Material3 自带约 80 种语言的翻译。shrinkResources 只删
+    // "完全没被引用的资源"，**不会**裁"被引用资源的其他语言版本" —— 不限定的话，
+    // 这些语言的 strings 全量进 resources.arsc。本 App 自身文案只有一份（中文为主，
+    // 兜底是默认 values），第三方库的语言保留 zh / en 就够了，设备语言不在清单里时
+    // 库文案自动回落英文默认值，不影响功能。
+    // （AGP 8.1 起的新写法；旧的 defaultConfig.resourceConfigurations 已废弃。）
+    androidResources {
+        localeFilters += ['zh', 'zh-rCN', 'zh-rTW', 'en']
+    }
+
     packaging {
         resources {
             excludes += ['/META-INF/{AL2.0,LGPL2.1}']
@@ -96,8 +106,13 @@ android {
             //
             // 为什么不用 `ndk { abiFilters }`：AGP 9 起那个写法不再影响打包
             // （实测加了之后 APK 仍然是全 ABI，63MB 没变），必须在这里显式排除。
-            excludes += ['lib/x86/**', 'lib/x86_64/**']
-            // 保留 arm64-v8a（2016 年后几乎全部手机）与 armeabi-v7a（老设备兜底）
+            excludes += ['lib/x86/**', 'lib/x86_64/**', 'lib/armeabi-v7a/**']
+            // 2026-09-28 审查后 v7a 也一并排除：它为老 32 位设备重复携带一整份 WebRTC
+            //（.so 6.8MB / 约占包体四分之一）。minSdk 27（Android 8.1）+ 纯 32 位设备
+            // 在 2026 年已可忽略；且本项目是**单一 APK 直链自分发**（/api/app/version
+            // 只有一个 apkUrl，浏览器下载安装），ABI 拆包（splits）会让更新流程要按机型
+            // 选包、脚本与发布清单都要跟着改，得不偿失。
+            // 真要重新支持 32 位设备：把这行排除里去掉 armeabi-v7a 即可（别用 abiFilters，见上）。
             //
             // 这里**不再覆写 useLegacyPackaging**，用 AGP 默认值（release=false：.so 不压缩、
             // 直接从 APK mmap 加载）。曾经为了排查"release 进语音房 SIGTRAP"把它改成 true，

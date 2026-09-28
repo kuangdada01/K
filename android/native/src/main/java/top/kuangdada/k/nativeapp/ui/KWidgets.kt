@@ -323,14 +323,21 @@ fun rememberAvatarRequest(url: String?): ImageRequest? {
 fun videoCoverMemoryCacheKey(url: String): String = "k-video-cover:$url"
 
 /**
+ * 视频封面的解码上限。曾经钉 `Size.ORIGINAL`（理由是"封面要全屏看，解全尺寸不浪费"）
+ * —— 但信息流卡片只画 ~358dp 宽，4K 封面照样解出 3840×2160 ≈ **33MB** 位图进内存缓存，
+ * 病根与头像当年 `Size.ORIGINAL` 一模一样（取证见 [AVATAR_DECODE_PX] 的长注释）。
+ *
+ * 取 1920px：覆盖全部在售机型的全屏宽度（1080p 封顶、1440p 也不放大），全屏观看不糊；
+ * 单张缓存上限从 33MB 降到 ~8MB。"两端不同尺寸必须同键"由显式键
+ * [videoCoverMemoryCacheKey] 保证 —— 同键从不依赖 ORIGINAL。
+ */
+private const val VIDEO_COVER_DECODE_PX = 1920
+
+/**
  * 视频封面的加载请求：**钉死尺寸 + 显式键 + 不让路给动画**。
  *
  * 与 [rememberSharedCoverRequest]（书封）同一条理由，见那个函数的详细注释：
  * 共享元素目标端的内容必须**第一帧就有**，否则飞行途中封面是空的。
- *
- * 尺寸钉 `Size.ORIGINAL` 是**有意**的（与书封一致）：两端尺寸不同、但必须同键，
- * 钉 ORIGINAL 让"同键"与"同尺寸"两件事合一，最不容易写歪。
- * 视频封面本来就是要全屏看的图，解全尺寸并不浪费（与头像那种 48dp 小圆片不同）。
  */
 @Composable
 fun rememberVideoCoverRequest(url: String?): ImageRequest? {
@@ -339,7 +346,7 @@ fun rememberVideoCoverRequest(url: String?): ImageRequest? {
         url?.let {
             ImageRequest.Builder(context)
                 .data(it)
-                .size(Size.ORIGINAL)
+                .size(VIDEO_COVER_DECODE_PX)
                 .memoryCacheKey(videoCoverMemoryCacheKey(it))
                 .fetcherCoroutineContext(ImageLoading.immediate)
                 .decoderCoroutineContext(ImageLoading.immediate)

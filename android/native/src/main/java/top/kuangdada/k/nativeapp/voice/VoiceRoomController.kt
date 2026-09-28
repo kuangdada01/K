@@ -4,8 +4,10 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -290,7 +292,11 @@ class VoiceRoomController(
                     _state.update { it.copy(error = message) }
                 }
             })
-            if (micGranted || listener) voiceSession.start()
+            if (micGranted || listener) {
+                // WebRTC 的 native 初始化（PeerConnectionFactory/EGL/音频模块）是重活，
+                // 低端机可达百毫秒级 —— 别卡进房关键路径（2026-09-28 审查项）
+                withContext(Dispatchers.Default) { voiceSession.start() }
+            }
             voiceSession.setMicEnabled(micEnabled && !listener)
 
             // 4) 信令
@@ -505,10 +511,11 @@ class VoiceRoomController(
             VoiceInboundType.Chat -> {
                 val m = message.message ?: return
                 _state.update { st ->
-                    // 按 id 去重（服务端会广播给包括发送者在内的所有人，本端也会本地回显）
+                    // 按 id 去重（服务端会广播给包括发送者在内的所有人，本端也会本地回显）。
+                    // 有 [CHAT_MAX] 封顶后 any{} 的线性扫最多 200 条，不值得再养一个 id 集合
                     if (st.chat.any { it.id == m.id }) st
                     else st.copy(
-                        chat = st.chat + ChatUi(
+                        chat = (st.chat + ChatUi(
                             id = m.id,
                             senderId = m.senderId,
                             username = m.username,
@@ -518,7 +525,7 @@ class VoiceRoomController(
                             isMine = m.senderId == myId,
                             // 实时收到的才算"新消息"：朗读只念它，进房时拉到的历史不念
                             live = true,
-                        )
+                        )).takeLast(CHAT_LIST_MAX)
                     )
                 }
             }
@@ -597,7 +604,9 @@ class VoiceRoomController(
                     }
                     val byId = (history.associateBy { it.id })
                     st.copy(
-                        chat = ids.sorted().mapNotNull { id ->
+                        // 合并结果同样封顶（按 id 升序排完取最新 [CHAT_LIST_MAX] 条再映射，
+                        // 老消息直接不进映射，省掉无谓的 ChatUi 构造）
+                        chat = ids.sorted().takeLast(CHAT_LIST_MAX).mapNotNull { id ->
                             val m = byId[id]
                             if (m != null) {
                                 ChatUi(
@@ -768,43 +777,60 @@ class VoiceRoomController(
             stopRecording()
             return
         }
+        // s.recorder 非空 = 上一轮还在后台启动中：忽略本次点击（start 移后台后
+        // 出现的窗口；老实现主线程同步完成，不存在这个窗口）
+        if (s.recorder != null) return
 
-        val caps = RoomRecorder.capabilities()
-        val recorder = RoomRecorder(context) { recording, startedAt, file, error ->
+        scope.launch {
+            // 能力探测（MediaCodecList 枚举）是重活，别在主线程做（2026-09-28 审查项）
+            val caps = withContext(Dispatchers.Default) { RoomRecorder.capabilities() }
+            // 回调里必须认出「这台还是不是当前机」：停止已改异步（见 stopRecording），旧机在
+            // 后台结算时发出的 recording=false 事件可能晚于新一轮录制到达，不判会互相覆盖状态。
+            lateinit var self: RoomRecorder
+            self = RoomRecorder(context) { recording, startedAt, file, error ->
+                if (s.recorder !== self) return@RoomRecorder
+                _state.update {
+                    it.copy(
+                        recording = recording,
+                        recordStartedAt = startedAt,
+                        recordedFile = file ?: it.recordedFile,
+                        error = error ?: it.error,
+                    )
+                }
+            }
+            self.setSelfMuted(!micEnabled)
+            s.recorder = self
+
+            val error = self.start(caps)
+            if (error != null) {
+                s.recorder = null
+                _state.update { it.copy(error = error) }
+                return@launch
+            }
             _state.update {
                 it.copy(
-                    recording = recording,
-                    recordStartedAt = startedAt,
-                    recordedFile = file ?: it.recordedFile,
-                    error = error ?: it.error,
+                    recording = true,
+                    recordStartedAt = System.currentTimeMillis(),
+                    recordedFile = null,
+                    recordFormatNote = caps.note,
                 )
             }
-        }
-        recorder.setSelfMuted(!micEnabled)
-        s.recorder = recorder
-
-        val error = recorder.start()
-        if (error != null) {
-            s.recorder = null
-            _state.update { it.copy(error = error) }
-            return
-        }
-        _state.update {
-            it.copy(
-                recording = true,
-                recordStartedAt = System.currentTimeMillis(),
-                recordedFile = null,
-                recordFormatNote = caps.note,
-            )
         }
     }
 
     fun stopRecording() {
         val s = session ?: return
-        val file = s.recorder?.stop()
+        val rec = s.recorder ?: return
+        // 同步摘除：连点两次/退房重入都不会把同一台停两遍（stop 自身也有 started 幂等）
         s.recorder = null
-        _state.update {
-            it.copy(recording = false, recordStartedAt = null, recordedFile = file)
+        // 状态立刻翻过去：收尾（join + muxer 结算）在后台跑，最坏几秒，按钮不能一直停在「正在录制」
+        _state.update { it.copy(recording = false, recordStartedAt = null) }
+        scope.launch {
+            // RoomRecorder.stop 自带 NonCancellable：退房路径 scope.cancel() 之后结算也必须跑完
+            val file = runCatching { rec.stop() }.getOrNull()
+            if (file != null) {
+                _state.update { it.copy(recordedFile = file) }
+            }
         }
     }
 
@@ -846,7 +872,19 @@ class VoiceRoomController(
         runCatching { if (_state.value.recording) stopRecording() }
         runCatching { signaling?.leave() }
         runCatching { signaling?.close() }
-        runCatching { session?.stop() }
+        // WebRTC 的 native 销毁（工厂/轨道/EGL 逐一 dispose）与初始化一样是重活，
+        // 别在主线程同步做（2026-09-28 审查项）。leave() 是同步函数（Compose onDispose
+        // 直接调），所以摘下引用后丢给 NonCancellable 协程在后台收尾：
+        // 结尾的 scope.cancel() 取消不掉它 —— native 资源必须释放干净。
+        val closingSession = session
+        session = null
+        if (closingSession != null) {
+            scope.launch {
+                withContext(NonCancellable + Dispatchers.Default) {
+                    runCatching { closingSession.stop() }
+                }
+            }
+        }
         // 退房必须收掉前台服务：不收的话通知栏会留一条假通知，
         // 而且服务一直持有麦克风类型的前台状态（系统会持续显示"正在使用麦克风"）
         runCatching { VoiceForegroundService.stop(context) }
@@ -855,8 +893,19 @@ class VoiceRoomController(
         // 象棋状态随连接一起清掉：不清的话下次进别的房间会看到上一个房间的残局，
         // 而且"等待对方应答"横幅会挂在那儿（那条邀请早已随离房作废）
         chess.reset()
-        // 退房：所有"正在说话"的灯一起收掉（页面马上就销毁了，但状态要干净）
-        _state.update { it.copy(phase = Phase.Closed, speakingUserIds = emptySet()) }
+        // 退房：所有"正在说话"的灯一起收掉（页面马上就销毁了，但状态要干净）。
+        // ★ 共享相关字段必须一并清空：上面 session?.stop() 已把轨道 native 释放，
+        //   留着 remoteVideoTrack 的话，UI（不看 phase 就 bindTrack 的那些消费点）可能
+        //   对已释放轨 addSink 崩溃；selfSharing/sharingUserId 残留则横幅卡在"共享中"。
+        _state.update {
+            it.copy(
+                phase = Phase.Closed,
+                speakingUserIds = emptySet(),
+                sharingUserId = 0,
+                remoteVideoTrack = null,
+                selfSharing = false,
+            )
+        }
         scope.cancel()
     }
 
@@ -885,6 +934,13 @@ class VoiceRoomController(
 
         /** 单条聊天消息的字数上限（与 Web 端输入框的 maxLength 一致） */
         const val CHAT_MAX_CHARS = 500
+
+        /**
+         * 房间聊天列表的内存上限（保留最新 200 条）。没有它，长时活跃房间的列表
+         * 无限增长，且每条新消息都整表拷贝一次（O(n²) 累计）—— 2026-09-28 审查项。
+         * 200 条足够滚动回看；更早的历史走「加载更早」时服务端仍可分页给。
+         */
+        const val CHAT_LIST_MAX = 200
     }
 }
 

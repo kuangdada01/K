@@ -142,13 +142,9 @@ fun ChessGamePanel(
     val self = selfUserId
 
     // ---- 本地走秒（500ms 步进足够平滑；对局结束即停表）----
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(playing) {
-        while (playing) {
-            now = System.currentTimeMillis()
-            delay(500)
-        }
-    }
+    // ★ ticker 在下面两个 ChessSeatClock 里各管各的（2026-09-28 审查项）：老实现把
+    // `now` 放在面板 body 读，对局全程每 500ms 整块面板（含棋盘 Canvas 与 32 个汉字）
+    // 全量重组一次。收进钟表自己的作用域后，走秒只重组两行席位，棋盘纹丝不动。
 
     // 将军提示由客户端用同源引擎从 FEN 现算（快照也就不需要额外字段）
     val inCheck = remember(game.fen, playing) {
@@ -220,9 +216,6 @@ fun ChessGamePanel(
         { from, to -> chess.move(game.gameId, game.moveCount, from, to) }
     }
 
-    val redLeft = remainingOf(game.clocks, ChessSide.Red, game.turn, playing, now)
-    val blackLeft = remainingOf(game.clocks, ChessSide.Black, game.turn, playing, now)
-
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -242,13 +235,14 @@ fun ChessGamePanel(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            ChessSeat(
+            ChessSeatClock(
                 name = game.red.username,
                 chip = "红",
                 chipColor = BoardPieceRed,
-                clock = chessClockText(redLeft),
-                clockActive = playing && game.turn == ChessSide.Red,
-                clockLow = playing && redLeft < 20_000,
+                clocks = game.clocks,
+                side = ChessSide.Red,
+                turn = game.turn,
+                playing = playing,
                 trailing = false,
             )
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -282,13 +276,14 @@ fun ChessGamePanel(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(KSpacing.xs),
             ) {
-                ChessSeat(
+                ChessSeatClock(
                     name = game.black.username,
                     chip = "黑",
                     chipColor = c.textPrimary,
-                    clock = chessClockText(blackLeft),
-                    clockActive = playing && game.turn == ChessSide.Black,
-                    clockLow = playing && blackLeft < 20_000,
+                    clocks = game.clocks,
+                    side = ChessSide.Black,
+                    turn = game.turn,
+                    playing = playing,
                     trailing = true,
                 )
                 if (mySide == null) {
@@ -664,6 +659,40 @@ private fun ChessPillButton(
  * 宽度由内容决定（调用方不再给 `weight`），昵称用 `widthIn(max)` 限宽 + 省略号 ——
  * 这样它**不会**把棋钟顶开，也不会因为一个超长昵称把状态条挤爆。
  */
+/**
+ * 单个席位的棋钟：**自带走秒 ticker**（详见面板 body 顶部 ticker 的说明）。
+ * 每 500ms 只有这一个 composable 重组，席位之外的棋盘/状态条不受牵连。
+ */
+@Composable
+private fun ChessSeatClock(
+    name: String,
+    chip: String,
+    chipColor: Color,
+    clocks: ChessClocks,
+    side: ChessSide,
+    turn: ChessSide,
+    playing: Boolean,
+    trailing: Boolean,
+) {
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(playing) {
+        while (playing) {
+            now = System.currentTimeMillis()
+            delay(500)
+        }
+    }
+    val left = remainingOf(clocks, side, turn, playing, now)
+    ChessSeat(
+        name = name,
+        chip = chip,
+        chipColor = chipColor,
+        clock = chessClockText(left),
+        clockActive = playing && turn == side,
+        clockLow = playing && left < 20_000,
+        trailing = trailing,
+    )
+}
+
 @Composable
 private fun ChessSeat(
     name: String,

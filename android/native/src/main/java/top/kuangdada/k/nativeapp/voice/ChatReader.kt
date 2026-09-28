@@ -19,6 +19,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
@@ -369,7 +370,10 @@ class ChatReader internal constructor(
                 }
             }
         } finally {
-            file.delete()
+            // 删除移 IO + NonCancellable：这里可能跑在被取消的协程里（stop 触发的
+            // invokeOnCancellation 收尾路径），磁盘操作不能落在主线程（语音房主线程
+            // 正在跑动画）、也不能因协程取消被跳过（跳过 = cacheDir 留垃圾 mp3）
+            withContext(NonCancellable + Dispatchers.IO) { file.delete() }
         }
     }
 

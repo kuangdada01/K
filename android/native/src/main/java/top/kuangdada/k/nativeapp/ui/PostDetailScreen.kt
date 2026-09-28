@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.lazy.LazyColumn
@@ -51,7 +52,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -78,6 +81,7 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import kotlin.math.roundToInt
@@ -279,6 +283,10 @@ fun PostDetailScreen(
      * `CommentBlock` 里那一行据此先收缩 + 淡出，等动画结束再真正移除。
      */
     val deletingCommentIds = remember { mutableStateListOf<Long>() }
+    // Set 化的只读视图（见调用点 deletingIds）：直接 `.toSet()` 会在每次重组时为每条
+    // 可见评论新建 Set 实例（参数不等 → 全体评论行跟着重组，打字期间尤其明显）；
+    // derivedStateOf 只在列表真变化时重算，两次删除之间是同一个实例
+    val deletingIdsSet by remember { derivedStateOf { deletingCommentIds.toSet() } }
 
     /**
      * 等着二次确认的那条评论 / 回复 id（null = 没有待确认的删除）。
@@ -342,7 +350,13 @@ fun PostDetailScreen(
         }
     }
 
-    var input by remember { mutableStateOf("") }
+    /**
+     * 评论输入内容。**刻意用 MutableState 而不是 `var input by`**：组合期唯一读它的
+     * 地方是 [CommentInputField] 内部的 `input.value`（KTextField 的 value）—— 读取
+     * 被圈在那个最小作用域里，打字时只有输入框重组，整页 body（含评论 LazyColumn）
+     * 不动。发送/选表情等其余读写都在事件回调里，事件期读取不参与组合。
+     */
+    val input = remember { mutableStateOf("") }
     var sending by remember { mutableStateOf(false) }
     var replyTo by remember { mutableStateOf<CommentRepository.CommentUi?>(null) }
     var menuOpen by remember { mutableStateOf(false) }
@@ -450,15 +464,21 @@ fun PostDetailScreen(
          *  · 键盘→面板：面板瞬时占位，键盘滑走露出面板。
          */
         val density = LocalDensity.current
-        val imeBottomPx = WindowInsets.ime.getBottom(density)
-        val navBottomPx = WindowInsets.navigationBars.getBottom(density)
+        // ★ 2026-09-28 重组优化（与聊天页同款，详见 ExchangeZone.kt）：组合期只捕获
+        // insets 对象、不读值 —— 老实现在根作用域读 IME 高度，键盘每一帧动画都把整页
+        // body（含评论 LazyColumn）重组一遍。值改由交换区的布局期 modifier 读取。
+        val ime = WindowInsets.ime
+        val nav = WindowInsets.navigationBars
+        val navBottomPx = nav.getBottom(density)
         var lastImeBottomPx by rememberSaveable { mutableIntStateOf(0) }
-        // 交接等待用 snapshotFlow 观察 IME 高度；而 WindowInsets.ime 的 getter 本身
-        // 是 @Composable 的、不能在 snapshotFlow 里直接读，这里重组后回写镜像
+        // 交接等待用（见下面 LaunchedEffect(inputFocused)）：snapshotFlow 在 IME 变化时
+        // 直接喂值，组合期零参与（老实现靠"每次重组回写"，根作用域因此被迫订阅 IME）
         var imeBottomState by remember { mutableIntStateOf(0) }
-        SideEffect {
-            imeBottomState = imeBottomPx
-            if (imeBottomPx > lastImeBottomPx) lastImeBottomPx = imeBottomPx
+        LaunchedEffect(density) {
+            snapshotFlow { ime.getBottom(density) }.collect {
+                imeBottomState = it
+                if (it > lastImeBottomPx) lastImeBottomPx = it
+            }
         }
 
         // 面板全高与 IME 全高同口径（都含导航栏那一条），网格内容再自己避让导航栏
@@ -476,8 +496,9 @@ fun PostDetailScreen(
                 if (!animationsEnabled) {
                     panelFraction.snapTo(1f)
                 } else {
-                    // 从键盘状态打开 → 瞬时占位（键盘滑走露出面板）；平时从底边长出
-                    panelFraction.snapTo(if (imeBottomPx > 0) 1f else 0f)
+                    // 从键盘状态打开 → 瞬时占位（键盘滑走露出面板）；平时从底边长出。
+                    // 事件期读取（effect 只在 emojiOpen 变化时跑一次），不订阅 IME
+                    panelFraction.snapTo(if (ime.getBottom(density) > 0) 1f else 0f)
                     panelFraction.animateTo(1f, KMotion.spatialBounded<Float>())
                 }
             } else {
@@ -486,13 +507,7 @@ fun PostDetailScreen(
             }
         }
 
-        val exchangeZoneDp = with(density) {
-            maxOf(
-                imeBottomPx,
-                navBottomPx,
-                (panelHeightPx * panelFraction.value).roundToInt(),
-            ).toDp()
-        }
+        // 交换区高度不再组合期计算 —— 消费节点改用布局期读取的 modifier（ExchangeZone.kt）
 
         // 聚焦输入框而面板还开着 → 交接：等键盘升到面板等高再收面板
         LaunchedEffect(inputFocused) {
@@ -695,7 +710,9 @@ fun PostDetailScreen(
                         // 无评论时**不再渲染空态提示**（用户要求去掉「还没有评论 / 来说两句吧」）：
                         // 落到下面的 else 分支自然就是"什么都没有"，只留上方的「评论 · 0」计数。
                         else -> {
-                            items(commentList, key = { it.id }) { comment ->
+                            // contentType：列表里混着 header/loading/error 等异形 item，
+                            // 声明评论的槽位类型让滚动回收时跨同类型复用（长评论页少付组合成本）
+                            items(commentList, key = { it.id }, contentType = { "comment" }) { comment ->
                                 CommentBlock(
                                     comment = comment,
                                     onReply = { target ->
@@ -718,8 +735,9 @@ fun PostDetailScreen(
                                     // 「删除」只是**开口**：先弹二次确认，确认后才真删（见 performDeleteComment）
                                     onDelete = { id -> confirmDeleteCommentId = id },
                                     isLoggedIn = isLoggedIn,
-                                    // 正在播删除动画的那几条（回复行走 AnimatedVisibility）
-                                    deletingIds = deletingCommentIds.toSet(),
+                                    // 正在播删除动画的那几条（回复行走 AnimatedVisibility）。
+                                    // derivedStateOf 的 Set 视图（见 deletingIdsSet 声明）
+                                    deletingIds = deletingIdsSet,
                                     /**
                                      * 顶级评论的删除动画 = **淡化消失 + 其余评论让位**。
                                      *
@@ -808,18 +826,14 @@ fun PostDetailScreen(
                     },
                 )
                 Box(modifier = Modifier.weight(1f)) {
-                    KTextField(
-                        value = input,
-                        onValueChange = { if (isLoggedIn) input = it else onRequireLogin() },
+                    CommentInputField(
+                        input = input,
+                        onValueChange = { if (isLoggedIn) input.value = it else onRequireLogin() },
                         placeholder = if (isLoggedIn) "说点什么…" else "登录后才能评论",
-                        shape = RoundedCornerShape(KRadius.control),
-                        variant = KTextFieldVariant.Inset,
                         // 点「回复」时把焦点交给它（见 onReply），IME 随之弹起
                         focusRequester = inputFocusRequester,
                         // 聚焦态喂给上面的 inputFocused（聚焦 = 面板向键盘交接让位）
                         interactionSource = inputInteraction,
-                        // 与聊天页同款 40dp 高（组件默认 44，外层高度约束压不住）
-                        minHeight = 40.dp,
                         /**
                          * 回复谁：**写在输入框里**（灰字前缀），而不是单独占一行。
                          *
@@ -872,14 +886,14 @@ fun PostDetailScreen(
                             onRequireLogin()
                             return@KButton
                         }
-                        if (input.isBlank()) {
+                        if (input.value.isBlank()) {
                             toast = "评论不能为空"
                             return@KButton
                         }
                         scope.launch {
                             sending = true
                             val parent = replyTo
-                            when (val r = comments.create(postId, input, parent?.id)) {
+                            when (val r = comments.create(postId, input.value, parent?.id)) {
                                 is ApiResult.Success -> {
                                     // 顶级评论追加到末尾；回复挂到父评论下
                                     commentList = if (parent == null) {
@@ -889,7 +903,7 @@ fun PostDetailScreen(
                                     }
                                     commentTotal += 1
                                     onCommentCountChanged(1)
-                                    input = ""
+                                    input.value = ""
                                     replyTo = null
                                     toast = "已发布"
                                     /**
@@ -935,7 +949,8 @@ fun PostDetailScreen(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(exchangeZoneDp)
+                    // 布局期读取交换区高度（max(IME, 面板×比例, 导航栏)，见 ExchangeZone.kt）
+                    .exchangeZoneHeight(density, ime, nav, panelHeightPx) { panelFraction.value }
                     .clipToBounds(),
                 contentAlignment = Alignment.BottomCenter,
             ) {
@@ -944,7 +959,7 @@ fun PostDetailScreen(
                         onPick = { emoji ->
                             // 追加到末尾（与聊天页同语义）。面板**选完不关**：
                             // 连发几个表情是常见操作
-                            input += emoji
+                            input.value += emoji
                         },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1782,6 +1797,37 @@ private fun CommentRow(
  * 为什么不用 [KToast]：那个会为底部导航胶囊预留 101dp（详情页是沉浸态、没有胶囊），
  * 直接用会在输入条上方留出一大块空白。
  */
+/**
+ * 评论输入框：**把对 [input] 的读取圈进这个最小作用域**（与聊天页的
+ * `ChatInputField` 同一套思路，见那边完整说明）。KTextField 的 `value` 在这里读
+ * —— 打字时只有这一小块重组，评论 LazyColumn 与页面 body 不动。
+ * 样式（shape/variant/minHeight 40dp）与聊天页输入框完全同款，收进 helper。
+ */
+@Composable
+private fun CommentInputField(
+    input: MutableState<String>,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    focusRequester: FocusRequester,
+    interactionSource: MutableInteractionSource,
+    leading: (@Composable () -> Unit)?,
+    trailing: (@Composable () -> Unit)?,
+) {
+    KTextField(
+        value = input.value,
+        onValueChange = onValueChange,
+        placeholder = placeholder,
+        shape = RoundedCornerShape(KRadius.control),
+        variant = KTextFieldVariant.Inset,
+        focusRequester = focusRequester,
+        interactionSource = interactionSource,
+        // 与聊天页同款 40dp 高（组件默认 44，外层高度约束压不住）
+        minHeight = 40.dp,
+        leading = leading,
+        trailing = trailing,
+    )
+}
+
 @Composable
 private fun PostToast(text: String, onDismiss: () -> Unit, modifier: Modifier = Modifier) {
     val c = KTheme.colors

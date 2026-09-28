@@ -70,6 +70,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import top.kuangdada.k.core.data.VoiceRepository
 import top.kuangdada.k.core.data.model.VoiceRoom
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import top.kuangdada.k.core.data.ApiResult
 import top.kuangdada.k.core.data.CHAT_TTS_CLOUD_VOICES
@@ -147,10 +148,15 @@ fun VoiceRoomScreen(
      * 对局象棋的状态（单独一个 StateFlow，不进 [state]）。
      *
      * 这里只用来回答一个问题：**现在能不能显示成员卡上的「对弈」入口**
-     * （[chessIdle]）。棋盘面板自己会再 collect 一次 —— 那边的重组代价大得多，
-     * 不该被信令层的高频字段（说话灯、音频接通计数）带着一起重建。
+     * （[chessIdle]）——所以只把这一个 Boolean **map** 出来收集：对局期间
+     * 走子/棋钟等高频广播每条都会发新 state，全量收集的话每一次走子都会
+     * 重组整个语音房（麦位、共享区、聊天 LazyColumn 全部跟着重跑）。
+     * collectAsState 写回的是结构相等的 Boolean，值不翻转就不触发重组；
+     * 棋盘面板（ChessGamePanel）自己会再 collect 全量，两边互不牵连。
      */
-    val chessUi by controller.chess.state.collectAsState()
+    val chessPanelOpen by remember(controller.chess) {
+        controller.chess.state.map { it.showPanel }
+    }.collectAsState(initial = controller.chess.state.value.showPanel)
     var input by remember { mutableStateOf("") }
     /**
      * 是否**正在**全屏观看别人的屏幕共享（用户要求"手机能全屏别人的共享"）。
@@ -520,7 +526,7 @@ fun VoiceRoomScreen(
                  * 对局进行中或已有未决邀请时**不画**入口 —— 否则点了只会拿到一句
                  * "本房间已有对局进行中 / 已有待处理的邀请"，是典型的"看着能点其实不能点"。
                  */
-                val chessIdle = !chessUi.showPanel
+                val chessIdle = !chessPanelOpen
                 // 有人进/出时，整块麦位区的高度变化走弹簧（M6）而不是"一行突然长出来"。
                 // 注意这**不是**座位级的入场动画：座位是"固定列的 Row 里有多少画多少"，
                 // 有人进来会把后面的人挤动 —— 那需要固定麦位数（服务端给）或改成 lazy 网格，

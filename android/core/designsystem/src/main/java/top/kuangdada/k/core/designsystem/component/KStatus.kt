@@ -304,6 +304,10 @@ fun HeartIcon(
      */
     fillProgress: Float = if (filled) 1f else 0f,
 ) {
+    // Path 实例 **remember 复用 + 每帧 rewind 重填**（2026-09-28 审查项）：点赞弹跳动画
+    // 期间 draw 每帧执行，老实现每帧 new 一个 Path + 6 段曲线坐标。坐标仍要每帧重算
+    //（依赖画布尺寸 s），但对象分配归零。
+    val heartPath = remember { Path() }
     Canvas(modifier = modifier.size(size)) {
         val s = this.size.minDimension
         // lucide heart：中心线在 24 网格上，按比例缩放到当前画布
@@ -322,7 +326,8 @@ fun HeartIcon(
         // 画布中心 == 图形中心，「心有没有对齐数字」这件事就不再依赖调用点记得补偏移，
         // 任何地方用 `HeartIcon` 都自然是对齐的。
         // （这也解释了为什么另外几个 `Glyph` 没这个毛病：它们的路径本来就大致居中。）
-        val path = Path().apply {
+        val path = heartPath.apply {
+            rewind()
             moveTo(p(12f, 20f).x, p(12f, 20f).y)
             cubicTo(
                 p(2f, 13.5f).x, p(2f, 13.5f).y,

@@ -2,6 +2,8 @@ package top.kuangdada.k.core.data
 
 import java.io.File
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -176,11 +178,16 @@ class MessageRepository(private val session: SessionRepository) {
      * 为什么单独一个方法：角标要在**任意页面**都能实时更新（SSE 事件到达时），
      * 而消息页没被组合时它的会话/通知状态并不存在。口径与 Web 版
      * `selectUnreadTotal`（私信未读 + 通知未读）一致。
+     *
+     * 两个 GET **并行**发（async）：它们互不依赖，串行的话角标延迟 = 两次 RTT 之和
+     * （2026-09-28 审查项）。任一失败由外层 [call] 统一映射成 Failure。
      */
     suspend fun unreadTotal(): ApiResult<Int> = call {
-        val conversations = session.api.messages.conversations().conversations.sumOf { it.unreadCount }
-        val notifications = session.api.notifications.list().notifications.count { !it.isRead }
-        conversations + notifications
+        coroutineScope {
+            val conversations = async { session.api.messages.conversations().conversations.sumOf { it.unreadCount } }
+            val notifications = async { session.api.notifications.list().notifications.count { !it.isRead } }
+            conversations.await() + notifications.await()
+        }
     }
 
     /**

@@ -95,38 +95,47 @@ class KApi(
      * 只放宽超时，**复用同一个 client**（`newBuilder`）：OkHttp 的连接池、线程池与
      * 已注册的拦截器都继承下来，Bearer 鉴权、X-Refreshed-Token 续期、401 回调一个都不会丢。
      */
-    private val mediaClient: OkHttpClient = client.newBuilder()
-        .readTimeout(60, TimeUnit.SECONDS)
-        .writeTimeout(120, TimeUnit.SECONDS)
-        .build()
+    // ---- 接口代理全部 **by lazy**（2026-09-28 审查项）----
+    // 每个 create() 都要做注解反射解析，14 个全量急切创建落在 Application.onCreate
+    // 的主线程装配里，而首次真正用网络要等到首帧之后的 restore()。改成 lazy 后
+    // 谁先被用谁创建，启动路径不再为没碰过的接口付反射成本。
 
-    private val mediaRetrofit: Retrofit = Retrofit.Builder()
-        .baseUrl(baseUrl)
-        .client(mediaClient)
-        .addConverterFactory(KJson.asConverterFactory("application/json".toMediaType()))
-        .build()
+    private val mediaClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(120, TimeUnit.SECONDS)
+            .build()
+    }
+
+    private val mediaRetrofit: Retrofit by lazy {
+        Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(mediaClient)
+            .addConverterFactory(KJson.asConverterFactory("application/json".toMediaType()))
+            .build()
+    }
 
     /** 媒体上传专用接口（目前只有发视频用得到） */
-    val composerMedia: ComposerApi = mediaRetrofit.create(ComposerApi::class.java)
+    val composerMedia: ComposerApi by lazy { mediaRetrofit.create(ComposerApi::class.java) }
 
-    val auth: AuthApi = retrofit.create(AuthApi::class.java)
-    val posts: PostApi = retrofit.create(PostApi::class.java)
-    val books: BookApi = retrofit.create(BookApi::class.java)
-    val users: UserApi = retrofit.create(UserApi::class.java)
+    val auth: AuthApi by lazy { retrofit.create(AuthApi::class.java) }
+    val posts: PostApi by lazy { retrofit.create(PostApi::class.java) }
+    val books: BookApi by lazy { retrofit.create(BookApi::class.java) }
+    val users: UserApi by lazy { retrofit.create(UserApi::class.java) }
     /** 关注（server/src/routes/friends.ts）：他人主页的关注按钮与关注状态 */
-    val friends: FriendsApi = retrofit.create(FriendsApi::class.java)
-    val voice: VoiceApi = retrofit.create(VoiceApi::class.java)
+    val friends: FriendsApi by lazy { retrofit.create(FriendsApi::class.java) }
+    val voice: VoiceApi by lazy { retrofit.create(VoiceApi::class.java) }
     /** 云端朗读（`/api/tts`）：房间文字聊天的「朗读」云端音色，与 Web 端同一接口 */
-    val tts: TtsApi = retrofit.create(TtsApi::class.java)
-    val messages: MessageApi = retrofit.create(MessageApi::class.java)
-    val composer: ComposerApi = retrofit.create(ComposerApi::class.java)
-    val events: EventApi = retrofit.create(EventApi::class.java)
-    val admin: AdminApi = retrofit.create(AdminApi::class.java)
-    val announcements: AnnouncementApi = retrofit.create(AnnouncementApi::class.java)
+    val tts: TtsApi by lazy { retrofit.create(TtsApi::class.java) }
+    val messages: MessageApi by lazy { retrofit.create(MessageApi::class.java) }
+    val composer: ComposerApi by lazy { retrofit.create(ComposerApi::class.java) }
+    val events: EventApi by lazy { retrofit.create(EventApi::class.java) }
+    val admin: AdminApi by lazy { retrofit.create(AdminApi::class.java) }
+    val announcements: AnnouncementApi by lazy { retrofit.create(AnnouncementApi::class.java) }
     // 通知接口。原先因为 release(R8) 下 create() 抛 ClassCastException 被摘掉，
     // 根因是 R8 的「接口合并」把服务接口并走了（见 :native/proguard-rules.pro）——
     // 规则修好后这里恢复注册，`NotificationApi` 与其它服务接口走同一套 create。
-    val notifications: NotificationsApi = retrofit.create(NotificationsApi::class.java)
+    val notifications: NotificationsApi by lazy { retrofit.create(NotificationsApi::class.java) }
 
     /**
      * 分享用的 PostApi 之外，这里再暴露一个 baseUrl 便于各仓库拼绝对媒体地址。

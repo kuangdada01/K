@@ -166,28 +166,34 @@ class VoiceForegroundService : Service() {
     private fun requestAudioFocus() {
         val manager = getSystemService(AudioManager::class.java) ?: return
         audioManager = manager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build()
-                )
-                // 丢焦点时不暂停采集：语音房被电话打断时用户往往希望"对方等一下"，
-                // 而不是直接掉线。真正的暂停交给系统（电话期间麦克风本来就拿不到）。
-                .setWillPauseWhenDucked(false)
-                .build()
-            focusRequest = request
-            runCatching { manager.requestAudioFocus(request) }
-        } else {
-            @Suppress("DEPRECATION")
-            runCatching {
-                manager.requestAudioFocus(
-                    null,
-                    AudioManager.STREAM_VOICE_CALL,
-                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
-                )
+        // 已持有焦点就只补扬声器设置、不再重复申请：一次会话 onStartCommand 会触发多次
+        // （进房、开始共享各一次），每次都 new AudioFocusRequest 申请的话旧请求对象堆积、
+        // 直到 onDestroy 只 abandon 最后一个（2026-09-28 审查项）
+        val alreadyHolding = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && focusRequest != null
+        if (!alreadyHolding) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    // 丢焦点时不暂停采集：语音房被电话打断时用户往往希望"对方等一下"，
+                    // 而不是直接掉线。真正的暂停交给系统（电话期间麦克风本来就拿不到）。
+                    .setWillPauseWhenDucked(false)
+                    .build()
+                focusRequest = request
+                runCatching { manager.requestAudioFocus(request) }
+            } else {
+                @Suppress("DEPRECATION")
+                runCatching {
+                    manager.requestAudioFocus(
+                        null,
+                        AudioManager.STREAM_VOICE_CALL,
+                        AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
+                    )
+                }
             }
         }
         // 语音房默认走扬声器（"免提"），与 Web 版行为一致；

@@ -64,7 +64,14 @@ class SpeakingGate(
         /** 松手保持：最后一声之后还亮多久 */
         const val DEFAULT_RELEASE_MS = 450L
 
-        /** 统计轮询间隔（与 Web 端的 100ms 同量级；统计本身比本地分析贵，取 150ms） */
-        const val POLL_MS = 150L
+        /**
+         * 统计轮询间隔。老实现取 150ms（对标 Web 端 100ms 的本地 AnalyserNode），
+         * 但原生这里每轮对**每个**远端连接做一次跨 JNI 的 `getStats`
+         * （序列化整份统计报告），N 人房 ≈ 每秒 7×(N+1) 次调用，人多时是持续性的
+         * CPU/耗电开销（2026-09-28 审查项）。取 300ms：配合 [DEFAULT_RELEASE_MS]
+         * 的 450ms 迟滞，说话灯的亮/灭延迟最多慢一拍半，肉眼几乎无感，
+         * 跨 JNI 开销直接减半。
+         */
+        const val POLL_MS = 300L
     }
 }

@@ -193,9 +193,14 @@ fun KTextField(
     }
 }
 
+// remember(override, color)：输入框 value 变化即重组，老实现每次都 copy 一个新
+// TextStyle（每键一次分配，聊天/发布页快速键入时叠加 —— 2026-09-28 审查项）。
+// color 也要当 key：主题切换换色时副本必须重算。
 @Composable
-private fun resolvedTextStyle(override: TextStyle?) =
-    (override ?: KType.body).copy(color = KTheme.colors.textPrimary)
+private fun resolvedTextStyle(override: TextStyle?): TextStyle {
+    val color = KTheme.colors.textPrimary
+    return remember(override, color) { (override ?: KType.body).copy(color = color) }
+}
 
 /** 两个重载共用的外壳：底 / 描边 / 内边距 / 占位符 / 选中高亮 */
 @Composable
