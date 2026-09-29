@@ -2,6 +2,7 @@ package top.kuangdada.k.core.data.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import top.kuangdada.k.core.data.KJson
 import top.kuangdada.k.core.data.chess.ChessMove
@@ -30,6 +31,12 @@ import top.kuangdada.k.core.data.chess.isChessPiece
  * 静默丢掉（`coerceInputValues` 只救"有默认值的字段"），而丢一条 `game-moved`
  * 的表现是"棋盘不动了"——很难查。所以标量一律收 String，由上层
  * [toChessSide]/[ChessGameEndReasonWire] 之类做有默认值的映射。
+ *
+ * ## ★ 上行（C→S）一律走 [ChessClientJson]（`encodeDefaults = true`）
+ * kotlinx 默认**省略等于默认值的字段**，而"坐标 0"是合法值（红方底线 r=0、
+ * 最左一路 f=0）。用默认配置编码的走子报文会把 0 吃掉，服务端报
+ * 「着法坐标无效」—— 见 [ChessSquareDto] 与 [encodeChessClientMsg] 的注释。
+ * 契约测试：`ChessContractsTest`（`android:test`）。
  */
 
 // ---------------------------------------------------------------
@@ -67,6 +74,16 @@ data class ChessCaptured(
     val black: List<String> = emptyList(),
 )
 
+/**
+ * 棋盘交点。
+ *
+ * ⚠️ 这两个字段**有默认值**（0），而 [KJson] 没开 `encodeDefaults` —— 所以上行编码
+ * 必须走 [ChessClientJson]（那边显式开了），否则 f/r 等于 0 时字段会被整个丢掉：
+ * 从底线（r=0）或最左一路（f=0）出子的报文会变成 `{"from":{}}`，服务端
+ * `parseSquare` 取不到数字 → 回 `bad-message`「着法坐标无效」，
+ * 用户看到的就是"底线上的车马相仕帅一步都走不动"（09-29 真机实测）。
+ * 默认值保留是为了下行（快照/广播）解码容错，别删。
+ */
 @Serializable
 data class ChessSquareDto(val f: Int = 0, val r: Int = 0)
 
@@ -352,6 +369,28 @@ fun decodeChessServerMsg(text: String): ChessServerMsg? =
 fun decodeChessServerMsg(element: JsonElement): ChessServerMsg? =
     runCatching { KJson.decodeFromJsonElement(ChessServerMsg.serializer(), element) }.getOrNull()
 
+/**
+ * 上行（C→S）对局消息**专用**的 Json。
+ *
+ * ★ `encodeDefaults = true` 是这里唯一的存在理由，**别删**：
+ * kotlinx 的默认是 `encodeDefaults = false`，即"值等于默认值就省略该字段"。
+ * 而 [ChessSquareDto] 的两个分量默认都是 0 → 走子报文里 f 或 r 为 0 时会被
+ * 静默省略（`{"from":{"r":2}}`），服务端 `chessGameManager.parseSquare`
+ * 要求 f、r 都是整数 → 回 `bad-message`「着法坐标无效」。
+ * 表现是"红方底线那一排（r=0）与最左一路（f=0）的子永远走不动"，
+ * 其余子照常 —— 09-29 用户在真机上撞到（截图里的「着法坐标无效」）。
+ *
+ * 上行宁可多送字段（服务端逐字段窄化、未知字段一律忽略），
+ * 也绝不能让一个"值为 0 的合法坐标"被编码器吃掉。
+ * 解码侧不受影响，继续用 [KJson]。
+ */
+private val ChessClientJson: Json = Json {
+    ignoreUnknownKeys = true
+    isLenient = true
+    explicitNulls = false
+    encodeDefaults = true
+}
+
 /** 编一条 C→S 对局消息（`type` 由 sealed 的类判别字段自动带上） */
 fun encodeChessClientMsg(msg: ChessClientMsg): String =
-    KJson.encodeToString(ChessClientMsg.serializer(), msg)
+    ChessClientJson.encodeToString(ChessClientMsg.serializer(), msg)

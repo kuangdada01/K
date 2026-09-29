@@ -14,7 +14,7 @@
  * 时效（邀请 300ms / 宽限 500ms）经 configureChessTimingsForTests 缩短以真等。
  */
 
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import Database from 'better-sqlite3';
@@ -27,6 +27,7 @@ import { configureChessTimingsForTests } from '../src/voice/game/chessGameManage
 import * as voiceRepo from '../src/repositories/voice.repo';
 import * as gameRepo from '../src/repositories/voice-game.repo';
 import { generateToken } from '../src/middleware/auth';
+import { logger } from '../src/lib/logger';
 
 let db: InstanceType<typeof Database>;
 let server: http.Server;
@@ -386,6 +387,45 @@ describe('走子与校验', () => {
     send(alice, { type: 'leave' });
     send(bob, { type: 'leave' });
     send(guest, { type: 'leave' });
+  });
+
+  /**
+   * ★ 回归 2026-09-29（安卓端"底线/最左一路的子一步都走不动"）：
+   * 客户端把 `from`/`to` 里**值为 0 的分量**丢了（kotlinx 默认省略等于默认值的字段），
+   * 报文长成 `{"from":{},"to":{"r":1}}` —— 服务端只回一句「着法坐标无效」，
+   * 排查时既看不到原始载荷、也容易误判成"前端坐标算错了"。
+   * 这里钉两件事：① 这类报文必须被拒（不能静默当合法步）；② 拒绝时留下原始载荷的日志。
+   */
+  it('坐标缺分量/越界：拒绝并留下原始载荷日志（安卓端 09-29 的报文形状）', async () => {
+    const { alice, bob, started } = await startGame({ side: 'red' });
+    const warn = vi.spyOn(logger, 'warn');
+
+    // 坐标 0 被编码器吃掉：from 成了空对象
+    send(alice, { type: 'game-move', gameId: started.gameId, seq: 0, from: {}, to: { f: 0, r: 1 } });
+    const err = await waitFor(alice, (m) => m.type === 'game-error');
+    expect(err.code).toBe('bad-message');
+    expect(err.message).toBe('着法坐标无效');
+    // 原始载荷进了日志（没有它只能靠猜）
+    expect(warn).toHaveBeenCalled();
+    expect(JSON.stringify(warn.mock.calls.at(-1))).toContain('着法坐标无法解析');
+
+    await sleep(160); // 越过 game-move 的连接级节流窗口
+    // 越界（f=9）同样被拒，且对局照常继续：红方仍可正常出子
+    send(alice, {
+      type: 'game-move',
+      gameId: started.gameId,
+      seq: 0,
+      from: { f: 9, r: 0 },
+      to: { f: 9, r: 1 },
+    });
+    expect((await waitFor(alice, (m) => m.type === 'game-error')).code).toBe('bad-message');
+    await sleep(160);
+    const moved = await redOpens(alice, bob, started.gameId);
+    expect(moved.toAlice.seq).toBe(0);
+
+    warn.mockRestore();
+    send(alice, { type: 'leave' });
+    send(bob, { type: 'leave' });
   });
 
   it('认输：对方获胜（resign）；终局后走子被拒（no-game）', async () => {

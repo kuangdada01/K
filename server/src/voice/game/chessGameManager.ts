@@ -541,7 +541,19 @@ export function createChessGameManager(deps: ChessGameManagerDeps) {
     }
     const from = parseSquare(msg.from);
     const to = parseSquare(msg.to);
-    if (!from || !to) return sendError(ws, 'bad-message', '着法坐标无效');
+    if (!from || !to) {
+      /*
+       * 把原始载荷一起记下来：这个分支以前只有一句「着法坐标无效」，而客户端
+       * 真出这个错的时候，报文往往"看着挺正常" —— 09-29 安卓端的起因就是
+       * kotlinx 默认省略等于默认值的字段，坐标为 0 的分量被吃掉，
+       * 报文成了 `{"from":{},"to":{"r":1}}`。没有原始载荷就只能靠猜端点/时序。
+       */
+      logger.warn(
+        { roomId, userId: user.id, from: msg.from, to: msg.to },
+        '语音：象棋着法坐标无法解析（客户端报文里的 from/to 缺字段或越界）'
+      );
+      return sendError(ws, 'bad-message', '着法坐标无效');
+    }
     // 超时兜底：着法与超时同刻到达时以钟为准（定时器随后广播 game-ended）
     if (Date.now() > game.clock.deadline) return sendError(ws, 'no-game', '已超时判负');
     const next = applyMove(game.state, from, to);
