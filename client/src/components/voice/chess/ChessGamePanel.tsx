@@ -15,19 +15,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Crown, RotateCcw, Speech, Swords, Undo2, Volume2, VolumeX } from 'lucide-react';
-import {
-  findKing,
-  isInCheck,
-  parseFen,
-  pieceDisplayName,
-  pieceSide,
-  type ChessClocks,
-  type ChessSide,
-  type ChessSquare,
-} from '@k/shared';
+import { Crown, RotateCcw, Swords, Undo2, Volume2, VolumeX } from 'lucide-react';
+import { findKing, isInCheck, parseFen, type ChessClocks, type ChessSide, type ChessSquare } from '@k/shared';
 import { useVoice } from '../../../context/VoiceContext';
-import { useChessTTS } from '../../../voice/chess/useChessTTS';
 import {
   getSoundPack,
   playChessSound,
@@ -38,19 +28,6 @@ import {
 import ChessBoard from './ChessBoard';
 import ChessReviewModal from './ChessReviewModal';
 import styles from './chess.module.css';
-
-/** 终局语音短语（语音短语包） */
-const END_PHRASE: Record<string, string> = {
-  checkmate: '绝杀！',
-  stalemate: '困毙！',
-  insufficient: '子力不足，判和',
-  repetition: '三次重复局面，判和',
-  perpetual: '长将判负',
-  resign: '认输',
-  disconnect: '对方掉线，判负',
-  timeout: '超时判负',
-  agreement: '双方同意，和棋',
-};
 
 const END_REASON_TEXT: Record<string, string> = {
   checkmate: '将死',
@@ -119,53 +96,6 @@ export default function ChessGamePanel() {
     }
   }, [game, playing]);
 
-  // 棋步语音播报（三期）：开关持久化，最新一着打断上一着；
-  // spokenRef 以 "gameId:手数" 防重（game-started 手数为 0 不播）
-  const tts = useChessTTS();
-  const announce = tts.announce; // useCallback([]) 产物，引用稳定
-  const spokenRef = useRef('');
-  useEffect(() => {
-    if (!game || !playing) return;
-    const key = `${game.gameId}:${game.moveCount}`;
-    if (spokenRef.current === key) return;
-    spokenRef.current = key;
-    const notation = game.notations[game.notations.length - 1];
-    const move = game.lastMove;
-    if (!notation || !move) return;
-    const sideName = pieceSide(move.piece) === 'red' ? '红方' : '黑方';
-    const capSuffix = move.captured ? `，吃${pieceDisplayName(move.captured)}` : '';
-    let checkSuffix = '';
-    try {
-      const { board, turn } = parseFen(game.fen);
-      checkSuffix = isInCheck(board, turn) ? '，将军' : '';
-    } catch {
-      checkSuffix = '';
-    }
-    tts.announce(`${sideName}${notation}${capSuffix}${checkSuffix}`);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- game 任何字段变化都经 spokenRef 键去重
-  }, [game]);
-
-  // 开局播报：对局开始，红方先行
-  const startKeyRef = useRef('');
-  useEffect(() => {
-    if (!game || !playing) return;
-    if (startKeyRef.current === game.gameId) return;
-    startKeyRef.current = game.gameId;
-    announce('对局开始，红方先行');
-  }, [game, playing, announce]);
-
-  // 暂停/继续播报：走开的人听得到。只在同一局内发生真实切换时播
-  // （开局有"对局开始"播报；刷新恢复出的历史暂停态也不重播）
-  const pausePrevRef = useRef<{ gameId: string; paused: boolean } | null>(null);
-  useEffect(() => {
-    if (!game || !playing) return;
-    const prev = pausePrevRef.current;
-    pausePrevRef.current = { gameId: game.gameId, paused };
-    if (prev && prev.gameId === game.gameId && prev.paused !== paused) {
-      announce(paused ? '对局暂停' : '对局继续');
-    }
-  }, [game, playing, paused, announce]);
-
   // 音效（走子/吃子/将军/终局）：偏好持久化（默认开，经典包）。
   // 按钮三态循环：经典音效开 → 合成音效开 → 关 → 经典音效开
   const [soundOn, setSoundOn] = useState(() => localStorage.getItem('voice:chessSound') !== '0');
@@ -214,6 +144,11 @@ export default function ChessGamePanel() {
     if (endSoundKeyRef.current === key) return;
     endSoundKeyRef.current = key;
     if (!soundOnRef.current) return;
+    // 绝杀专属音（checkmate.m4a）：直接顶掉胜/负旋律 —— 绝杀事件本身比"谁赢了"更响
+    if (ended.reason === 'checkmate') {
+      playChessSound('checkmate');
+      return;
+    }
     let kind: ChessSound = 'end-draw';
     if (ended.result !== 'draw' && mySide) {
       const iWin =
@@ -222,9 +157,7 @@ export default function ChessGamePanel() {
       kind = iWin ? 'end-win' : 'end-lose';
     }
     playChessSound(kind);
-    // 语音短语包：绝杀/困毙/认输/超时……（checkmate 与"绝杀"动画同时触发）
-    announce(END_PHRASE[ended.reason] ?? '对局结束');
-  }, [ended, game, mySide, announce]);
+  }, [ended, game, mySide]);
 
   // 绝杀动画（checkmate 专属）：棋盘震动 + 红光 + "绝杀"书法字浮现，
   // 持续 2.8s 后移除；对局双方与观战者本端各自播放。
@@ -427,21 +360,6 @@ export default function ChessGamePanel() {
           {game.black.username}
           <i className={styles.seatBlack}>黑</i>
         </span>
-        <button
-          className={`${styles.iconBtn} ${tts.enabled ? styles.ttsOn : ''}`}
-          onClick={tts.toggle}
-          disabled={!tts.supported}
-          title={
-            tts.supported
-              ? tts.enabled
-                ? '关闭棋步语音播报'
-                : '开启棋步语音播报（朗读每着记谱）'
-              : '当前浏览器不支持语音播报'
-          }
-          data-testid="chess-tts-toggle"
-        >
-          <Speech size={14} />
-        </button>
         <button
           className={`${styles.iconBtn} ${soundOn ? styles.ttsOn : ''}`}
           onClick={cycleSound}

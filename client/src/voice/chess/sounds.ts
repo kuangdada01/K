@@ -14,7 +14,7 @@
  *
  * 浏览器自动播放策略：音频上下文必须在用户手势后才能出声——
  * 首次 pointerdown 时预创建并 resume（capture 捕获阶段，先于页面逻辑），
- * 同时预热经典音效缓存并预解锁语音合成；每次播放前若仍 suspended
+ * 同时预热经典音效缓存；每次播放前若仍 suspended
  * 也会尝试 resume，失败则静默跳过。
  * ============================================================
  */
@@ -34,7 +34,7 @@ function ensureCtx(): AudioContext | null {
   return ctx;
 }
 
-export type ChessSound = 'move' | 'capture' | 'check' | 'end-win' | 'end-lose' | 'end-draw';
+export type ChessSound = 'move' | 'capture' | 'check' | 'checkmate' | 'end-win' | 'end-lose' | 'end-draw';
 
 // ---------- 音效包选择（偏好持久化） ----------
 
@@ -55,11 +55,17 @@ export function setSoundPack(pack: ChessSoundPack): void {
   localStorage.setItem(PACK_KEY, pack);
 }
 
-/** classic 包里每个音效的 wav 文件 */
+/**
+ * classic 包里每个音效的文件。
+ * · move —— 用户选定音源：Freesound "SingleKnock_Wood"（CC0）；
+ * · capture / check / checkmate —— 用户自备音源（man / out / whatcan，M4A 容器，
+ *   decodeAudioData 与安卓 SoundPool 都原生支持，无需转码）。
+ */
 const FILES: Record<ChessSound, string> = {
-  move: 'move.wav',
-  capture: 'capture.wav',
-  check: 'check.wav',
+  move: 'move.mp3',
+  capture: 'capture.m4a',
+  check: 'check.m4a',
+  checkmate: 'checkmate.m4a',
   'end-win': 'win.wav',
   'end-lose': 'win.wav',
   'end-draw': 'win.wav',
@@ -180,29 +186,12 @@ export function playChessSound(kind: ChessSound): void {
   playSynth(ac, kind);
 }
 
-/**
- * 预解锁语音合成（移动端 iOS/安卓要求首次 speak 发生在用户手势内，
- * 否则之后的程序化播报会被静默拦截）；空文本 + 0 音量，听不见。
- */
-function primeSpeechSynthesis(): void {
-  try {
-    const synth = window.speechSynthesis;
-    if (!synth || typeof SpeechSynthesisUtterance !== 'function') return;
-    const utter = new SpeechSynthesisUtterance(' ');
-    utter.volume = 0;
-    synth.speak(utter);
-  } catch {
-    /* 残缺内核静默跳过（判据与 useChatTTS 一致） */
-  }
-}
-
 if (typeof window !== 'undefined') {
   window.addEventListener(
     'pointerdown',
     () => {
       void ensureCtx();
       warmBuffers();
-      primeSpeechSynthesis();
     },
     { capture: true, once: true, passive: true }
   );

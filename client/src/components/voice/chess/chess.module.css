@@ -305,26 +305,30 @@
   user-select: none;
 }
 
-.boardBg {
-  fill: #e8d5ae;
-  stroke: #8a6d3b;
-  stroke-width: 1.5;
+/* 盘面质感（外框/盘面/棋子的渐变与木纹滤镜）在 TSX 的 <defs> 里，
+   色值与 Android 端 BoardColors 同源 —— 这里只留线宽与描边。 */
+.gridBorderOuter {
+  fill: none;
+  stroke: #7e5626;
+  stroke-width: 2.2;
 }
 
-.boardFrame {
+.gridBorderInner {
   fill: none;
-  stroke: #8a6d3b;
-  stroke-width: 2;
+  stroke: #7e5626;
+  stroke-width: 1.3;
 }
 
 .gridLine line,
 .gridLine {
-  stroke: #8a6d3b;
-  stroke-width: 1.2;
+  stroke: #7e5626;
+  stroke-width: 1.6;
 }
 
-.starPoint {
-  fill: #8a6d3b;
+.starMark {
+  fill: none;
+  stroke: #7e5626;
+  stroke-width: 1.8;
 }
 
 .riverText {
@@ -332,15 +336,9 @@
   dominant-baseline: central;
   text-anchor: middle;
   font-weight: 600;
-  opacity: 0.75;
-}
-
-.riverRed {
-  fill: #8a5a2b;
-}
-
-.riverBlack {
-  fill: #3d3d3d;
+  fill: #7a5228;
+  opacity: 0.85;
+  filter: drop-shadow(0 1px 0.5px rgba(255, 255, 255, 0.4));
 }
 
 .lastMoveMark {
@@ -356,27 +354,33 @@
   stroke-width: 3;
 }
 
-.piece {
+.pieceRing {
+  fill: none;
+  stroke: #ae8a50;
   stroke-width: 1.5;
-  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.25));
 }
 
-.pieceRed {
-  fill: #f6e7c8;
+.innerRingRed {
+  fill: none;
   stroke: #b03a2e;
+  stroke-opacity: 0.92;
+  stroke-width: 1.7;
 }
 
-.pieceBlack {
-  fill: #f6e7c8;
+.innerRingBlack {
+  fill: none;
   stroke: #2c3440;
+  stroke-opacity: 0.92;
+  stroke-width: 1.7;
 }
 
 .pieceText {
-  font-size: 30px;
+  font-size: 26px;
   font-weight: 700;
   dominant-baseline: central;
   text-anchor: middle;
   pointer-events: none;
+  filter: drop-shadow(0.8px 1.2px 0.5px rgba(0, 0, 0, 0.28));
 }
 
 .pieceTextRed {

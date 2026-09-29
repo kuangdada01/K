@@ -20,7 +20,6 @@ import ChessGamePanel from './ChessGamePanel';
 /** 挪到模块顶部：vi.mock 工厂会被提升，不能闭包引用普通变量 */
 const h = vi.hoisted(() => ({
   chess: {} as Record<string, unknown>,
-  announce: vi.fn(),
   playSound: vi.fn(),
 }));
 
@@ -30,10 +29,6 @@ vi.mock('../../../context/VoiceContext', () => ({
     participants: [{ userId: 1, username: 'alice', avatar: null }],
     activeRoomId: 7,
   }),
-}));
-
-vi.mock('../../../voice/chess/useChessTTS', () => ({
-  useChessTTS: () => ({ enabled: false, supported: false, toggle: vi.fn(), announce: h.announce }),
 }));
 
 vi.mock('../../../voice/chess/sounds', () => ({
@@ -118,7 +113,6 @@ function renderPanel(initial: { game: ChessGameView; ended: unknown }) {
 
 beforeEach(() => {
   vi.useFakeTimers();
-  h.announce.mockClear();
   h.playSound.mockClear();
 });
 
