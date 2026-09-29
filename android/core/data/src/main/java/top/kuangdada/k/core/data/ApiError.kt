@@ -129,6 +129,13 @@ internal fun mapError(t: Throwable, responseCode: Int? = null, responseBody: Str
 private fun defaultMessageFor(code: Int): String = when (code) {
     400 -> "请求参数有误"
     404 -> "内容不存在或已被删除"
+    /*
+     * 413：服务端自己回的（如视频临时配额满）一定带 JSON 信封，走上面的 serverMessage；
+     * 落到这里的 413 基本是**代理层**掐的（nginx 的 client_max_body_size）——
+     * 响应体是 nginx 的 HTML 页，没有可读信息，以前用户只看到一串「请求失败（413）」
+     * （09-29 线上：朋友选了 626MB 的视频发布，就是这个）。
+     */
+    413 -> "上传内容过大，服务器拒绝了这次请求（视频上限 300MB）"
     429 -> "操作过于频繁，请稍后再试"
     in 500..599 -> "服务器繁忙，请稍后再试"
     else -> "请求失败（$code）"

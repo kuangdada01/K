@@ -70,6 +70,7 @@ import top.kuangdada.k.core.data.ComposerRepository
 import top.kuangdada.k.core.data.displayMessage
 import top.kuangdada.k.core.data.image.ImageCompressor
 import top.kuangdada.k.core.data.isAcceptableVideoName
+import top.kuangdada.k.core.data.videoSizeError
 import top.kuangdada.k.core.data.resolveUrl
 import top.kuangdada.k.core.designsystem.component.KButton
 import top.kuangdada.k.core.designsystem.component.KButtonVariant
@@ -371,6 +372,15 @@ fun ComposerScreen(
     fun acceptVideo(uri: Uri, displayName: String?) {
         // 换视频：先把上一条的临时文件清掉，别在服务端堆草稿
         clearVideo()
+        // ★ 体积先拦一道，**在拷贝与上传之前**：单次 multipart 超过 nginx 的
+        //   client_max_body_size（350M）时，请求到不了 Node，用户只会看到
+        //   「请求失败（413）」（09-29 线上：626MB / 660MB 各一次）。
+        //   而服务端自己的上限是 300MB，所以本地拦下就是唯一的正解。
+        val declaredSize = context.contentResolver.queryFileSize(uri)
+        videoSizeError(declaredSize)?.let { message ->
+            videoError = message
+            return
+        }
         // 视频与图片不能同帖（服务端 /posts 与 /posts/video 是两套端点）。
         // 放在"真的选了视频"这一刻才清，而不是打开选择器时 —— 用户打开又取消不该丢图。
         val droppedImages = picked.size + keptImages.size
@@ -380,6 +390,14 @@ fun ComposerScreen(
             val copied = withContext(Dispatchers.IO) { copyVideoToCache(context, uri, displayName) }
             if (copied == null) {
                 videoError = "读取视频失败，请重新选择"
+                return@launch
+            }
+            // provider 查不到 SIZE 时（declaredSize <= 0）用拷完的真实体积兜底：
+            // 这一步能拦住"元数据撒谎/查不到"的少数来源，代价已经付过（拷完了），
+            // 但至少不会白传一遍。
+            videoSizeError(copied.length())?.let { message ->
+                copied.delete()
+                videoError = message
                 return@launch
             }
             pickedVideo = copied
@@ -1495,3 +1513,23 @@ private fun android.content.ContentResolver.queryDisplayName(uri: Uri): String? 
         if (c.moveToFirst()) c.getString(0) else null
     }
 }.getOrNull()
+
+/**
+ * 相册条目的字节数（查不到返回 -1，由调用方按"体积未知"处理）。
+ *
+ * 两条路：`OpenableColumns.SIZE`（大多数 provider 都实现了）→ 拿不到就退到
+ * `AssetFileDescriptor.length`（少数只提供 fd 的 provider，`length` 为 -1 时也算未知）。
+ *
+ * ⚠️ 必须在**拷贝进 cacheDir 之前**问出来：超限的视频（手机 4K 长视频动辄 600MB+）
+ * 要当场拒绝，绝不能先花几分钟拷一个 600MB 的文件、再白传一遍（09-29 线上事故）。
+ */
+private fun android.content.ContentResolver.queryFileSize(uri: Uri): Long = runCatching {
+    var size = -1L
+    query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null)?.use { c ->
+        if (c.moveToFirst() && !c.isNull(0)) size = c.getLong(0)
+    }
+    if (size <= 0) {
+        openAssetFileDescriptor(uri, "r")?.use { fd -> size = fd.length }
+    }
+    size
+}.getOrDefault(-1L)

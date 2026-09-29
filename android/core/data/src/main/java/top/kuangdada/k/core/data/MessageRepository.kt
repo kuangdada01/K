@@ -1,6 +1,7 @@
 package top.kuangdada.k.core.data
 
 import java.io.File
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -459,6 +460,41 @@ val VIDEO_EXTENSIONS = setOf(".mp4", ".mov", ".avi", ".webm", ".mkv", ".flv", ".
 
 /** 服务端能收下的视频文件名（扩展名在白名单内） */
 fun isAcceptableVideoName(name: String): Boolean = videoExtension(name) in VIDEO_EXTENSIONS
+
+/**
+ * 单条视频上传上限：与服务端 `MAX_VIDEO_BYTES`（`shared/src/constants/upload.ts`）一致。
+ *
+ * ★ 为什么客户端**必须**自己先拦一道（2026-09-29 线上事故）：
+ * 手机上的 4K 长视频动辄 600MB+，而上传是**单次 multipart**（App 没有分片实现），
+ * 于是请求在到达 Node 之前就被 nginx 的 `client_max_body_size 350M` 掐掉，
+ * 回的是 nginx 自带的 413 HTML 页面 —— 客户端 `mapError` 只能给出
+ * 「请求失败（413）」，用户看到的是一串数字，完全不知道发生了什么。
+ * 更糟的是白白把文件拷进 cacheDir、白耗流量（线上那两次分别是 626MB / 660MB）。
+ *
+ * 服务端自己的上限是 300MB（`MAX_VIDEO_BYTES`，分片路径超限回 400「视频超过大小限制」），
+ * 而 nginx 的 350M 只是为了给 multipart 开销留余量 ——
+ * 也就是说**超过 300MB 的视频，无论走哪条路都发不出去**：本地拦下才是正确姿势。
+ *
+ * ⚠️ 这个数改了要同步改 `shared/src/constants/upload.ts` 与服务器 nginx 的
+ * `client_max_body_size`（必须留出 multipart 开销的余量，否则 300MB 的视频会在 nginx 就被拒）。
+ * 契约测试：`VideoUploadContractTest`（`android:test`）。
+ */
+const val MAX_VIDEO_BYTES: Long = 300L * 1024 * 1024
+
+/**
+ * 体积超限时的用户提示（null = 通过）。
+ *
+ * `bytes <= 0`（少数 provider 查不到 SIZE）不拦 —— 宁可让服务端兜底，
+ * 也不能因为"读不到体积"就拒绝一个正常视频。
+ * 文案与 Web 端 `useMediaDraft` 同口径（「视频大小 626.3MB，超过300MB限制」），
+ * 多一句可照做的动作：裁剪或压缩。
+ */
+fun videoSizeError(bytes: Long): String? {
+    if (bytes <= 0L || bytes <= MAX_VIDEO_BYTES) return null
+    val mb = bytes.toDouble() / (1024 * 1024)
+    val limitMb = MAX_VIDEO_BYTES / (1024 * 1024)
+    return "视频 ${String.format(Locale.US, "%.1f", mb)}MB，超过 ${limitMb}MB 上限，请先裁剪或压缩"
+}
 
 /**
  * 带进度回调的请求体：每写出一块就报一次百分比。

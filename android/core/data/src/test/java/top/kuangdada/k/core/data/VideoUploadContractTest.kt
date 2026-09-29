@@ -3,6 +3,8 @@ package top.kuangdada.k.core.data
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import top.kuangdada.k.core.data.api.TempVideoStatus
@@ -51,6 +53,51 @@ class VideoUploadContractTest {
         assertFalse(isAcceptableVideoName("clip.m4v"))
         assertFalse(isAcceptableVideoName("clip.mp4.exe"))
         assertFalse(isAcceptableVideoName(""))
+    }
+
+    // ------------------------------------------------------------------
+    // 体积上限（2026-09-29 线上：626MB / 660MB 的视频被 nginx 413 掐掉）
+    // ------------------------------------------------------------------
+
+    /**
+     * 上限必须与服务端 `MAX_VIDEO_BYTES`（shared/src/constants/upload.ts）一致。
+     *
+     * 为什么这个数不能"随便大一点"：单次 multipart 的报文还得挤过 nginx 的
+     * `client_max_body_size 350M` —— 客户端比服务端宽松时，用户等来的不是
+     * 服务端那句可读的「视频超过大小限制」，而是 nginx 的 413（客户端只能显示
+     * 「请求失败（413）」）。宁可本地拦严一点。
+     */
+    @Test
+    fun `体积上限与服务端一致（300MB）`() {
+        assertEquals(300L * 1024 * 1024, MAX_VIDEO_BYTES)
+        // 且必须小于 nginx 的 client_max_body_size（350M），给 multipart 开销留余量
+        assertTrue("上限不能贴到 nginx 的 350M", MAX_VIDEO_BYTES < 350L * 1024 * 1024)
+    }
+
+    @Test
+    fun `刚好在上限内放行、超出一字节就拦下`() {
+        assertNull("等于上限应该放行", videoSizeError(MAX_VIDEO_BYTES))
+        assertNotNull("超出 1 字节必须拦下", videoSizeError(MAX_VIDEO_BYTES + 1))
+    }
+
+    @Test
+    fun `体积未知（provider 查不到）不当成超限`() {
+        // 少数 content:// 来源给不出 SIZE（OpenableColumns 为空、fd.length 也是 -1）：
+        // 不能因为"读不到体积"就拒绝一个正常视频，交给服务端兜底
+        assertNull(videoSizeError(-1))
+        assertNull(videoSizeError(0))
+    }
+
+    @Test
+    fun `超限提示带上体积与可照做的动作`() {
+        // 线上那次被 nginx 413 掐掉的真实体积：656,344,755 B ≈ 625.9MB
+        val bytes = 656_344_755L
+        val msg = videoSizeError(bytes)
+        assertNotNull(msg)
+        val expectedMb = String.format(java.util.Locale.US, "%.1f", bytes / 1024.0 / 1024.0)
+        assertTrue("要写清实际体积（$expectedMb）：$msg", msg!!.contains(expectedMb))
+        assertTrue("要写清上限：$msg", msg.contains("300"))
+        assertTrue("要告诉用户怎么办：$msg", msg.contains("裁剪") || msg.contains("压缩"))
     }
 
     @Test
