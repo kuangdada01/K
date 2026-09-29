@@ -288,6 +288,45 @@ export default function ChessGamePanel() {
       />
     ) : null;
 
+  /*
+   * 邀请横幅（收到的 / 等待应答的）：**两个分支都要渲染**。
+   *
+   * 以前只挂在"无对局"分支里 —— 于是一方收起棋盘（或刷新后本端不再摆残局）去点
+   * 成员卡的「对弈」邀请对方时，对面还摆着终局棋盘，这条横幅在他那边根本不存在，
+   * 只能眼睁睁看着邀请过期。进行中的对局收不到邀请（服务端 `game-busy`），
+   * 所以放在对局分支里也不会干扰棋局。
+   */
+  const inviteBanners = (
+    <>
+      {invite && (
+        <div className={styles.banner} data-testid="chess-invite">
+          <Swords size={16} />
+          <span>
+            <b>{invite.from.username}</b> 邀你对弈（
+            {invite.side === 'red' ? '他执红' : invite.side === 'black' ? '他执黑' : '随机执子'}）
+          </span>
+          <button className={styles.acceptBtn} onClick={() => chess.respondInvite(invite.inviteId, true)}>
+            接受
+          </button>
+          <button className={styles.declineBtn} onClick={() => chess.respondInvite(invite.inviteId, false)}>
+            拒绝
+          </button>
+        </div>
+      )}
+      {outgoing && (
+        <div className={styles.banner} data-testid="chess-outgoing">
+          <Swords size={16} />
+          <span>
+            已向 <b>{outgoing.toName}</b> 发出对局邀请，等待应答…
+          </span>
+          <button className={styles.declineBtn} onClick={() => chess.cancelInvite(outgoing.inviteId)}>
+            撤销
+          </button>
+        </div>
+      )}
+    </>
+  );
+
   if (!game) {
     // 无对局：只渲染邀请/待应答横幅
     return (
@@ -304,32 +343,7 @@ export default function ChessGamePanel() {
             </button>
           </div>
         )}
-        {invite && (
-          <div className={styles.banner} data-testid="chess-invite">
-            <Swords size={16} />
-            <span>
-              <b>{invite.from.username}</b> 邀你对弈（
-              {invite.side === 'red' ? '他执红' : invite.side === 'black' ? '他执黑' : '随机执子'}）
-            </span>
-            <button className={styles.acceptBtn} onClick={() => chess.respondInvite(invite.inviteId, true)}>
-              接受
-            </button>
-            <button className={styles.declineBtn} onClick={() => chess.respondInvite(invite.inviteId, false)}>
-              拒绝
-            </button>
-          </div>
-        )}
-        {outgoing && (
-          <div className={styles.banner} data-testid="chess-outgoing">
-            <Swords size={16} />
-            <span>
-              已向 <b>{outgoing.toName}</b> 发出对局邀请，等待应答…
-            </span>
-            <button className={styles.declineBtn} onClick={() => chess.cancelInvite(outgoing.inviteId)}>
-              撤销
-            </button>
-          </div>
-        )}
+        {inviteBanners}
         {reviewModal}
       </section>
     );
@@ -340,6 +354,7 @@ export default function ChessGamePanel() {
 
   return (
     <section className={styles.panel} data-testid="chess-panel">
+      {inviteBanners}
       {/* 状态条：席位 + 棋钟 + 轮次/将军 */}
       <div className={styles.statusBar}>
         <span className={`${styles.seat} ${game.turn === 'red' && playing ? styles.seatTurn : ''}`}>

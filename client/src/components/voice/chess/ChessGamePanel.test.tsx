@@ -319,3 +319,50 @@ describe('ChessGamePanel 音效开关', () => {
     localStorage.removeItem('voice:chessSound');
   });
 });
+
+/**
+ * 邀请横幅在两个分支都要在。
+ *
+ * 存量坑：横幅原来只挂在"无对局"分支里 —— 一方收起棋盘（或刷新后本端不再摆残局）
+ * 去点成员卡「对弈」邀请对方时，对面还摆着终局棋盘，这条横幅在他那边根本不存在，
+ * 只能看着邀请过期（服务端 30s 后回 `expired`）。进行中的对局收不到邀请
+ * （服务端 `game-busy`），所以放进对局分支不会干扰棋局。
+ */
+describe('ChessGamePanel 邀请横幅', () => {
+  it('终局棋盘还摆着时，收到的邀请照样可见、可接受', () => {
+    const respondInvite = vi.fn();
+    h.chess = {
+      game: mateGame(),
+      ended: ENDED,
+      invite: {
+        inviteId: 'inv1',
+        from: { userId: 2, username: 'bob', avatar: null },
+        side: 'red',
+        expiresAt: Date.now() + 30_000,
+      },
+      outgoing: null,
+      drawOfferFrom: null,
+      undoOfferFrom: null,
+      reviewOpen: false,
+      reviewGameId: null,
+      reset: vi.fn(),
+      closeReview: vi.fn(),
+      openReview: vi.fn(),
+      dismissEnded: vi.fn(),
+      rematch: vi.fn(),
+      pause: vi.fn(),
+      resume: vi.fn(),
+      respondInvite,
+      cancelInvite: vi.fn(),
+      mySideOf: (userId: number) => (userId === 1 ? 'red' : userId === 2 ? 'black' : null),
+    };
+    render(<ChessGamePanel />);
+
+    expect(screen.getByTestId('chess-board')).toBeTruthy(); // 残局棋盘仍在
+    expect(screen.getByTestId('chess-ended')).toBeTruthy();
+    expect(screen.getByTestId('chess-invite')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '接受' }));
+    expect(respondInvite).toHaveBeenCalledWith('inv1', true);
+  });
+});

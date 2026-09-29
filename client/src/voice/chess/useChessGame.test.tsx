@@ -13,10 +13,14 @@
  * - reset：全部状态清空（离房复位）
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import type { ChessGameServerMsg } from '@k/shared';
 import { useChessGame } from './useChessGame';
+
+// toast 是模块级单例（showToast 只在 <Toast/> 挂载后才入队），这里直接盯调用
+vi.mock('../../components/ui/Toast', () => ({ showToast: vi.fn() }));
+import { showToast } from '../../components/ui/Toast';
 
 const ALICE = { userId: 1, username: 'alice', avatar: null };
 const BOB = { userId: 2, username: 'bob', avatar: null };
@@ -61,6 +65,43 @@ const movedMsg = (
   status,
   notation: '炮二平五',
   clocks: CLOCKS,
+});
+
+/** 进行中的快照（重进房/观战者后进房） */
+const playingSnapshot = (gameId: string): ChessGameServerMsg => ({
+  type: 'game-snapshot',
+  gameId,
+  red: ALICE,
+  black: BOB,
+  fen: INITIAL_FEN,
+  turn: 'red',
+  status: 'playing',
+  lastMove: { from: { f: 0, r: 0 }, to: { f: 0, r: 1 }, piece: 'R', captured: null },
+  moveCount: 3,
+  endReason: null,
+  clocks: CLOCKS,
+  captured: { red: ['p'], black: [] },
+  notations: ['兵九进一'],
+});
+
+/** 终局快照（服务端在"房间空掉 / 开下一局"之前一直保留那一局，join 时补发） */
+const endedSnapshot = (
+  gameId: string,
+  status: 'red-win' | 'black-win' | 'draw' = 'black-win'
+): ChessGameServerMsg => ({
+  type: 'game-snapshot',
+  gameId,
+  red: ALICE,
+  black: BOB,
+  fen: INITIAL_FEN,
+  turn: 'black',
+  status,
+  endReason: 'checkmate',
+  lastMove: { from: { f: 7, r: 2 }, to: { f: 4, r: 6 }, piece: 'C', captured: 'p' },
+  moveCount: 3,
+  clocks: CLOCKS,
+  captured: { red: ['p'], black: [] },
+  notations: ['炮二平五', '卒3进1', '炮五进四'],
 });
 
 describe('useChessGame', () => {
@@ -290,24 +331,10 @@ describe('useChessGame 二期（棋钟/记谱/被吃子/悔棋）', () => {
     expect(hook.result.current.game?.rematchBy).toBe(1); // 乐观置位：按钮立即转"等待对方"
   });
 
-  it('终局后刷新：快照携带终局原因 → ended 横幅恢复（不再卡死）', () => {
+  it('本端亲历的同一局：终局快照照常恢复（否则"结束了既没再来一局、也没收起"= 死局）', () => {
     const { hook, feed } = makeHook(1);
     feed(startedMsg());
-    feed({
-      type: 'game-snapshot',
-      gameId: 'g1',
-      red: ALICE,
-      black: BOB,
-      fen: INITIAL_FEN,
-      turn: 'black',
-      status: 'black-win',
-      endReason: 'checkmate',
-      lastMove: { from: { f: 7, r: 2 }, to: { f: 4, r: 6 }, piece: 'C', captured: 'p' },
-      moveCount: 3,
-      clocks: CLOCKS,
-      captured: { red: ['p'], black: [] },
-      notations: ['炮二平五', '卒3进1', '炮五进四'],
-    });
+    feed(endedSnapshot('g1'));
     expect(hook.result.current.game?.status).toBe('black-win');
     expect(hook.result.current.ended).toEqual({ result: 'black-win', reason: 'checkmate' });
     // 关闭横幅后回到空闲入口条
@@ -323,6 +350,62 @@ describe('useChessGame 二期（棋钟/记谱/被吃子/悔棋）', () => {
     feed({ type: 'game-ended', gameId: 'g1', result: 'black-win', reason: 'timeout' });
     expect(hook.result.current.game?.status).toBe('black-win');
     expect(hook.result.current.ended).toEqual({ result: 'black-win', reason: 'timeout' });
+  });
+});
+
+/**
+ * 终局残局护栏：**只有本端亲历的那一局才摆出来**。
+ *
+ * 服务端在"房间空掉 / 开下一局"之前一直保留那一局的终局态，而 `game-snapshot` 是
+ * 成员 join 时补发的 → 不拦的话，"收起棋盘"只是把本端 state 置空，刷新 / 离房再
+ * 进房时这份快照又把早就结束的棋盘摆回眼前
+ * （用户实测："收起棋盘每次进来怎么还能看见，刷新也是会出现棋盘"）。
+ * 安卓端 `ChessGameController` 从一期起就有这条护栏（`ChessGameControllerTest`
+ * 的"收起棋盘后再收到同一局的终局快照 不会弹回来"），web 端一直漏了。
+ */
+describe('useChessGame 终局残局护栏（只摆本端亲历的那一局）', () => {
+  it('收起棋盘后再收到同一局的终局快照：不会弹回来', () => {
+    const { hook, feed } = makeHook(1);
+    feed(startedMsg());
+    feed({ type: 'game-ended', gameId: 'g1', result: 'black-win', reason: 'checkmate' });
+    expect(hook.result.current.showPanel).toBe(true);
+
+    act(() => hook.result.current.dismissEnded());
+    expect(hook.result.current.showPanel).toBe(false);
+    expect(hook.result.current.ended).toBeNull();
+
+    // 之后重连 / 重进房补发的同一局终局快照必须被忽略
+    feed(endedSnapshot('g1'));
+    expect(hook.result.current.game).toBeNull();
+    expect(hook.result.current.ended).toBeNull();
+    expect(hook.result.current.showPanel).toBe(false);
+  });
+
+  it('冷启动进房：手上没有这一局 → 终局快照一律忽略（残局归"对局记录"）', () => {
+    const { hook, feed } = makeHook(1); // 全新会话：什么都没收到过
+    feed(endedSnapshot('cold-1'));
+    expect(hook.result.current.game).toBeNull();
+    expect(hook.result.current.ended).toBeNull();
+    expect(hook.result.current.showPanel).toBe(false);
+  });
+
+  it('进行中的快照永远摆出来（重进房要能接着观战 / 接着下）', () => {
+    const { hook, feed } = makeHook(2); // 掉线重连 / 后进房的观战者
+    feed(playingSnapshot('g-live'));
+    expect(hook.result.current.game?.gameId).toBe('g-live');
+    expect(hook.result.current.game?.status).toBe('playing');
+    expect(hook.result.current.ended).toBeNull();
+    expect(hook.result.current.showPanel).toBe(true);
+  });
+
+  it('对方想再来一局、而本端手上没有这一局：不摆面板，但告诉他怎么开新局', () => {
+    const { hook, feed } = makeHook(1); // 收起过 / 刷新过：手上什么都没有
+    vi.mocked(showToast).mockClear();
+    feed({ type: 'game-rematch-offered', gameId: 'gone', from: 2 });
+    expect(hook.result.current.game).toBeNull();
+    expect(hook.result.current.showPanel).toBe(false);
+    // 对方那边正卡在"等待对方再来一局…"：不能默默丢掉这条消息
+    expect(vi.mocked(showToast)).toHaveBeenCalledWith('对方想再来一局：点成员卡上的「对弈」就能开新局');
   });
 });
 

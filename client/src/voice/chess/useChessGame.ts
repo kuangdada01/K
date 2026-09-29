@@ -164,46 +164,71 @@ export function useChessGame(deps: {
     depsRef.current = deps;
   }, [deps]);
 
-  const onChessMessage = useCallback((msg: ChessGameServerMsg): void => {
-    switch (msg.type) {
-      case 'game-invite-received':
-        setInvite({ inviteId: msg.inviteId, from: msg.from, side: msg.side, expiresAt: msg.expiresAt });
-        break;
-      case 'game-invite-result': {
-        // 发出的邀请：收到任一回执即清"等待应答"横幅（每客户端同时最多一个）
-        setOutgoing(null);
-        // 收到的邀请：服务端作废（发起方离房/撤销）时按 inviteId 清横幅
-        setInvite((prev) => (prev && prev.inviteId === msg.inviteId ? null : prev));
-        if (msg.outcome === 'declined') showToast('对方拒绝了你的对局邀请');
-        else if (msg.outcome === 'expired') showToast('对局邀请已过期');
-        else if (msg.outcome === 'cancelled') showToast('对局邀请已取消');
-        break;
-      }
-      case 'game-started':
-        setGame({
-          gameId: msg.gameId,
-          red: msg.red,
-          black: msg.black,
-          fen: msg.fen,
-          turn: msg.turn,
-          status: 'playing',
-          lastMove: null,
-          moveCount: 0,
-          rematchBy: null,
-          clocks: msg.clocks,
-          notations: [],
-          captured: { red: [], black: [] },
-        });
-        setInvite(null);
-        setOutgoing(null);
-        setDrawOfferFrom(null);
-        setUndoOfferFrom(null);
-        setEnded(null);
-        break;
-      case 'game-moved':
-        setGame((prev) => {
-          if (!prev || prev.gameId !== msg.gameId) return prev;
-          return {
+  /**
+   * game 的**同步镜像**。
+   *
+   * 为什么不能直接读 state：`game-snapshot` 那条护栏要判"手上有没有这一局"
+   * （见下面的 game-snapshot 分支），而 onChessMessage 是 `[]` 依赖的稳定回调 ——
+   * 读 state 拿到的是闭包里的旧值，靠 useEffect 回填又太晚（同一轮里可能连来
+   * 两条消息）。所以 game 的每一处写入都走下面两个小工具，顺带把镜像更新掉。
+   */
+  const gameRef = useRef<ChessGameView | null>(null);
+
+  /** 写 game 的唯一入口（镜像与 state 同步，判据不会错位） */
+  const writeGame = useCallback((next: ChessGameView | null): void => {
+    gameRef.current = next;
+    setGame(next);
+  }, []);
+
+  /** 按 gameId 命中才打补丁（等价于 `setGame(prev => prev?.gameId === id ? … : prev)`） */
+  const patchGame = useCallback(
+    (gameId: string, patch: (prev: ChessGameView) => ChessGameView): void => {
+      const prev = gameRef.current;
+      if (!prev || prev.gameId !== gameId) return;
+      writeGame(patch(prev));
+    },
+    [writeGame]
+  );
+
+  const onChessMessage = useCallback(
+    (msg: ChessGameServerMsg): void => {
+      switch (msg.type) {
+        case 'game-invite-received':
+          setInvite({ inviteId: msg.inviteId, from: msg.from, side: msg.side, expiresAt: msg.expiresAt });
+          break;
+        case 'game-invite-result': {
+          // 发出的邀请：收到任一回执即清"等待应答"横幅（每客户端同时最多一个）
+          setOutgoing(null);
+          // 收到的邀请：服务端作废（发起方离房/撤销）时按 inviteId 清横幅
+          setInvite((prev) => (prev && prev.inviteId === msg.inviteId ? null : prev));
+          if (msg.outcome === 'declined') showToast('对方拒绝了你的对局邀请');
+          else if (msg.outcome === 'expired') showToast('对局邀请已过期');
+          else if (msg.outcome === 'cancelled') showToast('对局邀请已取消');
+          break;
+        }
+        case 'game-started':
+          writeGame({
+            gameId: msg.gameId,
+            red: msg.red,
+            black: msg.black,
+            fen: msg.fen,
+            turn: msg.turn,
+            status: 'playing',
+            lastMove: null,
+            moveCount: 0,
+            rematchBy: null,
+            clocks: msg.clocks,
+            notations: [],
+            captured: { red: [], black: [] },
+          });
+          setInvite(null);
+          setOutgoing(null);
+          setDrawOfferFrom(null);
+          setUndoOfferFrom(null);
+          setEnded(null);
+          break;
+        case 'game-moved':
+          patchGame(msg.gameId, (prev) => ({
             ...prev,
             fen: msg.fen,
             turn: msg.turn,
@@ -213,71 +238,89 @@ export function useChessGame(deps: {
             clocks: msg.clocks,
             notations: [...prev.notations, msg.notation],
             captured: appendCaptured(prev.captured, msg.move),
-          };
-        });
-        setDrawOfferFrom(null);
-        setUndoOfferFrom(null);
-        break;
-      case 'game-ended':
-        setGame((prev) => {
-          if (!prev || prev.gameId !== msg.gameId) return prev;
-          return { ...prev, status: msg.result };
-        });
-        setDrawOfferFrom(null);
-        setUndoOfferFrom(null);
-        setEnded({ result: msg.result, reason: msg.reason });
-        break;
-      case 'game-snapshot':
-        // 断线重连恢复 / 观战者后进房：直接以快照为准
-        setGame({
-          gameId: msg.gameId,
-          red: msg.red,
-          black: msg.black,
-          fen: msg.fen,
-          turn: msg.turn,
-          status: msg.status,
-          lastMove: msg.lastMove,
-          moveCount: msg.moveCount,
-          rematchBy: null,
-          clocks: msg.clocks,
-          notations: msg.notations,
-          captured: msg.captured,
-        });
-        // 终局快照必须恢复 ended 横幅：否则刷新后"对局结束但没有
-        // 再来一局/复盘/收起"，面板无法操作（线上实测卡死）
-        setEnded(
-          msg.status !== 'playing' ? { result: msg.status, reason: msg.endReason ?? 'agreement' } : null
-        );
-        break;
-      case 'game-draw-offered':
-        setDrawOfferFrom(msg.from);
-        break;
-      case 'game-draw-declined':
-        showToast('对方拒绝了求和');
-        break;
-      case 'game-undo-offered':
-        setUndoOfferFrom(msg.from);
-        break;
-      case 'game-undo-declined':
-        showToast('对方拒绝了你的悔棋请求');
-        break;
-      case 'game-rematch-offered':
-        setGame((prev) => {
-          if (!prev || prev.gameId !== msg.gameId) return prev;
-          return { ...prev, rematchBy: msg.from };
-        });
-        break;
-      case 'game-rematch-reset':
-        setGame((prev) => {
-          if (!prev || prev.gameId !== msg.gameId) return prev;
-          return { ...prev, rematchBy: null };
-        });
-        break;
-      case 'game-undone':
-        // 悔棋生效：全房按广播恢复盘面/棋钟/记谱/被吃子
-        setGame((prev) => {
-          if (!prev || prev.gameId !== msg.gameId) return prev;
-          return {
+          }));
+          setDrawOfferFrom(null);
+          setUndoOfferFrom(null);
+          break;
+        case 'game-ended':
+          patchGame(msg.gameId, (prev) => ({ ...prev, status: msg.result }));
+          setDrawOfferFrom(null);
+          setUndoOfferFrom(null);
+          setEnded({ result: msg.result, reason: msg.reason });
+          break;
+        case 'game-snapshot': {
+          /*
+           * ★ **已经结束、且不是本端亲历的对局，一律不摆出来**（与安卓端
+           *   `ChessGameController` 的同一条护栏对齐）。
+           *
+           * 服务端在"房间空掉 / 开下一局"之前**一直保留那一局的终局态**，而快照是
+           * 成员 join 时补发的 → 不拦的话，"收起棋盘"只是把本端 state 置空，刷新 /
+           * 重进房时这份快照又把早就结束的棋盘摆回眼前
+           * （用户实测："收起棋盘每次进来怎么还能看见，刷新也是会出现棋盘"）。
+           * 残局的归属是「对局记录」，不是房间面板。
+           *
+           * 判据用"手上有没有这一局"（gameRef 同 id）而不是时间戳：
+           *  · 在房里看着它结束 → 手上一直有 → 照常恢复终局横幅（不然"结束了但既没有
+           *    再来一局、也没有收起棋盘"= 死局，线上踩过）；
+           *  · 冷启动 / 刷新 / 离房再进房 / 收起过 → 手上没有 → 忽略这条快照。
+           * 进行中的对局**永远显示**（重进房要能接着观战 / 接着下）。
+           *
+           * 代价：终局残局不自动恢复就没有"再来一局"入口 —— 这是刻意的取舍，
+           * 入口交给成员卡「对弈」（握手成功即开新局，服务端对已结束的对局不再拦截邀请）。
+           */
+          const known = gameRef.current;
+          if (msg.status !== 'playing' && known?.gameId !== msg.gameId) break;
+          writeGame({
+            gameId: msg.gameId,
+            red: msg.red,
+            black: msg.black,
+            fen: msg.fen,
+            turn: msg.turn,
+            status: msg.status,
+            lastMove: msg.lastMove,
+            moveCount: msg.moveCount,
+            rematchBy: null,
+            clocks: msg.clocks,
+            notations: msg.notations,
+            captured: msg.captured,
+          });
+          // 终局快照必须恢复 ended 横幅：否则刷新后"对局结束但没有
+          // 再来一局/复盘/收起"，面板无法操作（线上实测卡死）
+          setEnded(
+            msg.status !== 'playing' ? { result: msg.status, reason: msg.endReason ?? 'agreement' } : null
+          );
+          break;
+        }
+        case 'game-draw-offered':
+          setDrawOfferFrom(msg.from);
+          break;
+        case 'game-draw-declined':
+          showToast('对方拒绝了求和');
+          break;
+        case 'game-undo-offered':
+          setUndoOfferFrom(msg.from);
+          break;
+        case 'game-undo-declined':
+          showToast('对方拒绝了你的悔棋请求');
+          break;
+        case 'game-rematch-offered': {
+          const hold = gameRef.current;
+          if (!hold || hold.gameId !== msg.gameId) {
+            // 手上没有这一局（收起过 / 刷新过 / 后来才进房）：终局面板摆不出来，
+            // 也就没有那颗"点击开始"的按钮。但**不能当没这回事** —— 对方那边正卡在
+            // "等待对方再来一局…"，得让本端知道并给出可行的动作（成员卡「对弈」）。
+            showToast('对方想再来一局：点成员卡上的「对弈」就能开新局');
+            break;
+          }
+          writeGame({ ...hold, rematchBy: msg.from });
+          break;
+        }
+        case 'game-rematch-reset':
+          patchGame(msg.gameId, (prev) => ({ ...prev, rematchBy: null }));
+          break;
+        case 'game-undone':
+          // 悔棋生效：全房按广播恢复盘面/棋钟/记谱/被吃子
+          patchGame(msg.gameId, (prev) => ({
             ...prev,
             fen: msg.fen,
             turn: msg.turn,
@@ -287,32 +330,30 @@ export function useChessGame(deps: {
             clocks: msg.clocks,
             notations: msg.notations,
             captured: msg.captured,
-          };
-        });
-        setDrawOfferFrom(null);
-        setUndoOfferFrom(null);
-        break;
-      case 'game-paused':
-      case 'game-resumed': {
-        // 暂停/继续：clocks 是唯一事实来源（paused/deadline 都在里面），
-        // 视图层不再单独维护 paused 字段
-        const paused = msg.type === 'game-paused';
-        setGame((prev) => {
-          if (!prev || prev.gameId !== msg.gameId) return prev;
-          return { ...prev, clocks: msg.clocks };
-        });
-        if (msg.by !== depsRef.current.getSelfUserId()) {
-          showToast(paused ? '对方暂停了对局' : '对方继续了对局');
+          }));
+          setDrawOfferFrom(null);
+          setUndoOfferFrom(null);
+          break;
+        case 'game-paused':
+        case 'game-resumed': {
+          // 暂停/继续：clocks 是唯一事实来源（paused/deadline 都在里面），
+          // 视图层不再单独维护 paused 字段
+          const paused = msg.type === 'game-paused';
+          patchGame(msg.gameId, (prev) => ({ ...prev, clocks: msg.clocks }));
+          if (msg.by !== depsRef.current.getSelfUserId()) {
+            showToast(paused ? '对方暂停了对局' : '对方继续了对局');
+          }
+          break;
         }
-        break;
+        case 'game-error':
+          showToast(msg.message);
+          break;
+        default:
+          break;
       }
-      case 'game-error':
-        showToast(msg.message);
-        break;
-      default:
-        break;
-    }
-  }, []);
+    },
+    [writeGame, patchGame]
+  );
 
   const inviteUser = useCallback((toUserId: number, toName: string, side: ChessSideChoice) => {
     setOutgoing({ inviteId: `pending-${toUserId}`, toUserId, toName });
@@ -358,13 +399,14 @@ export function useChessGame(deps: {
     depsRef.current.send({ type: 'game-undo-respond', gameId, accept });
   }, []);
 
-  const rematch = useCallback((gameId: string) => {
-    const self = depsRef.current.getSelfUserId();
-    setGame((prev) =>
-      prev && prev.gameId === gameId && prev.rematchBy === null ? { ...prev, rematchBy: self } : prev
-    );
-    depsRef.current.send({ type: 'game-rematch', gameId });
-  }, []);
+  const rematch = useCallback(
+    (gameId: string) => {
+      const self = depsRef.current.getSelfUserId();
+      patchGame(gameId, (prev) => (prev.rematchBy === null ? { ...prev, rematchBy: self } : prev));
+      depsRef.current.send({ type: 'game-rematch', gameId });
+    },
+    [patchGame]
+  );
 
   const pause = useCallback((gameId: string) => {
     depsRef.current.send({ type: 'game-pause', gameId });
@@ -375,9 +417,9 @@ export function useChessGame(deps: {
   }, []);
 
   const dismissEnded = useCallback(() => {
-    setGame(null);
+    writeGame(null);
     setEnded(null);
-  }, []);
+  }, [writeGame]);
 
   const openReview = useCallback((gameId?: string) => {
     setReviewGameId(gameId ?? null);
@@ -390,7 +432,7 @@ export function useChessGame(deps: {
   }, []);
 
   const reset = useCallback(() => {
-    setGame(null);
+    writeGame(null);
     setInvite(null);
     setOutgoing(null);
     setDrawOfferFrom(null);
@@ -398,7 +440,7 @@ export function useChessGame(deps: {
     setEnded(null);
     setReviewOpen(false);
     setReviewGameId(null);
-  }, []);
+  }, [writeGame]);
 
   return useMemo(
     () => ({

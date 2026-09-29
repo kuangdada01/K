@@ -79,6 +79,37 @@ async function soundEvents(page: Page): Promise<string[]> {
   return page.evaluate(() => ((window as unknown as { __sndEvents?: string[] }).__sndEvents ?? []).slice());
 }
 
+/**
+ * 记录该页收到的 `game-*` 下行帧。
+ *
+ * 为什么端到端要用它：测"面板不该摆出来"时，只断言"看不见棋盘"是不够的 ——
+ * 快照到达前的那一刻本来就没有棋盘，断言会**抢先通过**（真写错过一次：
+ * 故意摘掉护栏后 e2e 依然是绿的）。必须等到服务端**确实补发了快照**、
+ * 再留出 React 落状态的时间，这条断言才有意义。
+ */
+function collectGameFrames(page: Page): string[] {
+  const frames: string[] = [];
+  page.on('websocket', (ws) => {
+    ws.on('framereceived', (frame) => {
+      const payload = typeof frame.payload === 'string' ? frame.payload : '';
+      if (payload.includes('"game-')) frames.push(payload);
+    });
+  });
+  return frames;
+}
+
+/** 等服务端补发的快照帧到齐（返回收到的快照条数） */
+async function waitForSnapshots(frames: string[], label: string): Promise<void> {
+  await expect
+    .poll(() => frames.filter((f) => f.includes('"type":"game-snapshot"')).length, {
+      message: `${label} 应收到服务端补发的对局快照`,
+      timeout: 10_000,
+    })
+    .toBeGreaterThan(0);
+  // 帧到了不等于 React 已经落状态：留一拍再断言"面板长什么样"
+  await new Promise((resolve) => setTimeout(resolve, 600));
+}
+
 test('双人对弈全流程：邀请→开局→走子同步→认输终局', async ({ browser, request }) => {
   const created = await request.post('/api/voice/rooms', {
     data: { name: roomName, description: 'e2e 象棋对局（临时房间）' },
@@ -90,6 +121,8 @@ test('双人对弈全流程：邀请→开局→走子同步→认输终局', as
   const contextB = await browser.newContext();
   const pageA = await contextA.newPage();
   const pageB = await contextB.newPage();
+  const framesA = collectGameFrames(pageA);
+  const framesB = collectGameFrames(pageB);
 
   try {
     await enterRoom(pageA, roomName);
@@ -199,12 +232,10 @@ test('双人对弈全流程：邀请→开局→走子同步→认输终局', as
     await soundToggle.click();
     await expect(soundToggle).toHaveAttribute('title', '音效：开（落子 / 吃子 / 将军 / 绝杀）');
 
-    // 三期四：再来一局（双向点击直开）——A 刷新后横幅仍在（快照恢复），
-    // A 点"再来一局"转等待态，B 的按钮转"点击开始"，B 点击即开新局
-    await pageA.reload();
-    // 访客刷新后不会自动回房（自动回房仅登录用户），需重新点击进入
-    await pageA.getByText(roomName).first().click();
-    await expect(pageA.getByTestId('chess-ended')).toBeVisible({ timeout: 10_000 });
+    // 三期四：再来一局（双向点击直开）——A 点"再来一局"转等待态，
+    // B 的按钮转"点击开始"，B 点击即开新局。
+    // ⚠️ 这一步**不能**再靠"A 先刷新、横幅照样还在"进入流程：终局残局只在"本端亲历"时
+    // 才摆出来（下面的残局护栏用例就是针对这条），刷新 = 本端没亲历过 → 面板回空闲入口条。
     await pageA.getByTestId('chess-rematch').click();
     await expect(pageA.getByTestId('chess-rematch')).toHaveText('等待对方再来一局…');
     await expect(pageB.getByTestId('chess-rematch')).toHaveText('对方想再来一局 · 点击开始', {
@@ -220,6 +251,41 @@ test('双人对弈全流程：邀请→开局→走子同步→认输终局', as
     // 重开后是新的一局（进行中）：终局横幅/收起按钮随新局消失，面板回到对局态
     await expect(pageA.getByTestId('chess-ended')).toHaveCount(0);
     await expect(pageB.getByTestId('chess-ended')).toHaveCount(0);
+
+    /*
+     * ---- 终局残局护栏（用户实测的问题）----
+     * "收起棋盘每次进来怎么还能看见，刷新也是会出现棋盘"：
+     * 服务端在"房间空掉 / 开下一局"之前**一直保留那一局的终局态**，而 game-snapshot 是
+     * join 时补发的 → 客户端不拦的话，收起只是本端置空，刷新/重进房又被这份快照摆回来。
+     * 现在只摆"本端亲历"的那一局（安卓端一直如此）。
+     */
+    // A 再认输一次收尾这一局
+    await pageA.getByRole('button', { name: '认输' }).click();
+    await expect(pageA.getByTestId('chess-ended')).toBeVisible({ timeout: 10_000 });
+    await expect(pageB.getByTestId('chess-ended')).toBeVisible({ timeout: 10_000 });
+
+    // A 自己收起棋盘 → 回到空闲入口条（"对局记录"仍在，残局入口没丢）
+    await pageA.getByRole('button', { name: '收起棋盘' }).click();
+    await expect(pageA.getByTestId('chess-board')).toHaveCount(0);
+    await expect(pageA.getByTestId('chess-idle')).toBeVisible();
+
+    // ★ A 刷新 + 重进房：服务端照样补发这局的终局快照，但本端没亲历过 → 不许再摆回来
+    await pageA.reload();
+    // 访客刷新后不会自动回房（自动回房仅登录用户），需重新点击进入
+    await pageA.getByText(roomName).first().click();
+    await expect(pageA.locator('button[title="退出房间"]')).toBeVisible({ timeout: 15_000 });
+    await waitForSnapshots(framesA, 'A 重进房');
+    await expect(pageA.getByTestId('chess-idle')).toBeVisible();
+    await expect(pageA.getByTestId('chess-board')).toHaveCount(0);
+    await expect(pageA.getByTestId('chess-ended')).toHaveCount(0);
+
+    // 一直没收起过的 B（亲历了终局）：刷新后是"冷启动"，同样不再自动摆出来
+    await pageB.reload();
+    await pageB.getByText(roomName).first().click();
+    await expect(pageB.locator('button[title="退出房间"]')).toBeVisible({ timeout: 15_000 });
+    await waitForSnapshots(framesB, 'B 刷新重进房');
+    await expect(pageB.getByTestId('chess-idle')).toBeVisible();
+    await expect(pageB.getByTestId('chess-board')).toHaveCount(0);
   } finally {
     await contextA.close();
     await contextB.close();
