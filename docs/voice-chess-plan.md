@@ -42,6 +42,16 @@
 > - **Android 原生端**：协议与引擎已双端就绪（`@k/shared` 的 game-* 消息 + 规则引擎），但原生 Compose 实现
 >   属独立工程，本阶段不涉及。
 >   测试：server 战绩聚合集成测试 + client foldGame/复盘状态用例 + e2e 扩展（复盘直达/列表/播报开关/空闲入口）。
+>
+> **⚠️ 后续变更（0.1.15 / 0.1.16）**
+>
+> - **走子语音播报已移除**（上文的 `useChessTTS` / `chess-tts-toggle` / `voice:chessTTS` 都不存在了，按用户要求去掉），
+>   改为**落子 / 吃子 / 将军 / 绝杀四音效**：web 走 `client/src/voice/chess/sounds.ts`（素材在
+>   `client/public/chess/sounds/`），安卓走 `ChessSounds`（`res/raw/`）。面板上的三态音效开关保留。
+> - **0.1.16 重写了 web 端音效的加载策略**：素材没就位时不再**静默**回落合成音（提前预热字节 → 手势后解码 →
+>   播放先等一小会儿 → 失败可重试 → 状态交面板提示）。原因与教训见 `.workbuddy/memory/topics/voice-chess.md`。
+> - **0.1.16 修了安卓端「着法坐标无效」**：上行报文里坐标为 0 的分量被 kotlinx 默认配置吃掉
+>   （`ModelsChess.kt` 的 `ChessClientJson` / 契约测试 `ChessContractsTest`）。
 
 ---
 

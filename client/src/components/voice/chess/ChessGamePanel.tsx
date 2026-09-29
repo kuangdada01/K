@@ -19,12 +19,15 @@ import { Crown, RotateCcw, Swords, Undo2, Volume2, VolumeX } from 'lucide-react'
 import { findKing, isInCheck, parseFen, type ChessClocks, type ChessSide, type ChessSquare } from '@k/shared';
 import { useVoice } from '../../../context/VoiceContext';
 import {
+  getClassicPackState,
   getSoundPack,
   playChessSound,
   setSoundPack,
+  subscribeClassicPack,
   type ChessSound,
   type ChessSoundPack,
 } from '../../../voice/chess/sounds';
+import { showToast } from '../../ui/Toast';
 import ChessBoard from './ChessBoard';
 import ChessReviewModal from './ChessReviewModal';
 import styles from './chess.module.css';
@@ -104,6 +107,28 @@ export default function ChessGamePanel() {
   useEffect(() => {
     soundOnRef.current = soundOn;
   }, [soundOn]);
+
+  /**
+   * 经典素材的就位状态。
+   *
+   * 为什么要把这件事摆到界面上：素材取不到时 sounds.ts 会**回落合成音**，
+   * 而用户听到的只是"声音不对"（线上 09-29 反馈："web 端落子还是之前的声音"，
+   * 而 App 里是我给的音效）—— 没有任何线索指向"素材没加载成功"。
+   * 现在第一次真失败就弹一条提示，标题也随之改写，点一下喇叭即可切到合成音或重试。
+   */
+  const [packState, setPackState] = useState(() => getClassicPackState());
+  useEffect(() => {
+    // 只在"本次挂载期间**变成** failed"时提示：进房时已经坏掉的老状态不再重复弹
+    let announced = getClassicPackState() === 'failed';
+    return subscribeClassicPack((next) => {
+      setPackState(next);
+      if (next === 'failed' && !announced) {
+        announced = true;
+        showToast('经典音效素材加载失败，暂时用合成音效（点喇叭可切换）');
+      }
+    });
+  }, []);
+
   const changePack = useCallback((pack: ChessSoundPack) => {
     setSoundPack(pack); // 写偏好
     setSoundPackState(pack); // 驱动标题/图标
@@ -367,7 +392,11 @@ export default function ChessGamePanel() {
             !soundOn
               ? '音效：关（点击开启）'
               : soundPack === 'classic'
-                ? '音效：经典（点击切换合成音效）'
+                ? packState === 'failed'
+                  ? '音效：经典素材加载失败，正在用合成音（点击切换）'
+                  : packState === 'loading'
+                    ? '音效：经典（素材加载中…点击切换合成音效）'
+                    : '音效：经典（点击切换合成音效）'
                 : '音效：合成（点击关闭音效）'
           }
           data-testid="chess-sound-toggle"

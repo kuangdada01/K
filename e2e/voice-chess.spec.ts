@@ -25,12 +25,58 @@ const MIC_INIT_SCRIPT = `
 })();
 `;
 
-/** 进房并等到成员网格出现（麦克风假流已注入） */
+/**
+ * 记录"实际发声的是谁"：BufferSource = 经典包素材（用户给的四个音效），
+ * Oscillator = 合成包/回落合成音。
+ *
+ * 为什么要端到端盯这一条：线上 09-29 报过「web 端落子还是之前的声音，App 里是我给的音效」——
+ * 素材取不到/解码失败/手势之前收到广播时，代码会**静默**回落合成音，界面与听感都只是
+ * "声音不对"，没有任何线索。单测（client/src/voice/chess/sounds.test.ts）盯逻辑，
+ * 这里盯真实浏览器 + 真实 http 资源。
+ */
+const AUDIO_LOG_SCRIPT = `
+(() => {
+  const events = (window.__sndEvents = []);
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  const wrap = (name, tag) => {
+    const orig = AC.prototype[name];
+    if (!orig) return;
+    AC.prototype[name] = function (...args) {
+      const node = orig.apply(this, args);
+      if (node && node.start) {
+        const start = node.start.bind(node);
+        node.start = (...a) => { events.push(tag); return start(...a); };
+      }
+      return node;
+    };
+  };
+  wrap('createBufferSource', 'sample');   // 素材
+  wrap('createOscillator', 'synth');      // 合成音
+  const of = window.fetch;
+  window.fetch = function (input) {
+    const url = typeof input === 'string' ? input : (input && input.url) || '';
+    const p = of.apply(this, arguments);
+    if (url.includes('/chess/sounds/')) {
+      p.then((r) => { if (!r.ok) events.push('sample-http-' + r.status); }).catch(() => events.push('sample-http-err'));
+    }
+    return p;
+  };
+})();
+`;
+
+/** 进房并等到成员网格出现（麦克风假流 + 音频探针已注入） */
 async function enterRoom(page: Page, name: string) {
   await page.addInitScript(MIC_INIT_SCRIPT);
+  await page.addInitScript(AUDIO_LOG_SCRIPT);
   await page.goto('/voice');
   await page.getByText(name).first().click();
   await expect(page.locator('button[title="退出房间"]')).toBeVisible({ timeout: 15_000 });
+}
+
+/** 取该页记录到的发声事件 */
+async function soundEvents(page: Page): Promise<string[]> {
+  return page.evaluate(() => ((window as unknown as { __sndEvents?: string[] }).__sndEvents ?? []).slice());
 }
 
 test('双人对弈全流程：邀请→开局→走子同步→认输终局', async ({ browser, request }) => {
@@ -86,6 +132,29 @@ test('双人对弈全流程：邀请→开局→走子同步→认输终局', as
     // B 变为轮到己方
     await expect(pageB.getByText('轮到你走')).toBeVisible({ timeout: 10_000 });
 
+    /*
+     * 落子音必须真的播用户给的素材（BufferSource），而不是合成音（Oscillator）。
+     * 存量坑：素材没就位时老实现会**静默**改播合成音 —— 用户听到的只是"声音不对"
+     * （线上 09-29："web 端落子还是之前的声音"）。双方都要响，且都不能是合成音。
+     */
+    await expect.poll(async () => (await soundEvents(pageA)).length, { timeout: 5_000 }).toBeGreaterThan(0);
+    const sndA = await soundEvents(pageA);
+    const sndB = await soundEvents(pageB);
+    expect(sndA, `A 端应播素材：${sndA.join(',')}`).toContain('sample');
+    expect(sndB, `B 端应播素材：${sndB.join(',')}`).toContain('sample');
+    expect(
+      sndA.filter((e) => e === 'synth'),
+      'A 端不该回落合成音'
+    ).toHaveLength(0);
+    expect(
+      sndB.filter((e) => e === 'synth'),
+      'B 端不该回落合成音'
+    ).toHaveLength(0);
+    expect(
+      sndA.filter((e) => e.startsWith('sample-http')),
+      '素材必须取得到'
+    ).toHaveLength(0);
+
     // B 应一手：黑马 (1,9)→(2,7)（马走日，蹩腿位 (1,8) 为空，合法）
     await pageB.getByTestId('chess-hot-1-9').click();
     await pageB.getByTestId('chess-hot-2-7').click();
@@ -120,13 +189,8 @@ test('双人对弈全流程：邀请→开局→走子同步→认输终局', as
     await pageA.getByRole('button', { name: '关闭', exact: true }).click();
     await expect(pageA.getByTestId('chess-review')).toHaveCount(0);
 
-    // 棋步播报开关：开启后标题变化（Chromium 支持 speechSynthesis）
-    const ttsToggle = pageA.getByTestId('chess-tts-toggle');
-    await expect(ttsToggle).toBeEnabled();
-    await ttsToggle.click();
-    await expect(ttsToggle).toHaveAttribute('title', '关闭棋步语音播报');
-
-    // 音效开关：三态循环（默认经典包）——经典 → 合成 → 关
+    // 音效开关：三态循环（默认经典包）——经典 → 合成 → 关。
+    // 标题在素材就位后是"音效：经典"，加载中/失败会另外点明（见 sounds.ts 的素材状态）
     const soundToggle = pageA.getByTestId('chess-sound-toggle');
     await expect(soundToggle).toHaveAttribute('title', '音效：经典（点击切换合成音效）');
     await soundToggle.click();

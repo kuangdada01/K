@@ -21,6 +21,10 @@ import ChessGamePanel from './ChessGamePanel';
 const h = vi.hoisted(() => ({
   chess: {} as Record<string, unknown>,
   playSound: vi.fn(),
+  toast: vi.fn(),
+  /** 经典素材状态（面板据此改写喇叭标题 + 弹一次提示） */
+  packState: 'ready' as 'loading' | 'ready' | 'failed',
+  packListeners: [] as ((s: 'loading' | 'ready' | 'failed') => void)[],
 }));
 
 vi.mock('../../../context/VoiceContext', () => ({
@@ -31,10 +35,19 @@ vi.mock('../../../context/VoiceContext', () => ({
   }),
 }));
 
+vi.mock('../../ui/Toast', () => ({ showToast: h.toast }));
+
 vi.mock('../../../voice/chess/sounds', () => ({
   getSoundPack: () => 'classic',
   setSoundPack: vi.fn(),
   playChessSound: h.playSound,
+  getClassicPackState: () => h.packState,
+  subscribeClassicPack: (cb: (s: 'loading' | 'ready' | 'failed') => void) => {
+    h.packListeners.push(cb);
+    return () => {
+      h.packListeners = h.packListeners.filter((l) => l !== cb);
+    };
+  },
 }));
 
 const MATE_FEN = '3k5/R8/9/9/9/4R4/9/9/9/4R3K w';
@@ -114,6 +127,9 @@ function renderPanel(initial: { game: ChessGameView; ended: unknown }) {
 beforeEach(() => {
   vi.useFakeTimers();
   h.playSound.mockClear();
+  h.toast.mockClear();
+  h.packState = 'ready';
+  h.packListeners = [];
 });
 
 afterEach(() => {
@@ -216,5 +232,53 @@ describe('ChessGamePanel 暂停/继续', () => {
     expect(screen.getByTestId('chess-status').textContent).toContain('对局已暂停');
     expect(screen.queryByTestId('chess-resume')).toBeNull();
     expect(screen.queryByTestId('chess-pause')).toBeNull();
+  });
+});
+
+/**
+ * 经典素材没就位时的可见性（2026-09-29 线上"web 端落子还是之前的声音"）：
+ * 素材取不到时 sounds.ts 会回落合成音，用户只会觉得"声音不对" ——
+ * 面板必须在标题上给出线索，并在**本次挂载期间**第一次失败时弹一条提示。
+ */
+describe('ChessGamePanel 音效素材状态', () => {
+  it('素材就位：喇叭标题是"经典音效"，不弹提示', () => {
+    renderPanel({ game: playingGame(), ended: null });
+    expect(screen.getByTestId('chess-sound-toggle').getAttribute('title')).toBe(
+      '音效：经典（点击切换合成音效）'
+    );
+    expect(h.toast).not.toHaveBeenCalled();
+  });
+
+  it('素材还在加载：标题点明"加载中"，不弹提示（不是失败，不该惊动用户）', () => {
+    h.packState = 'loading';
+    renderPanel({ game: playingGame(), ended: null });
+    expect(screen.getByTestId('chess-sound-toggle').getAttribute('title')).toContain('素材加载中');
+    expect(h.toast).not.toHaveBeenCalled();
+  });
+
+  it('素材加载失败：标题改写 + 弹一条提示（只弹一次）', () => {
+    h.packState = 'loading';
+    renderPanel({ game: playingGame(), ended: null });
+
+    act(() => {
+      h.packListeners.forEach((cb) => cb('failed'));
+    });
+
+    expect(screen.getByTestId('chess-sound-toggle').getAttribute('title')).toContain('素材加载失败');
+    expect(h.toast).toHaveBeenCalledTimes(1);
+    expect(h.toast.mock.calls[0]![0]).toContain('经典音效素材加载失败');
+
+    // 后续再来一次 failed（比如另一个音效也失败）不重复弹
+    act(() => {
+      h.packListeners.forEach((cb) => cb('failed'));
+    });
+    expect(h.toast).toHaveBeenCalledTimes(1);
+  });
+
+  it('挂载时就已经是失败态：只改标题，不再重复弹提示（进房不该被老状态打扰）', () => {
+    h.packState = 'failed';
+    renderPanel({ game: playingGame(), ended: null });
+    expect(screen.getByTestId('chess-sound-toggle').getAttribute('title')).toContain('素材加载失败');
+    expect(h.toast).not.toHaveBeenCalled();
   });
 });
