@@ -4,16 +4,20 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +26,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -30,9 +37,11 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,12 +51,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.abs
 import kotlinx.coroutines.launch
 import top.kuangdada.k.core.data.ApiResult
 import top.kuangdada.k.core.data.BookRepository
@@ -106,8 +118,20 @@ fun ReaderScreen(
     // 重试计数：作为 LaunchedEffect 的 key 之一，点"重试"时自增即可触发重新拉取
     var reloadTick by remember { mutableIntStateOf(0) }
 
-    val scroll = rememberScrollState()
+    val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+
+    // ---- 横滑翻页（跟手）----
+    // 视口高度（"一页" = 一个正文区高度）；翻页 = 一次滚动一个视口
+    var viewportPx by remember { mutableIntStateOf(0) }
+    /** 跟手/翻页的横向位移（px），graphicsLayer 绘制期读取 —— 拖动每帧不重组 */
+    val dragX = remember { mutableFloatStateOf(0f) }
+    /** 翻页动画执行中：期间的新的横滑手势一律忽略（避免两套位移互相打架） */
+    var flipping by remember { mutableStateOf(false) }
+    /** 往回翻到上一章时，新章节到货后要滚到**末尾**（阅读连续性） */
+    var pendingScrollBottom by remember { mutableStateOf(false) }
+    /** 翻章后新正文到货要先回顶部：**不能立刻滚**——见 openChapter 里的时序说明 */
+    var pendingScrollTop by remember { mutableStateOf(false) }
 
     LaunchedEffect(current, reloadTick) {
         loading = true
@@ -120,26 +144,112 @@ fun ReaderScreen(
         loading = false
     }
 
-    // 进度：用滚动位置估算（服务端没有"章节总字数/页数"，所以只能给百分比）
+    // 正文按空行分段（段间距用 spacing；行高按设计稿取字号的 2.0 倍）。
+    // 提到屏幕作用域：翻章回滚/锚点恢复的 LaunchedEffect 也要知道段数。
+    val paragraphs = remember(text) {
+        text.orEmpty().replace("\r\n", "\n")
+            .split(Regex("\n\\s*\n"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+    }
+
+    // 进度：用可见段估算（服务端没有"章节总字数/页数"，只能给百分比）
     val progress by remember {
         derivedStateOf {
-            val max = scroll.maxValue
-            if (max <= 0) 0f else (scroll.value.toFloat() / max).coerceIn(0f, 1f)
+            val total = listState.layoutInfo.totalItemsCount
+            if (total <= 0) 0f
+            else {
+                val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                ((last + 1).toFloat() / total).coerceIn(0f, 1f)
+            }
         }
     }
 
     // 滚到本章末尾 → 浮出「下一章」。
-    // 设计稿工具条里没有翻章按钮，但连续阅读不能每次都开目录 ——
-    // 这是「贴稿 + 不牺牲体验」的折中：平时不出现，读到章末才出现。
+    // ★ `!canScrollForward` 同时覆盖两种"到底"：真的滚到末尾，以及**本章内容不满一屏**
+    //   （后者老实现用 scroll.maxValue 判断，maxValue==0 时按钮永远不出现 —— 就是
+    //   "短章节不触发下一章"那个 bug 的根因）。
     val atChapterEnd by remember {
-        derivedStateOf {
-            scroll.maxValue > 0 && scroll.value >= scroll.maxValue - 120
-        }
+        derivedStateOf { !listState.canScrollForward }
     }
 
     val chapters = detail.flatChapters
     val index = chapters.indexOfFirst { it.file == current.file }
     val chapterNo = if (index >= 0) index + 1 else 0
+
+    // ---- 章内阅读锚点（精确定位续读）----
+    // 记 (章节下标, 首个可见段, 段内像素偏移)。保存时机刻意只有两个：
+    //  · 离开阅读器（DisposableEffect.onDispose）；
+    //  · 换章（[openChapter] 里先存旧章再切）。
+    // 不在滚动中连续写：既省写放大，也避免"新章节首帧 firstVisible=0 把锚点冲掉"
+    // 与恢复滚动互相打架的时序。恢复条件是锚点章节 == 当前章节 —— 正是"继续阅读"
+    // 回到退出位置（而不是章节开头）的那条路径。
+    fun saveAnchor() {
+        if (index >= 0) {
+            BookProgressAnchor[detail.id] = Triple(
+                index,
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+            )
+        }
+    }
+
+    /**
+     * 翻章统一入口：先存旧章锚点，再切章 + 通知宿主。
+     *
+     * ★ 时序（别"顺手优化"掉）：这里**不能立刻 scrollToItem(0)** —— 切章会触发
+     * DisposableEffect(current.file) 换 key，旧 effect 的 onDispose 会再存一次锚点；
+     * 若此刻滚动已被清零，存下来的就是 (旧章, 0, 0)，把真实位置冲掉。复位改由
+     * 下面的到货 effect 在新正文渲染前完成（pendingScrollTop / pendingScrollBottom）。
+     */
+    fun openChapter(ch: BookChapter, toBottom: Boolean = false) {
+        saveAnchor()
+        current = ch
+        onOpenChapter(ch)
+        pendingScrollTop = !toBottom
+        pendingScrollBottom = toBottom
+    }
+
+    // 离开阅读器：把退出时刻的位置存进锚点（"继续阅读"因此能回到这一段）
+    DisposableEffect(current.file) {
+        onDispose { saveAnchor() }
+    }
+
+    // 新章节正文到货后的滚动目标（优先级：回末尾 > 锚点恢复 > 回到顶部）。
+    // 滚动发生在内容首帧渲染之前（effect 先于下一帧），不会看到跳位。
+    LaunchedEffect(current, text) {
+        if (text == null) return@LaunchedEffect
+        val anchor = BookProgressAnchor[detail.id]
+        when {
+            pendingScrollBottom -> {
+                pendingScrollBottom = false
+                pendingScrollTop = false
+                listState.scrollToItem(paragraphs.lastIndex.coerceAtLeast(0))
+            }
+            !pendingScrollTop && anchor != null && anchor.first == index && index >= 0 -> {
+                listState.scrollToItem(anchor.second, anchor.third)
+            }
+            else -> {
+                pendingScrollTop = false
+                // 懒列表跨章复用（同一个 listState），旧章的可见位置必须清掉
+                listState.scrollToItem(0, 0)
+            }
+        }
+    }
+
+    // 记录阅读进度（进程内）：详情页的「已读 N% · 剩余 M 章」「继续阅读」与进度条都吃这份数据
+    LaunchedEffect(detail.id, current.file) {
+        if (index >= 0) BookProgress[detail.id] = index
+    }
+
+    // 字号三档循环（13 / 15 / 18）：设计稿工具条只有一个 AA 入口，点一下换一档
+    fun cycleFontSize() {
+        fontSize = when (fontSize) {
+            13 -> 15
+            15 -> 18
+            else -> 13
+        }
+    }
 
     // 系统关掉动画时，M4 的进出场一律直接到位
     val animationsEnabled = LocalAnimationsEnabled.current
@@ -158,20 +268,6 @@ fun ReaderScreen(
         }
         chapterFade.snapTo(0f)
         chapterFade.animateTo(1f, KMotion.effects())
-    }
-
-    // 记录阅读进度（进程内）：详情页的「已读 N% · 剩余 M 章」「继续阅读」与进度条都吃这份数据
-    LaunchedEffect(detail.id, current.file) {
-        if (index >= 0) BookProgress[detail.id] = index
-    }
-
-    // 字号三档循环（13 / 15 / 18）：设计稿工具条只有一个 AA 入口，点一下换一档
-    fun cycleFontSize() {
-        fontSize = when (fontSize) {
-            13 -> 15
-            15 -> 18
-            else -> 13
-        }
     }
 
     Box(modifier = Modifier.fillMaxSize().background(c.bgPage)) {
@@ -199,8 +295,100 @@ fun ReaderScreen(
                 KIconButton(icon = GlyphKind.Menu, onClick = { showCatalog = !showCatalog })
             }
 
-            // 正文
-            Box(modifier = Modifier.weight(1f)) {
+            // 正文。这里同时是**横滑翻页**的 gesture 宿主：
+            //  · onSizeChanged 量出"一页"高度（翻页 = 滚一个视口）；
+            //  · detectHorizontalDragGestures 只认横向往复，竖滑仍由 LazyColumn 自己滚动，
+            //    两套手势互不抢（各自等各自方向的 touch slop）。
+            // 拖动中 dragX 逐帧累加（graphicsLayer 跟手）；松手后按位移决定：
+            // 翻一页 / 到章边界翻一章 / 弹回 —— 见 decideFlip。
+            val pageable = !loading && error == null && text != null && !current.isPdf
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .onSizeChanged { viewportPx = it.height }
+                    .then(
+                        if (pageable) {
+                            Modifier.pointerInput(current.file, fontSize) {
+                                var gestureActive = false
+                                detectHorizontalDragGestures(
+                                    onDragStart = { if (!flipping) gestureActive = true },
+                                    onHorizontalDrag = { change, amount ->
+                                        if (gestureActive && !flipping) {
+                                            change.consume()
+                                            dragX.floatValue += amount
+                                        }
+                                    },
+                                    onDragEnd = {
+                                        if (!gestureActive || flipping) return@detectHorizontalDragGestures
+                                        gestureActive = false
+                                        val startX = dragX.floatValue
+                                        val w = viewportPx.toFloat()
+                                        if (w <= 0f || abs(startX) < 1f) {
+                                            dragX.floatValue = 0f
+                                            return@detectHorizontalDragGestures
+                                        }
+                                        val forward = startX < 0
+                                        val far = abs(startX) > w * 0.25f
+                                        flipping = true
+                                        scope.launch {
+                                            try {
+                                                suspend fun slide(from: Float, to: Float, ms: Int) = animate(
+                                                    from, to,
+                                                    animationSpec = tween(ms),
+                                                ) { v, _ -> dragX.floatValue = v }
+                                                when {
+                                                    // 位移不够一页：弹回
+                                                    !far -> slide(startX, 0f, 180)
+                                                    forward && listState.canScrollForward -> {
+                                                        slide(startX, -w, 200)      // 本页滑出左侧
+                                                        listState.scroll { scrollBy(w) } // 滚到下一页
+                                                        dragX.floatValue = w        // 新页从右侧进
+                                                        slide(w, 0f, 200)
+                                                    }
+                                                    !forward && listState.canScrollBackward -> {
+                                                        slide(startX, w, 200)       // 本页滑出右侧
+                                                        listState.scroll { scrollBy(-w) } // 滚到上一页
+                                                        dragX.floatValue = -w       // 新页从左侧进
+                                                        slide(-w, 0f, 200)
+                                                    }
+                                                    // 章边界：横滑越过去就是翻章（向后翻落到上一章末尾）
+                                                    forward -> {
+                                                        val next = chapters.getOrNull(index + 1)
+                                                        if (next != null) {
+                                                            slide(startX, -w, 200)
+                                                            openChapter(next)
+                                                        }
+                                                        dragX.floatValue = 0f
+                                                    }
+                                                    else -> {
+                                                        val prev = chapters.getOrNull(index - 1)
+                                                        if (prev != null) {
+                                                            slide(startX, w, 200)
+                                                            openChapter(prev, toBottom = true)
+                                                        }
+                                                        dragX.floatValue = 0f
+                                                    }
+                                                }
+                                            } finally {
+                                                flipping = false
+                                            }
+                                        }
+                                    },
+                                    onDragCancel = {
+                                        gestureActive = false
+                                        scope.launch {
+                                            animate(dragX.floatValue, 0f, animationSpec = tween(180)) { v, _ ->
+                                                dragX.floatValue = v
+                                            }
+                                        }
+                                    },
+                                )
+                            }
+                        } else {
+                            Modifier
+                        },
+                ),
+            ) {
                 when {
                     loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(color = c.accent)
@@ -224,49 +412,44 @@ fun ReaderScreen(
                         modifier = Modifier.align(Alignment.Center),
                     )
 
-                    else -> Column(
+                    else -> LazyColumn(
+                        state = listState,
+                        // 底部多让一档 xxl：老实现的尾部 Spacer（章末与屏幕底缘的呼吸感）
+                        contentPadding = PaddingValues(
+                            start = KSpacing.lg,
+                            top = KSpacing.lg,
+                            end = KSpacing.lg,
+                            bottom = KSpacing.lg + KSpacing.xxl,
+                        ),
                         modifier = Modifier
                             .fillMaxSize()
-                            .verticalScroll(scroll)
-                            .padding(horizontal = KSpacing.lg, vertical = KSpacing.lg)
                             /**
-                             * 换章过渡（M4）：新章节正文**淡入 + 轻微上移**。
-                             *
-                             * 为什么不用 `Crossfade` / `AnimatedContent`：那两者会**同时组合两份内容**，
-                             * 而滚动位置由同一个 [scroll] 驱动 —— 两份内容抢一个 `ScrollState`，
-                             * 转场期间会互相打架（蹦一下再回位）。这里只对**唯一一份**内容做绘制期动画，
-                             * 语义是"这一页自己换掉了" ✓。
-                             *
-                             * 方向刻意做成**纵向轻微上移**而不是横向滑入：reader 的翻章可能向前也可能
-                             * 向后（章节目录里点任意一章），横向滑入必须知道方向才对，否则"往回翻也像往前翻"。
+                             * 换章过渡（M4）+ 横滑翻页位移（2026-09-29）共用一个 graphicsLayer：
+                             *  · chapterFade：新章节正文**淡入 + 轻微上移**（原实现保留——
+                             *    不用 Crossfade/AnimatedContent 是因为两份内容会抢同一份滚动）；
+                             *  · translationX：横滑跟手与翻页动画的位移，绘制期读 [dragX]，
+                             *    拖动/动画期间每帧只重画不重组。
                              */
                             .graphicsLayer {
                                 val p = chapterFade.value
                                 alpha = p
                                 translationY = (1f - p) * 16.dp.toPx()
+                                translationX = dragX.floatValue
                             },
                         verticalArrangement = Arrangement.spacedBy(KSpacing.md),
                     ) {
-                        // 正文：按空行分段，段间距用 spacing；行高按设计稿取字号的 2.0 倍
-                        val bodyStyle = TextStyle(
-                            fontSize = fontSize.sp,
-                            lineHeight = (fontSize * 2).sp,
-                            fontWeight = FontWeight.Normal,
-                        )
-                        val paragraphs = remember(text) {
-                            text.orEmpty().replace("\r\n", "\n").split(Regex("\n\\s*\n"))
+                        // 正文：段落即 item。key 用段下标（同章内稳定），锚点恢复/走秒都按它定位
+                        itemsIndexed(paragraphs) { _, para ->
+                            Text(
+                                text = para,
+                                style = TextStyle(
+                                    fontSize = fontSize.sp,
+                                    lineHeight = (fontSize * 2).sp,
+                                    fontWeight = FontWeight.Normal,
+                                ),
+                                color = c.textPrimary,
+                            )
                         }
-                        paragraphs.forEach { para ->
-                            val trimmed = para.trim()
-                            if (trimmed.isNotEmpty()) {
-                                Text(
-                                    text = trimmed,
-                                    style = bodyStyle,
-                                    color = c.textPrimary,
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(KSpacing.xxl))
                     }
                 }
             }
@@ -355,7 +538,7 @@ fun ReaderScreen(
         // M4：从下方**滑入 + 淡入**（原来是一出现就在那儿），退出反向 —— 它是"读到章末才出现"的
         // 提示，滑入能明确表达"这是新冒出来的"，而不是一直在那里的固定按钮。
         AnimatedVisibility(
-            visible = atChapterEnd && index in 0 until chapters.size - 1,
+            visible = atChapterEnd && text != null && index in 0 until chapters.size - 1,
             enter = if (animationsEnabled) {
                 slideInVertically(animationSpec = KMotion.spatial()) { it } + fadeIn(KMotion.effects())
             } else {
@@ -378,9 +561,7 @@ fun ReaderScreen(
                 color = c.surfaceRaised,
                 shadowElevation = KElevation.raised,
                 onClick = {
-                    current = next
-                    onOpenChapter(next)
-                    scope.launch { scroll.scrollTo(0) }
+                    openChapter(next)
                 },
             ) {
                 Text(
@@ -420,8 +601,7 @@ fun ReaderScreen(
                                 .clip(RoundedCornerShape(KRadius.chip))
                                 .clickable {
                                     showCatalog = false
-                                    current = ch
-                                    onOpenChapter(ch)
+                                    openChapter(ch)
                                 }
                                 .padding(vertical = KSpacing.xs, horizontal = KSpacing.xs),
                         ) {

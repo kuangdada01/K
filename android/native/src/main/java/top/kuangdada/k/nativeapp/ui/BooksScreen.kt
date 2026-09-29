@@ -94,6 +94,19 @@ import androidx.compose.ui.draw.blur as composeBlur
 internal val BookProgress = mutableMapOf<String, Int>()
 
 /**
+ * 章内阅读锚点（进程内）：bookId → (章节下标, 首个可见段下标, 段内像素偏移)。
+ *
+ * 与 [BookProgress] 的分工：那里只记「读到第几章」（详情页进度条/继续阅读的章号用），
+ * 这里记「那一章里读到了哪个位置」——「继续阅读」因此能回到**退出时的那一段**，
+ * 而不是章节开头（2026-09-29 需求）。
+ *
+ * 只保最近一次阅读的章节（换章即覆盖）；保存时机是离开阅读器/换章两个点，
+ * 不在滚动中连续写 —— 既省写放大，也避免新章节首帧 firstVisible=(0,0) 把锚点
+ * 冲掉、和恢复滚动互相打架的时序。取舍与 [BookProgress] 相同：进程内，回收即失。
+ */
+internal val BookProgressAnchor = mutableMapOf<String, Triple<Int, Int, Int>>()
+
+/**
  * ============================================================
  * 图书列表（设计稿「图书列表」——高亮图书 tab）
  * ============================================================
