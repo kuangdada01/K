@@ -26,11 +26,11 @@ const MIC_INIT_SCRIPT = `
 `;
 
 /**
- * 记录"实际发声的是谁"：BufferSource = 经典包素材（用户给的四个音效），
- * Oscillator = 合成包/回落合成音。
+ * 记录"实际发声的是谁"：BufferSource = 用户给的四个素材；
+ * Oscillator = 合成音（**行内已删除**这一套，出现即回归）。
  *
  * 为什么要端到端盯这一条：线上 09-29 报过「web 端落子还是之前的声音，App 里是我给的音效」——
- * 素材取不到/解码失败/手势之前收到广播时，代码会**静默**回落合成音，界面与听感都只是
+ * 当时素材取不到/解码失败/手势之前收到广播时会**静默**回落合成音，界面与听感都只是
  * "声音不对"，没有任何线索。单测（client/src/voice/chess/sounds.test.ts）盯逻辑，
  * 这里盯真实浏览器 + 真实 http 资源。
  */
@@ -52,7 +52,7 @@ const AUDIO_LOG_SCRIPT = `
     };
   };
   wrap('createBufferSource', 'sample');   // 素材
-  wrap('createOscillator', 'synth');      // 合成音
+  wrap('createOscillator', 'synth');      // 合成音（不该再出现）
   const of = window.fetch;
   window.fetch = function (input) {
     const url = typeof input === 'string' ? input : (input && input.url) || '';
@@ -189,14 +189,15 @@ test('双人对弈全流程：邀请→开局→走子同步→认输终局', as
     await pageA.getByRole('button', { name: '关闭', exact: true }).click();
     await expect(pageA.getByTestId('chess-review')).toHaveCount(0);
 
-    // 音效开关：三态循环（默认经典包）——经典 → 合成 → 关。
-    // 标题在素材就位后是"音效：经典"，加载中/失败会另外点明（见 sounds.ts 的素材状态）
+    // 音效开关：**两态**（开 / 关）。素材就位后标题说明是哪四个音；
+    // 素材加载中/失败会另外点明（见 sounds.ts 的素材状态）。
+    // 曾经是"经典 / 合成 / 关"三态循环 + 一套合成备用音效，09-29 连出两次事故后整体删除。
     const soundToggle = pageA.getByTestId('chess-sound-toggle');
-    await expect(soundToggle).toHaveAttribute('title', '音效：经典（点击切换合成音效）');
-    await soundToggle.click();
-    await expect(soundToggle).toHaveAttribute('title', '音效：合成（点击关闭音效）');
+    await expect(soundToggle).toHaveAttribute('title', '音效：开（落子 / 吃子 / 将军 / 绝杀）');
     await soundToggle.click();
     await expect(soundToggle).toHaveAttribute('title', '音效：关（点击开启）');
+    await soundToggle.click();
+    await expect(soundToggle).toHaveAttribute('title', '音效：开（落子 / 吃子 / 将军 / 绝杀）');
 
     // 三期四：再来一局（双向点击直开）——A 刷新后横幅仍在（快照恢复），
     // A 点"再来一局"转等待态，B 的按钮转"点击开始"，B 点击即开新局

@@ -43,13 +43,17 @@
 >   属独立工程，本阶段不涉及。
 >   测试：server 战绩聚合集成测试 + client foldGame/复盘状态用例 + e2e 扩展（复盘直达/列表/播报开关/空闲入口）。
 >
-> **⚠️ 后续变更（0.1.15 / 0.1.16）**
+> **⚠️ 后续变更（0.1.15 / 0.1.16 / 0.1.17）**
 >
 > - **走子语音播报已移除**（上文的 `useChessTTS` / `chess-tts-toggle` / `voice:chessTTS` 都不存在了，按用户要求去掉），
 >   改为**落子 / 吃子 / 将军 / 绝杀四音效**：web 走 `client/src/voice/chess/sounds.ts`（素材在
->   `client/public/chess/sounds/`），安卓走 `ChessSounds`（`res/raw/`）。面板上的三态音效开关保留。
-> - **0.1.16 重写了 web 端音效的加载策略**：素材没就位时不再**静默**回落合成音（提前预热字节 → 手势后解码 →
->   播放先等一小会儿 → 失败可重试 → 状态交面板提示）。原因与教训见 `.workbuddy/memory/topics/voice-chess.md`。
+>   `client/public/chess/sounds/`），安卓走 `ChessSounds`（`res/raw/`）。
+> - **0.1.17 起 web 端只剩这一套音效**：原来的"合成音效"包与"经典 / 合成 / 关"三态开关**整体删除**
+>   （面板开关只剩开 / 关）。原因见 `.workbuddy/memory/topics/voice-chess.md`：素材没就位时静默改播
+>   合成音、以及三态循环的「关 → 开」不回经典档，把用户永久卡在合成音上。素材没就位就**不响**，
+>   并在控制台与面板上说明原因。
+> - **0.1.16 重写了 web 端音效的加载策略**：提前预热字节 → 手势后解码 → 播放先等一小会儿 →
+>   失败可重试。
 > - **0.1.16 修了安卓端「着法坐标无效」**：上行报文里坐标为 0 的分量被 kotlinx 默认配置吃掉
 >   （`ModelsChess.kt` 的 `ChessClientJson` / 契约测试 `ChessContractsTest`）。
 

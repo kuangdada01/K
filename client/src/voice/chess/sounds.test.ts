@@ -1,19 +1,18 @@
 /**
  * ============================================================
- * 象棋音效加载/回落单测（voice/chess/sounds.test）
+ * 象棋音效加载与播放单测（voice/chess/sounds.test）
  * ============================================================
- * 锁死 2026-09-29 线上那次"web 端落子还是之前的声音（App 里是用户给的音效）"：
- * classic 包**必须真的播用户给的素材**，只有素材确实到不了手时才回落合成音，
- * 而且回落要留痕（控制台 + [subscribeClassicPack] → 面板提示）。
+ * 现在是**一套**音效（用户给的四个素材），没有备用包。这里钉住的都是
+ * 09-29 线上两次事故的成因：
+ *  · 素材没就位时**绝不拿另一套声音顶替**（老实现静默回落到合成音，
+ *    用户听到的只是"声音不对"，还以为"音效没生效"）；
+ *  · 失败**可以重试**（老实现把失败永久缓存，页面停在旧构建上就再也不试）；
+ *  · 模块加载即按文件名预热（老实现只等 pointerdown，刷新自动回房/观战
+ *    在手势之前收到广播时缓冲还是空的）。
  *
- * 覆盖：
- *  · 模块加载即按**文件名**预热（win.wav 被三个终局音共用 → 只下一次）；
- *  · 手势解码之后播放走 BufferSource（不是振荡器）；
- *  · 手势之前/素材还没解码完就响（刷新自动回房、观战）→ 等一小会儿再播素材；
- *  · 404/解码失败 → 回落合成音 + 状态 failed + 控制台留痕；
- *  · 失败**不是终局**：切回经典包会重试（老实现永久记恨）；
- *  · decodeAudioData 会 detach 传进去的字节 → 缓存必须给拷贝（win.wav 两用）；
- *  · 上下文不是 running（自动播放策略）→ 静默跳过，不炸不响。
+ * 覆盖：预热去重 · 素材优先（BufferSource）· 未就绪时的等待窗口 ·
+ * 失败＝不响＋状态 failed＋控制台留痕 · 过重试窗口会再试 ·
+ * decodeAudioData 的 detach 回归（win.wav 三用）· 上下文未 running / 不可用。
  * ============================================================
  */
 
@@ -62,9 +61,8 @@ class FakeAudioContext {
   currentTime = 0;
   destination = { name: 'destination' };
   sources: FakeBufferSource[] = [];
+  /** 合成音的"振荡器"：本模块**不该**再产出任何振荡器（备用音效已删除） */
   oscillators: FakeOscillator[] = [];
-  /** decodeAudioData 的调用次数（验证 win.wav 被两个终局音各解一次） */
-  decodeCalls = 0;
 
   constructor(initial: AudioContextState = 'running') {
     this.state = initial;
@@ -91,7 +89,6 @@ class FakeAudioContext {
    * 这里照样模拟；空 buffer 直接失败（缺 slice(0) 的实现会在这里露馅）。
    */
   decodeAudioData = vi.fn(async (bytes: ArrayBuffer) => {
-    this.decodeCalls += 1;
     if (bytes.byteLength === 0) throw new Error('Decoding failed: empty buffer');
     structuredClone(bytes, { transfer: [bytes] });
     return fakeAudioBuffer();
@@ -130,12 +127,16 @@ function lastCtx(): FakeAudioContext {
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 let warn: ReturnType<typeof vi.spyOn>;
+/** 可控时钟：用来越过 RETRY_MS 的重试窗口 */
+let now = 0;
 
 beforeEach(() => {
   vi.resetModules();
   localStorage.clear();
   FakeAudioContext.instances = [];
   warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  now = 1_800_000_000_000;
+  vi.spyOn(Date, 'now').mockImplementation(() => now);
 });
 
 afterEach(() => {
@@ -144,8 +145,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('象棋音效：classic 包真的用素材', () => {
-  it('模块加载即按文件名预热（win.wav 三个终局音只下一次）', async () => {
+describe('象棋音效：素材加载', () => {
+  it('模块加载即按文件名预热（win.wav 被三个终局音共用 → 只下一次）', async () => {
     const { calls } = stubFetch();
     vi.stubGlobal('AudioContext', FakeAudioContext);
 
@@ -155,27 +156,26 @@ describe('象棋音效：classic 包真的用素材', () => {
     expect([...calls].sort()).toEqual(SOUND_FILES.map((f) => `/chess/sounds/${f}`).sort());
   });
 
-  it('手势解码之后：落子音走 BufferSource（素材），不走振荡器（合成音）', async () => {
+  it('手势解码之后：落子音走 BufferSource（素材）', async () => {
     stubFetch();
     vi.stubGlobal('AudioContext', FakeAudioContext);
     const snd = await import('./sounds');
 
-    // 首次手势：建上下文 + 解码
     window.dispatchEvent(new Event('pointerdown'));
     await flush();
-    expect(snd.getClassicPackState()).toBe('ready');
+    expect(snd.getSoundLoadState()).toBe('ready');
 
     snd.playChessSound('move');
     await flush();
 
     const ctx = lastCtx();
     expect(ctx.sources).toHaveLength(1);
-    expect(ctx.oscillators).toHaveLength(0);
     expect(ctx.sources[0]!.buffer).toBeTruthy();
+    expect(ctx.oscillators, '备用音效已删除，不该再出现振荡器').toHaveLength(0);
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it('还没有手势（刷新自动回房/观战）时收到走子：等解码好再播素材，而不是换成合成音', async () => {
+  it('还没有手势（刷新自动回房/观战）时收到走子：等解码好再播素材', async () => {
     stubFetch();
     vi.stubGlobal('AudioContext', FakeAudioContext);
     const snd = await import('./sounds');
@@ -184,9 +184,8 @@ describe('象棋音效：classic 包真的用素材', () => {
     snd.playChessSound('capture');
     await flush();
 
-    const ctx = lastCtx();
-    expect(ctx.sources, '素材在手时必须用素材').toHaveLength(1);
-    expect(ctx.oscillators, '不该回落合成音').toHaveLength(0);
+    expect(lastCtx().sources, '素材在手时必须用素材').toHaveLength(1);
+    expect(lastCtx().oscillators).toHaveLength(0);
   });
 
   it('终局变体按倍率播放（end-lose = 0.75 倍速）', async () => {
@@ -216,12 +215,12 @@ describe('象棋音效：classic 包真的用素材', () => {
 
     const ctx = lastCtx();
     expect(ctx.sources, '两个终局音都要响').toHaveLength(2);
-    expect(ctx.oscillators, '第二次解码失败会回落合成音 —— 说明字节缓存被 detach 了').toHaveLength(0);
+    expect(warn, '第二次解码失败会打警告 —— 说明字节缓存被 detach 了').not.toHaveBeenCalled();
   });
 });
 
-describe('象棋音效：素材到不了手时的回落（必须留痕）', () => {
-  it('404：回落合成音 + 状态 failed + 控制台说明原因', async () => {
+describe('象棋音效：素材到不了手时不响（且留痕）', () => {
+  it('404：一声都不响（不拿别的音效顶替）+ 状态 failed + 控制台说明原因', async () => {
     stubFetch(['move.mp3']);
     vi.stubGlobal('AudioContext', FakeAudioContext);
     const snd = await import('./sounds');
@@ -230,38 +229,35 @@ describe('象棋音效：素材到不了手时的回落（必须留痕）', () =
     await flush();
 
     const ctx = lastCtx();
-    expect(ctx.oscillators.length, '兜底至少要有声').toBeGreaterThan(0);
-    expect(ctx.sources).toHaveLength(0);
-    expect(snd.getClassicPackState()).toBe('failed');
+    expect(ctx.sources, '没有素材就不响（旧的合成音已删除）').toHaveLength(0);
+    expect(ctx.oscillators).toHaveLength(0);
+    expect(snd.getSoundLoadState()).toBe('failed');
     expect(warn).toHaveBeenCalled();
   });
 
-  it('失败不是终局：切回经典包会重试（老实现把失败永久缓存了）', async () => {
+  it('失败不是终局：过了重试窗口会重新取素材，成功后照常播', async () => {
     const calls: string[] = [];
     stubFetch(['move.mp3'], calls);
     vi.stubGlobal('AudioContext', FakeAudioContext);
     const snd = await import('./sounds');
 
+    window.dispatchEvent(new Event('pointerdown'));
+    await flush();
     snd.playChessSound('move');
     await flush();
-    expect(snd.getClassicPackState()).toBe('failed');
+    expect(snd.getSoundLoadState()).toBe('failed');
+    const attemptsBefore = calls.filter((c) => c.endsWith('move.mp3')).length;
 
-    // 素材恢复可用了：用户点一下"经典音效"（重试 + 清失败记录）
+    // 素材恢复可用了 + 越过 RETRY_MS：下一次播放会重新尝试
     stubFetch([], calls);
-    snd.setSoundPack('classic');
-    await flush();
-
-    // 记下重试前已经响过的合成音（上一次失败留下的），只断言"这次不再响合成音"
-    const ctx = lastCtx();
-    const sourcesBefore = ctx.sources.length;
-    const oscillatorsBefore = ctx.oscillators.length;
-
+    now += 9_000;
     snd.playChessSound('move');
     await flush();
 
-    expect(ctx.sources.length, '重试成功后必须播素材').toBe(sourcesBefore + 1);
-    expect(ctx.oscillators.length, '不该还在响合成音').toBe(oscillatorsBefore);
-    expect(snd.getClassicPackState()).toBe('ready');
+    const ctx = lastCtx();
+    expect(calls.filter((c) => c.endsWith('move.mp3')).length).toBeGreaterThan(attemptsBefore);
+    expect(ctx.sources, '重试成功后必须播素材').toHaveLength(1);
+    expect(snd.getSoundLoadState()).toBe('ready');
   });
 
   it('状态变化能被订阅者拿到（面板据此提示用户）', async () => {
@@ -270,34 +266,19 @@ describe('象棋音效：素材到不了手时的回落（必须留痕）', () =
     const snd = await import('./sounds');
 
     const seen: string[] = [];
-    const off = snd.subscribeClassicPack((s: string) => seen.push(s));
+    const off = snd.subscribeSoundLoad((s: string) => seen.push(s));
 
     snd.playChessSound('check');
     await flush();
 
     expect(seen).toContain('failed');
     off();
-    expect(snd.getClassicPackState()).toBe('failed');
+    expect(snd.getSoundLoadState()).toBe('failed');
   });
 });
 
-describe('象棋音效：合成包与自动播放策略', () => {
-  it('合成包：一个素材都不下，走振荡器', async () => {
-    localStorage.setItem('voice:chessSoundPack', 'synth');
-    const { fn } = stubFetch();
-    vi.stubGlobal('AudioContext', FakeAudioContext);
-    const snd = await import('./sounds');
-
-    expect(snd.getSoundPack()).toBe('synth');
-    snd.playChessSound('move');
-    await flush();
-
-    const ctx = lastCtx();
-    expect(ctx.oscillators.length).toBeGreaterThan(0);
-    expect(fn, '合成包不该请求素材').not.toHaveBeenCalled();
-  });
-
-  it('上下文不是 running（自动播放策略拦截）：静默跳过，既不响也不炸', async () => {
+describe('象棋音效：自动播放策略与残缺内核', () => {
+  it('上下文不是 running：静默跳过，既不响也不炸（仍会尝试 resume）', async () => {
     stubFetch();
     class SuspendedContext extends FakeAudioContext {
       constructor() {
@@ -316,9 +297,10 @@ describe('象棋音效：合成包与自动播放策略', () => {
 
     const ctx = lastCtx();
     expect(FakeAudioContext.instances.length).toBe(before + 1);
-    expect(ctx.resume, '仍要尝试恢复（iOS 的 interrupted 也靠它）').toHaveBeenCalled();
-    expect(ctx.oscillators).toHaveLength(0);
+    expect(ctx.resume, '仍要尝试恢复（iOS 的 interrupted 也靠它）').toBeDefined();
+    expect(ctx.resume).toHaveBeenCalled();
     expect(ctx.sources).toHaveLength(0);
+    expect(ctx.oscillators).toHaveLength(0);
   });
 
   it('音频上下文无法创建（内核残缺/数量上限）：静默跳过', async () => {

@@ -19,13 +19,10 @@ import { Crown, RotateCcw, Swords, Undo2, Volume2, VolumeX } from 'lucide-react'
 import { findKing, isInCheck, parseFen, type ChessClocks, type ChessSide, type ChessSquare } from '@k/shared';
 import { useVoice } from '../../../context/VoiceContext';
 import {
-  getClassicPackState,
-  getSoundPack,
+  getSoundLoadState,
   playChessSound,
-  setSoundPack,
-  subscribeClassicPack,
+  subscribeSoundLoad,
   type ChessSound,
-  type ChessSoundPack,
 } from '../../../voice/chess/sounds';
 import { showToast } from '../../ui/Toast';
 import ChessBoard from './ChessBoard';
@@ -49,15 +46,6 @@ function formatClock(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
 }
-
-/**
- * 「合成音效」提醒是否已经弹过（存 sessionStorage：同一个标签页只说一次）。
- *
- * 不用模块级变量：面板会在切换房间/收起棋盘时反复挂载，模块级标志与"重进房"
- * 无关；也不用 localStorage：用户**故意**切到合成音效时不该被永久闭嘴，
- * 刷新一次页面就该再提醒一次。
- */
-const SYNTH_HINT_KEY = 'voice:chessSynthHinted';
 
 /** 某侧当前剩余：轮到方取 总时长 与 单步期限 的较小者（与服务端的判定一致）；
  *  暂停时双方冻结（服务端已在暂停时把已耗时间扣进 remaining） */
@@ -108,80 +96,43 @@ export default function ChessGamePanel() {
     }
   }, [game, playing]);
 
-  // 音效（走子/吃子/将军/终局）：偏好持久化（默认开，经典包）。
-  // 按钮三态循环：经典音效开 → 合成音效开 → 关 → 经典音效开
+  // 音效（走子/吃子/将军/终局）：**只有用户给的那一套素材**，开关两态（开 / 关）。
+  //
+  // 这里曾经是个"经典 / 合成 / 关"的三态循环 + 一套实时合成的备用音效。
+  // 09-29 连着出了两次事（素材没就位时静默改播合成音；循环的「关 → 开」不回经典档，
+  // 用户被永久卡在合成音上），所以备用音效连同档位一并删掉了 ——
+  // 素材没就位就**不响**，并在这里把原因说出来（见下面的 loadState）。
   const [soundOn, setSoundOn] = useState(() => localStorage.getItem('voice:chessSound') !== '0');
-  const [soundPack, setSoundPackState] = useState(() => getSoundPack());
   const soundOnRef = useRef(soundOn);
   useEffect(() => {
     soundOnRef.current = soundOn;
-  }, [soundOn]);
+  }, []);
 
   /**
-   * 经典素材的就位状态。
+   * 素材的就位状态：`loading` / `ready` / `failed`。
    *
-   * 为什么要把这件事摆到界面上：素材取不到时 sounds.ts 会**回落合成音**，
-   * 而用户听到的只是"声音不对"（线上 09-29 反馈："web 端落子还是之前的声音"，
-   * 而 App 里是我给的音效）—— 没有任何线索指向"素材没加载成功"。
-   * 现在第一次真失败就弹一条提示，标题也随之改写，点一下喇叭即可切到合成音或重试。
+   * 为什么要把这件事摆到界面上：素材取不到时现在**什么都不会响**，
+   * 用户只会以为"音效坏了"。第一次真失败就弹一条提示，标题也点明原因。
    */
-  const [packState, setPackState] = useState(() => getClassicPackState());
+  const [loadState, setLoadState] = useState(() => getSoundLoadState());
   useEffect(() => {
     // 只在"本次挂载期间**变成** failed"时提示：进房时已经坏掉的老状态不再重复弹
-    let announced = getClassicPackState() === 'failed';
-    return subscribeClassicPack((next) => {
-      setPackState(next);
+    let announced = getSoundLoadState() === 'failed';
+    return subscribeSoundLoad((next) => {
+      setLoadState(next);
       if (next === 'failed' && !announced) {
         announced = true;
-        showToast('经典音效素材加载失败，暂时用合成音效（点喇叭可切换）');
+        showToast('音效素材加载失败，本局暂时没有音效（可刷新页面重试）');
       }
     });
   }, []);
 
-  /*
-   * 偏好停在「合成音效」时提醒一次（每个页面加载最多一次）。
-   *
-   * 为什么要有这条：音效开关是三态循环（经典 → 合成 → 关），而"当前是哪一档"
-   * 只写在鼠标悬停的 title 里 —— 手机上没有悬停，桌面上也很少有人去悬停。
-   * 09-29 的线上反馈就是因此来的：用户听了一整晚的"旧音效"，其实是本机偏好
-   * 停在合成包（`localStorage.voice:chessSoundPack`），**强刷也不会清**，
-   * 而同一个房间里的朋友听到的是他给的四个素材。标题现在还会显示档位文字
-   * （见状态条上的 [soundPackLabel]），这条提示只负责再主动说一次。
-   */
-  useEffect(() => {
-    if (getSoundPack() !== 'synth') return;
-    if (sessionStorage.getItem(SYNTH_HINT_KEY) === '1') return;
-    sessionStorage.setItem(SYNTH_HINT_KEY, '1');
-    showToast('当前是合成音效 · 点状态条的喇叭可切回经典音效');
+  const toggleSound = useCallback(() => {
+    setSoundOn((on) => {
+      localStorage.setItem('voice:chessSound', on ? '0' : '1');
+      return !on;
+    });
   }, []);
-
-  const changePack = useCallback((pack: ChessSoundPack) => {
-    setSoundPack(pack); // 写偏好
-    setSoundPackState(pack); // 驱动标题/图标
-  }, []);
-  /**
-   * 音效开关的三态循环：**经典开 → 合成开 → 关 → 经典开**。
-   *
-   * ⚠️ 「关 → 开」这一支必须把音效包**复位成经典**。老实现写的是"保持原音效包"，
-   * 于是从合成档出发的循环变成：合成 → 关 → 合成 → 关 ……
-   * **再也回不到经典**（偏好是持久化的，强刷也不清）——
-   * 09-29 线上反馈「web 端音效还是旧版、Ctrl+F5 没用」就是这么来的：
-   * 用户被永久卡在合成音效上，而房间里别人听到的是他给的四个素材。
-   */
-  const cycleSound = useCallback(() => {
-    if (!soundOn) {
-      setSoundOn(true);
-      localStorage.setItem('voice:chessSound', '1');
-      if (soundPack !== 'classic') changePack('classic'); // 关 → 开：复位到经典
-      return;
-    }
-    if (soundPack === 'classic') {
-      changePack('synth'); // classic → synth
-      return;
-    }
-    setSoundOn(false); // synth → 关
-    localStorage.setItem('voice:chessSound', '0');
-  }, [soundOn, soundPack, changePack]);
 
   const soundKeyRef = useRef('');
   useEffect(() => {
@@ -423,27 +374,19 @@ export default function ChessGamePanel() {
         </span>
         <button
           className={`${styles.iconBtn} ${soundOn ? styles.ttsOn : ''}`}
-          onClick={cycleSound}
+          onClick={toggleSound}
           title={
             !soundOn
-              ? '音效：关（点击开启经典音效）'
-              : soundPack === 'classic'
-                ? packState === 'failed'
-                  ? '音效：经典素材加载失败，正在用合成音（点击切换）'
-                  : packState === 'loading'
-                    ? '音效：经典（素材加载中…点击切换合成音效）'
-                    : '音效：经典（点击切换合成音效）'
-                : '音效：合成（点击关闭音效）'
+              ? '音效：关（点击开启）'
+              : loadState === 'failed'
+                ? '音效：素材加载失败，本局没有音效（可刷新页面重试）'
+                : loadState === 'loading'
+                  ? '音效：开（素材加载中…）'
+                  : '音效：开（落子 / 吃子 / 将军 / 绝杀）'
           }
           data-testid="chess-sound-toggle"
         >
           {soundOn ? <Volume2 size={14} /> : <VolumeX size={14} />}
-          {/* 当前档位**写在按钮上**，不再只藏在 title 里：三态循环里"合成"这一档
-              肉眼看不出来，用户会一直以为自己开的就是经典音效（09-29 实测）。
-              文案取「经典 / 合成 / 关」三个短词，移动端也放得下 */}
-          <span className={styles.soundPackLabel} data-testid="chess-sound-label">
-            {!soundOn ? '关' : soundPack === 'classic' ? '经典' : '合成'}
-          </span>
         </button>
         {mySide === null && (
           <button className={styles.iconBtn} onClick={() => setSpectatorFlipped((v) => !v)} title="翻转视角">

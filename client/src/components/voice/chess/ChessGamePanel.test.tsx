@@ -22,13 +22,9 @@ const h = vi.hoisted(() => ({
   chess: {} as Record<string, unknown>,
   playSound: vi.fn(),
   toast: vi.fn(),
-  /** 写音效包的偏好（断言"关 → 开"复位成经典时用） */
-  setPack: vi.fn(),
-  /** 经典素材状态（面板据此改写喇叭标题 + 弹一次提示） */
-  packState: 'ready' as 'loading' | 'ready' | 'failed',
-  /** 当前音效包（三态循环的档位） */
-  pack: 'classic' as 'classic' | 'synth',
-  packListeners: [] as ((s: 'loading' | 'ready' | 'failed') => void)[],
+  /** 素材就位状态（面板据此改写喇叭标题 + 弹一次提示） */
+  loadState: 'ready' as 'loading' | 'ready' | 'failed',
+  loadListeners: [] as ((s: 'loading' | 'ready' | 'failed') => void)[],
 }));
 
 vi.mock('../../../context/VoiceContext', () => ({
@@ -42,14 +38,12 @@ vi.mock('../../../context/VoiceContext', () => ({
 vi.mock('../../ui/Toast', () => ({ showToast: h.toast }));
 
 vi.mock('../../../voice/chess/sounds', () => ({
-  getSoundPack: () => h.pack,
-  setSoundPack: h.setPack,
   playChessSound: h.playSound,
-  getClassicPackState: () => h.packState,
-  subscribeClassicPack: (cb: (s: 'loading' | 'ready' | 'failed') => void) => {
-    h.packListeners.push(cb);
+  getSoundLoadState: () => h.loadState,
+  subscribeSoundLoad: (cb: (s: 'loading' | 'ready' | 'failed') => void) => {
+    h.loadListeners.push(cb);
     return () => {
-      h.packListeners = h.packListeners.filter((l) => l !== cb);
+      h.loadListeners = h.loadListeners.filter((l) => l !== cb);
     };
   },
 }));
@@ -132,10 +126,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   h.playSound.mockClear();
   h.toast.mockClear();
-  h.setPack.mockClear();
-  h.packState = 'ready';
-  h.pack = 'classic';
-  h.packListeners = [];
+  h.loadState = 'ready';
+  h.loadListeners = [];
   sessionStorage.clear();
 });
 
@@ -243,47 +235,43 @@ describe('ChessGamePanel 暂停/继续', () => {
 });
 
 /**
- * 经典素材没就位时的可见性（2026-09-29 线上"web 端落子还是之前的声音"）：
- * 素材取不到时 sounds.ts 会回落合成音，用户只会觉得"声音不对" ——
- * 面板必须在标题上给出线索，并在**本次挂载期间**第一次失败时弹一条提示。
- */
 describe('ChessGamePanel 音效素材状态', () => {
-  it('素材就位：喇叭标题是"经典音效"，不弹提示', () => {
+  it('素材就位：喇叭标题说明是"开"，不弹提示', () => {
     renderPanel({ game: playingGame(), ended: null });
     expect(screen.getByTestId('chess-sound-toggle').getAttribute('title')).toBe(
-      '音效：经典（点击切换合成音效）'
+      '音效：开（落子 / 吃子 / 将军 / 绝杀）'
     );
     expect(h.toast).not.toHaveBeenCalled();
   });
 
   it('素材还在加载：标题点明"加载中"，不弹提示（不是失败，不该惊动用户）', () => {
-    h.packState = 'loading';
+    h.loadState = 'loading';
     renderPanel({ game: playingGame(), ended: null });
     expect(screen.getByTestId('chess-sound-toggle').getAttribute('title')).toContain('素材加载中');
     expect(h.toast).not.toHaveBeenCalled();
   });
 
   it('素材加载失败：标题改写 + 弹一条提示（只弹一次）', () => {
-    h.packState = 'loading';
+    h.loadState = 'loading';
     renderPanel({ game: playingGame(), ended: null });
 
     act(() => {
-      h.packListeners.forEach((cb) => cb('failed'));
+      h.loadListeners.forEach((cb) => cb('failed'));
     });
 
     expect(screen.getByTestId('chess-sound-toggle').getAttribute('title')).toContain('素材加载失败');
     expect(h.toast).toHaveBeenCalledTimes(1);
-    expect(h.toast.mock.calls[0]![0]).toContain('经典音效素材加载失败');
+    expect(h.toast.mock.calls[0]![0]).toContain('音效素材加载失败');
 
     // 后续再来一次 failed（比如另一个音效也失败）不重复弹
     act(() => {
-      h.packListeners.forEach((cb) => cb('failed'));
+      h.loadListeners.forEach((cb) => cb('failed'));
     });
     expect(h.toast).toHaveBeenCalledTimes(1);
   });
 
   it('挂载时就已经是失败态：只改标题，不再重复弹提示（进房不该被老状态打扰）', () => {
-    h.packState = 'failed';
+    h.loadState = 'failed';
     renderPanel({ game: playingGame(), ended: null });
     expect(screen.getByTestId('chess-sound-toggle').getAttribute('title')).toContain('素材加载失败');
     expect(h.toast).not.toHaveBeenCalled();
@@ -291,54 +279,43 @@ describe('ChessGamePanel 音效素材状态', () => {
 });
 
 /**
- * 音效档位必须**肉眼可见**（2026-09-29 实测：偏好停在"合成"上时，
- * 用户以为经典音效开着，听了一整晚"旧音效"，强刷也不清 localStorage）。
+ * 音效开关：**两态**（开 / 关）。
+ *
+ * 这里原本是"经典 / 合成 / 关"三态循环 + 一套实时合成的备用音效，09-29 连出两次事故：
+ * 素材没就位时静默改播合成音；循环的「关 → 开」不回经典档，用户被永久卡在合成音上。
+ * 备用音效已整体删除，开关只剩开 / 关。
  */
-describe('ChessGamePanel 音效档位可见', () => {
-  it('经典档：按钮上写着"经典"', () => {
+describe('ChessGamePanel 音效开关', () => {
+  it('点击在开 / 关之间切换，并持久化偏好', () => {
     renderPanel({ game: playingGame(), ended: null });
-    expect(screen.getByTestId('chess-sound-label').textContent).toBe('经典');
-  });
+    const toggle = screen.getByTestId('chess-sound-toggle');
+    expect(toggle.getAttribute('title')).toContain('音效：开');
 
-  it('合成档：按钮上写着"合成"，并主动提醒一次（同一标签页只说一次）', () => {
-    h.pack = 'synth';
-    const first = renderPanel({ game: playingGame(), ended: null });
-    expect(screen.getByTestId('chess-sound-label').textContent).toBe('合成');
-    expect(h.toast).toHaveBeenCalledTimes(1);
-    expect(h.toast.mock.calls[0]![0]).toContain('合成音效');
+    fireEvent.click(toggle); // 开 → 关
+    expect(toggle.getAttribute('title')).toBe('音效：关（点击开启）');
+    expect(localStorage.getItem('voice:chessSound')).toBe('0');
 
-    // 面板重新挂载（换房间/收起棋盘）不该再弹
-    first.update({ game: playingGame({ moveCount: 1 }) });
-    expect(h.toast).toHaveBeenCalledTimes(1);
-  });
-
-  it('关闭档：图标转静音，按钮上写着"关"', () => {
-    localStorage.setItem('voice:chessSound', '0');
-    renderPanel({ game: playingGame(), ended: null });
-    expect(screen.getByTestId('chess-sound-label').textContent).toBe('关');
+    fireEvent.click(toggle); // 关 → 开
+    expect(toggle.getAttribute('title')).toContain('音效：开');
+    expect(localStorage.getItem('voice:chessSound')).toBe('1');
     localStorage.removeItem('voice:chessSound');
   });
 
-  /**
-   * ★ 回归：三态循环必须能回到经典档。
-   *
-   * 老实现「关 → 开」那一支是"保持原音效包"，于是从合成档出发：
-   * 合成 → 关 → 合成 → 关 …… **永远回不到经典**，而偏好是持久化的
-   * （强刷不清）→ 线上表现就是"web 端音效还是旧版、Ctrl+F5 没用"。
-   */
-  it('三态循环走完一圈能回到经典档（合成档不是死胡同）', () => {
-    renderPanel({ game: playingGame(), ended: null });
-    const toggle = screen.getByTestId('chess-sound-toggle');
-    const label = () => screen.getByTestId('chess-sound-label').textContent;
-
-    expect(label()).toBe('经典');
-    fireEvent.click(toggle); // 经典 → 合成
-    expect(label()).toBe('合成');
-    fireEvent.click(toggle); // 合成 → 关
-    expect(label()).toBe('关');
-    fireEvent.click(toggle); // 关 → 经典（复位，不是回到合成）
-    expect(label()).toBe('经典');
-    // 写偏好：至少写过一次 classic（复位那一跳）
-    expect((h.setPack.mock.calls as string[][]).some((c) => c[0] === 'classic')).toBe(true);
+  it('关闭后不再播放任何音效（走子不响）', () => {
+    localStorage.setItem('voice:chessSound', '0');
+    const panel = renderPanel({ game: playingGame({ moveCount: 0 }), ended: null });
+    panel.update({
+      game: playingGame({
+        moveCount: 1,
+        lastMove: {
+          from: { f: 7, r: 2 },
+          to: { f: 4, r: 2 },
+          piece: 'C',
+          captured: null,
+        } as never,
+      }),
+    });
+    expect(h.playSound).not.toHaveBeenCalled();
+    localStorage.removeItem('voice:chessSound');
   });
 });
