@@ -210,6 +210,18 @@
   padding: 4px 6px;
   display: inline-flex;
   align-items: center;
+  /* 图标与档位文字之间的缝（单图标按钮没有第二个子节点，不受影响） */
+  gap: 3px;
+}
+
+/*
+ * 音效档位标签（经典 / 合成 / 关）：三态循环的当前档以前只在 title 里，
+ * 而"合成"这一档听起来像"音效没生效"—— 用户会一直以为经典音效开着。
+ * 所以档位必须**肉眼可见**（见 ChessGamePanel 的注释）。
+ */
+.soundPackLabel {
+  font-size: 11px;
+  line-height: 1;
 }
 
 /* ---------- 状态条 ---------- */
