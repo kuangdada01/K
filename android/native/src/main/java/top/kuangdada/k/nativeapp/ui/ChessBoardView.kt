@@ -1,12 +1,15 @@
 package top.kuangdada.k.nativeapp.ui
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.BitmapShader
+import android.graphics.Shader
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -14,7 +17,6 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -27,13 +29,26 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
@@ -50,6 +65,7 @@ import top.kuangdada.k.core.data.chess.pieceSide
 import top.kuangdada.k.core.data.chess.sameSquare
 import top.kuangdada.k.core.designsystem.theme.KTheme
 import top.kuangdada.k.core.designsystem.theme.LocalAnimationsEnabled
+import top.kuangdada.k.nativeapp.R
 
 /**
  * ============================================================
@@ -66,8 +82,10 @@ import top.kuangdada.k.core.designsystem.theme.LocalAnimationsEnabled
  * "棋盘单位 × k" 换算（k = 实际宽度 / 528），所以任何屏宽下比例都不变。
  *
  * 配色是**固定色**（木色盘面 + 朱红/墨黑棋子），刻意不走主题令牌：
- * 棋盘是一个"实物"，浅色主题下是它、深色主题下也是它 —— 与 Web 端
- * `chess.module.css` 里那组硬编码色值同源，改一处要同步对端。
+ * 棋盘是一个"实物"，浅色主题下是它、深色主题下也是它。
+ * 质感是 Android 端自绘的升级版（外框/木纹/立体棋子全部程序化画，不引入图片
+ * 资源）：几何比例仍与 Web 端逐字一致，但配色不再与 Web 的平涂同源 ——
+ * 调色只动 [BoardColors]。
  */
 
 // ---- 棋盘几何（单位 = Web 端 SVG 的 viewBox 单位）----
@@ -104,13 +122,27 @@ private val PALACE_LINES: List<IntArray> = listOf(
     intArrayOf(5, 7, 3, 9),
 )
 
-/** 棋盘固定配色（与 Web 端 `chess.module.css` 的棋盘段一一对应） */
+/** 炮位/兵位角标几何：臂贴着网格线（距线 [STAR_GAP]）、从靠近交点的内角向外伸 [STAR_LEN]（与 Web 端同参） */
+private const val STAR_GAP = 2f
+private const val STAR_LEN = 9f
+
+/** 棋盘固定配色（实物质感版；调色只动这里） */
 private object BoardColors {
-    val woodFill = Color(0xFFE8D5AE)
-    val woodLine = Color(0xFF8A6D3B)
-    val riverRed = Color(0xFF8A5A2B)
-    val riverBlack = Color(0xFF3D3D3D)
-    val pieceFill = Color(0xFFF6E7C8)
+    // 盘面木色（竖向微渐变 + 木纹 + 角部压暗）
+    val faceTop = Color(0xFFF2D9A4)
+    val faceBottom = Color(0xFFE3BC80)
+    val grain = Color(0xFF8A5A28)
+    val line = Color(0xFF7E5626)
+    val riverText = Color(0xFF7A5228)
+    // 外框（深木 + 外缘描边）
+    val frameTop = Color(0xFF8F5F35)
+    val frameBottom = Color(0xFF5F3F1D)
+    val frameEdge = Color(0xFF3F2A14).copy(alpha = 0.55f)
+    // 棋子（受光木子：芯部亮、边缘深）
+    val pieceCore = Color(0xFFFCF3DB)
+    val pieceMid = Color(0xFFF2DFB2)
+    val pieceRim = Color(0xFFD5B478)
+    val pieceRing = Color(0xFFAE8A50)
     val pieceRed = Color(0xFFB03A2E)
     val pieceBlack = Color(0xFF2C3440)
 }
@@ -184,16 +216,17 @@ fun ChessBoardView(
     }
 
     BoxWithConstraints(modifier = modifier.aspectRatio(W / H)) {
+        val context = LocalContext.current
         // k = 实际宽度 / 棋盘单位宽度：所有坐标乘它。
         // 用 BoxWithConstraints 实测宽度而不是拿 dp 常量换算 —— 棋盘宽度由调用方
         // （面板的可用宽度）决定，写死会在窄屏上溢出。
         val k = with(density) { maxWidth.toPx() } / W
-        // 棋子文字尺寸也是"棋盘单位"：Web 端 SVG 里 `font-size: 30px`（同一个 528 单位 viewBox）
-        val pieceFont = with(density) { (30f * k).toSp() }
-        val pieceBox = with(density) { (PIECE_R * 2f * k).toDp() }
+        // 棋子文字尺寸也是"棋盘单位"：与 Web 端 CSS 的 26px 同源（墨迹居中见绘制处）
+        val pieceFont = with(density) { (26f * k).toSp() }
         val riverFont = with(density) { (26f * k).toSp() }
-        // 河界文字的整体不透明度（Web 端 `.riverText { opacity: 0.75 }`）
-        val riverAlpha = 0.75f
+        val textMeasurer = rememberTextMeasurer()
+        // 每个棋子字只量一次（14 个字 × 当前字号）：getBoundingBox 给出墨迹包围盒
+        val measuredChars = remember(pieceFont) { mutableMapOf<Char, TextLayoutResult>() }
 
         /** 棋盘单位 → 屏内像素 */
         fun px(units: Float) = units * k
@@ -202,16 +235,217 @@ fun ChessBoardView(
         /** 横线 r 的纵坐标（含翻转） */
         fun cy(r: Int) = px(MARGIN + (if (flipped) r else 9 - r) * CELL)
 
-        // 盘底：用背景 Box 画，**不画进 Canvas** —— 这样"楚河汉界"才能插在它之上、
-        // Canvas（棋子圆底）之下。理由见下面那两处 RiverLabel 的注释。
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .background(
-                    color = BoardColors.woodFill,
-                    shape = RoundedCornerShape(with(density) { px(10f).toDp() }),
+        /**
+         * 立体木子：右下月牙落影 + 左上受光的渐变盘体 + 盘体内高光 + 外缘环 + 内圈刻线。
+         * 全部程序化画（无图片资源），受光方式对齐实物棋子。
+         * 声明成 DrawScope 的局部扩展：只在该层 Canvas 的绘制作用域里可调。
+         */
+        fun DrawScope.drawPiece(center: Offset, isRed: Boolean) {
+            val r = px(PIECE_R)
+            // 落影：两枚与子同大的实心黑圆偏移右下，被盘体盖住只露月牙。
+            // ★ 别改回"径向渐变软影"：渐变圆比子大、四周都露，在盘面上是一圈灰雾（实测翻车）。
+            drawCircle(Color.Black.copy(alpha = 0.32f), r, center + Offset(px(3f), px(4f)))
+            drawCircle(Color.Black.copy(alpha = 0.15f), r, center + Offset(px(5.5f), px(7f)))
+            // 盘体：高光偏左上，边缘过渡到深木色
+            drawCircle(
+                Brush.radialGradient(
+                    0f to BoardColors.pieceCore,
+                    0.55f to BoardColors.pieceMid,
+                    1f to BoardColors.pieceRim,
+                    center = center - Offset(r * 0.32f, r * 0.38f),
+                    radius = r * 1.6f,
                 ),
-        )
+                radius = r,
+                center = center,
+            )
+            // 左上高光：半径收在盘体内（0.48r）——再大就溢出棋子边缘，在盘面上拖出白雾
+            val hl = center - Offset(r * 0.34f, r * 0.42f)
+            drawCircle(
+                Brush.radialGradient(
+                    0f to Color.White.copy(alpha = 0.30f),
+                    1f to Color.Transparent,
+                    center = hl,
+                    radius = r * 0.48f,
+                ),
+                radius = r * 0.48f,
+                center = hl,
+            )
+            // 外缘环（深木色收边）+ 内圈刻线（红黑各随其字）
+            drawCircle(BoardColors.pieceRing, r, center, style = Stroke(px(1.5f)))
+            val side = if (isRed) BoardColors.pieceRed else BoardColors.pieceBlack
+            drawCircle(side.copy(alpha = 0.92f), r * 0.76f, center, style = Stroke(px(1.7f)))
+        }
+
+        // ---- 盘面绘制拆两层 Canvas ----
+        // 底层：外框/盘面/木纹/网格 —— 只依赖尺寸与翻转，静态内容单独一层，
+        // 走子/选中/绝杀脉冲的高频重绘不会连木纹一起重画。
+        // 顶层：棋子与各类标记。河界文字夹在两层之间（层级要求见下）。
+        val facePathPx = remember(k) {
+            Path().apply {
+                addRoundRect(
+                    RoundRect(18f * k, 18f * k, (W - 18f) * k, (H - 21f) * k, CornerRadius(8f * k)),
+                )
+            }
+        }
+
+        // 盘面木纹：真实贴图（Poly Haven silver_oak_veneer_01，CC0，调米黄后 16KB），
+        // 与 Web 端 <image> 同一文件。解码后缩放到盘面像素尺寸（BitmapShader CLAMP）整幅盖上。
+        val woodBrush = remember(context, k) {
+            val faceW = px(W - 36f).toInt().coerceAtLeast(1)
+            val faceH = px(H - 39f).toInt().coerceAtLeast(1)
+            val src = BitmapFactory.decodeResource(context.resources, R.drawable.chess_wood)
+            val scaled = Bitmap.createScaledBitmap(src, faceW, faceH, true)
+            ShaderBrush(BitmapShader(scaled, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP))
+        }
+
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            // 整盘落影：两层圆角矩形叠出软边，向右下偏（与棋子受光方向一致）
+            drawRoundRect(
+                color = Color.Black.copy(alpha = 0.26f),
+                topLeft = Offset(px(3f), px(5f)),
+                size = Size(px(W - 6f), px(H - 9f)),
+                cornerRadius = CornerRadius(px(13f)),
+            )
+            drawRoundRect(
+                color = Color.Black.copy(alpha = 0.12f),
+                topLeft = Offset(px(4.5f), px(7.5f)),
+                size = Size(px(W - 8f), px(H - 11.5f)),
+                cornerRadius = CornerRadius(px(14f)),
+            )
+
+            // 外框：深木竖向渐变 + 外缘描边
+            drawRoundRect(
+                brush = Brush.verticalGradient(
+                    listOf(BoardColors.frameTop, BoardColors.frameBottom),
+                    startY = 0f,
+                    endY = px(H),
+                ),
+                topLeft = Offset(px(1.5f), px(1.5f)),
+                size = Size(px(W - 3f), px(H - 6f)),
+                cornerRadius = CornerRadius(px(12f)),
+            )
+            drawRoundRect(
+                color = BoardColors.frameEdge,
+                topLeft = Offset(px(1.5f), px(1.5f)),
+                size = Size(px(W - 3f), px(H - 6f)),
+                cornerRadius = CornerRadius(px(12f)),
+                style = Stroke(px(1.2f)),
+            )
+
+            // 盘面：浅木底 + 中央提亮 + 竖向木纹 + 角部压暗 + 与外框的"雕刻缝"
+            val faceTopLeft = Offset(px(18f), px(18f))
+            val faceSize = Size(px(W - 36f), px(H - 39f))
+            val faceRadius = CornerRadius(px(8f))
+            drawRoundRect(
+                brush = Brush.verticalGradient(
+                    listOf(BoardColors.faceTop, BoardColors.faceBottom),
+                    startY = faceTopLeft.y,
+                    endY = faceTopLeft.y + faceSize.height,
+                ),
+                topLeft = faceTopLeft,
+                size = faceSize,
+                cornerRadius = faceRadius,
+            )
+            drawRoundRect(
+                brush = Brush.radialGradient(
+                    0f to Color.White.copy(alpha = 0.14f),
+                    1f to Color.Transparent,
+                    center = Offset(px(W / 2f), px(H * 0.38f)),
+                    radius = px(W * 0.62f),
+                ),
+                topLeft = faceTopLeft,
+                size = faceSize,
+                cornerRadius = faceRadius,
+            )
+            // 木纹贴图：clip 到盘面圆角矩形，再平移到盘面原点画（BitmapShader 以画布原点为参考）
+            clipPath(facePathPx) {
+                withTransform({ translate(faceTopLeft.x, faceTopLeft.y) }) {
+                    drawRect(brush = woodBrush, topLeft = Offset.Zero, size = faceSize)
+                }
+            }
+            drawRoundRect(
+                brush = Brush.radialGradient(
+                    0.55f to Color.Transparent,
+                    1f to Color.Black.copy(alpha = 0.08f),
+                    center = Offset(px(W / 2f), px(H / 2f)),
+                    radius = px(W * 0.52f),
+                ),
+                topLeft = faceTopLeft,
+                size = faceSize,
+                cornerRadius = faceRadius,
+            )
+            drawRoundRect(
+                color = Color.Black.copy(alpha = 0.30f),
+                topLeft = faceTopLeft,
+                size = faceSize,
+                cornerRadius = faceRadius,
+                style = Stroke(px(1.2f)),
+            )
+
+            // 网格外框：双线（外粗内细，经典盘面画法；与 Web 端 gridBorderOuter/Inner 同参）
+            drawRoundRect(
+                color = BoardColors.line,
+                topLeft = Offset(px(MARGIN - 9f), px(MARGIN - 9f)),
+                size = Size(px(CELL * 8f + 18f), px(CELL * 9f + 18f)),
+                cornerRadius = CornerRadius(px(4f)),
+                style = Stroke(px(2.2f)),
+            )
+            drawRoundRect(
+                color = BoardColors.line,
+                topLeft = Offset(px(MARGIN - 3.5f), px(MARGIN - 3.5f)),
+                size = Size(px(CELL * 8f + 7f), px(CELL * 9f + 7f)),
+                cornerRadius = CornerRadius(px(2f)),
+                style = Stroke(px(1.3f)),
+            )
+
+            // 横线
+            for (r in 0..9) {
+                drawLine(
+                    color = BoardColors.line,
+                    start = Offset(cx(0), cy(r)),
+                    end = Offset(cx(8), cy(r)),
+                    strokeWidth = px(1.2f),
+                )
+            }
+            // 纵线：两侧贯通，中间被河界断开
+            for (f in 0..8) {
+                val fx = cx(f)
+                if (f == 0 || f == 8) {
+                    drawLine(BoardColors.line, Offset(fx, cy(0)), Offset(fx, cy(9)), px(1.2f))
+                } else {
+                    drawLine(BoardColors.line, Offset(fx, cy(0)), Offset(fx, cy(4)), px(1.2f))
+                    drawLine(BoardColors.line, Offset(fx, cy(5)), Offset(fx, cy(9)), px(1.2f))
+                }
+            }
+            // 九宫斜线
+            for (l in PALACE_LINES) {
+                drawLine(
+                    color = BoardColors.line,
+                    start = Offset(cx(l[0]), cy(l[1])),
+                    end = Offset(cx(l[2]), cy(l[3])),
+                    strokeWidth = px(1.2f),
+                )
+            }
+            // 炮位/兵位角标：每个象限一条"贴线 L"——竖臂贴纵线、横臂贴横线，
+            // 角在靠近交点的内角、臂向外伸（与 Web 端 starMarkPath 同参）。
+            // 边缘点只画盘内侧的象限（外侧越出纵边）。
+            for ((f, r) in STAR_POINTS) {
+                val x = cx(f)
+                val y = cy(r)
+                for (sx in intArrayOf(-1, 1)) {
+                    if (f == 0 && sx < 0) continue
+                    if (f == 8 && sx > 0) continue
+                    for (sy in intArrayOf(-1, 1)) {
+                        val cornerX = x + sx * px(STAR_GAP)
+                        val cornerY = y + sy * px(STAR_GAP)
+                        val outX = x + sx * px(STAR_GAP + STAR_LEN)
+                        val outY = y + sy * px(STAR_GAP + STAR_LEN)
+                        drawLine(BoardColors.line, Offset(outX, cornerY), Offset(cornerX, cornerY), px(1.8f))
+                        drawLine(BoardColors.line, Offset(cornerX, cornerY), Offset(cornerX, outY), px(1.8f))
+                    }
+                }
+            }
+        }
 
         // ---- 楚河（左）/ 漢界（右）----
         // 层级：**必须在棋子之下**。Web 端 SVG 里这两个 `<text>` 排在棋子之前，
@@ -225,7 +459,7 @@ fun ChessBoardView(
             font = riverFont,
             boxWidthPx = px(CELL * 2f),
             boxHeightPx = px(CELL),
-            color = BoardColors.riverRed.copy(alpha = riverAlpha),
+            color = BoardColors.riverText.copy(alpha = 0.85f),
         )
         RiverLabel(
             text = "漢 界",
@@ -234,52 +468,11 @@ fun ChessBoardView(
             font = riverFont,
             boxWidthPx = px(CELL * 2f),
             boxHeightPx = px(CELL),
-            color = BoardColors.riverBlack.copy(alpha = riverAlpha),
+            color = BoardColors.riverText.copy(alpha = 0.85f),
         )
 
+        // ---- 棋子与标记层 ----
         Canvas(modifier = Modifier.fillMaxSize()) {
-            // 边框（盘底由上面的背景 Box 提供）
-            drawRoundRect(
-                color = BoardColors.woodLine,
-                topLeft = Offset(px(MARGIN - 8f), px(MARGIN - 8f)),
-                size = Size(px(CELL * 8f + 16f), px(CELL * 9f + 16f)),
-                cornerRadius = CornerRadius(px(4f)),
-                style = Stroke(width = px(2f)),
-            )
-
-            // 横线
-            for (r in 0..9) {
-                drawLine(
-                    color = BoardColors.woodLine,
-                    start = Offset(cx(0), cy(r)),
-                    end = Offset(cx(8), cy(r)),
-                    strokeWidth = px(1.2f),
-                )
-            }
-            // 纵线：两侧贯通，中间被河界断开
-            for (f in 0..8) {
-                val fx = cx(f)
-                if (f == 0 || f == 8) {
-                    drawLine(BoardColors.woodLine, Offset(fx, cy(0)), Offset(fx, cy(9)), px(1.2f))
-                } else {
-                    drawLine(BoardColors.woodLine, Offset(fx, cy(0)), Offset(fx, cy(4)), px(1.2f))
-                    drawLine(BoardColors.woodLine, Offset(fx, cy(5)), Offset(fx, cy(9)), px(1.2f))
-                }
-            }
-            // 九宫斜线
-            for (l in PALACE_LINES) {
-                drawLine(
-                    color = BoardColors.woodLine,
-                    start = Offset(cx(l[0]), cy(l[1])),
-                    end = Offset(cx(l[2]), cy(l[3])),
-                    strokeWidth = px(1.2f),
-                )
-            }
-            // 炮位/兵位角标
-            for ((f, r) in STAR_POINTS) {
-                drawCircle(BoardColors.woodLine, radius = px(2.5f), center = Offset(cx(f), cy(r)))
-            }
-
             // 被绝杀老将：红光脉冲（绝杀动画期间）
             if (kingHighlight != null) {
                 drawCircle(
@@ -302,7 +495,7 @@ fun ChessBoardView(
                 )
             }
 
-            // 棋子圆底 + 选中圈
+            // 棋子（立体木子）+ 选中圈
             val sel = selected
             for (i in 0 until 90) {
                 val p = board[i]
@@ -312,14 +505,30 @@ fun ChessBoardView(
                 val center = Offset(cx(f), cy(r))
                 val isRed = pieceSide(p) == ChessSide.Red
                 if (sel != null && sel.f == f && sel.r == r) {
-                    drawCircle(c.accent, px(PIECE_R + 5f), center, style = Stroke(px(3f)))
+                    drawCircle(c.accent, px(PIECE_R + 6f), center, style = Stroke(px(3f)))
                 }
-                drawCircle(BoardColors.pieceFill, px(PIECE_R), center)
-                drawCircle(
+                drawPiece(center, isRed)
+                // 棋子汉字：直接画进 Canvas（替代旧的每子一个 Text 组合层）。
+                // 居中用"墨迹包围盒"：字体把汉字墨迹画在 em 框里的位置因字体而异
+                // （"兵"的腿会顶到内圈下缘），按行盒居中永远差一点 —— 量出第一字
+                // 的实际墨迹 bbox，把字平移到"墨迹中心 == 内圈圆心"，与设备字体无关。
+                val char = PIECE_CHARS[p] ?: "?"
+                val layout = measuredChars.getOrPut(p) {
+                    textMeasurer.measure(
+                        AnnotatedString(char),
+                        TextStyle(
+                            fontSize = pieceFont,
+                            fontWeight = FontWeight.Bold,
+                            // 极淡的右下投影：字刻进木头的层次（再重就脏了）
+                            shadow = Shadow(Color.Black.copy(alpha = 0.28f), Offset(px(0.8f), px(1.2f)), blurRadius = px(1.5f)),
+                        ),
+                    )
+                }
+                val ink = layout.getBoundingBox(0)
+                drawText(
+                    textLayoutResult = layout,
                     color = if (isRed) BoardColors.pieceRed else BoardColors.pieceBlack,
-                    radius = px(PIECE_R),
-                    center = center,
-                    style = Stroke(width = px(1.5f)),
+                    topLeft = center - Offset(ink.center.x, ink.center.y),
                 )
             }
             // 合法落点：空点画实心小圆、可吃子画外圈
@@ -335,40 +544,6 @@ fun ChessBoardView(
                 } else {
                     drawCircle(c.accent.copy(alpha = 0.55f), px(8f), center)
                 }
-            }
-        }
-
-        // 棋子汉字层：画在 Canvas 之上（文字永远压在所有棋盘标记上；但**在河界文字之上**
-        // —— 河界文字已经画在这一层之前了）。
-        // 用固定尺寸盒子居中，不需要量文字自身尺寸 —— 汉字在 52×52 的方盒里居中即视觉正中。
-        for (i in 0 until 90) {
-            val p = board[i]
-            if (p == CHESS_EMPTY) continue
-            val f = i % 9
-            val r = i / 9
-            val isRed = pieceSide(p) == ChessSide.Red
-            val half = PIECE_R
-            Box(
-                modifier = Modifier
-                    .offset {
-                        IntOffset(
-                            px(MARGIN + (if (flipped) 8 - f else f) * CELL - half).roundToInt(),
-                            px(MARGIN + (if (flipped) r else 9 - r) * CELL - half).roundToInt(),
-                        )
-                    }
-                    .size(pieceBox),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = PIECE_CHARS[p] ?: "?",
-                    style = TextStyle(
-                        fontSize = pieceFont,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center,
-                    ),
-                    color = if (isRed) BoardColors.pieceRed else BoardColors.pieceBlack,
-                    maxLines = 1,
-                )
             }
         }
 
@@ -448,6 +623,8 @@ private fun RiverLabel(
                 fontSize = font,
                 fontWeight = FontWeight.SemiBold,
                 textAlign = TextAlign.Center,
+                // 字底下垫一丝亮边：刻进木头的"凹版"错觉
+                shadow = Shadow(Color.White.copy(alpha = 0.35f), Offset(0f, 1f), blurRadius = 2f),
             ),
             color = color,
             maxLines = 1,

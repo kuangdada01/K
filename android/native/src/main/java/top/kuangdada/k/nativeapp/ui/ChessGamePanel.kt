@@ -34,6 +34,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -55,6 +56,7 @@ import top.kuangdada.k.core.designsystem.theme.KTheme
 import top.kuangdada.k.core.designsystem.theme.KType
 import top.kuangdada.k.core.designsystem.theme.LocalAnimationsEnabled
 import top.kuangdada.k.nativeapp.voice.ChessGameController
+import top.kuangdada.k.nativeapp.voice.ChessSounds
 
 /**
  * ============================================================
@@ -80,6 +82,10 @@ fun ChessGamePanel(
     val animationsEnabled = LocalAnimationsEnabled.current
     val ui by chess.state.collectAsState()
     val game = ui.game
+
+    // 象棋音效：SoundPool 加载是异步的，面板一挂载就预热（对局开始后第一手即可响）
+    val soundContext = LocalContext.current
+    LaunchedEffect(Unit) { ChessSounds.init(soundContext) }
 
     // ---- 无对局：只渲染邀请 / 待应答横幅 ----
     // 注意"早就结束的残局"根本不会走到这里 —— 控制器在收快照时就把它们挡掉了

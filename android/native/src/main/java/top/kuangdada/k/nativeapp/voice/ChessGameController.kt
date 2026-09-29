@@ -11,6 +11,8 @@ import kotlinx.coroutines.flow.update
 import top.kuangdada.k.core.data.chess.ChessMove
 import top.kuangdada.k.core.data.chess.ChessSide
 import top.kuangdada.k.core.data.chess.ChessSquare
+import top.kuangdada.k.core.data.chess.isInCheck
+import top.kuangdada.k.core.data.chess.parseFen
 import top.kuangdada.k.core.data.chess.pieceSide
 import top.kuangdada.k.core.data.model.ChessCaptured
 import top.kuangdada.k.core.data.model.ChessClientMsg
@@ -203,6 +205,16 @@ class ChessGameController(
 
             is ChessMovedMsg -> {
                 val move = msg.move.toEngineMove()
+                // 走子音：广播到达即响（己方/对方/观战统一；快照恢复不进此分支）。
+                // 吃子走"吃"音；将军时 200ms 后补一声"将军"（与 Web 端节奏一致）。
+                if (_state.value.game?.gameId == msg.gameId) {
+                    if (move?.captured != null) ChessSounds.capture() else ChessSounds.move()
+                    val inCheck = runCatching {
+                        val parsed = parseFen(msg.fen)
+                        isInCheck(parsed.board, parsed.turn)
+                    }.getOrDefault(false)
+                    if (inCheck) ChessSounds.check()
+                }
                 _state.update { st ->
                     val g = st.game
                     if (g == null || g.gameId != msg.gameId) {
@@ -227,14 +239,22 @@ class ChessGameController(
                 }
             }
 
-            is ChessEndedMsg -> _state.update { st ->
-                val g = st.game
-                st.copy(
-                    game = if (g != null && g.gameId == msg.gameId) g.copy(status = msg.result) else g,
-                    drawOfferFrom = null,
-                    undoOfferFrom = null,
-                    ended = EndedView(msg.result, msg.reason),
-                )
+            is ChessEndedMsg -> {
+                // 绝杀专属音（whatcan）：对局以 checkmate 结束时顶掉一切只响这一声。
+                // 副作用放在 update 外 —— MutableStateFlow.update 的 lambda 在竞争下会重试，
+                // 放里面可能双响。
+                if (_state.value.game?.gameId == msg.gameId && msg.reason == ChessEndReasonWire.Checkmate) {
+                    ChessSounds.checkmate()
+                }
+                _state.update { st ->
+                    val g = st.game
+                    st.copy(
+                        game = if (g != null && g.gameId == msg.gameId) g.copy(status = msg.result) else g,
+                        drawOfferFrom = null,
+                        undoOfferFrom = null,
+                        ended = EndedView(msg.result, msg.reason),
+                    )
+                }
             }
 
             is ChessSnapshotMsg -> {
@@ -303,6 +323,8 @@ class ChessGameController(
 
             is ChessUndoneMsg -> _state.update { st ->
                 val g = st.game
+                // 悔棋盘面回退也响一声落子（与 Web 端 moveCount 变化触发音效的行为一致）
+                if (g != null && g.gameId == msg.gameId) ChessSounds.move()
                 if (g == null || g.gameId != msg.gameId) {
                     st
                 } else {
