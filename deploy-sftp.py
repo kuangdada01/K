@@ -356,6 +356,14 @@ echo APK_PRUNE_DONE
         ("数据库探针（/api/health 需为 200 而非 503）",
             "curl -s http://127.0.0.1:3000/api/health",
             lambda o: '"status":"ok"' in o.replace(" ", "")),
+        # 云端朗读的密钥是"只存在于 .env"的配置：它一旦被部署冲掉，接口会在**校验入参之前**
+        # 直接 503（见 server/src/routes/tts.ts 的第一段），所以"空 text 探针"正好能区分
+        # 「密钥在不在」——400 = 密钥已配置（走到入参校验了）、503 = 服务端缺少 STEP_API_KEY。
+        # 2026-09-29 就是靠人反馈"安卓端朗读提示缺少 key"才发现，以后部署当场就能看到。
+        ("云端朗读密钥已配置（/api/tts：400=已配置，503=缺少 STEP_API_KEY）",
+            "curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3000/api/tts "
+            "-H 'Content-Type: application/json' -d '{\"text\":\"\"}'",
+            lambda o: o.strip() == "400"),
         ("首页引用的静态产物全部 200（防「HTML 是新的、资源是旧的」）",
             "curl -skL http://127.0.0.1/ | grep -oE '/assets/[A-Za-z0-9_.-]+\\.(js|css)' | sort -u | "
             "while read -r a; do printf '%s %s\\n' \"$(curl -skL -o /dev/null -w '%{http_code}' \"http://127.0.0.1$a\")\" \"$a\"; done",

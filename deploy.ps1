@@ -50,6 +50,60 @@ if (-not $useKey -and -not $PASSWORD) {
 Write-Host "=== k 项目部署脚本 (SFTP) ===" -ForegroundColor Cyan
 Write-Host "目标服务器: $USER@$SERVER" -ForegroundColor Yellow
 
+<#
+.SYNOPSIS
+  部署前闸门：比对远端 .env 与本地 .env 的**键名**，远端多出来的键一律拦下。
+
+.DESCRIPTION
+  部署会把打包里的 .env 用 `cp -a` 整体覆盖到 $REMOTE_DIR/.env（见 deploy-sftp.py 的 [4/7]），
+  所以"只加在服务器上、没写进本地 .env"的键（密钥最常见）会在下一次部署里**无声消失**。
+  实证 2026-09-29：STEP_API_KEY 这样丢过一次，安卓端云端朗读直接报"服务端缺少 STEP_API_KEY"，
+  而两端的 .env 与备份里都查不到它 —— 只能靠日志里的历史 TTS 调用反推"它确实存在过"。
+
+  只比键名、不读值（密钥不进命令行、不进日志）。确要丢弃远端独有键时：
+      $env:K_DEPLOY_ALLOW_ENV_LOSS = '1'; .\deploy.ps1 -SERVER <IP>
+  口令模式没有可用的非交互通道，只能跳过比对并**明确说出来**（不假装检查过）。
+#>
+function Assert-NoRemoteOnlyEnvKeys {
+    param(
+        [string]$Server,
+        [string]$User,
+        [string]$RemoteDir,
+        [string]$LocalEnv,
+        [string]$KeyFile,
+        [bool]$UseKey
+    )
+    if (-not $UseKey) {
+        Write-Host "  [跳过] 口令模式：无法非交互读远端 .env，未做键名比对（请自行确认远端没有独有键）" -ForegroundColor Yellow
+        return
+    }
+    $remoteRaw = & ssh -i $KeyFile -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=15 `
+        "$User@$Server" "grep -o '^[A-Za-z_][A-Za-z0-9_]*' $RemoteDir/.env 2>/dev/null"
+    if ($LASTEXITCODE -ne 0 -or -not $remoteRaw) {
+        Write-Host "  [跳过] 读不到远端 $RemoteDir/.env（首次部署或 ssh 不通），未做键名比对" -ForegroundColor Yellow
+        return
+    }
+    $remoteKeys = @($remoteRaw | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $localKeys = @(
+        Get-Content $LocalEnv | ForEach-Object { if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=') { $Matches[1] } }
+    )
+    $lost = @($remoteKeys | Where-Object { $localKeys -notcontains $_ } | Sort-Object -Unique)
+    if ($lost.Count -eq 0) {
+        Write-Host "  .env 键名比对：远端无本地缺失的键 ✓" -ForegroundColor Green
+        return
+    }
+    Write-Host "  [中止] 远端 .env 里有本地 .env 没有的键：" -ForegroundColor Red
+    foreach ($k in $lost) { Write-Host "           - $k" -ForegroundColor Red }
+    Write-Host "         本次部署会用本地 .env 整体覆盖远端，上面这些键会消失（09-29 丢过 STEP_API_KEY）。" -ForegroundColor Red
+    Write-Host "         请先把它们补进本地 .env（值也要一并补）再部署；确要丢弃：" -ForegroundColor Red
+    Write-Host "           `$env:K_DEPLOY_ALLOW_ENV_LOSS = '1'; .\deploy.ps1 -SERVER $Server" -ForegroundColor Red
+    if ($env:K_DEPLOY_ALLOW_ENV_LOSS -ne '1') {
+        Write-Error "已中止部署：远端 .env 有本地缺失的键（未上传任何文件）"
+        exit 1
+    }
+    Write-Host "  [放行] K_DEPLOY_ALLOW_ENV_LOSS=1：按上面的键丢失清单继续部署" -ForegroundColor Yellow
+}
+
 # Step 1: 构建（一次调用，失败即终止部署——E1 修复：此前三段手写构建
 # 失败后脚本继续执行，可能把旧产物静默推上生产）
 Write-Host "`n[1/6] 构建项目..." -ForegroundColor Green
@@ -126,6 +180,13 @@ Copy-Item -Recurse "client\public" "$tmpDir\client\public"
 # 下次部署会被本地 .env 悄悄改回去。本地 .env 必须是生产配置的唯一事实来源。
 if (-not (Test-Path ".env")) {
     Write-Host "  [警告] 未找到本地 .env：远端将沿用现有配置（首次部署必须提供）" -ForegroundColor Yellow
+} else {
+    # ★ 部署前闸门：远端 .env 里"本地没有"的键会被这次整体覆盖**悄悄抹掉**。
+    #   2026-09-29 就是这么出的事：STEP_API_KEY（云端朗读）当初只加在服务器上，
+    #   0.1.16 的部署用本地 .env 覆盖后，安卓端「朗读」立刻变成"服务端缺少 STEP_API_KEY"，
+    #   而两端本地的 .env 里都找不到它（远端 `.env.bak-*` 也没有）—— 排查成本全在这上面。
+    #   本地 .env 既然是唯一事实来源，这里就**响亮失败**，而不是静默回退到旧配置。
+    Assert-NoRemoteOnlyEnvKeys -Server $SERVER -User $USER -RemoteDir $REMOTE_DIR -LocalEnv ".env" -KeyFile $KEY -UseKey $useKey
 }
 Copy-Item ".env" "$tmpDir\"
 if (-not (Test-Path "package-lock.json")) {
