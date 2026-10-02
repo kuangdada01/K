@@ -34,8 +34,15 @@ let db: InstanceType<typeof Database>;
 let server: http.Server;
 let base = '';
 let token = '';
+let savedStepKey: string | undefined;
 
 beforeAll(async () => {
+  // CI 上没有 .env（本地有真实 STEP_API_KEY）：统一给个假密钥，让"正常路径"等用例
+  // 不被路由的「未配置 → 503」闸门拦下（路由按请求动态读 env，见 503 用例的做法）。
+  // 各条断言都引用 env.STEP_API_KEY 本身（Authorization 回显、不外泄检查），假密钥同样成立。
+  savedStepKey = env.STEP_API_KEY;
+  env.STEP_API_KEY = 'test-step-api-key';
+
   db = createMemoryDb();
   setDbForTests(db);
   const id = Number(
@@ -52,6 +59,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  env.STEP_API_KEY = savedStepKey;
   if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
   resetDbForTests();
   db?.close();
