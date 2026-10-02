@@ -109,7 +109,7 @@ export default function ChessGamePanel() {
   const soundOnRef = useRef(soundOn);
   useEffect(() => {
     soundOnRef.current = soundOn;
-  }, []);
+  }, [soundOn]);
 
   /**
    * 素材的就位状态：`loading` / `ready` / `failed`。
