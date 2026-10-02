@@ -85,7 +85,10 @@ function Assert-NoRemoteOnlyEnvKeys {
     }
     $remoteKeys = @($remoteRaw | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     $localKeys = @(
-        Get-Content $LocalEnv | ForEach-Object { if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=') { $Matches[1] } }
+        # ★ -Encoding UTF8 必须带：本地 .env 是 UTF-8（更新说明等值含中文），PS5.1 默认按
+        #   ANSI/GBK 读 —— 中文行的末字节会和换行符组成 GBK 双字节字符，把**下一行的键**
+        #   并进本行，键名比对就漏键（0.1.17 发布实测吞掉 6 个键，闸门误报远端独有）。
+        Get-Content $LocalEnv -Encoding UTF8 | ForEach-Object { if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=') { $Matches[1] } }
     )
     $lost = @($remoteKeys | Where-Object { $localKeys -notcontains $_ } | Sort-Object -Unique)
     if ($lost.Count -eq 0) {
