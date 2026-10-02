@@ -38,10 +38,14 @@ export type ChessGameEndReason =
 /**
  * 双方剩余总时长（毫秒）。turnStartedAt/deadline 为**轮到方**的计时锚点：
  * deadline = turnStartedAt + min(每步限时, 轮到方剩余总时长)；轮到方的真实
- * 剩余 = min(clocks[turn], deadline - Date.now())，客户端据此本地走秒。
+ * 剩余 = min(clocks[turn], deadline - now)，客户端据此本地走秒 —— now 用
+ * "本机时钟 + clockOffset" 校准（见 serverNow），设备时钟不准也显示得对。
  * 终局后 deadline = 0（不再计时）。
  * paused（三期）：对局被暂停时为 true（deadline 同步归 0，双方棋钟冻结），
  * 客户端据此停止走秒、禁用走子；快照携带它，刷新/重连后恢复暂停态。
+ * serverNow：服务端封包那一刻的 Date.now()。客户端在消息**到达**的那一刻记
+ * clockOffset = serverNow - 本机 Date.now()，之后走秒一律用校准后的 now ——
+ * 否则两台设备时钟有偏差时，同一局面在双方屏幕上显示的剩余时间对不上。
  */
 export interface ChessClocks {
   red: number;
@@ -49,6 +53,7 @@ export interface ChessClocks {
   turnStartedAt: number;
   deadline: number;
   paused?: boolean;
+  serverNow?: number;
 }
 
 /** 被吃子陈列：red = 红方吃获的黑子，black = 黑方吃获的红子 */

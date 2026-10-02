@@ -217,6 +217,8 @@ export function createChessGameManager(deps: ChessGameManagerDeps) {
     turnStartedAt: game.clock.turnStartedAt,
     deadline: game.clock.deadline,
     paused: !!game.clock.paused,
+    // 封包时刻的服务端时钟：客户端据此对表（校准设备时钟偏差后本地走秒）
+    serverNow: Date.now(),
   });
 
   const snapshotOf = (game: ChessGame) => ({

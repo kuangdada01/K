@@ -56,8 +56,15 @@ data class ChessPlayerInfo(
  *
  * [turnStartedAt]/[deadline] 为**轮到方**的计时锚点：
  * `deadline = turnStartedAt + min(每步限时, 轮到方剩余总时长)`；
- * 轮到方的真实剩余 = `min(clocks[turn], deadline - now)`，客户端据此本地走秒。
+ * 轮到方的真实剩余 = `min(clocks[turn], deadline - now)`，客户端据此本地走秒 ——
+ * now 用"本机时钟 + [serverNow] 算出的钟差"校准，设备时钟不准也显示得对。
  * 终局后 `deadline = 0`（不再计时）。
+ *
+ * [paused]（三期）：对局被暂停时为 true（服务端已把已耗时间扣进 red/black、
+ * deadline 同步归 0），客户端据此冻结走秒、禁走子；快照携带它，重进房恢复暂停态。
+ * [serverNow]：服务端封包那一刻的 epoch 毫秒，客户端在消息到达时记
+ * `offset = serverNow - 本机 System.currentTimeMillis()`，走秒用校准后的 now ——
+ * 不然两台设备时钟有偏差时，同一局面在双方屏幕上显示的剩余对不上。
  */
 @Serializable
 data class ChessClocks(
@@ -65,6 +72,8 @@ data class ChessClocks(
     val black: Long = 0,
     val turnStartedAt: Long = 0,
     val deadline: Long = 0,
+    val paused: Boolean = false,
+    val serverNow: Long = 0,
 )
 
 /** 被吃子陈列：red = 红方吃获的黑子，black = 黑方吃获的红子 */
@@ -265,6 +274,25 @@ data class ChessUndoneMsg(
     val notations: List<String> = emptyList(),
 ) : ChessServerMsg
 
+/** 对局已暂停（任一棋手触发）：clocks.paused=true、deadline=0，客户端冻结走秒并禁走 */
+@Serializable
+@SerialName("game-paused")
+data class ChessPausedMsg(
+    val gameId: String = "",
+    /** 触发暂停的棋手 userId（客户端据此区分自己/对方的操作做提示） */
+    @SerialName("by") val byUserId: Long = 0,
+    val clocks: ChessClocks = ChessClocks(),
+) : ChessServerMsg
+
+/** 对局继续：clocks.paused=false，deadline 已为轮到方重新起表 */
+@Serializable
+@SerialName("game-resumed")
+data class ChessResumedMsg(
+    val gameId: String = "",
+    @SerialName("by") val byUserId: Long = 0,
+    val clocks: ChessClocks = ChessClocks(),
+) : ChessServerMsg
+
 /** 对方已点"再来一局"（本方按钮转为"点击开始"，点击即开局） */
 @Serializable
 @SerialName("game-rematch-offered")
@@ -345,6 +373,16 @@ data class ChessUndoRespondMsg(val gameId: String, val accept: Boolean) : ChessC
 @Serializable
 @SerialName("game-rematch")
 data class ChessRematchMsg(val gameId: String) : ChessClientMsg
+
+/** 暂停对局（任一棋手可触发；服务端把已耗时间扣进剩余并冻结棋钟） */
+@Serializable
+@SerialName("game-pause")
+data class ChessPauseMsg(val gameId: String) : ChessClientMsg
+
+/** 继续对局（暂停期间任一棋手可触发；服务端为轮到方重新起表） */
+@Serializable
+@SerialName("game-resume")
+data class ChessResumeMsg(val gameId: String) : ChessClientMsg
 
 // ---------------------------------------------------------------
 // 编解码

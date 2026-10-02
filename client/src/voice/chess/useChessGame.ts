@@ -132,6 +132,8 @@ export interface ChessActions {
 
 export type ChessController = ChessUiState &
   ChessActions & {
+    /** 棋钟对表：服务端封包时刻 - 本机此刻（毫秒，服务端快为正）；面板走秒校准用 */
+    clockOffset: number;
     /** 某用户在对局中执哪方（观战者 null）；面板据此判定 mySide/myTurn */
     mySideOf: (userId: number) => ChessSide | null;
     /** 服务端 game-* 消息入口（控制器把它接进 VoiceSession 回调） */
@@ -157,6 +159,13 @@ export function useChessGame(deps: {
   const [ended, setEnded] = useState<ChessEndedView | null>(null);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewGameId, setReviewGameId] = useState<string | null>(null);
+  /**
+   * 棋钟对表：`服务端封包时刻 - 本机此刻`（毫秒；服务端快为正）。
+   * deadline 是服务端口径的绝对时间，本机时钟不准时直接拿 Date.now() 去减，
+   * 显示的剩余就差一个钟差 —— 每条带 clocks 的消息到达时刷新一次（见
+   * onChessMessage 顶部），面板走秒用 `deadline - (本机 now + clockOffset)`。
+   */
+  const [clockOffset, setClockOffset] = useState(0);
   // deps 经 ref 读取：onChessMessage/动作保持稳定引用，不随渲染重建
   //（effect 内同步最新值 —— 与控制器里 chatActionsRef 的同一做法）
   const depsRef = useRef(deps);
@@ -192,6 +201,12 @@ export function useChessGame(deps: {
 
   const onChessMessage = useCallback(
     (msg: ChessGameServerMsg): void => {
+      // 棋钟对表：所有带 clocks 的消息都刷新一次"服务端 - 本机"的钟差。
+      // 必须在消息**到达**的这一刻取本机时间 —— 拖到渲染/走秒时才取，
+      // 网络、调度延迟会混进偏差里（面板 remainingOf 拿它校准 deadline）。
+      if ('clocks' in msg && msg.clocks.serverNow) {
+        setClockOffset(msg.clocks.serverNow - Date.now());
+      }
       switch (msg.type) {
         case 'game-invite-received':
           setInvite({ inviteId: msg.inviteId, from: msg.from, side: msg.side, expiresAt: msg.expiresAt });
@@ -450,6 +465,7 @@ export function useChessGame(deps: {
       drawOfferFrom,
       undoOfferFrom,
       ended,
+      clockOffset,
       showPanel: !!(game || invite || outgoing),
       reviewOpen,
       reviewGameId,
@@ -485,6 +501,7 @@ export function useChessGame(deps: {
       drawOfferFrom,
       undoOfferFrom,
       ended,
+      clockOffset,
       reviewOpen,
       reviewGameId,
       onChessMessage,

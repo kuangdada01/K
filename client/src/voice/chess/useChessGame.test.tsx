@@ -15,7 +15,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
-import type { ChessGameServerMsg } from '@k/shared';
+import type { ChessGameMovedMsg, ChessGameServerMsg, ChessGameStartedMsg } from '@k/shared';
 import { useChessGame } from './useChessGame';
 
 // toast 是模块级单例（showToast 只在 <Toast/> 挂载后才入队），这里直接盯调用
@@ -40,7 +40,8 @@ function makeHook(selfUserId: number) {
 
 const CLOCKS = { red: 600000, black: 600000, turnStartedAt: 1000, deadline: 90000 };
 
-const startedMsg = (red = ALICE, black = BOB): ChessGameServerMsg => ({
+// 返回具体消息类型而不是联合：测试里用展开覆盖 clocks 时 TS 才能收窄成功
+const startedMsg = (red = ALICE, black = BOB): ChessGameStartedMsg => ({
   type: 'game-started',
   gameId: 'g1',
   red,
@@ -54,7 +55,7 @@ const movedMsg = (
   seq: number,
   turn: 'red' | 'black',
   status: 'playing' | 'red-win' = 'playing'
-): ChessGameServerMsg => ({
+): ChessGameMovedMsg => ({
   type: 'game-moved',
   gameId: 'g1',
   seq,
@@ -452,5 +453,27 @@ describe('useChessGame 三期（暂停/继续）', () => {
     expect(sent[sent.length - 1]).toEqual({ type: 'game-pause', gameId: 'g1' });
     act(() => hook.result.current.resume('g1'));
     expect(sent[sent.length - 1]).toEqual({ type: 'game-resume', gameId: 'g1' });
+  });
+});
+
+describe('useChessGame 棋钟对表（serverNow）', () => {
+  it('带 serverNow 的 clocks 到达时记录钟差（服务端封包时刻 - 本机此刻）', () => {
+    const { hook, feed } = makeHook(1);
+    const skew = 55_000; // 模拟服务端比本机快 55 秒
+    feed({ ...startedMsg(), clocks: { ...CLOCKS, serverNow: Date.now() + skew } });
+    // 到达那一刻记下的偏差：处理耗时只有几毫秒，误差远小于 1 秒
+    expect(hook.result.current.clockOffset).toBeGreaterThan(skew - 1_000);
+    expect(hook.result.current.clockOffset).toBeLessThanOrEqual(skew);
+
+    // 每条带 clocks 的消息都刷新（game-moved 带来新的 serverNow 就以它为准）
+    feed({ ...movedMsg(0, 'black'), clocks: { ...CLOCKS, serverNow: Date.now() + skew / 5 } });
+    expect(hook.result.current.clockOffset).toBeGreaterThan(skew / 5 - 1_000);
+    expect(hook.result.current.clockOffset).toBeLessThanOrEqual(skew / 5);
+  });
+
+  it('旧服务端不带 serverNow 时钟差保持 0（退回本机口径）', () => {
+    const { hook, feed } = makeHook(1);
+    feed(startedMsg());
+    expect(hook.result.current.clockOffset).toBe(0);
   });
 });

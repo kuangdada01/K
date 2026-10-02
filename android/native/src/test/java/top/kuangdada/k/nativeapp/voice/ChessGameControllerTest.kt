@@ -27,11 +27,15 @@ import top.kuangdada.k.core.data.model.ChessInviteResultMsg
 import top.kuangdada.k.core.data.model.ChessMoveDto
 import top.kuangdada.k.core.data.model.ChessMoveMsg
 import top.kuangdada.k.core.data.model.ChessMovedMsg
+import top.kuangdada.k.core.data.model.ChessPauseMsg
+import top.kuangdada.k.core.data.model.ChessPausedMsg
 import top.kuangdada.k.core.data.model.ChessPlayerInfo
 import top.kuangdada.k.core.data.model.ChessRematchMsg
 import top.kuangdada.k.core.data.model.ChessRematchOfferedMsg
 import top.kuangdada.k.core.data.model.ChessRematchResetMsg
 import top.kuangdada.k.core.data.model.ChessResignMsg
+import top.kuangdada.k.core.data.model.ChessResumeMsg
+import top.kuangdada.k.core.data.model.ChessResumedMsg
 import top.kuangdada.k.core.data.model.ChessServerMsg
 import top.kuangdada.k.core.data.model.ChessSnapshotMsg
 import top.kuangdada.k.core.data.model.ChessSquareDto
@@ -41,6 +45,7 @@ import top.kuangdada.k.core.data.model.ChessUndoOfferMsg
 import top.kuangdada.k.core.data.model.ChessUndoOfferedMsg
 import top.kuangdada.k.core.data.model.ChessUndoRespondMsg
 import top.kuangdada.k.core.data.model.ChessUndoneMsg
+import top.kuangdada.k.core.data.model.decodeChessServerMsg
 
 /**
  * ============================================================
@@ -361,6 +366,10 @@ class ChessGameControllerTest {
         assertEquals(ChessInviteRespondMsg("inv1", true), h.last())
         h.controller.cancelInvite("pending-2")
         assertEquals(ChessInviteCancelMsg("pending-2"), h.last())
+        h.controller.pause("g1")
+        assertEquals(ChessPauseMsg("g1"), h.last())
+        h.controller.resume("g1")
+        assertEquals(ChessResumeMsg("g1"), h.last())
     }
 
     @Test
@@ -377,6 +386,73 @@ class ChessGameControllerTest {
         assertNull(s.undoOfferFrom)
         assertNull(s.ended)
         assertFalse(s.showPanel)
+    }
+
+    // ---------------------------------------------------------------
+    // 三期：暂停/继续（clocks 是唯一事实来源）+ 棋钟对表
+    // 之前 Android 端没有 game-paused/resumed 分支：对方从 Web 端暂停时
+    // 本端浑然不知，棋钟照走、走到 0:00 卡死，直到下一步棋才"跳回"。
+    // ---------------------------------------------------------------
+
+    @Test
+    fun `game-paused 整体替换棋钟 记录对表偏差 对方操作给提示`() {
+        val h = Harness(1)
+        h.feed(started())
+        h.feed(moved(0, "black"))
+        // 服务端暂停时已把已耗时间扣进剩余、deadline 归 0、paused 置位
+        val pausedClocks = clocks.copy(red = 590_000, deadline = 0, paused = true)
+        val serverNow = System.currentTimeMillis() + 60_000 // 模拟服务端比本机快 1 分钟
+        val toasts = collectMessages(h.controller) {
+            h.feed(ChessPausedMsg(gameId = "g1", byUserId = 2, clocks = pausedClocks.copy(serverNow = serverNow)))
+        }
+        val s = h.controller.state.value
+        assertEquals(pausedClocks.copy(serverNow = serverNow), s.game?.clocks)
+        assertEquals("playing", s.game?.status)
+        // 到达那一刻记下的偏差（处理耗时只有几毫秒，误差远小于 1 秒）
+        assertTrue("clockOffsetMs 应约等于 60s，实际 ${s.clockOffsetMs}", s.clockOffsetMs in 59_000..60_000)
+        assertTrue(toasts.contains("对方暂停了对局"))
+    }
+
+    @Test
+    fun `game-resumed 重新起表 自己触发的不给提示`() {
+        val h = Harness(1)
+        h.feed(started())
+        val resumed = clocks.copy(turnStartedAt = 9_000, deadline = 99_000, paused = false)
+        val toasts = collectMessages(h.controller) {
+            h.feed(ChessResumedMsg(gameId = "g1", byUserId = 1, clocks = resumed))
+        }
+        assertEquals(resumed, h.controller.state.value.game?.clocks)
+        assertTrue(toasts.isEmpty())
+    }
+
+    @Test
+    fun `非本局的暂停广播不落状态 但对方操作仍提示`() {
+        val h = Harness(1)
+        h.feed(started())
+        val toasts = collectMessages(h.controller) {
+            h.feed(ChessPausedMsg(gameId = "other", byUserId = 2, clocks = clocks.copy(paused = true, deadline = 0)))
+        }
+        assertEquals(clocks, h.controller.state.value.game?.clocks)
+        assertTrue(toasts.contains("对方暂停了对局"))
+    }
+
+    @Test
+    fun `game-paused 线格式解码 by 映射到 byUserId paused与serverNow落进clocks`() {
+        // 钉住线格式：Web 端协议字段名是 `by`，kotlinx 侧靠 @SerialName 对上；
+        // 映射错了 byUserId 会拿默认值 0，"自己/对方"的提示就永远判错
+        val json = """
+            {"type":"game-paused","gameId":"g1","by":2,
+             "clocks":{"red":590000,"black":600000,"turnStartedAt":3,"deadline":0,
+                       "paused":true,"serverNow":1727769600000}}
+        """.trimIndent()
+        val msg = decodeChessServerMsg(json)
+        assertTrue(msg is ChessPausedMsg)
+        msg as ChessPausedMsg
+        assertEquals("g1", msg.gameId)
+        assertEquals(2L, msg.byUserId)
+        assertTrue(msg.clocks.paused)
+        assertEquals(0L, msg.clocks.deadline)
+        assertEquals(1727769600000L, msg.clocks.serverNow)
     }
 
     // ---------------------------------------------------------------

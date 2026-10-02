@@ -31,11 +31,15 @@ import top.kuangdada.k.core.data.model.ChessInviteRespondMsg
 import top.kuangdada.k.core.data.model.ChessInviteResultMsg
 import top.kuangdada.k.core.data.model.ChessMoveMsg
 import top.kuangdada.k.core.data.model.ChessMovedMsg
+import top.kuangdada.k.core.data.model.ChessPauseMsg
+import top.kuangdada.k.core.data.model.ChessPausedMsg
 import top.kuangdada.k.core.data.model.ChessPlayerInfo
 import top.kuangdada.k.core.data.model.ChessRematchMsg
 import top.kuangdada.k.core.data.model.ChessRematchOfferedMsg
 import top.kuangdada.k.core.data.model.ChessRematchResetMsg
 import top.kuangdada.k.core.data.model.ChessResignMsg
+import top.kuangdada.k.core.data.model.ChessResumeMsg
+import top.kuangdada.k.core.data.model.ChessResumedMsg
 import top.kuangdada.k.core.data.model.ChessServerMsg
 import top.kuangdada.k.core.data.model.ChessSnapshotMsg
 import top.kuangdada.k.core.data.model.ChessStartedMsg
@@ -130,6 +134,13 @@ class ChessGameController(
         /** 对方发来的未决悔棋请求（发起方 userId） */
         val undoOfferFrom: Long? = null,
         val ended: EndedView? = null,
+        /**
+         * 棋钟对表：`服务端封包时刻 - 本机此刻`（毫秒；服务端快为正）。
+         * deadline 是服务端口径的绝对时间，本机时钟不准时直接拿
+         * [System.currentTimeMillis] 去减，显示的剩余就差一个钟差。
+         * 每条带 clocks 的消息到达时刷新（见 [clockOffsetOf]）。
+         */
+        val clockOffsetMs: Long = 0,
     ) {
         /** 面板是否可见（对局/邀请/待应答横幅任一存在即显示） */
         val showPanel: Boolean get() = game != null || invite != null || outgoing != null
@@ -154,6 +165,14 @@ class ChessGameController(
     // ---------------------------------------------------------------
     // 下行：服务端 game-* 消息
     // ---------------------------------------------------------------
+
+    /**
+     * 棋钟对表：`serverNow - 本机此刻`。必须在消息**到达**的这一刻取本机时间 ——
+     * 拖到渲染/走秒时才取，网络、调度延迟会混进偏差里（面板 remainingOf 拿它
+     * 校准 deadline）。旧服务端不带 serverNow（=0）时退回本机口径。
+     */
+    private fun clockOffsetOf(clocks: ChessClocks): Long =
+        if (clocks.serverNow > 0) clocks.serverNow - System.currentTimeMillis() else 0L
 
     fun onMessage(msg: ChessServerMsg) {
         when (msg) {
@@ -200,7 +219,8 @@ class ChessGameController(
                     clocks = msg.clocks,
                     notations = emptyList(),
                     captured = ChessCaptured(),
-                )
+                ),
+                clockOffsetMs = clockOffsetOf(msg.clocks),
             )
 
             is ChessMovedMsg -> {
@@ -234,6 +254,7 @@ class ChessGameController(
                             // 盘面一动，未决的求和/悔棋请求就作废（与 Web 端一致）
                             drawOfferFrom = null,
                             undoOfferFrom = null,
+                            clockOffsetMs = clockOffsetOf(msg.clocks),
                         )
                     }
                 }
@@ -299,6 +320,7 @@ class ChessGameController(
                         } else {
                             null
                         },
+                        clockOffsetMs = clockOffsetOf(msg.clocks),
                     )
                 }
             }
@@ -341,11 +363,39 @@ class ChessGameController(
                         ),
                         drawOfferFrom = null,
                         undoOfferFrom = null,
+                        clockOffsetMs = clockOffsetOf(msg.clocks),
                     )
                 }
             }
 
+            is ChessPausedMsg -> onPauseToggled(msg.gameId, msg.clocks, paused = true, by = msg.byUserId)
+
+            is ChessResumedMsg -> onPauseToggled(msg.gameId, msg.clocks, paused = false, by = msg.byUserId)
+
             is ChessErrorMsg -> _messages.tryEmit(msg.message)
+        }
+    }
+
+    /**
+     * 暂停/继续（game-paused / game-resumed）：**clocks 是唯一事实来源**
+     * （paused/deadline 都在里面），视图层不单独存暂停态 —— 面板按
+     * `clocks.paused` 冻结走秒、禁走子。之前 Android 端没有这两个分支：
+     * 对方从 Web 端暂停时本端浑然不知，棋钟照走、走到 0:00 卡死，
+     * 直到下一步棋带来新 clocks 才"跳回"（用户实测的"时间不对"就是它）。
+     */
+    private fun onPauseToggled(gameId: String, clocks: ChessClocks, paused: Boolean, by: Long) {
+        _state.update { st ->
+            val g = st.game
+            if (g == null || g.gameId != gameId) {
+                st
+            } else {
+                st.copy(game = g.copy(clocks = clocks), clockOffsetMs = clockOffsetOf(clocks))
+            }
+        }
+        // 提示在 update 外发（update 的 lambda 在竞争下会重试）；谁触发的不影响
+        // clocks 的应用，只决定要不要提示一句 —— 自己点的自己知道，与 Web 端同口径
+        if (by != selfUserId()) {
+            _messages.tryEmit(if (paused) "对方暂停了对局" else "对方继续了对局")
         }
     }
 
@@ -421,6 +471,16 @@ class ChessGameController(
             }
         }
         send(ChessRematchMsg(gameId))
+    }
+
+    /** 暂停对局（任一棋手可触发；服务端把已耗时间扣进剩余并冻结棋钟） */
+    fun pause(gameId: String) {
+        send(ChessPauseMsg(gameId))
+    }
+
+    /** 继续对局（暂停期间任一棋手可触发；服务端为轮到方重新起表） */
+    fun resume(gameId: String) {
+        send(ChessResumeMsg(gameId))
     }
 
     /**

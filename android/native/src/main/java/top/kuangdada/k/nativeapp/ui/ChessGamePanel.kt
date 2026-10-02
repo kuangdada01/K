@@ -64,10 +64,11 @@ import top.kuangdada.k.nativeapp.voice.ChessSounds
  * ============================================================
  * 屏幕共享舞台下方的对局容器：邀请横幅（收到的/发出的）、状态条
  * （双方席位 / 棋钟 / 轮次 / 将军提示）、棋盘、被吃子陈列、棋谱条、
- * 悔棋/求和/认输操作、终局横幅、绝杀动画。
+ * 暂停/继续、悔棋/求和/认输操作、终局横幅、绝杀动画。
  *
  * 棋钟：服务端权威（超时由服务端裁决判负），这里只按广播的 clocks
- * （剩余总时长 + 轮到方计时锚点）本地走秒。
+ * （剩余总时长 + 轮到方计时锚点 + serverNow 对表）本地走秒；
+ * 暂停中按 clocks.paused 冻结（与 Web 端同一口径）。
  *
  * **无对局时不渲染** —— 对局入口在成员卡上的「对弈」按钮（与 Web 端一致：
  * 那边整个面板也只在 `chess.showPanel` 为真时才挂载）。
@@ -144,7 +145,10 @@ fun ChessGamePanel(
         else -> null
     }
     val playing = game.playing
-    val myTurn = playing && mySide != null && game.turn == mySide
+    // 暂停以 clocks.paused 为准（服务端在 game-paused/resumed/快照里都带）：
+    // 停走秒、停走子，双方都能看到也都能继续
+    val paused = playing && game.clocks.paused
+    val myTurn = playing && !paused && mySide != null && game.turn == mySide
     val self = selfUserId
 
     // ---- 本地走秒（500ms 步进足够平滑；对局结束即停表）----
@@ -249,12 +253,14 @@ fun ChessGamePanel(
                 side = ChessSide.Red,
                 turn = game.turn,
                 playing = playing,
+                clockOffsetMs = ui.clockOffsetMs,
                 trailing = false,
             )
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = when {
                         !playing -> "对局结束"
+                        paused -> "对局已暂停"
                         myTurn -> "轮到你走"
                         game.turn == ChessSide.Red -> "轮到红方"
                         else -> "轮到黑方"
@@ -290,6 +296,7 @@ fun ChessGamePanel(
                     side = ChessSide.Black,
                     turn = game.turn,
                     playing = playing,
+                    clockOffsetMs = ui.clockOffsetMs,
                     trailing = true,
                 )
                 if (mySide == null) {
@@ -398,12 +405,19 @@ fun ChessGamePanel(
             }
         }
 
-        // ---- 操作条：棋手显示悔棋/求和/认输，观战显示观战提示 ----
+        // ---- 操作条：棋手显示暂停（暂停中转"继续"）/悔棋/求和/认输，观战显示观战提示 ----
         if (playing && mySide != null) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(KSpacing.xs),
             ) {
+                // 暂停/继续与 Web 端同口径：任一棋手都能触发，服务端把已耗时间
+                // 扣进剩余并冻结棋钟（暂停中"继续对局"转为主按钮位）
+                if (paused) {
+                    ChessPillButton("继续对局", primary = true) { chess.resume(game.gameId) }
+                } else {
+                    ChessPillButton("暂停") { chess.pause(game.gameId) }
+                }
                 /**
                  * 「悔棋」**常驻显示**（不再用 Web 端那条 `moveCount > 0` 的门控）。
                  *
@@ -420,7 +434,8 @@ fun ChessGamePanel(
         }
         if (playing && mySide == null) {
             Text(
-                text = "观战中（${game.red.username} vs ${game.black.username}）",
+                text = "观战中（${game.red.username} vs ${game.black.username}）" +
+                    if (paused) " · 对局已暂停" else "",
                 style = KType.tiny,
                 color = c.textMuted,
             )
@@ -531,7 +546,10 @@ internal fun chessClockText(ms: Long): String {
  * 某侧当前剩余：轮到方取 总时长 与 单步期限 的较小者（与服务端的判定一致）。
  *
  * 口径来自协议：`deadline = turnStartedAt + min(每步限时, 轮到方剩余总时长)`，
- * 所以"轮到方的真实剩余"就是 `min(clocks[side], deadline - now)`。
+ * 所以"轮到方的真实剩余"就是 `min(clocks[side], deadline - now)` —— 但 deadline
+ * 是**服务端口径**的绝对时间，[clockOffsetMs]（`serverNow - 本机此刻`，控制器在
+ * 每条 clocks 消息到达时记）先把本机 now 校准过去，不然设备时钟不准时走秒就偏。
+ * 暂停中（clocks.paused）双方冻结：服务端已把已耗时间扣进剩余、deadline 归 0。
  */
 internal fun remainingOf(
     clocks: ChessClocks,
@@ -539,10 +557,11 @@ internal fun remainingOf(
     turn: ChessSide,
     playing: Boolean,
     now: Long,
+    clockOffsetMs: Long = 0,
 ): Long {
     val total = if (side == ChessSide.Red) clocks.red else clocks.black
-    if (!playing || side != turn) return max(0L, total)
-    return max(0L, min(total, clocks.deadline - now))
+    if (!playing || clocks.paused || side != turn) return max(0L, total)
+    return max(0L, min(total, clocks.deadline - (now + clockOffsetMs)))
 }
 
 /** 被吃子陈列文案（空 → "—"；棋子用棋盘那套汉字，红黑各自取字） */
@@ -678,23 +697,25 @@ private fun ChessSeatClock(
     side: ChessSide,
     turn: ChessSide,
     playing: Boolean,
+    clockOffsetMs: Long,
     trailing: Boolean,
 ) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(playing) {
-        while (playing) {
+    // 暂停时停表（remainingOf 在 paused 下也不依赖 now，纯省重组）
+    LaunchedEffect(playing, clocks.paused) {
+        while (playing && !clocks.paused) {
             now = System.currentTimeMillis()
             delay(500)
         }
     }
-    val left = remainingOf(clocks, side, turn, playing, now)
+    val left = remainingOf(clocks, side, turn, playing, now, clockOffsetMs)
     ChessSeat(
         name = name,
         chip = chip,
         chipColor = chipColor,
         clock = chessClockText(left),
-        clockActive = playing && turn == side,
-        clockLow = playing && left < 20_000,
+        clockActive = playing && !clocks.paused && turn == side,
+        clockLow = playing && !clocks.paused && left < 20_000,
         trailing = trailing,
     )
 }

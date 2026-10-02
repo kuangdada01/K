@@ -48,17 +48,20 @@ function formatClock(ms: number): string {
 }
 
 /** 某侧当前剩余：轮到方取 总时长 与 单步期限 的较小者（与服务端的判定一致）；
- *  暂停时双方冻结（服务端已在暂停时把已耗时间扣进 remaining） */
+ *  暂停时双方冻结（服务端已在暂停时把已耗时间扣进 remaining）；
+ *  clockOffset = 服务端 - 本机的钟差：deadline 是服务端口径的绝对时间，
+ *  先把本机 now 校准过去，两台设备时钟有偏差时双方看到的剩余才一致 */
 function remainingOf(
   clocks: ChessClocks,
   side: ChessSide,
   turn: ChessSide,
   playing: boolean,
   paused: boolean,
-  now: number
+  now: number,
+  clockOffset = 0
 ): number {
   if (!playing || paused || side !== turn) return Math.max(0, clocks[side]);
-  return Math.max(0, Math.min(clocks[side], clocks.deadline - now));
+  return Math.max(0, Math.min(clocks[side], clocks.deadline - (now + clockOffset)));
 }
 
 export default function ChessGamePanel() {
@@ -273,7 +276,7 @@ export default function ChessGamePanel() {
 
   const clockLabel = (side: ChessSide): { text: string; low: boolean } => {
     if (!game) return { text: '--', low: false };
-    const remaining = remainingOf(game.clocks, side, game.turn, playing, paused, now);
+    const remaining = remainingOf(game.clocks, side, game.turn, playing, paused, now, chess.clockOffset);
     return { text: formatClock(remaining), low: playing && !paused && remaining < 20_000 };
   };
 

@@ -50,6 +50,28 @@ class ChessPanelLogicTest {
         assertEquals(590_000L, remainingOf(clocks, ChessSide.Black, ChessSide.Black, false, 999_999))
     }
 
+    @Test
+    fun `暂停中冻结显示总时长 deadline 归零也不走秒`() {
+        // 服务端暂停时已把已耗时间扣进剩余、deadline 归 0、paused 置位 ——
+        // 之前 Android 端不认 paused，对方从 Web 端暂停时本端棋钟照走、
+        // 走到 0:00 卡死（用户实测的"时间不对"）
+        val paused = clocks.copy(paused = true, deadline = 0)
+        assertEquals(600_000L, remainingOf(paused, ChessSide.Red, ChessSide.Red, true, 999_999_999))
+        assertEquals(590_000L, remainingOf(paused, ChessSide.Black, ChessSide.Red, true, 999_999_999))
+    }
+
+    @Test
+    fun `轮到方走秒先对表 服务端快几分就多扣几分`() {
+        val now = 50_000L
+        assertEquals(41_000L, remainingOf(clocks, ChessSide.Red, ChessSide.Red, true, now))
+        // 服务端比本机快 5 秒：deadline 是服务端口径的绝对时间，本机 now + 5s 才是"服务端此刻"
+        assertEquals(36_000L, remainingOf(clocks, ChessSide.Red, ChessSide.Red, true, now, 5_000))
+        // 服务端比本机慢 8 秒：显示的剩余相应多 8 秒
+        assertEquals(49_000L, remainingOf(clocks, ChessSide.Red, ChessSide.Red, true, now, -8_000))
+        // 校准只影响轮到方，非轮到方照旧显示总时长
+        assertEquals(590_000L, remainingOf(clocks, ChessSide.Black, ChessSide.Red, true, now, 5_000))
+    }
+
     // ---- 被吃子 / 记谱 ----
 
     @Test
