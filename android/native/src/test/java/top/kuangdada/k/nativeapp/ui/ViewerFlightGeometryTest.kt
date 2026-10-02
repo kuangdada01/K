@@ -9,6 +9,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import top.kuangdada.k.core.designsystem.theme.KMotion
+import top.kuangdada.k.nativeapp.ui.viewer.coverScaleOf
+import kotlin.math.abs
 
 /**
  * 全屏查看器飞行几何的单元测试（M5.2）。
@@ -200,22 +202,54 @@ class ViewerFlightGeometryTest {
      *
      * 拖到任意深度松手时，`flying=false`（拖拽那段）与 `flying=true`（飞行那段）算出来的
      * 透明度必须相等 —— 早先那版在 `flying` 翻过来的瞬间把半透的遮罩跳成了全黑。
+     *
+     * 注：第三个参数 M5.10 起叫 `maskProgress`（时间线性的遮罩进度），不再是几何的 `progress`；
+     * 起飞那一帧它是 1（见 [flightMaskAlphaOf]），所以下面这条等式仍然必须成立。
      */
     @Test
     fun mask_alpha_is_continuous_at_the_handoff() {
         for (drag in listOf(0f, 0.1f, 1f / 6f, 0.25f, 2f)) {
             assertEquals(
-                viewerMaskAlpha(flying = false, progress = 1f, dragFraction = drag),
-                viewerMaskAlpha(flying = true, progress = 1f, dragFraction = drag),
+                viewerMaskAlpha(flying = false, maskProgress = 1f, dragFraction = drag),
+                viewerMaskAlpha(flying = true, maskProgress = 1f, dragFraction = drag),
                 0.001f,
             )
         }
-        // 没下拉过（点画面退出 / 返回键）：与旧行为一致，透明度就是飞行进度
-        assertEquals(1f, viewerMaskAlpha(flying = true, progress = 1f, dragFraction = 0f), 0.001f)
-        assertEquals(0.5f, viewerMaskAlpha(flying = true, progress = 0.5f, dragFraction = 0f), 0.001f)
-        assertEquals(0f, viewerMaskAlpha(flying = true, progress = 0f, dragFraction = 0f), 0.001f)
+        // 没下拉过（点画面退出 / 返回键）：端点与全屏静止状态严丝合缝
+        assertEquals(1f, viewerMaskAlpha(flying = true, maskProgress = 1f, dragFraction = 0f), 0.001f)
+        assertEquals(0f, viewerMaskAlpha(flying = true, maskProgress = 0f, dragFraction = 0f), 0.001f)
         // 1x 静止时全黑
-        assertEquals(1f, viewerMaskAlpha(flying = false, progress = 1f, dragFraction = 0f), 0.001f)
+        assertEquals(1f, viewerMaskAlpha(flying = false, maskProgress = 1f, dragFraction = 0f), 0.001f)
+    }
+
+    /**
+     * 飞行段遮罩曲线（M5.10，对齐用户第二份微信录屏 Record_2026-10-02-14-53-15 的逐帧实测）：
+     * 遮罩**铺满整个飞行**，不是"只在大图占屏的两端"。
+     *
+     * 实测（进场/退场各自独立测得，τ=0.5 处分别是 0.58 / 0.49）：遮罩在整段飞行上都在变，
+     * 所以这里钉的是"每一段都在动"：
+     *  · τ=0.25 必须已经**明显不是全亮**（旧曲线在这里是 0，即背景完全没压暗 —— 就是被修掉的观感）；
+     *  · τ=0.75 必须**还没全黑**（旧曲线在这里已经 1）；
+     *  · 两端严格 0/1，且全程单调（不能中途变亮又变暗）。
+     */
+    @Test
+    fun flight_mask_alpha_spans_the_whole_flight() {
+        assertEquals(0f, flightMaskAlphaOf(0f), 0.001f)
+        assertEquals(1f, flightMaskAlphaOf(1f), 0.001f)
+        // 中点：实测 0.58 / 0.49，曲线给 0.5
+        assertEquals(0.5f, flightMaskAlphaOf(0.5f), 0.001f)
+        // 整段都在动：四分之一处已压暗一截，四分之三处还没全黑
+        assertTrue("τ=0.25 处背景必须已经压暗（实测 0.09~0.20）", flightMaskAlphaOf(0.25f) > 0.05f)
+        assertTrue("τ=0.25 处不该已经压黑（实测 0.09~0.20）", flightMaskAlphaOf(0.25f) < 0.35f)
+        assertTrue("τ=0.75 处不该已经全黑（实测 0.91~0.95）", flightMaskAlphaOf(0.75f) < 0.95f)
+        // 单调递增（进场方向），不许中途回头
+        var last = 0f
+        var t = 0f
+        while (t <= 1f) {
+            assertTrue("t=$t 处曲线不单调", flightMaskAlphaOf(t) >= last - 1e-6f)
+            last = flightMaskAlphaOf(t)
+            t += 0.05f
+        }
     }
 
     /**
@@ -252,6 +286,88 @@ class ViewerFlightGeometryTest {
             below = "0（会越出缩略格再弹回）",
         )
     }
+
+    /**
+     * M5.7 的飞行绘制变换：`cropOverScaleOf(落位矩形, 中间矩形)` 必须**等价于 ContentScale.Crop**
+     * —— 飞行图按落位矩形只布局一次，每帧用这个系数缩放。
+     *
+     * 系数取小了：缩放后的内容盖不住裁剪框，框里露黑边（真机上就是飞行图"缺一角"）。
+     * 所以这条不变量必须钉死：**缩放后的基准矩形在两轴上都 ≥ 中间矩形**（覆盖），且至少
+     * 一轴**恰好相等**（贴边，Crop 的"裁着填满"）。
+     */
+    @Test
+    fun crop_over_scale_always_covers_and_touches_both_ends() {
+        val fullscreen = Rect(0f, 0f, 1080f, 2400f) // 竖屏全屏（落位矩形）
+        val cells = listOf(
+            Rect(90f, 900f, 990f, 1800f),   // 九宫格的方格（1:1）
+            Rect(56f, 773f, 1383f, 2542f),  // 详情单图（真机量到过的矩形）
+            Rect(0f, 0f, 1080f, 2400f),     // 落位矩形自己（恒等）
+        )
+        for (cell in cells) {
+            val s = cropOverScaleOf(fullscreen, cell)
+            assertTrue("s 必须为正", s > 0f)
+            val scaledW = fullscreen.width * s
+            val scaledH = fullscreen.height * s
+            assertTrue("宽度方向必须盖住格子", scaledW >= cell.width - 0.01f)
+            assertTrue("高度方向必须盖住格子", scaledH >= cell.height - 0.01f)
+            assertTrue(
+                "至少一轴恰好贴边（Crop 的取景），否则取景和 Crop 不一致",
+                abs(scaledW - cell.width) < 0.01f || abs(scaledH - cell.height) < 0.01f,
+            )
+        }
+    }
+
+    /** 恒等情形：rect == base 时系数必须是 1（落位帧与全屏 Fit 逐像素一致的前提） */
+    @Test
+    fun crop_over_scale_is_identity_at_the_target() {
+        val r = Rect(10f, 20f, 110f, 320f)
+        assertEquals(1f, cropOverScaleOf(r, r), 0.001f)
+    }
+
+    /**
+     * 飞行时长（M5.10）：几何弹簧的 `durationNanos` 就是遮罩补间的时长（见 `flightDurationMs`），
+     * 所以它同时决定"图片飞多久"和"背景压黑多久"。
+     *
+     * 为什么钉一个区间：用户录屏逐帧量到的微信飞行是 **约 245~250ms**
+     * （进场 1.3607→1.610、退场 2.9305→3.180）。这条动画也顺带保证
+     * `durationNanos` 不会返回一个离谱的值 —— 遮罩时长是照抄它的，
+     * 一旦它变成几百毫秒，`flying` 会被白白拖长（期间不能翻页、点击也不响应）。
+     */
+    @Test
+    fun flight_duration_stays_in_the_measured_band() {
+        val ms = TargetBasedAnimation(
+            animationSpec = KMotion.spatialBounded<Float>(KMotion.Preset.Default),
+            typeConverter = Float.VectorConverter,
+            initialValue = 0f,
+            targetValue = 1f,
+        ).durationNanos / 1_000_000
+        println("[flight] 几何弹簧时长 = $ms ms（微信实测约 245~250ms）")
+        assertTrue("飞行时长 $ms ms 偏离微信实测太多", ms in 150..400)
+    }
+
+    /**
+     * 双击目标倍率（M5.9，用户实测微信的行为）：**刚好铺满全屏**的 cover 倍率 ——
+     * 放大后只有溢出的那个方向需要滑（通常是左右滑），不再"上下左右全得拖"。
+     */
+    @Test
+    fun double_tap_cover_scale_fills_the_screen_exactly() {
+        // 3:4 竖图在 ~9:19.5 屏：图比屏"相对更宽" → 按高铺满，左右滑
+        assertEquals(0.75f / 0.46f, coverScaleOf(0.75f, 460f, 1000f)!!, 0.01f)
+        // 16:9 宽图：同样按高铺满，横向溢出更多
+        assertEquals(1.78f / 0.46f, coverScaleOf(1.78f, 460f, 1000f)!!, 0.01f)
+        // 极窄长图（比屏幕相对更窄）→ 按宽铺满，上下滑
+        assertEquals(0.46f / 0.4f, coverScaleOf(0.4f, 460f, 1000f)!!, 0.01f)
+        // 与屏幕同比例：cover = 1，双击不缩放（本就全屏）
+        assertEquals(1f, coverScaleOf(0.46f, 460f, 1000f)!!, 0.01f)
+        // 比例/容器不可用 → null（调用方退回固定倍率）
+        assertEquals(null, coverScaleOf(0f, 460f, 1000f))
+        assertEquals(null, coverScaleOf(0.75f, 0f, 1000f))
+    }
+
+    /**
+     * 可反悔退场的弹簧档已随"单击即刻关闭"试验一起移除（真机否掉了双击的回弹观感），
+     * 退场回到 [KMotion.spatialBounded] —— 上面两条不过冲测试已覆盖它。
+     */
 
     /**
      * 逐帧跑完一整段动画，断言值**始终落在 [from, to] 之间**，并且真的走到了终点。
