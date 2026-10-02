@@ -1,7 +1,10 @@
 package top.kuangdada.k.core.data
 
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -9,6 +12,9 @@ import okhttp3.RequestBody.Companion.asRequestBody
 import top.kuangdada.k.core.data.model.BookChapter
 import top.kuangdada.k.core.data.model.BookDetail
 import top.kuangdada.k.core.data.model.BookSummary
+import top.kuangdada.k.core.data.model.CloudBookProgress
+import top.kuangdada.k.core.data.model.CloudBookProgressListEnvelope
+import top.kuangdada.k.core.data.model.CloudBookProgressRequest
 import top.kuangdada.k.core.data.model.CreateRoomRequest
 import top.kuangdada.k.core.data.model.TtsRequest
 import top.kuangdada.k.core.data.model.UpdateProfileRequest
@@ -26,6 +32,15 @@ import top.kuangdada.k.core.data.model.VoiceRoom
 class BookRepository(private val session: SessionRepository) {
 
     private val baseUrl: String get() = session.api.baseUrl
+
+    /**
+     * 云端进度写盘用的进程级作用域：退出阅读器（onDispose）那一刻组合作用域已经没了，
+     * 「把最后这次位置写上云」必须挂在它上面才活得过页面销毁。
+     */
+    private val cloudWriteScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** 当前登录状态 —— 云端记忆只在登录后开启，未登录保持既有的进程内记忆 */
+    val isLoggedIn: Boolean get() = session.isLoggedIn
 
     /** 章节正文（文本章节） */
     data class ChapterContent(
@@ -82,6 +97,65 @@ class BookRepository(private val session: SessionRepository) {
                 ApiResult.Failure(mapErrorFromThrowable(t))
             }
         }
+
+    /**
+     * 拉云端阅读进度（重装/换设备后恢复「继续阅读」）。
+     * 未登录直接返回 Success(null)，调用方无需再判登录。
+     */
+    suspend fun cloudProgress(bookId: String): ApiResult<CloudBookProgress?> =
+        if (!session.isLoggedIn) {
+            ApiResult.Success(null)
+        } else {
+            call { session.api.books.getProgress(bookId).progress }
+        }
+
+    /**
+     * 覆盖写入云端阅读进度（挂起版）。
+     * 云端记忆是锦上添花：离线/接口失败返回 Failure 即可，不该打扰阅读。
+     */
+    /** 拉该用户**全部**图书的云端进度（图书列表一次性水合用） */
+    suspend fun allCloudProgress(): ApiResult<List<CloudBookProgress>> =
+        if (!session.isLoggedIn) {
+            ApiResult.Success(emptyList())
+        } else {
+            call { session.api.books.getAllProgress().progress }
+        }
+
+    suspend fun saveCloudProgress(
+        bookId: String,
+        chapterIndex: Int,
+        chapterFile: String,
+        para: Int,
+        charOffset: Int,
+    ): ApiResult<CloudBookProgress?> {
+        if (!session.isLoggedIn) return ApiResult.Success(null)
+        return call {
+            session.api.books.putProgress(
+                bookId,
+                CloudBookProgressRequest(chapterIndex, chapterFile, para, charOffset),
+            ).progress
+        }
+    }
+
+    /**
+     * 发后即忘版：给**退出阅读器**（onDispose）用 —— 组合作用域已死，
+     * 写入挂在 [cloudWriteScope] 上，这次「最后的位置」才能发出去。
+     */
+    fun saveCloudProgressAsync(
+        bookId: String,
+        chapterIndex: Int,
+        chapterFile: String,
+        para: Int,
+        charOffset: Int,
+        /** 写入结束（true=成功）回调；回调已切主线程，可直接弹 Toast */
+        onDone: ((Boolean) -> Unit)? = null,
+    ) {
+        if (!session.isLoggedIn) return
+        cloudWriteScope.launch {
+            val ok = saveCloudProgress(bookId, chapterIndex, chapterFile, para, charOffset) is ApiResult.Success
+            if (onDone != null) withContext(Dispatchers.Main) { onDone(ok) }
+        }
+    }
 }
 
 /**

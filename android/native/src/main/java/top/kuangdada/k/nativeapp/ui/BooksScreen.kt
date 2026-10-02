@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import android.os.Build
 import androidx.compose.foundation.lazy.LazyColumn
@@ -58,10 +59,12 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.kuangdada.k.core.data.ApiResult
 import top.kuangdada.k.core.data.BookRepository
 import top.kuangdada.k.core.data.displayMessage
+import top.kuangdada.k.core.data.getOrNull
 import top.kuangdada.k.core.data.model.BookChapter
 import top.kuangdada.k.core.data.model.BookDetail
 import top.kuangdada.k.core.data.model.BookSummary
@@ -94,17 +97,27 @@ import androidx.compose.ui.draw.blur as composeBlur
 internal val BookProgress = mutableMapOf<String, Int>()
 
 /**
- * 章内阅读锚点（进程内）：bookId → (章节下标, 首个可见段下标, 段内像素偏移)。
+ * 章内阅读锚点（进程内）：bookId → (章节下标, 页首行所在段下标, 段内字符偏移)。
  *
  * 与 [BookProgress] 的分工：那里只记「读到第几章」（详情页进度条/继续阅读的章号用），
- * 这里记「那一章里读到了哪个位置」——「继续阅读」因此能回到**退出时的那一段**，
+ * 这里记「那一章里读到了哪个位置」——「继续阅读」因此能回到**退出时的那一页**，
  * 而不是章节开头（2026-09-29 需求）。
  *
+ * 2026-09-30 阅读器改分页（番茄式平移翻页）后，后两位不再记 LazyColumn 的
+ * 可见段/像素偏移，改记当前页首行的 (段下标, 段内字符偏移) —— 按字符而不是像素，
+ * 换字号重排后页码漂了也能找到同一位置（ReaderScreen 里按它反查所在页）。
+ *
  * 只保最近一次阅读的章节（换章即覆盖）；保存时机是离开阅读器/换章两个点，
- * 不在滚动中连续写 —— 既省写放大，也避免新章节首帧 firstVisible=(0,0) 把锚点
- * 冲掉、和恢复滚动互相打架的时序。取舍与 [BookProgress] 相同：进程内，回收即失。
+ * 不在翻页中连续写 —— 既省写放大，也避免新章节首帧把锚点冲掉、和落页
+ * 互相打架的时序。取舍与 [BookProgress] 相同：进程内，回收即失。
  */
 internal val BookProgressAnchor = mutableMapOf<String, Triple<Int, Int, Int>>()
+
+/** 登录后的云端全量同步是否已在本次进程内做过（只做一次；登出复位，换账号登录会重拉） */
+internal var bookCloudSyncDone = false
+
+/** 图书列表头部的同步指示器状态：转圈（进行中）→ 打勾（成功，停 1s）→ 消失 */
+private enum class CloudSyncUi { Idle, Syncing, Done }
 
 /**
  * ============================================================
@@ -195,6 +208,39 @@ fun BooksScreen(
     }
 
     LaunchedEffect(Unit) { load(silent = all.isNotEmpty()) }
+
+    // 云端记忆全量水合（**只在登录后的第一次**做，对应头部小指示器）：
+    // 把所有书的云端进度一次拉回，列表上的「已读 N%」与继续阅读位置**不用进详情**就已就位。
+    // 只补内存里没有的键：本进程刚写的进度永远比云端新，不能被旧云端值冲掉。
+    // 失败（断网等）不阻塞页面、不打勾，下次进图书页会自动重试。
+    var cloudSyncUi by remember { mutableStateOf(CloudSyncUi.Idle) }
+    LaunchedEffect(books.isLoggedIn) {
+        if (!books.isLoggedIn) {
+            bookCloudSyncDone = false
+            return@LaunchedEffect
+        }
+        if (bookCloudSyncDone) return@LaunchedEffect
+        bookCloudSyncDone = true
+        cloudSyncUi = CloudSyncUi.Syncing
+        val all = books.allCloudProgress().getOrNull()
+        if (all == null) {
+            // 同步失败：不打勾，下次进图书页自动重试
+            bookCloudSyncDone = false
+            cloudSyncUi = CloudSyncUi.Idle
+            return@LaunchedEffect
+        }
+        for (p in all) {
+            if (!BookProgress.containsKey(p.bookId)) {
+                BookProgress[p.bookId] = p.chapterIndex
+            }
+            if (!BookProgressAnchor.containsKey(p.bookId)) {
+                BookProgressAnchor[p.bookId] = Triple(p.chapterIndex, p.para, p.charOffset)
+            }
+        }
+        cloudSyncUi = CloudSyncUi.Done
+        delay(1000)
+        cloudSyncUi = CloudSyncUi.Idle
+    }
     // 展开搜索框后把焦点交给它（键盘随之弹起；`runCatching` 兜极端时序下节点未附着）
     LaunchedEffect(searchOpen) {
         if (searchOpen) runCatching { searchFocus.requestFocus() }
@@ -368,18 +414,37 @@ fun BooksScreen(
                                 }
                             }
                         }
-                        // 统计（设计稿「全部图书 · 12 本」）：搜索时改成「搜索「xx」· N 本」
-                        Text(
-                            text = if (keyword.isEmpty()) {
-                                "${if (categories[categoryIndex] == "全部") "全部图书" else categories[categoryIndex]} · ${visible.size} 本"
-                            } else {
-                                "搜索「$keyword」· ${visible.size} 本"
-                            },
-                            style = KType.footnote,
-                            color = c.textMuted,
-                            // 自己的间距自己带（同上，不再靠 Column 的 spacedBy）
+                        // 统计（设计稿「全部图书 · 12 本」）：搜索时改成「搜索「xx」· N 本」。
+                        // 右侧是云端同步指示器（只跟随登录后那一次全量同步）：
+                        // 转圈=进行中 → ✓=完成（停 1s）→ 消失；阅读中/其他记录**不出任何提示**。
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.padding(top = KSpacing.sm),
-                        )
+                        ) {
+                            Text(
+                                text = if (keyword.isEmpty()) {
+                                    "${if (categories[categoryIndex] == "全部") "全部图书" else categories[categoryIndex]} · ${visible.size} 本"
+                                } else {
+                                    "搜索「$keyword」· ${visible.size} 本"
+                                },
+                                style = KType.footnote,
+                                color = c.textMuted,
+                            )
+                            when (cloudSyncUi) {
+                                CloudSyncUi.Syncing -> CircularProgressIndicator(
+                                    modifier = Modifier.padding(start = KSpacing.xs).size(14.dp),
+                                    strokeWidth = 2.dp,
+                                    color = c.accent,
+                                )
+                                CloudSyncUi.Done -> Glyph(
+                                    tint = c.accent,
+                                    kind = GlyphKind.Check,
+                                    size = 14.dp,
+                                    modifier = Modifier.padding(start = KSpacing.xs),
+                                )
+                                CloudSyncUi.Idle -> Unit
+                            }
+                        }
                     }
                 }
                 // 搜索无结果时给一句话（否则屏幕只剩页头，看着像坏了）
@@ -489,6 +554,22 @@ fun BookDetailScreen(
             // 系统分享（「更多」圆钮）要从 Activity context 发起
             val appContext = LocalContext.current
             // 阅读进度（有才显示；进程内，见文件顶部 BookProgress 的说明）
+            // 云端记忆水合：进程内没有这本书的进度（冷启动/重装/换设备）且已登录时，
+            // 从服务端把「读到第几章、页首在哪」拿回来 —— 「继续阅读」按钮与阅读器的
+            // 页内恢复都吃这两份进程内数据，这里种下即可，阅读器无感。
+            // 只在内存完全没有时拉一次：进程内已有的值永远比云端新（本进程刚写的）。
+            LaunchedEffect(d?.id) {
+                val book = d ?: return@LaunchedEffect
+                if (!books.isLoggedIn) return@LaunchedEffect
+                if (BookProgress.containsKey(book.id) || BookProgressAnchor.containsKey(book.id)) {
+                    return@LaunchedEffect
+                }
+                val cloud = books.cloudProgress(book.id).getOrNull() ?: return@LaunchedEffect
+                if (cloud.chapterIndex !in book.flatChapters.indices) return@LaunchedEffect
+                BookProgress[book.id] = cloud.chapterIndex
+                BookProgressAnchor[book.id] = Triple(cloud.chapterIndex, cloud.para, cloud.charOffset)
+            }
+
             val lastIndex = d?.let { BookProgress[it.id]?.takeIf { i -> i in it.flatChapters.indices } }
             val progressFraction =
                 if (d != null && lastIndex != null) {

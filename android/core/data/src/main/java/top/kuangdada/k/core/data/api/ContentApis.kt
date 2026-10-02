@@ -16,6 +16,9 @@ import okhttp3.MultipartBody
 import okhttp3.ResponseBody
 import top.kuangdada.k.core.data.model.BookDetail
 import top.kuangdada.k.core.data.model.BookListResponse
+import top.kuangdada.k.core.data.model.CloudBookProgressEnvelope
+import top.kuangdada.k.core.data.model.CloudBookProgressListEnvelope
+import top.kuangdada.k.core.data.model.CloudBookProgressRequest
 import top.kuangdada.k.core.data.model.PostListWithMore
 import top.kuangdada.k.core.data.model.UpdateProfileRequest
 import top.kuangdada.k.core.data.model.User
@@ -49,6 +52,24 @@ interface BookApi {
         @Path("bookId") bookId: String,
         @Query("file") file: String,
     ): ResponseBody
+
+    /**
+     * 云端阅读进度（登录用户的「继续阅读」记忆，重装/换设备存活）。
+     * progress 为 null = 云端还没有记录（首次阅读/从未同步）。
+     */
+    @GET("api/books/{bookId}/progress")
+    suspend fun getProgress(@Path("bookId") bookId: String): CloudBookProgressEnvelope
+
+    /** 该用户全部图书的云端进度（图书列表一次性水合用） */
+    @GET("api/books/progress/all")
+    suspend fun getAllProgress(): CloudBookProgressListEnvelope
+
+    /** 覆盖写入云端阅读进度（客户端在退出阅读器/换章两个时机调用，last-write-wins） */
+    @PUT("api/books/{bookId}/progress")
+    suspend fun putProgress(
+        @Path("bookId") bookId: String,
+        @Body body: CloudBookProgressRequest,
+    ): CloudBookProgressEnvelope
 }
 
 /**

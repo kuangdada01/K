@@ -171,3 +171,31 @@ data class VoiceParticipant(
     /** 正在共享屏幕（全房间最多一人，服务端互斥） */
     val sharing: Boolean = false,
 )
+
+/** 云端阅读进度（server book_progress 表）—— 登录用户的「继续阅读」跨设备/重装存活 */
+@Serializable
+data class CloudBookProgress(
+    val bookId: String = "",
+    val chapterIndex: Int = 0,
+    val chapterFile: String = "",
+    val para: Int = 0,
+    val charOffset: Int = 0,
+    val updatedAt: String = "",
+)
+
+/** GET/PUT `/api/books/:id/progress` 的信封（progress 为 null = 云端还没有记录） */
+@Serializable
+data class CloudBookProgressEnvelope(val progress: CloudBookProgress? = null)
+
+/** PUT 请求体（字段名与服务端 zod schema 逐字对齐） */
+@Serializable
+data class CloudBookProgressRequest(
+    val chapterIndex: Int,
+    val chapterFile: String,
+    val para: Int,
+    val charOffset: Int,
+)
+
+/** GET /api/books/progress/all 的信封：该用户全部图书的云端进度 */
+@Serializable
+data class CloudBookProgressListEnvelope(val progress: List<CloudBookProgress> = emptyList())

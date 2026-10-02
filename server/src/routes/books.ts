@@ -21,6 +21,11 @@ import path from 'path';
 import fs from 'fs';
 import { PATHS } from '../config';
 import { logger } from '../lib/logger';
+import { z } from 'zod';
+import { authMiddleware } from '../middleware/auth';
+import { asyncHandler } from '../middleware/error';
+import { validateBody } from '../validate';
+import { getAllBookProgress, getBookProgress, upsertBookProgress } from '../repositories/book-progress.repo';
 
 const router = Router();
 
@@ -270,5 +275,78 @@ router.get('/:bookId/content', async (req: Request, res: Response) => {
     res.status(500).json({ error: '章节读取失败' });
   }
 });
+
+/** 把 book_progress 行映射成对外的 JSON 形状（下划线列名 → camelCase） */
+function toProgressJson(row: ReturnType<typeof getBookProgress>) {
+  if (!row) return null;
+  return {
+    bookId: row.book_id,
+    chapterIndex: row.chapter_index,
+    chapterFile: row.chapter_file,
+    para: row.para,
+    charOffset: row.char_offset,
+    updatedAt: row.updated_at,
+  };
+}
+
+/**
+ * GET /api/books/:bookId/progress - 读云端阅读进度（需登录）
+ *
+ * 返回 { progress: null | { chapterIndex, chapterFile, para, charOffset, updatedAt } }。
+ * progress 为 null 表示云端还没有记录（首次阅读/从未同步）。
+ */
+/**
+ * GET /api/books/progress/all - 该用户全部图书的云端进度（需登录）
+ *
+ * 给列表页一次性水合用：进图书 tab 就能把所有书的「已读 N%」和
+ * 继续阅读位置恢复出来，而不是要一本本点进详情才知道。
+ */
+router.get(
+  '/progress/all',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const rows = getAllBookProgress(req.user!.id);
+    res.json({ progress: rows.map(toProgressJson) });
+  })
+);
+
+router.get(
+  '/:bookId/progress',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const bookId = String(req.params.bookId);
+    const row = getBookProgress(req.user!.id, bookId);
+    res.json({ progress: toProgressJson(row) });
+  })
+);
+
+/**
+ * PUT /api/books/:bookId/progress - 覆盖写入云端阅读进度（需登录）
+ *
+ * 客户端在「退出阅读器/换章」两个时机写入（与进程内锚点同节奏），
+ * last-write-wins：同一用户同一本书只保最新一条。
+ */
+const upsertProgressSchema = z.object({
+  chapterIndex: z.number().int().min(0),
+  chapterFile: z.string().max(512),
+  para: z.number().int().min(0),
+  charOffset: z.number().int().min(0),
+});
+
+router.put(
+  '/:bookId/progress',
+  authMiddleware,
+  validateBody(upsertProgressSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const bookId = String(req.params.bookId);
+    const row = upsertBookProgress(req.user!.id, bookId, {
+      chapterIndex: req.body.chapterIndex,
+      chapterFile: req.body.chapterFile,
+      para: req.body.para,
+      charOffset: req.body.charOffset,
+    });
+    res.json({ progress: toProgressJson(row) });
+  })
+);
 
 export default router;

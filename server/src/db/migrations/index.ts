@@ -40,6 +40,7 @@ import migration027 from './027-posts-location';
 import migration028 from './028-drop-private-images';
 import migration029 from './029-voice-room-cover';
 import migration030 from './030-voice-room-games';
+import migration031 from './031-book-progress';
 import type { Migration } from './helpers';
 
 export type { Migration };
@@ -77,6 +78,7 @@ export const migrations: Migration[] = [
   migration028,
   migration029,
   migration030,
+  migration031,
 ];
 
 /** 迁移记录表 */

@@ -38,7 +38,7 @@ enum class GlyphKind {
     Home, Chat, Book, Voice, User, Image, Bookmark, Repost, Share, Search, Mail,
     ChevronLeft, Menu, Sun, More, Plus, Close,
     Mic, Volume, Monitor, LogOut, Dot, Sliders, Megaphone,
-    Shield, ChevronRight, Maximize,
+    Shield, ChevronRight, Maximize, Check,
 }
 
 /**
@@ -300,6 +300,12 @@ fun Glyph(
             GlyphKind.Close -> {
                 drawLine(tint, o(6f, 6f), o(18f, 18f), stroke.width, StrokeCap.Round)
                 drawLine(tint, o(18f, 6f), o(6f, 18f), stroke.width, StrokeCap.Round)
+            }
+
+            // lucide check（对勾：M20 6 9 17l-5-5）
+            GlyphKind.Check -> {
+                drawLine(tint, o(4f, 12.5f), o(9f, 17f), stroke.width, StrokeCap.Round)
+                drawLine(tint, o(9f, 17f), o(20f, 6.5f), stroke.width, StrokeCap.Round)
             }
 
             // lucide mic（胶囊拾音头 + U 形支架 + 底杆）
