@@ -11,12 +11,15 @@
  */
 
 import nodemailer from 'nodemailer';
+// v10 起官方自带 .d.ts（具名导出），@types/nodemailer 被架空删除；
+// `nodemailer.Transporter` 这种命名空间写法不复存在，改用具名导入
+import type { Transporter } from 'nodemailer';
 import { env } from './config';
 
 /** SMTP 邮件传输实例（惰性初始化） */
-let transporter: nodemailer.Transporter | null = null;
+let transporter: Transporter | null = null;
 
-function getTransporter(): nodemailer.Transporter {
+function getTransporter(): Transporter {
   if (!transporter) {
     transporter = nodemailer.createTransport({
       host: env.SMTP_HOST || 'smtp.qq.com',
