@@ -9,3 +9,6 @@ archive
 package-lock.json
 k.db*
 OPTIMIZATION_PLAN.md
+
+# 本地参考资料（不入库的抓取/研究草稿，只是碍着本地 prettier 全量检查）
+_research
