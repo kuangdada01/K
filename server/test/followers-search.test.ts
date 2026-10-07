@@ -247,7 +247,7 @@ describe('★ 共同关注优先排序（分页形状专有，2026-10-03）', ()
 
     // 老形状逐字不动：行里不得出现新字段（老 WebView 弹窗靠它）
     const legacy = await api(`/api/friends/followers/${starId}`, viewerToken);
-    const legacyRow = (legacy.data!.users as Record<string, unknown>[])[0];
+    const legacyRow = (legacy.data!.users as Record<string, unknown>[])[0]!;
     expect('is_mutual' in legacyRow).toBe(false);
     expect('follows_viewer' in legacyRow).toBe(false);
   });
@@ -265,7 +265,7 @@ describe('★ 共同关注优先排序（分页形状专有，2026-10-03）', ()
     const ids2 = p2.users.map((u) => u.id);
     expect(ids1.filter((id) => ids2.includes(id))).toEqual([]);
     expect(new Set([...ids1, ...ids2]).size).toBe(27);
-    expect(p1.users[0].username).toBe('fan03'); // 互关的那个人在第一页第一个
+    expect(p1.users[0]!.username).toBe('fan03'); // 互关的那个人在第一页第一个
   });
 });
 

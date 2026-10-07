@@ -199,7 +199,8 @@ console.log('\n[doctor] Android SDK');
       if (hit) {
         record('ok', `platforms;${hit}`);
       } else {
-        record('fail', `缺少 platforms;android-${compileSdk}`, `sdkmanager "platforms;android-${compileSdk}"`);
+        // 新版 SDK 清单里平台包带小版本号（API 37 = platforms;android-37.0），裸 android-37 已不存在
+        record('fail', `缺少 platforms;android-${compileSdk}`, `sdkmanager "platforms;android-${compileSdk}.0"`);
       }
     }
     const btDir = join(sdk, 'build-tools');

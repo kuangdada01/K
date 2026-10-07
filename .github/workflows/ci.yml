@@ -139,10 +139,11 @@ jobs:
       # platform-tools 且原生跑在 node24 上
       - uses: android-actions/setup-android@v4
 
-      - name: 安装 SDK 组件（platform 37 + build-tools 36）
+      - name: 安装 SDK 组件（platform 37.0 + build-tools 36）
         run: |
           yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager 'platforms;android-37' 'build-tools;36.0.0' > /dev/null
+          # API 37 起平台包带小版本号（manifest 里是 android-37.0，裸 android-37 已不存在）
+          sdkmanager 'platforms;android-37.0' 'build-tools;36.0.0' > /dev/null
 
       - name: Gradle 缓存（wrapper 与依赖）
         uses: actions/cache@v4
