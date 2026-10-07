@@ -143,7 +143,8 @@ function viewerRelationColumns(viewerId: number): { sql: string; params: number[
 }
 
 /** 共同关注优先的排序（引用上面 SELECT 的别名；组内 username/id 升序保证翻页稳定） */
-const MUTUAL_FIRST_ORDER = 'ORDER BY is_mutual DESC, is_following DESC, follows_viewer DESC, u.username ASC, u.id ASC';
+const MUTUAL_FIRST_ORDER =
+  'ORDER BY is_mutual DESC, is_following DESC, follows_viewer DESC, u.username ASC, u.id ASC';
 
 /**
  * 粉丝列表（服务端搜索 + 分页）。

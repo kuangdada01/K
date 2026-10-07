@@ -215,7 +215,7 @@ describe('★ 共同关注优先排序（分页形状专有，2026-10-03）', ()
 
   it('viewer 视角排序：互关 → 我关注了 Ta → Ta 关注了我 → 其余按用户名', async () => {
     const { data } = await api(`/api/friends/followers/${starId}?page=1&limit=50`, viewerToken);
-    const names = ((data as unknown as { users: RelationRow[] }).users).map((u) => u.username);
+    const names = (data as unknown as { users: RelationRow[] }).users.map((u) => u.username);
 
     expect(names.slice(0, 3)).toEqual(['fan03', 'fan01', 'fan02']);
     // 其余（无关系的陌生人）组内仍按用户名升序
@@ -226,9 +226,7 @@ describe('★ 共同关注优先排序（分页形状专有，2026-10-03）', ()
 
   it('关系字段按查看者计算；老形状（不带 page）没有这些字段', async () => {
     const { data } = await api(`/api/friends/followers/${starId}?page=1&limit=50`, viewerToken);
-    const rows = new Map(
-      ((data as unknown as { users: RelationRow[] }).users).map((u) => [u.username, u]),
-    );
+    const rows = new Map((data as unknown as { users: RelationRow[] }).users.map((u) => [u.username, u]));
     expect(rows.get('fan03')!.is_mutual).toBe(1);
     expect(rows.get('fan03')!.follows_viewer).toBe(1);
     expect(rows.get('fan01')!.is_following).toBe(1);
@@ -239,7 +237,7 @@ describe('★ 共同关注优先排序（分页形状专有，2026-10-03）', ()
     // 换 star 当查看者：这三条关系一条都不属于 star
     const asStar = await api(`/api/friends/followers/${starId}?page=1&limit=50`, starToken);
     const starRows = new Map(
-      ((asStar.data as unknown as { users: RelationRow[] }).users).map((u) => [u.username, u]),
+      (asStar.data as unknown as { users: RelationRow[] }).users.map((u) => [u.username, u])
     );
     expect(starRows.get('fan03')!.is_mutual).toBe(0);
     // star 看自己的粉丝列表：列表成员本来就都关注 star → 每一行的 follows_viewer 恒为 1

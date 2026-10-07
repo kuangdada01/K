@@ -269,7 +269,7 @@ Android [SessionRepository.kt](../android/core/data/src/main/java/top/kuangdada/
 - 缩小 [.gitignore](../.gitignore) 对整个 `android/native/src/debug/` 的忽略，保留合法 debug 资源，只排除明确的临时探针文件。当前目录没有 `.git`，不能据忽略规则推断某文件是否已跟踪。
 - 修正 [.env.example](../.env.example) 中 Android 仍使用 `VITE_SERVER_URL`/WebView Origin 的旧说明；默认服务地址集中配置，保留现有运行时服务器覆盖能力。
 - 更新 [preflight.mjs](../android/scripts/preflight.mjs)：支持 variant/APK 参数，以当前原生导航结果验收。它仍等待旧 WebView 日志，并测试当前未支持的 ACTION_SEND/帖子深链；应先明确支持范围，分别修导航或修测试，不能仅取消失败断言。
-- README 作为当前入口，历史重写/优化文档标明日期和适用状态。接口/命令变化随代码更新，旧执行记录如根 `OPTIMIZATION_PLAN.md` 保留为历史，不冒充本轮待办。
+- README 作为当前入口，历史重写/优化文档标明日期和适用状态。接口/命令变化随代码更新，旧执行记录不冒充本轮待办（根 `OPTIMIZATION_PLAN.md` 已于 2026-10-07 从仓库移除）。
 
 **验收**：旧 APK、debug 包、错误签名和版本不匹配均在部署前失败；debug/release 真机检查均能识别有效导航和实际错误。源码导出包含 Wrapper JAR、源码、资源、测试和脚本，排除构建缓存及个人配置，接收者按 README 可重新构建。
 

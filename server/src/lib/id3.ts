@@ -21,7 +21,12 @@ export interface Id3Tags {
 
 /** v2.4 帧大小/标签大小用 syncsafe 整数：每字节只取低 7 位 */
 function readSyncsafe(buf: Buffer, off: number): number {
-  return ((buf[off]! & 0x7f) << 21) | ((buf[off + 1]! & 0x7f) << 14) | ((buf[off + 2]! & 0x7f) << 7) | (buf[off + 3]! & 0x7f);
+  return (
+    ((buf[off]! & 0x7f) << 21) |
+    ((buf[off + 1]! & 0x7f) << 14) |
+    ((buf[off + 2]! & 0x7f) << 7) |
+    (buf[off + 3]! & 0x7f)
+  );
 }
 
 function readUint32(buf: Buffer, off: number): number {
@@ -61,7 +66,7 @@ function decodeTextFrame(raw: Buffer): string {
       }
     }
     let end = body.length;
-    for (let i = start + (2 - (start % 2)) % 2; i + 1 < body.length; i += 2) {
+    for (let i = start + ((2 - (start % 2)) % 2); i + 1 < body.length; i += 2) {
       if (body[i] === 0x00 && body[i + 1] === 0x00) {
         end = i;
         break;
@@ -162,7 +167,9 @@ export function parseId3v2(header: Buffer, body: Buffer): Id3Tags {
         }
         content = out.subarray(0, n);
       }
-      const text = decodeTextFrame(content).replace(/\u0000+$/g, '').trim();
+      const text = decodeTextFrame(content)
+        .replace(/\u0000+$/g, '')
+        .trim();
       if (text) {
         if (isTitle) tags.title = text;
         else tags.artist = text;

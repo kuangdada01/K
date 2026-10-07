@@ -124,7 +124,6 @@ k/
 │   └── version.properties        # versionCode / versionName 单一来源
 ├── .github/workflows/ci.yml     # CI
 ├── Dockerfile
-├── OPTIMIZATION_PLAN.md         # 优化与加固的执行记录（问题清单 → 改动 → 逐项验证数据；含撤回/不做的决定）
 ├── deploy.ps1                   # 完整部署脚本（本地构建/打包；传输走 SFTP：deploy-sftp.py；SSH 私钥优先）
 ├── deploy-interactive.ps1       # 部署交互包装（无密钥时才提示输入密码；有密钥直接免密部署）
 ├── deploy-sftp.py               # 完整部署传输/远端部署后端（SFTP，paramiko；密钥优先，主机密钥严格校验）
@@ -452,7 +451,7 @@ docker run -p 3000:3000 \
 
 > 上述改动都有对应的回归测试（见 `server/test` / `client/src/**/*.test.ts`），
 > 其中 P0 级缺陷（麦克风驻留、乐观更新在途闸门）另有浏览器级 e2e 与**反向验证**
-> （把修复拆掉确认用例真会失败）。完整过程、撤回项与测量数据见 `OPTIMIZATION_PLAN.md`。
+> （把修复拆掉确认用例真会失败）。实施进度与收尾项见[审计方案](docs/maintenance-modernization-plan.md)。
 
 ---
 

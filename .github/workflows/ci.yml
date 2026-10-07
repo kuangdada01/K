@@ -134,7 +134,10 @@ jobs:
           distribution: temurin
           java-version: '25'
 
-      - uses: android-actions/setup-android@v3
+      # v4：v3 默认安装的 `tools` 包已被 Google 从 SDK 仓库下架（sdkmanager
+      # "Failed to find package 'tools'"，2026-10 起必挂），v4 默认包改为
+      # platform-tools 且原生跑在 node24 上
+      - uses: android-actions/setup-android@v4
 
       - name: 安装 SDK 组件（platform 37 + build-tools 36）
         run: |

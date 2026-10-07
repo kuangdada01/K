@@ -20,13 +20,21 @@ function frame23or4(id: string, content: Buffer, sizeBuf: Buffer): Buffer {
 }
 
 function frame22(id: string, content: Buffer): Buffer {
-  const size = Buffer.from([(content.length >> 16) & 0xff, (content.length >> 8) & 0xff, content.length & 0xff]);
+  const size = Buffer.from([
+    (content.length >> 16) & 0xff,
+    (content.length >> 8) & 0xff,
+    content.length & 0xff,
+  ]);
   return Buffer.concat([Buffer.from(id, 'latin1'), size, content]);
 }
 
 /** 拼一个完整 ID3v2 标签（header + frames，无填充） */
 function tag(major: number, frames: Buffer, flags = 0): { header: Buffer; body: Buffer } {
-  const header = Buffer.concat([Buffer.from('ID3', 'latin1'), Buffer.from([major, 0, flags]), ss(frames.length)]);
+  const header = Buffer.concat([
+    Buffer.from('ID3', 'latin1'),
+    Buffer.from([major, 0, flags]),
+    ss(frames.length),
+  ]);
   return { header, body: frames };
 }
 
@@ -42,14 +50,20 @@ describe('parseId3v2', () => {
   it('v2.3 + UTF-16 带 BOM（真实场景最常见，中文艺术家）', () => {
     const t1 = text(1, utf16le('Deadman'));
     const t2 = text(1, utf16le('蔡徐坤'));
-    const { header, body } = tag(3, Buffer.concat([frame23or4('TIT2', t1, ss(t1.length)), frame23or4('TPE1', t2, ss(t2.length))]));
+    const { header, body } = tag(
+      3,
+      Buffer.concat([frame23or4('TIT2', t1, ss(t1.length)), frame23or4('TPE1', t2, ss(t2.length))])
+    );
     expect(parseId3v2(header, body)).toEqual({ title: 'Deadman', artist: '蔡徐坤' });
   });
 
   it('v2.4 + UTF-8，syncsafe 帧大小', () => {
     const t1 = text(3, Buffer.from('晴天', 'utf8'));
     const t2 = text(3, Buffer.from('周杰伦', 'utf8'));
-    const { header, body } = tag(4, Buffer.concat([frame23or4('TIT2', t1, ss(t1.length)), frame23or4('TPE1', t2, ss(t2.length))]));
+    const { header, body } = tag(
+      4,
+      Buffer.concat([frame23or4('TIT2', t1, ss(t1.length)), frame23or4('TPE1', t2, ss(t2.length))])
+    );
     expect(parseId3v2(header, body)).toEqual({ title: '晴天', artist: '周杰伦' });
   });
 
@@ -70,7 +84,12 @@ describe('parseId3v2', () => {
 
   it('v2.3 整体反同步：内容里的 FF 被转义为 FF 00', () => {
     // latin1 文本 "aÿ"（0xFF），传输流里写成 FF 00
-    const escaped = Buffer.concat([Buffer.from([0]), Buffer.from('a', 'latin1'), Buffer.from([0xff, 0x00]), Buffer.from([0])]);
+    const escaped = Buffer.concat([
+      Buffer.from([0]),
+      Buffer.from('a', 'latin1'),
+      Buffer.from([0xff, 0x00]),
+      Buffer.from([0]),
+    ]);
     const { header, body } = tag(3, frame23or4('TPE1', escaped, ss(escaped.length)), 0x80);
     expect(parseId3v2(header, body)).toEqual({ artist: 'a\u00ff' });
   });
@@ -107,7 +126,10 @@ describe('readId3Tags（真实文件 IO）', () => {
   it('v2.3 标签的 mp3 读出标题/艺术家', () => {
     const t1 = text(1, utf16le('七里香'));
     const t2 = text(1, utf16le('周杰伦'));
-    const { header, body } = tag(3, Buffer.concat([frame23or4('TIT2', t1, ss(t1.length)), frame23or4('TPE1', t2, ss(t2.length))]));
+    const { header, body } = tag(
+      3,
+      Buffer.concat([frame23or4('TIT2', t1, ss(t1.length)), frame23or4('TPE1', t2, ss(t2.length))])
+    );
     const file = join(dir, 'song.mp3');
     writeFileSync(file, Buffer.concat([header, body, Buffer.alloc(2048, 0xff)])); // 后面垫"音频数据"
     expect(readId3Tags(file)).toEqual({ title: '七里香', artist: '周杰伦' });
