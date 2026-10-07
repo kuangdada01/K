@@ -120,14 +120,18 @@ class ContractsFollowTest {
         // 这里钉的是「DTO 字段名 ↔ 服务端响应」的对应关系（蛇形）：
         // is_following / follows_viewer / is_mutual / has_more 任一写成驼峰
         // 都会静默走默认值 0/false —— 表现为"所有人都显示未关注、互关排不了前"。
-        val body = """{"users":[{"id":1,"username":"a","is_following":1,
-            "follows_viewer":1,"is_mutual":1}],"total":1,"page":1,
-            "totalPages":1,"has_more":true}"""
-        val dto = json.decodeFromString(FollowUserDto.serializer(), body)
+        // 注意 FollowUserDto 要喂**单个用户对象**：喂列表包装 JSON 的话
+        // （ignoreUnknownKeys=true）users/total 全被忽略、字段全走默认值，钉不住任何东西。
+        val user = """{"id":1,"username":"a","is_following":1,
+            "follows_viewer":1,"is_mutual":1}"""
+        val dto = json.decodeFromString(FollowUserDto.serializer(), user)
         assertEquals(1, dto.isFollowing)
         assertEquals(1, dto.followsViewer)
         assertEquals(1, dto.isMutual)
-        val list = json.decodeFromString(FollowListDto.serializer(), body)
+        val list = json.decodeFromString(
+            FollowListDto.serializer(),
+            """{"users":[$user],"total":1,"page":1,"totalPages":1,"has_more":true}""",
+        )
         assertTrue("翻页靠 has_more", list.hasMore)
     }
 

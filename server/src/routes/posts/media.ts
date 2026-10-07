@@ -160,14 +160,18 @@ export function sweepTempVideos(now: number = Date.now()): number {
 }
 
 /**
- * 启动时立即清理一次，此后每小时一次。
- * 原实现只在模块加载时扫一次——进程不重启就永不回收，未发布的 1GB
- * 草稿会一直占着磁盘。定时器 unref：不阻止进程退出。
+ * 启动时立即清理一次，此后每小时一次。原实现只在模块加载时扫一次——进程不重启就永不回收，
+ * 未发布的 1GB 草稿会一直占着磁盘。定时器 unref：不阻止进程退出。
+ *
+ * 由 index.ts（仅 bootstrap）显式调用，**不能**放在模块顶层：sweep 会经
+ * pruneChunkUploads 惰性初始化**默认**数据库，模块加载期触发既打破
+ * 「测试与真实 k.db 零接触」的不变量，CI 多 worker 并发首启还会撞
+ * SqliteError: database is locked。
  */
-(() => {
+export function startTempVideoSweeper(): void {
   sweepTempVideos();
   setInterval(() => sweepTempVideos(), TEMP_SWEEP_INTERVAL_MS).unref();
-})();
+}
 
 // 分片上传：原生 App 大文件（>50M）走此接口，避免单次 1G FormData 一次性进内存导致 WebView OOM 闪退
 // 前端切片 5MB/片，顺序 POST 到此接口，服务端 append 到 temp 文件；完成后前端再走现有 POST /video 的 video_url 流程

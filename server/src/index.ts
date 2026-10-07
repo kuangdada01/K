@@ -26,9 +26,14 @@ import { createApp } from './app';
 import { attachVoiceWs } from './voice/ws';
 import { closeAllStreams } from './sse';
 import { logger } from './lib/logger';
+import { startTempVideoSweeper } from './routes/posts/media';
 
 const PORT = env.PORT;
 const app = createApp();
+
+// 临时视频 TTL 清理（启动清一次 + 每小时一次）：必须由 bootstrap 显式启动，
+// 不能放回 media.ts 模块顶层（会打破测试的「真实 k.db 零接触」，见 startTempVideoSweeper）
+startTempVideoSweeper();
 
 const server = app.listen(PORT, () => {
   logger.info(`K server running on http://localhost:${PORT}`);
