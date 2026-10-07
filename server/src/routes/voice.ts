@@ -1,0 +1,447 @@
+/**
+ * ============================================================
+ * 语音房间路由模块 (/api/voice)
+ * ============================================================
+ * 房间元数据 CRUD + 聊天记录读写 + ICE 服务器配置下发；
+ * 实时信令走同路径下的 WebSocket（voice/ws.ts，/api/voice/ws）
+ *
+ * API 端点:
+ * - GET    /api/voice/rooms                - 房间列表（合并实时在线人数 + 逐查看者 isCreator）
+ * - POST   /api/voice/rooms                - 创建房间（登录用户或未登录访客均可）
+ * - DELETE /api/voice/rooms/:id            - 删除房间（创建者或管理员，在线成员会被请出）
+ * - GET    /api/voice/rooms/:id/messages   - 聊天记录（游标分页 before_id/after_id/limit）
+ * - DELETE /api/voice/rooms/:id/messages   - 清空聊天记录（权限同删除房间，在线成员收 chat-cleared）
+ * - GET    /api/voice/rooms/:id/games      - 终局留档列表（before_id/limit 分页）
+ * - GET    /api/voice/rooms/:id/games/:gameId - 单局复盘数据（棋谱 + 中文记谱）
+ * - GET    /api/voice/chess/stats/:userId  - 用户象棋战绩（跨房间聚合）
+ * - GET    /api/voice/ice                  - WebRTC ICE 服务器配置
+ *
+ * 认证策略:
+ * - GET 列表/聊天/ICE：可选认证（无效 token 静默跳过）
+ * - POST/DELETE：voiceAuth —— 有 token 时按必须认证处理（无效/过期 → 401，
+ *   封禁中禁止写操作），无 token 时按访客处理（IP 分配负数 id，与语音 WS 同一身份）
+ * ============================================================
+ */
+
+import { Router, Request, Response } from 'express';
+import rateLimit from 'express-rate-limit';
+import { verifyLiveToken } from '../lib/jwt';
+import { authMiddleware, optionalAuth } from '../middleware/auth';
+import { AppError, asyncHandler } from '../middleware/error';
+import { validateBody } from '../validate';
+import * as voiceRepo from '../repositories/voice.repo';
+import type { VoiceRoomRow } from '../repositories/voice.repo';
+import * as voiceChatRepo from '../repositories/voice-chat.repo';
+import * as voiceGameRepo from '../repositories/voice-game.repo';
+import { getSafeUser } from '../repositories/user.repo';
+import * as voiceHub from '../voice/hub';
+import { guestIds } from '../voice/guest-ids';
+import { voiceTickets } from '../voice/tickets';
+import { getClientIp } from '../lib/client-ip';
+import { env } from '../config';
+import path from 'path';
+import { createVoiceRoomSchema } from '@k/shared/schemas';
+import { createVoiceCoverUploader } from '../lib/upload';
+import { imageFileFilter, compressImage } from '../lib/image';
+import { STUN_SERVER_URLS } from '@k/shared';
+
+const router = Router();
+
+/** 房间封面上传中间件：限 10MB、仅图片，落盘 uploads/voice-covers（公开静态目录） */
+const uploadRoomCover = createVoiceCoverUploader(imageFileFilter);
+
+/** ICE 服务器基础配置（STUN 部分，静态不变；urls 兼容单地址字符串与数组两种形态。
+ *  STUN 地址来自 @k/shared 共享常量，与客户端兜底配置同源） */
+const ICE_BASE_SERVERS: { urls: string | string[]; username?: string; credential?: string }[] = [
+  { urls: [...STUN_SERVER_URLS] },
+];
+
+/** voiceAuth 注入的访客来源 IP（请求结束释放 guestIds 引用后即失效） */
+interface VoiceAuthRequest extends Request {
+  voiceGuestIp?: string;
+}
+
+/**
+ * 认证或访客中间件（语音写操作专用）
+ *
+ * 行为:
+ * - 带 Authorization: Bearer <token>：按必须认证处理——token 缺失/无效/过期 → 401
+ *   （绝不当成访客，避免本地残留 token 被误判）；封禁中的账号禁止写操作 → 403
+ * - 无 token：视为未登录访客，按来源 IP 分配负数 id（与语音 WS 同池同身份），
+ *   响应结束（finish/close）即归还引用计数（10 分钟窗口内复用原 id）
+ */
+function voiceAuth(req: Request, res: Response, next: () => void): void {
+  const authHeader = req.headers.authorization;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const live = verifyLiveToken(authHeader.slice('Bearer '.length));
+    if (!live) {
+      res.status(401).json({ error: 'Invalid token' });
+      return;
+    }
+    req.user = { id: live.id, username: live.username, role: live.role };
+    // 封禁拦截：与 authMiddleware 一致，封禁期间写操作一律 403
+    if (live.role !== 'admin' && live.banned_until && live.banned_until > new Date().toISOString()) {
+      res.status(403).json({
+        error: `账号已被封禁（解封时间: ${live.banned_until.slice(0, 10)}），封禁期间仅可浏览`,
+        banned: true,
+      });
+      return;
+    }
+    next();
+    return;
+  }
+
+  // 无 token = 未登录访客：按 IP 分配/复用负数 id（同 IP 10 分钟内保持同一身份）
+  const ip = getClientIp(req);
+  const lease = guestIds.acquire(ip);
+  req.user = { id: lease.id, username: `未登录-${-lease.id}` };
+  (req as VoiceAuthRequest).voiceGuestIp = ip;
+  // 请求结束即归还本次租约（lease.release 幂等，finish/close 双触发安全）
+  const release = () => lease.release();
+  res.on('finish', release);
+  res.on('close', release);
+  next();
+}
+
+/**
+ * 取出请求携带的访客房间所有权令牌（`X-Voice-Owner-Token` 请求头）。
+ * 放请求头而不是查询串：与语音 WS 的教训一致 —— URL 会进 nginx access log。
+ */
+function getOwnerToken(req: Request): string | undefined {
+  const raw = req.headers['x-voice-owner-token'];
+  const token = Array.isArray(raw) ? raw[0] : raw;
+  return typeof token === 'string' && token.length > 0 ? token : undefined;
+}
+
+/**
+ * 房间所有权判定（删除房间 / 清空聊天记录共用）
+ * - 管理员恒有权限
+ * - 登录用户：creator_id 匹配本人（正数 id）
+ * - 访客：比对**房间级令牌**（创建时签发、客户端保存）
+ *
+ * 为什么不再用 IP：同一 NAT 后的两个人会互相判定为「创建者」，于是**能删对方的房间**；
+ * 反过来换个网络（切 WiFi/重连拿到新 IP）就丢掉自己的房间。令牌把所有权从
+ * 「网络位置」换成「只有创建者持有的凭证」。
+ *
+ * 存量访客房间（026 迁移前创建，owner_token 为 NULL）回退到旧的 IP 判定 ——
+ * 它们无法回溯补发令牌，回退比「谁都删不掉」更合理。
+ */
+function isRoomOwner(req: Request, room: VoiceRoomRow): boolean {
+  if (req.user?.role === 'admin') return true;
+  if (!req.user) return false;
+  if (req.user.id > 0) return room.creator_id === req.user.id;
+  if (room.owner_token) return voiceRepo.matchesOwnerToken(room, getOwnerToken(req));
+  return room.creator_ip !== null && room.creator_ip === getClientIp(req);
+}
+
+/**
+ * GET /api/voice/rooms - 房间列表
+ *
+ * 认证: 可选（无效 token 静默跳过）
+ * 在线人数来自 WS 内存态；有人的房间排前，同级按创建时间倒序。
+ * isCreator 逐查看者计算（登录用户比 creator_id，访客比 creator_ip），服务端不泄露 creator_ip。
+ */
+router.get(
+  '/rooms',
+  optionalAuth,
+  asyncHandler(async (req: Request, res: Response) => {
+    const viewerIp = req.user ? undefined : getClientIp(req);
+    const occupancy = voiceHub.getOccupancy();
+    const rooms = voiceRepo.listRooms().map((row) => {
+      const room = voiceRepo.toVoiceRoom(row);
+      room.participantCount = occupancy.get(row.id) ?? 0;
+      if (req.user) {
+        room.isCreator = row.creator_id === req.user.id;
+      } else if (row.owner_token) {
+        // 有令牌的访客房间：服务端**不再**按 IP 声称所有权（那正是 NAT 互删的成因）。
+        // 真正的判定在删除/清聊天时按令牌做；列表里的这个标记由客户端按本地保存的
+        // 令牌自行补齐（见 client/src/voice/roomOwnership.ts）。
+        room.isCreator = false;
+      } else {
+        // 存量访客房间：保持旧的 IP 判定行为不变
+        room.isCreator = row.creator_ip !== null && row.creator_ip === viewerIp;
+      }
+      return room;
+    });
+    rooms.sort((a, b) => b.participantCount! - a.participantCount! || (b.created_at > a.created_at ? 1 : -1));
+    res.json({ rooms });
+  })
+);
+
+/**
+ * POST /api/voice/ticket - 换取一次性语音连接票据
+ *
+ * 认证: 必须（登录用户）。访客不需要票据 —— 他们不带任何凭证直连 WS。
+ *
+ * 为什么需要它：浏览器 WebSocket 无法自定义请求头，JWT 若放进查询串会进
+ * nginx access log 等渠道（SSE 早已改为一次性票据，语音此前没有对齐）。
+ * 票据 30 秒有效、只能用一次，且不跨协议通用（见 lib/oneTimeTicket）。
+ */
+router.post(
+  '/ticket',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    res.json({ ticket: voiceTickets.issue(req.user!.id) });
+  })
+);
+
+/**
+ * POST /api/voice/rooms/cover - 上传房间封面（登录用户或访客均可，与建房权限一致）
+ *
+ * 为什么单独一个接口：建房请求是 JSON（zod 校验），封面需要先上传拿到 URL、
+ * 在建房表单里预览确认后随创建请求落库 —— 与帖子视频的两步上传同一思路。
+ * 存储：公开静态目录 uploads/voice-covers；压缩到长边 1440（封面展示高度仅 108dp）。
+ * 删除房间时封面文件暂不回收（孤儿文件，量小可接受）。
+ */
+router.post(
+  '/rooms/cover',
+  voiceAuth,
+  uploadRoomCover.single('cover'),
+  asyncHandler(async (req: Request, res: Response) => {
+    if (!req.file) throw new AppError(400, '请选择封面图片');
+    const finalPath = await compressImage(req.file.path, { maxWidth: 1440, quality: 82 });
+    // compressImage 可能改扩展名（avif→jpg / heic→jpg），一律以最终文件名为准
+    const url = `/uploads/voice-covers/${path.basename(finalPath)}`;
+    res.json({ url });
+  })
+);
+
+/**
+ * POST /api/voice/rooms - 创建房间
+ *
+ * 认证: voiceAuth（登录用户或未登录访客均可创建）
+ * 创建者快照: 登录用户取 users 表实时值；访客取占位名并以 IP 作为所有权锚点。
+ */
+router.post(
+  '/rooms',
+  voiceAuth,
+  validateBody(createVoiceRoomSchema),
+  asyncHandler(async (req: Request, res: Response) => {
+    const { name, description, coverUrl } = req.body;
+    const user = req.user!;
+    // 每个创建者（登录用户或访客 IP）同时持有的房间数上限：访客创建不设限的话，
+    // 脚本可刷出海量空房间撑爆列表（房间无 TTL 自动清理，靠该上限封顶）
+    const MAX_ROOMS_PER_CREATOR = 5;
+    // 上限校验与插入在同一事务内完成（createRoomWithinLimit）：
+    // 分两步做时，并发创建会各自读到「还没到上限」而双双插入、越过封顶
+    const guestIp = (req as VoiceAuthRequest).voiceGuestIp;
+    if (user.id <= 0 && !guestIp) throw new AppError(401, '认证失败');
+    const safe = user.id > 0 ? getSafeUser(user.id) : undefined;
+
+    const created = voiceRepo.createRoomWithinLimit({
+      creatorId: user.id,
+      name,
+      description: description ?? '',
+      // 封面：客户端先经 POST /rooms/cover 上传，随建房请求带上服务端相对路径
+      coverUrl:
+        typeof coverUrl === 'string' && coverUrl.startsWith('/uploads/voice-covers/') ? coverUrl : null,
+      limit: MAX_ROOMS_PER_CREATOR,
+      ...(user.id > 0
+        ? { creatorName: safe?.username ?? user.username, creatorAvatar: safe?.avatar ?? null }
+        : { creatorName: user.username, creatorAvatar: null, creatorIp: guestIp ?? null }),
+    });
+    if (!created) {
+      throw new AppError(429, '你创建的房间太多了，请先删除不需要的房间');
+    }
+    const row: VoiceRoomRow = created;
+    res.status(201).json({
+      room: { ...voiceRepo.toVoiceRoom(row), participantCount: 0 },
+      // 访客房间的所有权令牌：**只在创建响应里回这一次**（列表/详情都不下发）。
+      // 客户端保存后在删除/清聊天时经 X-Voice-Owner-Token 带上。
+      ...(row.owner_token ? { ownerToken: row.owner_token } : {}),
+    });
+  })
+);
+
+/**
+ * DELETE /api/voice/rooms/:id - 删除房间
+ *
+ * 认证: voiceAuth（创建者或管理员；访客以 IP 判定所有权）
+ * 房间内在线成员会收到 room-closed 并被断开；聊天记录随房间一起清除。
+ */
+router.delete(
+  '/rooms/:id',
+  voiceAuth,
+  asyncHandler(async (req: Request, res: Response) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) throw new AppError(400, '参数错误');
+    const room = voiceRepo.getRoomById(id);
+    if (!room) throw new AppError(404, '房间不存在');
+    if (!isRoomOwner(req, room)) throw new AppError(403, '只有房间创建者或管理员可以删除房间');
+    voiceRepo.deleteRoom(id);
+    voiceHub.closeRoom(id, '房间已被删除');
+    res.json({ success: true });
+  })
+);
+
+/**
+ * GET /api/voice/rooms/:id/messages 轻量限流（§4.4 加固）
+ *
+ * 防刷但不影响正常使用与测试：60 秒窗口 300 次，正常翻页/增量追拉远低于此
+ * （voice-chat 测试对该端点全程数十次请求，不会触发；node 默认 headersTimeout
+ * 60s 与限流互不干扰）。
+ */
+const roomMessagesLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 300,
+  standardHeaders: true,
+});
+
+/**
+ * GET /api/voice/rooms/:id/messages - 聊天记录（持久化历史）
+ *
+ * 认证: 可选（无效 token 静默跳过，游客可读）
+ * 游标分页: before_id 向更早翻、after_id 向更新翻（加入房间后补拉增量），
+ * limit 默认 50、上限 100。房间不存在返回 404。
+ */
+router.get(
+  '/rooms/:id/messages',
+  optionalAuth,
+  roomMessagesLimiter,
+  asyncHandler(async (req: Request, res: Response) => {
+    const roomId = Number(req.params.id);
+    if (!Number.isInteger(roomId)) throw new AppError(400, '参数错误');
+    const room = voiceRepo.getRoomById(roomId);
+    if (!room) throw new AppError(404, '房间不存在');
+
+    const limitRaw = Number(req.query.limit ?? 50);
+    const limit = Number.isInteger(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 50;
+    const beforeId = parseCursor(req.query.before_id, 'before_id');
+    const afterId = parseCursor(req.query.after_id, 'after_id');
+
+    const { messages, has_more } = voiceChatRepo.listRoomMessages(roomId, {
+      ...(beforeId !== undefined ? { beforeId } : {}),
+      ...(afterId !== undefined ? { afterId } : {}),
+      limit,
+    });
+    res.json({ messages, has_more });
+  })
+);
+
+/**
+ * DELETE /api/voice/rooms/:id/messages - 清空聊天记录
+ *
+ * 认证: voiceAuth（权限同删除房间）
+ * 在线成员即时收到 { type: 'chat-cleared' } 清空本地列表（离线成员下次进房自然看不到旧记录）。
+ */
+router.delete(
+  '/rooms/:id/messages',
+  voiceAuth,
+  asyncHandler(async (req: Request, res: Response) => {
+    const roomId = Number(req.params.id);
+    if (!Number.isInteger(roomId)) throw new AppError(400, '参数错误');
+    const room = voiceRepo.getRoomById(roomId);
+    if (!room) throw new AppError(404, '房间不存在');
+    if (!isRoomOwner(req, room)) throw new AppError(403, '只有房间创建者或管理员可以清空聊天记录');
+    voiceChatRepo.deleteRoomMessages(roomId);
+    voiceHub.broadcast(roomId, { type: 'chat-cleared' });
+    res.json({ success: true });
+  })
+);
+
+/**
+ * GET /api/voice/rooms/:id/games - 房间终局留档列表（复盘入口）
+ *
+ * 认证: 可选（无效 token 静默跳过，游客可读）。
+ * 游标分页: before_id 向更早翻页；limit 默认 20、上限 50。房间不存在 404。
+ * 行内不含棋谱（轻量）；单局棋谱走 /:gameId。
+ */
+router.get(
+  '/rooms/:id/games',
+  optionalAuth,
+  roomMessagesLimiter,
+  asyncHandler(async (req: Request, res: Response) => {
+    const roomId = Number(req.params.id);
+    if (!Number.isInteger(roomId)) throw new AppError(400, '参数错误');
+    const room = voiceRepo.getRoomById(roomId);
+    if (!room) throw new AppError(404, '房间不存在');
+
+    const limitRaw = Number(req.query.limit ?? 20);
+    const limit = Number.isInteger(limitRaw) ? Math.min(Math.max(limitRaw, 1), 50) : 20;
+    const beforeId = parseCursor(req.query.before_id, 'before_id');
+
+    const { games, has_more } = voiceGameRepo.listRoomGames(roomId, {
+      ...(beforeId !== undefined ? { beforeId } : {}),
+      limit,
+    });
+    res.json({ games, has_more });
+  })
+);
+
+/**
+ * GET /api/voice/rooms/:id/games/:gameId - 单局完整复盘数据（棋谱 + 记谱）
+ *
+ * 认证: 可选。房间或对局不存在返回 404。
+ */
+router.get(
+  '/rooms/:id/games/:gameId',
+  optionalAuth,
+  roomMessagesLimiter,
+  asyncHandler(async (req: Request, res: Response) => {
+    const roomId = Number(req.params.id);
+    const gameId = String(req.params.gameId ?? '');
+    if (!Number.isInteger(roomId) || !gameId) throw new AppError(400, '参数错误');
+    const room = voiceRepo.getRoomById(roomId);
+    if (!room) throw new AppError(404, '房间不存在');
+    const game = voiceGameRepo.getVoiceGame(roomId, gameId);
+    if (!game) throw new AppError(404, '对局不存在');
+    res.json({
+      game: {
+        ...game,
+        moves: JSON.parse(game.moves) as unknown,
+        notations: JSON.parse(game.notations) as unknown,
+      },
+    });
+  })
+);
+
+/**
+ * GET /api/voice/chess/stats/:userId - 用户象棋战绩（跨房间聚合）
+ *
+ * 认证: 可选（公开读）。userId 非法返回 400。返回 { stats: { wins, losses, draws, total } }。
+ */
+router.get(
+  '/chess/stats/:userId',
+  optionalAuth,
+  roomMessagesLimiter,
+  asyncHandler(async (req: Request, res: Response) => {
+    const userId = Number(req.params.userId);
+    if (!Number.isInteger(userId)) throw new AppError(400, '参数错误');
+    res.json({ stats: voiceGameRepo.getUserGameStats(userId) });
+  })
+);
+
+/**
+ * GET /api/voice/ice - WebRTC ICE 服务器配置
+ *
+ * 认证: 可选（公开；仅 STUN/TURN 地址，无敏感信息）
+ * 服务端配了 TURN 环境变量时追加中继配置。
+ */
+router.get(
+  '/ice',
+  asyncHandler(async (_req: Request, res: Response) => {
+    // 每次请求构建新数组返回（历史 bug：曾向模块级数组 push TURN 条目，
+    // 每请求一次叠加一条，客户端 ICE 候选收集被重复项拖慢）
+    const iceServers = [...ICE_BASE_SERVERS];
+    if (env.VOICE_TURN_URL) {
+      iceServers.push({
+        urls: env.VOICE_TURN_URL,
+        ...(env.VOICE_TURN_USERNAME ? { username: env.VOICE_TURN_USERNAME } : {}),
+        ...(env.VOICE_TURN_CREDENTIAL ? { credential: env.VOICE_TURN_CREDENTIAL } : {}),
+      });
+    }
+    res.json({ iceServers });
+  })
+);
+
+/** 解析游标查询参数（正整数，非法值报 400；缺省返回 undefined） */
+function parseCursor(raw: unknown, name: string): number | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string' || raw === '') return undefined;
+  const v = Number(raw);
+  if (!Number.isInteger(v) || v < 1) throw new AppError(400, `${name} 参数无效`);
+  return v;
+}
+
+export default router;

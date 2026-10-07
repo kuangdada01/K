@@ -1,0 +1,331 @@
+/* 帖子媒体区（原 post.css 的 post-detail-image-section/zoom 与共享 dots 规则） */
+
+.video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+.imageSection {
+  flex: 1;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.imageCarousel {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* 只负责裁剪：真正的滚动容器是里面的 .imageTrack（原生滚动分页） */
+  overflow: hidden;
+  /* 空白区域黑色填充 */
+  background: #000;
+}
+
+/* ★ 原生滚动轨道：拖动/惯性/越界回弹全部由浏览器合成器执行（线程化滚动），
+   JS 不再逐帧写 transform —— 这是 WebView 内唯一能拿到「跟手不掉帧」的路径。
+   每页 scroll-snap-align/stop 让松手后精确停在一页上。 */
+.imageTrack {
+  display: flex;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  /* 到头不再把滚动链传给外层 */
+  overscroll-behavior-x: contain;
+  /* 原生滚动的前提是允许横向平移；纵向交给浏览器做轴判定（拖纵向仍滚页面） */
+  touch-action: manipulation;
+  /* 隐藏滚动条：这是分页器，不是可见滚动区域 */
+  scrollbar-width: none;
+}
+
+.imageTrack::-webkit-scrollbar {
+  display: none;
+}
+
+.image {
+  flex: 0 0 100%;
+  height: 100%;
+  object-fit: contain;
+  /* 原生滚动下不再需要「每张图独立合成层」的残影 hack：
+     残影来自 JS 逐帧平移轨道，现在滚动由合成器接管（也是原先的掉帧来源之一） */
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+.imageDots {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 5px;
+  z-index: 2;
+}
+
+.imageDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.5);
+  transition: background 0.2s;
+  cursor: pointer;
+}
+
+.imageDot.active {
+  background: white;
+}
+
+.carouselBtn {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(0, 0, 0, 0.45);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.2s,
+    background 0.2s;
+  z-index: 3;
+  padding: 0;
+}
+
+.imageSection:hover .carouselBtn {
+  opacity: 1;
+}
+
+.carouselBtn:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.carouselPrev {
+  left: 12px;
+}
+
+.carouselNext {
+  right: 12px;
+}
+
+.zoomBtn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: rgba(0, 0, 0, 0.45);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.2s,
+    background 0.2s;
+  z-index: 3;
+  padding: 0;
+}
+
+.imageSection:hover .zoomBtn {
+  opacity: 1;
+}
+
+.zoomBtn:hover {
+  background: rgba(0, 0, 0, 0.7);
+}
+
+.close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  color: white;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 50%;
+  transition: background 0.15s;
+}
+
+.close:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.zoomOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 400;
+  /* 全屏看图是模态层：只允许横向（交给内部 .zoomTrack 的原生滚动做翻页），
+     纵向什么都不滚 —— 这样拖动图片时不会连带滚动下面的详情页。
+     （touch-action 的判定会走到「最近的滚动容器」即 .zoomTrack，
+       所以这里不会拦住内部翻页；放大态由缩放 Hook 把 .zoomTrack 改成 none） */
+  touch-action: pan-x;
+  /* ★ transition 只挂在 .closing 上：淡出（= 露出下层页面）必须晚于双击窗口，
+     且撤销路径上不存在任何可倒放的过渡。
+     曾把 transition 放到基类做「撤销时平滑淡回」——结果双击撤销看到的是
+     「遮罩变淡 → 露出帖子详情页 → 再淡回」，即用户反馈的闪烁。 */
+}
+
+.zoomOverlay.closing {
+  opacity: 0;
+  /* 时长与 CANCELABLE_CLOSE_FADE_MS 一致（keepMs 按它计算卸载时机） */
+  transition: opacity 180ms ease;
+}
+
+.zoomContent {
+  position: relative;
+  width: 95vw;
+  height: 95vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zoomCarousel {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* 只负责裁剪：真正的滚动容器是里面的 .zoomTrack（原生滚动分页） */
+  overflow: hidden;
+  /* 空白区域黑色填充 */
+  background: #000;
+  /* 防止图片被拖拽/长按选中干扰滑动 */
+  -webkit-user-drag: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ★ 原生滚动轨道（全屏）：拖动与惯性由浏览器合成器执行（线程化滚动），
+   与网页纵向滚动同一条路径 —— 这是 WebView 里最接近原生相册的滑动。
+   每页 scroll-snap-align/stop 让松手后精确停在一页上。 */
+.zoomTrack {
+  display: flex;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  /* 到头不再把滚动链传给外层（避免带动页面/控件） */
+  overscroll-behavior-x: contain;
+  /* 全屏看图是模态：只消费横向平移（原生翻页），纵向不滚（不会带动详情页）。
+     放大态由 useImagePinchZoom 内联改成 none 并把 overflow-x 锁成 hidden */
+  touch-action: pan-x;
+  /* 隐藏滚动条：这是分页器，不是可见的滚动区域 */
+  scrollbar-width: none;
+}
+
+.zoomTrack::-webkit-scrollbar {
+  display: none;
+}
+
+.zoomImage {
+  flex: 0 0 100%;
+  height: 100%;
+  object-fit: contain;
+  cursor: zoom-out;
+  /* 双指缩放 transform-origin 中心（useImagePinchZoom 以元素中心为原点计算平移） */
+  transform-origin: center;
+  /* 原生滚动下不需要「每张图独立合成层」那套合成残影 hack
+     （残影来自 JS 逐帧平移轨道；现在滚动由合成器接管，不会残留） */
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
+}
+
+.zoomDots {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  z-index: 5;
+}
+
+.zoomNav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background: rgba(255, 255, 255, 0.2);
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.2s;
+  z-index: 5;
+  padding: 0;
+}
+
+.zoomNav:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+.zoomPrev {
+  left: 16px;
+}
+
+.zoomNext {
+  right: 16px;
+}
+
+@media (max-width: 768px) {
+  .imageSection {
+    flex: none;
+    height: auto;
+    min-height: 0;
+    /* 不再用 max-height + overflow:hidden 硬性限高：
+       超宽图按宽度铺满时高度很小不会被裁；超长竖图交给下面的 max-height 封顶，
+       配合 object-fit:contain 等比缩放（保留完整画面），两侧留黑边而非裁切。 */
+    max-height: none;
+    overflow: visible;
+  }
+
+  .imageCarousel {
+    height: auto;
+  }
+
+  .imageTrack {
+    align-items: center; /* 横图/高度不足的图垂直居中 */
+  }
+
+  .image {
+    /* 与首页 PostCard 保持一致：宽度铺满 + 限高封顶 + contain 保完整 */
+    flex: 0 0 100%;
+    height: auto;
+    max-height: 70vh;
+    object-fit: contain;
+    display: block;
+  }
+
+  .video {
+    height: auto;
+    max-height: 70vh;
+  }
+
+  .close {
+    display: none;
+  }
+}

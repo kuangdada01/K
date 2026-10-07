@@ -1,0 +1,196 @@
+/**
+ * 帖子仓库测试（内存 SQLite，通过连接注入隔离，不触碰真实数据库）
+ */
+
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { createMemoryDb } from './helpers/memdb';
+import { setDbForTests, resetDbForTests } from '../src/db/connection';
+import * as postRepo from '../src/repositories/post.repo';
+import * as commentRepo from '../src/repositories/comment.repo';
+
+let db: ReturnType<typeof createMemoryDb>;
+
+/** 插入测试用户，返回 id */
+function insertUser(username: string): number {
+  const r = db
+    .prepare("INSERT INTO users (username, email, password_hash, email_verified) VALUES (?, ?, 'x', 1)")
+    .run(username, `${username}@test.com`);
+  return Number(r.lastInsertRowid);
+}
+
+/** 插入测试帖子，返回 id */
+function insertPost(userId: number, description = '', imageUrl = '[]'): number {
+  const r = db
+    .prepare('INSERT INTO posts (user_id, image_url, description) VALUES (?, ?, ?)')
+    .run(userId, imageUrl, description);
+  return Number(r.lastInsertRowid);
+}
+
+beforeAll(() => {
+  db = createMemoryDb();
+  setDbForTests(db);
+});
+
+afterAll(() => {
+  resetDbForTests();
+});
+
+beforeEach(() => {
+  // 清理数据，保持用例独立
+  db.exec('DELETE FROM posts; DELETE FROM users; DELETE FROM notifications;');
+});
+
+describe('listPosts / searchPosts', () => {
+  it('分页与计数正确', () => {
+    const u = insertUser('alice');
+    for (let i = 0; i < 25; i++) insertPost(u, `post ${i}`);
+    const page1 = postRepo.listPosts(1, 20, u);
+    expect(page1.posts.length).toBe(20);
+    expect(page1.total).toBe(25);
+    const page2 = postRepo.listPosts(2, 20, u);
+    expect(page2.posts.length).toBe(5);
+    // 响应形状：feed 无 bookmarked 字段
+    expect(page1.posts[0]).not.toHaveProperty('bookmarked');
+    expect(page1.posts[0]).toHaveProperty('liked');
+  });
+
+  it('搜索关键词匹配标题/描述', () => {
+    const u = insertUser('alice');
+    insertPost(u, 'hello world');
+    insertPost(u, 'other');
+    const { posts, total } = postRepo.searchPosts('hello', 1, 20, u);
+    expect(total).toBe(1);
+    expect(posts[0]!.description).toBe('hello world');
+  });
+});
+
+describe('点赞/收藏/转发/分享', () => {
+  it('点赞去重且计数正确', () => {
+    const u = insertUser('alice');
+    const v = insertUser('bob');
+    const p = insertPost(u);
+    expect(postRepo.likePost(v, p)).toBe(1);
+    expect(postRepo.likePost(v, p)).toBe(1); // 重复点赞不增加
+    expect(postRepo.unlikePost(v, p)).toBe(0);
+  });
+
+  it('分享每个用户只计一次', () => {
+    const u = insertUser('alice');
+    const v = insertUser('bob');
+    const p = insertPost(u);
+    expect(postRepo.sharePost(v, p).share_count).toBe(1);
+    expect(postRepo.sharePost(v, p).share_count).toBe(1);
+  });
+
+  it('收藏与转发列表', () => {
+    const u = insertUser('alice');
+    const v = insertUser('bob');
+    const p = insertPost(u);
+    postRepo.bookmarkPost(v, p);
+    postRepo.repostPost(v, p);
+    const bm = postRepo.listBookmarkedPosts(v);
+    const rp = postRepo.listRepostedPosts(v);
+    expect(bm.rows.length).toBe(1);
+    expect(bm.has_more).toBe(false);
+    expect(bm.rows[0]!.bookmarked).toBe(1);
+    expect(rp.rows.length).toBe(1);
+    expect(rp.has_more).toBe(false);
+    expect(rp.rows[0]!.reposted).toBe(1);
+  });
+
+  it('★ 收藏/转发列表有硬上限：超过 cap 时截断并置 has_more', () => {
+    const u = insertUser('alice');
+    const v = insertUser('bob');
+    // 造 3 条收藏，把 cap 压到 2 验证截断（生产上限是 HARD_LIST_CAP=500）
+    for (let i = 0; i < 3; i++) postRepo.bookmarkPost(v, insertPost(u));
+    const capped = postRepo.listBookmarkedPosts(v, 2);
+    expect(capped.rows.length).toBe(2);
+    expect(capped.has_more).toBe(true);
+
+    // 恰好等于上限时不该误报还有更多（多取一行的判断方式）
+    const exact = postRepo.listBookmarkedPosts(v, 3);
+    expect(exact.rows.length).toBe(3);
+    expect(exact.has_more).toBe(false);
+  });
+});
+
+describe('评论', () => {
+  it('创建/列表/嵌套回复与父评论信息', () => {
+    const u = insertUser('alice');
+    const v = insertUser('bob');
+    const p = insertPost(u);
+    const c1 = commentRepo.createComment(u, p, null, '顶层评论');
+    commentRepo.createComment(v, p, c1.id, '回复评论');
+    const list = commentRepo.listComments(p, u);
+    expect(list.rows.length).toBe(2);
+    expect(list.has_more).toBe(false);
+    const reply = list.rows.find((c) => c.parent_id === c1.id)!;
+    expect(reply.parent_content).toBe('顶层评论');
+    expect(reply.parent_username).toBe('alice');
+  });
+
+  it('删除评论级联清理子孙通知', () => {
+    const u = insertUser('alice');
+    const p = insertPost(u);
+    const c1 = commentRepo.createComment(u, p, null, 'root');
+    db.prepare(
+      "INSERT INTO notifications (user_id, type, from_user_id, post_id, comment_id, content) VALUES (?, 'reply', ?, ?, ?, '')"
+    ).run(u, u, p, c1.id);
+    commentRepo.deleteComment(c1.id);
+    const n = db.prepare('SELECT COUNT(*) as c FROM notifications').get() as { c: number };
+    expect(n.c).toBe(0);
+    const c = db.prepare('SELECT COUNT(*) as c FROM comments').get() as { c: number };
+    expect(c.c).toBe(0);
+  });
+});
+
+describe('帖子 CRUD', () => {
+  it('创建图文帖子返回 0 计数形状', () => {
+    const u = insertUser('alice');
+    const post = postRepo.createPost({
+      userId: u,
+      imageUrl: JSON.stringify(['/uploads/a.jpg']),
+      title: 't',
+      description: 'd',
+      // `location` 是**必填**（迁移 027 起 posts 有这一列；服务端所有调用点都要传）。
+      // 空串 = "这条帖子没带位置"，与列的默认值、以及 schema 的 default('') 一致。
+      location: '',
+      closeComments: 0,
+      pinned: 0,
+    });
+    expect(post.like_count).toBe(0);
+    expect(post.comment_count).toBe(0);
+    expect(post).not.toHaveProperty('liked');
+  });
+
+  it('更新与删除自己的帖子', () => {
+    const u = insertUser('alice');
+    const v = insertUser('bob');
+    const p = insertPost(u);
+    const updated = postRepo.updatePost({
+      postId: p,
+      userId: u,
+      imageUrl: '[]',
+      description: 'new',
+      location: '',
+      closeComments: 0,
+      pinned: 1,
+    });
+    expect(updated!.description).toBe('new');
+    expect(updated!.pinned).toBe(1);
+    // 非作者更新失败
+    expect(
+      postRepo.updatePost({
+        postId: p,
+        userId: v,
+        imageUrl: '[]',
+        description: 'x',
+        location: '',
+        closeComments: 0,
+        pinned: 0,
+      })
+    ).toBeUndefined();
+    postRepo.deletePost(p);
+    expect(postRepo.getPostById(p)).toBeUndefined();
+  });
+});

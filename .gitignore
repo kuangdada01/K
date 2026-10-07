@@ -1,0 +1,124 @@
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db
+
+# Server 数据库（k.db 现行库及 WAL 一律不提交）
+server/k.db*
+server/uploads/*
+!server/uploads/.gitkeep
+server/uploads_private/*
+!server/uploads_private/.gitkeep
+
+# Client
+client/dist/
+client/tsconfig.tsbuildinfo
+# Vite 产出的哈希资源曾被误提交进 public/（两份字体共 1.6MB，无任何引用却随每次部署分发）。
+# 带哈希的构建产物只应存在于 dist/，public/ 只放需要保持稳定文件名的资源。
+client/public/*-[A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-]*.woff2
+
+# Android 原生工程（android/）
+android/.gradle/
+android/build/
+android/.kotlin/
+android/local.properties
+android/app/build/
+# 由 android/scripts/sync-web.mjs 从 client/dist 生成
+android/app/src/main/assets/web/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude local settings
+.claude/settings.local.json
+.claude/deploy_fix.py
+
+# Music files (large & potential copyright)
+client/public/music/
+
+# Android keystore（签名口令在 android/keystore.properties，同样不入库）
+android/keystore.properties
+*.keystore
+*.jks
+*.p12
+*.pfx
+
+# Playwright
+test-results/
+playwright-report/
+# Dev server runtime files
+*.pid
+dev-server*.log
+dev-vite*.log
+
+# npm pack 产物（防提交进仓库、防整树打包时被重复包含）
+*.tgz
+*.tar.gz
+
+# J-Space 工作台账（本地工作状态，不入库）
+.jspace/
+
+# ZCode 本地会话目录
+.zcode/
+
+# 部署脚本（包含服务器凭据的禁止入库；deploy-sftp.py / deploy-client-lite.py 无凭据且工具链依赖，需入库）
+deploy*.py
+!deploy-probe*.py.keep
+!deploy-sftp.py
+!deploy-client-lite.py
+
+# 发布产物（release APK 等，构建生成不入库）
+release/
+
+# APK 发布产物（构建生成不入库）
+client/public/apk/
+
+# WorkBuddy workspace data
+.workbuddy/
+
+# E2E 独立测试库（playwright webServer DB_PATH 指向）
+e2e/.tmp/
+
+# 历史归档笔记（一次性迁移/重命名过程文档，已完成使命，不入库；本地保留）
+archive/
+
+# ---- 本地产物与调试证据（体积大 / 与机器绑定，一律不入库）----
+# 打包出来的 APK（每个约 22MB，累计上百 MB）
+/outputs/
+# 仓库根下的构建目录
+/build/
+# 真机取证：逐帧截图、解包后的 APK、logcat（实测已涨到 1.2GB）
+.dsh-evidence/
+# WorkBuddy AI 工作目录
+.workbuddy-ai/
+# 从线上抓下来的编译后 CSS（排查样式用的一次性快照）
+live.css
+# 某次命令重定向误建的空文件
+android/cd
+# 同类误产物：Git Bash 里 `dir ... > nul` 会建出这个保留名文件（Windows 无法检出，必须排除）
+/nul
+
+# 仓库根下的 APK 产物（android/scripts/build-apk.mjs 的收尾复制，22MB 构建生成不入库）
+/k-app-*.apk
+# 教学课件（与本项目无关的个人资料，误放在仓库根目录）
+/课件/
+# debug 源集里的**调试探针文件**（Coil 加载追踪 / 转场追踪 / 调试开关，本地取证用不入库）。
+# 只排除明确的探针，不再忽略整个 src/debug/ —— 合法的 debug 资源（如 app 名后缀 strings.xml）
+# 应当入库，否则别的机器上 debug 变体缺资源（P1/P2-4.4 收窄；新增探针请按名追加）。
+android/native/src/debug/java/
+android/native/src/debug/**/DebugProbe*.kt
+android/native/src/debug/**/CoilTrace*.kt
+android/native/src/debug/**/TransitionTrace*.kt
+
+# 本地参考资料（不入库）
+/_research/

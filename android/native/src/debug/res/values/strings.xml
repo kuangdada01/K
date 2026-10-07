@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      调试包的桌面名（**只覆盖 debug 变体**：buildType 的源集优先级高于 main）。
+
+      为什么值得单独写一份：两个包（applicationId 差一个 `.debug`）图标长得一模一样，
+      桌面上根本分不出哪个是"慢的 debug 包"。而**性能观感必须看 release 包**
+      （debug 无 R8、Compose 调试开销全开，同一段动画的帧时能差一倍），
+      测试时点错图标就会得出错误结论。名字带 Debug 之后一眼可辨。
+    -->
+    <string name="app_name">K Debug</string>
+</resources>

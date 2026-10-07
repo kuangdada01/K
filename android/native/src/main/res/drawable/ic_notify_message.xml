@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  私信通知的小图标（对话气泡）。
+  Android 只用小图标的 alpha 通道并**自动着色为白色**，所以画实心形状即可 ——
+  在这里用彩色会被系统压成纯白（看起来像一块方块），与 ic_voice_notification 同一约定。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M20,2H4c-1.1,0 -2,0.9 -2,2v18l4,-4h14c1.1,0 2,-0.9 2,-2V4c0,-1.1 -0.9,-2 -2,-2z" />
+</vector>

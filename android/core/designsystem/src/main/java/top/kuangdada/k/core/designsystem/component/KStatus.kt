@@ -1,0 +1,430 @@
+package top.kuangdada.k.core.designsystem.component
+
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Fill
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.Canvas
+import kotlinx.coroutines.launch
+import top.kuangdada.k.core.designsystem.theme.KDimens
+import top.kuangdada.k.core.designsystem.theme.KMotion
+import top.kuangdada.k.core.designsystem.theme.KRadius
+import top.kuangdada.k.core.designsystem.theme.KSpacing
+import top.kuangdada.k.core.designsystem.theme.KTheme
+import top.kuangdada.k.core.designsystem.theme.KType
+import top.kuangdada.k.core.designsystem.theme.LocalAnimationsEnabled
+
+/**
+ * ============================================================
+ * 状态类小件（设计稿「三 · 核心组件」输入 / 状态一行：点赞两态 · 角标）
+ * ============================================================
+ */
+
+/**
+ * 数字角标：15×15，**压住图标右上角约 12px**（不是并排在旁边）。
+ *
+ * 两个必须遵守的规则：
+ *  1. **角标文字用 onAccent，不能用白色** —— 旧 Web 版 `.badge { color: white }` 在深色下
+ *     配 `--danger #E0586B` 只有 3.63:1；改用 onAccent 后浅色 5.35 / 深色 5.27，双主题达标。
+ *  2. 角标会溢出图标容器边界 → 容器必须留余量或 `clip = false`，
+ *     否则会被裁成月牙（设计稿明确记录过这个坑）。
+ *
+ * @param anchor 被角标压住的图标（角标按 -12px 偏移量贴到它的右上角）
+ */
+@Composable
+fun KBadge(
+    count: Int,
+    modifier: Modifier = Modifier,
+    anchor: (@Composable () -> Unit)? = null,
+) {
+    if (count <= 0) {
+        if (anchor != null) anchor()
+        return
+    }
+    val c = KTheme.colors
+    // 角标是纯数字，居中；宽度用 minWidth 撑开（1 位与 2 位数字宽度不同会导致右缘参差，
+    // 这是设计稿 §3.2 记录的问题），>99 显示 99+
+    val badge: @Composable () -> Unit = {
+        Box(
+            modifier = Modifier
+                .defaultMinSize(minWidth = KDimens.badge, minHeight = KDimens.badge)
+                .clip(CircleShape)
+                .background(c.danger)
+                .padding(horizontal = 4.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = if (count > 99) "99+" else count.toString(),
+                color = c.onAccent,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                lineHeight = 10.sp,
+                textAlign = TextAlign.Center,
+            )
+        }
+    }
+
+    if (anchor == null) {
+        Box(modifier = modifier) { badge() }
+        return
+    }
+
+    // 角标压住图标右上角：图标在容器内居中，角标按 -12px 偏移量贴右上
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center,
+    ) {
+        anchor()
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .offset(x = KDimens.badgeOverlap, y = (-KDimens.badgeOverlap)),
+        ) {
+            badge()
+        }
+    }
+}
+
+/**
+ * 点赞两态 + 一次"点赞弹跳"（M4）。
+ *
+ * 旧 Web 版的缺陷（设计稿 §3.1 记录）：`.actionBtn:first-child` 与 `.actionBtn.liked`
+ * **颜色完全相同**，未赞与已赞只差 svg 的 `fill` —— 快速滑动时用户分不清自己点没点过。
+ * 所以这里三态明确化：
+ *   · 未赞：描边图标 + `textSecondary`
+ *   · 已赞：实心图标 + `danger`
+ *   · 按下：scale(.92) 微反馈（120ms）
+ *
+ * M4 补的两处：
+ *  1. **点赞那一下的弹跳**：点击这颗心时 scale 冲到 1.28 再回弹
+ *     （[KMotion.pressSpec]，阻尼比 0.45 —— 这是"手指施加了力"的反馈，允许明显过冲）。
+ *     取消点赞不弹：弹跳代表"给出去"，收回来再弹一次会让人以为又赞了一次。
+ *     触发点是**点击本身**，不是 `liked` 的值 —— 旧版挂在 `LaunchedEffect(liked)` 上，
+ *     只要"liked 变成 true"就弹：点进详情页首帧（帖本来就赞过）、退回信息流时卡片
+ *     重组、服务端回写，全都误弹（用户实测反馈）。值的变化交给下面的颜色/填充过渡。
+ *  2. **颜色走过渡**（[KMotion.effects]）：`textSecondary ↔ danger` 直接切会"跳"，
+ *     而 `effects` 档阻尼比固定 1.0，不过冲（颜色过冲会显脏）。
+ *
+ * 计数用 [AnimatedContent] 做**数字滚动**：`+1` 时新数字从下方上来、旧数字向上走，
+ * `-1` 时反过来 —— 方向跟"数变大还是变小"一致，用户不用读数字就知道发生了什么。
+ * 位数变化（9→10）用 `SizeTransform(clip = false)` 让宽度自己长出来，不要裁字。
+ *
+ * 降级：系统动画缩放为 0（[LocalAnimationsEnabled] = false）时全部 `snap()` ——
+ * 状态依然由**颜色 + 实心/描边 + 数字**表达（动效从来不是唯一信号）。
+ */
+@Composable
+fun KLikeButton(
+    liked: Boolean,
+    count: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = KTheme.colors
+    val animationsEnabled = LocalAnimationsEnabled.current
+    val haptics = LocalHapticFeedback.current
+    val interaction = remember { MutableInteractionSource() }
+    val isPressed by interaction.collectIsPressedAsState()
+
+    // 按下缩放 × 点赞弹跳，两个 scale 相乘（否则前者会把后者覆盖掉）
+    val pressScale by animateFloatAsState(
+        targetValue = if (isPressed) KMotion.pressedScale else 1f,
+        animationSpec = tween(KMotion.instant, easing = KMotion.standard),
+        label = "KLikeScale",
+    )
+    val heartScale = remember { Animatable(1f) }
+    val scope = rememberCoroutineScope()
+
+    val targetTint = if (liked) c.danger else c.textSecondary
+    val tint by animateColorAsState(
+        targetValue = targetTint,
+        animationSpec = if (animationsEnabled) KMotion.effects() else snap(),
+        label = "KLikeTint",
+    )
+    // 空心 → 实心的形变进度（M6）：与颜色同时进行，所以"变色"与"填满"是一个动作
+    val fillProgress by animateFloatAsState(
+        targetValue = if (liked) 1f else 0f,
+        animationSpec = if (animationsEnabled) KMotion.effects() else snap(),
+        label = "KLikeFill",
+    )
+
+    Row(
+        modifier = modifier
+            .scale(pressScale)
+            .defaultMinSize(minHeight = KDimens.minTouchTarget)
+            .clip(RoundedCornerShape(KRadius.chip))
+            .clickable(interactionSource = interaction, indication = null) {
+                // 触感与动效配对（§6）：点赞是"有结果"的动作，给一次轻微触感
+                haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                // 弹跳只认"用户点了这颗心"，不跟 liked 的值走 —— 旧实现挂在
+                // LaunchedEffect(liked) 上，任何"liked 变成 true"都弹：点进详情页
+                // 首帧组合（帖本来就赞过）、退回信息流时卡片带着新状态重新组合、
+                // 服务端回写校正，全都误触发（用户实测反馈）。liked 的变化交给
+                // 颜色/填充的过渡表达就够了，那两个动画首帧即达目标值、不会闪。
+                // scope 在离开组合时自动取消，与 LaunchedEffect 的生命周期等价。
+                if (!liked && animationsEnabled) {
+                    scope.launch {
+                        // 冲过头再弹回来：1.28 是"能看清但不像玩具"的量（比 design 的 .92 按下更深一档）
+                        heartScale.animateTo(1.28f, KMotion.pressSpec)
+                        heartScale.animateTo(1f, KMotion.pressSpec)
+                    }
+                }
+                onClick()
+            }
+            .padding(horizontal = KSpacing.xs)
+            .semantics { contentDescription = if (liked) "取消点赞，当前 $count 赞" else "点赞，当前 $count 赞" },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(KSpacing.xxs),
+    ) {
+        HeartIcon(
+            tint = tint,
+            filled = liked,
+            modifier = Modifier.scale(heartScale.value),
+            // 28dp（18 → 20 → 22 → 26 → 28）：用户连提**四次**要"心再大一点"。
+            //
+            // 为什么一路加到 28 —— 前两次调错基准了，记下来免得再犯：
+            //   ① 第一次 18→20，以为"和另外几个 dp 相等 = 一样大"。错：**同一 dp ≠ 同一视觉大小**。
+            //   ② 第二次按"高度对齐"调到 22（心高 14.67，落进其余几个 14.17~16.67 的区间）。还是显小 ——
+            //      因为那个区间的**下限就是评论**，拿最矮的一档当基准，怎么调都偏轻。
+            //
+            // 正解 = 按**视觉重量**对齐，而且要**压过评论**（用户原话"应该要比评论大一点"）：
+            // 心在 24 网格上是 **20 宽 × 16 高**（扁的），而评论是 18×18 的圆 ——
+            // 同样画布下心矮一截、轮廓又比圆"空"，所以它天生轻。按视觉重量（∝ dp × 包络对角 × 墨迹密度）算：
+            //   评论 20dp → 21.21 ｜ 心 22dp → 15.97   24dp → 17.42   26dp → 18.87   28dp → 20.32
+            // 心要 **28dp** 才追平评论的 20dp（26dp 时 18.87 仍略轻）。
+            //
+            // ⚠️ **28dp 是这一串的上限，不要再往上加**：心的包络宽 20 格（比评论的 18 更宽），
+            // 放大后**宽度**涨得比高度快 —— 28dp 时心实际 23.33 × 18.67dp，
+            // 而 30dp 会让高到 20dp，顶破操作栏那一行的高度、和右边数字的基线也对不上。
+            // 用户如果还要更大，该动的是**这几个图标的整体档位**（一起放大），不是单独再加这颗心。
+            size = 28.dp,
+            fillProgress = fillProgress,
+        )
+        CountRoll(count = count, tint = tint, animationsEnabled = animationsEnabled)
+    }
+}
+
+/**
+ * 计数的数字滚动。方向由**数值变化方向**决定：变大 → 新值从下往上进、旧值往上走。
+ *
+ * 抽出来是为了让 [KLikeButton] 的主干保持"一眼能读完"；它本身不含业务。
+ */
+@Composable
+private fun CountRoll(count: Int, tint: Color, animationsEnabled: Boolean) {
+    AnimatedContent(
+        targetState = count,
+        transitionSpec = {
+            if (!animationsEnabled) {
+                // 降级：直接换数字（EnterTransition.None + ExitTransition.None）
+                EnterTransition.None togetherWith ExitTransition.None
+            } else {
+                val up = targetState >= initialState
+                val enter = slideInVertically(
+                    animationSpec = KMotion.spatial(),
+                    initialOffsetY = { if (up) it else -it },
+                ) + fadeIn(animationSpec = KMotion.effects())
+                val exit = slideOutVertically(
+                    animationSpec = KMotion.spatial(),
+                    targetOffsetY = { if (up) -it else it },
+                ) + fadeOut(animationSpec = KMotion.effects())
+                // clip = false：9→10 时宽度要能长出来，别把新数字裁掉半个
+                (enter togetherWith exit).using(SizeTransform(clip = false))
+            }
+        },
+        label = "KLikeCount",
+    ) { value ->
+        Text(
+            text = value.toString(),
+            style = KType.caption,
+            color = tint,
+        )
+    }
+}
+
+/**
+ * 心形图标（自绘）。
+ *
+ * 为什么自绘而不是用 `material-icons`：设计稿要求「直接复用项目里 lucide-react 的原始图标」，
+ * 手绘版与 lucide 的 24 网格线条比例不一致，放大后差异明显。但 Compose 的 material-icons-core
+ * 里没有 Favorite/FavoriteBorder（它们在 material-icons-extended，多一个 ~3MB 依赖），
+ * 所以按 lucide 的 24×24 网格比例自绘一个 —— 与设计稿的心形形状、描边宽度（1.6/24）对齐。
+ */
+@Composable
+fun HeartIcon(
+    tint: Color,
+    filled: Boolean,
+    modifier: Modifier = Modifier,
+    size: androidx.compose.ui.unit.Dp = 20.dp,
+    strokeWidthRatio: Float = 1.6f / 24f,
+    /**
+     * 描边 → 实心的**形变进度**（M6）：0 = 只有描边，1 = 只有实心，中间 = 两者叠加。
+     *
+     * 为什么不是 `if (filled) Fill else Stroke` 的硬切：那是"两个图形换了一下"，
+     * 而心形从空心变实心本来是**同一个形状在变**。描边淡出的同时填充淡入，
+     * 眼睛看到的是"轮廓被填满"，而不是"闪了一下"。
+     * 默认 1f 保持既有调用点行为不变（`filled=false` 时按 0 处理）。
+     */
+    fillProgress: Float = if (filled) 1f else 0f,
+) {
+    // Path 实例 **remember 复用 + 每帧 rewind 重填**（2026-09-28 审查项）：点赞弹跳动画
+    // 期间 draw 每帧执行，老实现每帧 new 一个 Path + 6 段曲线坐标。坐标仍要每帧重算
+    //（依赖画布尺寸 s），但对象分配归零。
+    val heartPath = remember { Path() }
+    Canvas(modifier = modifier.size(size)) {
+        val s = this.size.minDimension
+        // lucide heart：中心线在 24 网格上，按比例缩放到当前画布
+        fun p(x: Float, y: Float) = androidx.compose.ui.geometry.Offset(x / 24f * s, y / 24f * s)
+
+        // ⚠️ 整颗心**上移 0.5**（原 lucide 的 y 是 4.5~20.5，中心 12.5）—— 用户实测反馈：
+        // 「爱心视觉偏低，得把爱心上移才能跟右边数值对齐，现在偏下了」。
+        //
+        // 根因：心形在 24 网格里**天生不居中** —— 它占 y 4.5~20.5，垂直中心落在 **12.5**，
+        // 而画布中心是 **12.0**。`KLikeButton` 那颗心走 `Alignment.CenterVertically` 居中，
+        // 于是路径自带的 0.5 格下偏被原封不动暴露出来（26dp 画布下 ≈ 0.54dp，
+        // 加上描边骑在路径上的视觉外扩，观感偏移接近 0.7dp）→ 心比右边的数字**低半格**。
+        //
+        // 为什么在这里修、而不是在调用点加 `offset`：描边是**骑在路径上**的（宽度一半在外），
+        // 所以真正该对齐的是**中心线**而不是外接盒。把路径本身摆正 →
+        // 画布中心 == 图形中心，「心有没有对齐数字」这件事就不再依赖调用点记得补偏移，
+        // 任何地方用 `HeartIcon` 都自然是对齐的。
+        // （这也解释了为什么另外几个 `Glyph` 没这个毛病：它们的路径本来就大致居中。）
+        val path = heartPath.apply {
+            rewind()
+            moveTo(p(12f, 20f).x, p(12f, 20f).y)
+            cubicTo(
+                p(2f, 13.5f).x, p(2f, 13.5f).y,
+                p(2.5f, 4f).x, p(2.5f, 4f).y,
+                p(12f, 8.5f).x, p(12f, 8.5f).y,
+            )
+            cubicTo(
+                p(21.5f, 4f).x, p(21.5f, 4f).y,
+                p(22f, 13.5f).x, p(22f, 13.5f).y,
+                p(12f, 20f).x, p(12f, 20f).y,
+            )
+            close()
+        }
+        val progress = fillProgress.coerceIn(0f, 1f)
+        // 两者在中间帧叠加（各 50% 不透明度）：看起来是"轮廓正在被填满"，
+        // 而不是"空心图消失、实心图出现"这种两张图交替的观感
+        if (progress > 0f) {
+            drawPath(path, color = tint.copy(alpha = tint.alpha * progress), style = Fill)
+        }
+        if (progress < 1f) {
+            drawPath(
+                path,
+                color = tint.copy(alpha = tint.alpha * (1f - progress)),
+                style = Stroke(width = strokeWidthRatio * s),
+            )
+        }
+    }
+}
+
+/** 加载 / 空 / 错三态的统一占位（设计稿 §1.3：EmptyState 已存在但只有部分页面接入） */
+enum class KPlaceholderKind { Loading, Empty, Error }
+
+@Composable
+fun KPlaceholder(
+    kind: KPlaceholderKind,
+    modifier: Modifier = Modifier,
+    title: String? = null,
+    description: String? = null,
+    action: (@Composable () -> Unit)? = null,
+) {
+    val c = KTheme.colors
+    val defaultTitle = when (kind) {
+        KPlaceholderKind.Loading -> "加载中…"
+        KPlaceholderKind.Empty -> "这里还是空的"
+        KPlaceholderKind.Error -> "加载失败"
+    }
+    Column(
+        modifier = modifier.padding(KSpacing.xl),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(KSpacing.sm),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                // 加载态用微光（M4）：无限动画由 kShimmer 内部按 LocalAnimationsEnabled 门控；
+                // 关掉动画时它就是一块静态底色，状态仍由下面那句"加载中…"表达（§6）
+                .then(if (kind == KPlaceholderKind.Loading) Modifier.kShimmer(CircleShape) else Modifier)
+                .clip(CircleShape)
+                .background(if (kind == KPlaceholderKind.Loading) Color.Transparent else c.accentSoft)
+                .border(1.dp, c.borderSubtle, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (kind != KPlaceholderKind.Loading) {
+                Text(
+                    text = when (kind) {
+                        KPlaceholderKind.Empty -> "○"
+                        KPlaceholderKind.Error -> "!"
+                        // 到不了：Loading 已在上面用微光表达，不再画"…"
+                        KPlaceholderKind.Loading -> ""
+                    },
+                    style = KType.subtitle,
+                    color = c.accent,
+                )
+            }
+        }
+        Text(
+            text = title ?: defaultTitle,
+            style = KType.body,
+            color = c.textSecondary,
+        )
+        if (description != null) {
+            Text(
+                text = description,
+                style = KType.footnote,
+                color = c.textMuted,
+                textAlign = TextAlign.Center,
+            )
+        }
+        if (action != null) action()
+    }
+}

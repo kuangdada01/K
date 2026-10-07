@@ -1,0 +1,311 @@
+# K 部署脚本 - 部署到远程服务器（SFTP 传输后端，不依赖 PuTTY）
+# 传输由 deploy-sftp.py（paramiko / SFTP）完成：上传 + 远端部署 + 部署后核验，任一步失败即退出非 0。
+#
+# 用法：
+#   直接运行（推荐，默认用 SSH 私钥免密部署）：
+#     .\deploy.ps1 -SERVER <IP>
+#   或交互式（弹提示框输入服务器与密码）：
+#     .\deploy.ps1
+#   或传口令（CI/无人值守；服务器关闭口令登录后此路不通）：
+#     .\deploy.ps1 -SERVER <IP> -PASSWORD <ssh密码>
+#   指定私钥：
+#     .\deploy.ps1 -SERVER <IP> -KEY C:\path\to\id_ed25519
+param(
+    [string]$SERVER = "",
+    [string]$PASSWORD = "",
+    [string]$KEY = ""
+)
+$USER = "root"
+# 部署目标目录
+$REMOTE_DIR = "/var/www/k"
+
+# deploy-sftp.py 所在路径（与 deploy.ps1 同目录）
+$SFTP_BACKEND = Join-Path $PSScriptRoot "deploy-sftp.py"
+
+# 认证：**私钥优先**。默认取本机专用部署密钥；存在即免密，
+# 密码只在没有私钥时才要求（口令登录一旦在服务器上关闭，这条回退自然失效）。
+if (-not $KEY) {
+    $KEY = Join-Path $env:USERPROFILE ".ssh\k_deploy_ed25519"
+}
+$useKey = Test-Path $KEY
+if ($useKey) {
+    $env:DEPLOY_KEY = $KEY
+    Write-Host "认证方式: SSH 私钥 ($KEY)" -ForegroundColor Green
+} else {
+    Write-Host "未找到私钥 $KEY，回退为口令认证" -ForegroundColor Yellow
+}
+
+# 未传参时交互式输入（弹提示框；密码掩码显示，不落在命令行/历史记录里）
+if (-not $SERVER) {
+    $SERVER = Read-Host "请输入服务器 IP 地址"
+}
+if (-not $useKey -and -not $PASSWORD) {
+    $secure = Read-Host "请输入 SSH 密码（掩码输入）" -AsSecureString
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    $PASSWORD = [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+    [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+    $secure = $null
+}
+
+Write-Host "=== k 项目部署脚本 (SFTP) ===" -ForegroundColor Cyan
+Write-Host "目标服务器: $USER@$SERVER" -ForegroundColor Yellow
+
+<#
+.SYNOPSIS
+  部署前闸门：比对远端 .env 与本地 .env 的**键名**，远端多出来的键一律拦下。
+
+.DESCRIPTION
+  部署会把打包里的 .env 用 `cp -a` 整体覆盖到 $REMOTE_DIR/.env（见 deploy-sftp.py 的 [4/7]），
+  所以"只加在服务器上、没写进本地 .env"的键（密钥最常见）会在下一次部署里**无声消失**。
+  实证 2026-09-29：STEP_API_KEY 这样丢过一次，安卓端云端朗读直接报"服务端缺少 STEP_API_KEY"，
+  而两端的 .env 与备份里都查不到它 —— 只能靠日志里的历史 TTS 调用反推"它确实存在过"。
+
+  只比键名、不读值（密钥不进命令行、不进日志）。确要丢弃远端独有键时：
+      $env:K_DEPLOY_ALLOW_ENV_LOSS = '1'; .\deploy.ps1 -SERVER <IP>
+  口令模式没有可用的非交互通道，只能跳过比对并**明确说出来**（不假装检查过）。
+#>
+function Assert-NoRemoteOnlyEnvKeys {
+    param(
+        [string]$Server,
+        [string]$User,
+        [string]$RemoteDir,
+        [string]$LocalEnv,
+        [string]$KeyFile,
+        [bool]$UseKey
+    )
+    if (-not $UseKey) {
+        Write-Host "  [跳过] 口令模式：无法非交互读远端 .env，未做键名比对（请自行确认远端没有独有键）" -ForegroundColor Yellow
+        return
+    }
+    $remoteRaw = & ssh -i $KeyFile -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=15 `
+        "$User@$Server" "grep -o '^[A-Za-z_][A-Za-z0-9_]*' $RemoteDir/.env 2>/dev/null"
+    if ($LASTEXITCODE -ne 0 -or -not $remoteRaw) {
+        Write-Host "  [跳过] 读不到远端 $RemoteDir/.env（首次部署或 ssh 不通），未做键名比对" -ForegroundColor Yellow
+        return
+    }
+    $remoteKeys = @($remoteRaw | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    $localKeys = @(
+        # ★ -Encoding UTF8 必须带：本地 .env 是 UTF-8（更新说明等值含中文），PS5.1 默认按
+        #   ANSI/GBK 读 —— 中文行的末字节会和换行符组成 GBK 双字节字符，把**下一行的键**
+        #   并进本行，键名比对就漏键（0.1.17 发布实测吞掉 6 个键，闸门误报远端独有）。
+        Get-Content $LocalEnv -Encoding UTF8 | ForEach-Object { if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=') { $Matches[1] } }
+    )
+    $lost = @($remoteKeys | Where-Object { $localKeys -notcontains $_ } | Sort-Object -Unique)
+    if ($lost.Count -eq 0) {
+        Write-Host "  .env 键名比对：远端无本地缺失的键 ✓" -ForegroundColor Green
+        return
+    }
+    Write-Host "  [中止] 远端 .env 里有本地 .env 没有的键：" -ForegroundColor Red
+    foreach ($k in $lost) { Write-Host "           - $k" -ForegroundColor Red }
+    Write-Host "         本次部署会用本地 .env 整体覆盖远端，上面这些键会消失（09-29 丢过 STEP_API_KEY）。" -ForegroundColor Red
+    Write-Host "         请先把它们补进本地 .env（值也要一并补）再部署；确要丢弃：" -ForegroundColor Red
+    Write-Host "           `$env:K_DEPLOY_ALLOW_ENV_LOSS = '1'; .\deploy.ps1 -SERVER $Server" -ForegroundColor Red
+    if ($env:K_DEPLOY_ALLOW_ENV_LOSS -ne '1') {
+        Write-Error "已中止部署：远端 .env 有本地缺失的键（未上传任何文件）"
+        exit 1
+    }
+    Write-Host "  [放行] K_DEPLOY_ALLOW_ENV_LOSS=1：按上面的键丢失清单继续部署" -ForegroundColor Yellow
+}
+
+# Step 1: 构建（一次调用，失败即终止部署——E1 修复：此前三段手写构建
+# 失败后脚本继续执行，可能把旧产物静默推上生产）
+Write-Host "`n[1/6] 构建项目..." -ForegroundColor Green
+Write-Host "  构建 shared → server → client ..." -ForegroundColor Yellow
+npm run build
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "构建失败（exit $LASTEXITCODE），已终止部署，未上传任何文件"
+    exit 1
+}
+Write-Host "  构建完成 ✓" -ForegroundColor Green
+
+# 定位新版签名 APK（Gradle 输出）并计算版本化文件名；未构建 APK 时跳过单独上传
+$APK_LOCAL = ""
+$APK_NAME = ""
+$APK_SHA = ""
+$APK_MANIFEST = ""
+$versionFile = Join-Path $PSScriptRoot "android\version.properties"
+# ⚠️ 原生重写后应用模块是 `:native`（不是 `:app`）—— 这里曾长期指向旧的
+# `android/app/build/outputs/apk/release/app-release.apk`，文件早就不存在，
+# 于是每次都走"未找到 Gradle 输出的 APK"分支**静默跳过上传**，
+# 结果是服务器上 /apk/ 目录一直空着、App 里"立即更新"下到的是 SPA 兜底的 index.html
+# （09-27 实测）。
+$apkOut = Join-Path $PSScriptRoot "android\native\build\outputs\apk\release\native-release.apk"
+if (Test-Path $versionFile) {
+    # 版本号单一来源：android/version.properties（不再从 build.gradle 里抠字符串）
+    $versionName = (Select-String -Path $versionFile -Pattern '^versionName\s*=\s*(.+)$').Matches.Groups[1].Value.Trim()
+    if ((Test-Path $apkOut) -and $versionName) {
+        $APK_LOCAL = $apkOut
+        $APK_NAME = "k-app-$versionName-release.apk"
+        # 本地 sha256：远端同名文件一致时后端会跳过上传（APK 十几 MB，只在发版时才变）
+        $APK_SHA = (Get-FileHash $apkOut -Algorithm SHA256).Hash.ToLower()
+        Write-Host "  找到新版 APK: $APK_NAME ($([math]::Round((Get-Item $apkOut).Length/1MB,1)) MB, sha256 $($APK_SHA.Substring(0,12))…) ✓" -ForegroundColor Green
+
+        # ★ 发布清单闸门（P1/P2-4.4）：**读取 APK 内部的真实元数据**与 version.properties、
+        #   .env 的 APP_VERSION 比对 —— “只改了文件名/配置、包内容还是旧的”这一类事故
+        #   （旧 APK 错标新版本，App 端“立即更新”下到旧包）在这里当场失败。
+        $manifestScript = Join-Path $PSScriptRoot "android\scripts\release-manifest.mjs"
+        $manifestJson = & node $manifestScript $apkOut
+        if ($LASTEXITCODE -ne 0 -or -not $manifestJson) {
+            Write-Error "发布清单生成失败（exit $LASTEXITCODE），已终止部署"
+            exit 1
+        }
+        $manifest = $manifestJson | ConvertFrom-Json
+        if (-not $manifest.versionName) {
+            Write-Error "发布清单缺少 versionName（aapt2 不可用或 APK 损坏）：拒绝盲发，请先修复工具链（npm run android:doctor）"
+            exit 1
+        }
+        if ($manifest.versionName -ne $versionName) {
+            Write-Error "APK 实际版本 ($($manifest.versionName)) 与 version.properties ($versionName) 不一致 —— 旧包错标新版本？请重新构建 release APK 后再部署"
+            exit 1
+        }
+        if (Test-Path ".env") {
+            $envVersion = (Select-String -Path ".env" -Pattern '^APP_VERSION\s*=\s*(.+)$' -ErrorAction SilentlyContinue).Matches.Groups[1].Value.Trim()
+            if ($envVersion -and ($manifest.versionName -ne $envVersion)) {
+                Write-Error ".env 的 APP_VERSION ($envVersion) 与 APK 实际版本 ($($manifest.versionName)) 不一致 —— 更新配置会把旧版本号推给新包（或反之）。先对齐再部署"
+                exit 1
+            }
+        }
+        # 清单随部署包的 APK 目录一起下发（服务端/接手者可核对任何历史包的来历）
+        $APK_MANIFEST = $manifestJson
+        Write-Host "  发布清单: applicationId=$($manifest.applicationId) versionCode=$($manifest.versionCode) versionName=$($manifest.versionName) cert=$($manifest.certSha256 ? $manifest.certSha256.Substring(0,12) : '未知')…" -ForegroundColor Green
+    } else {
+        Write-Host "  未找到 Gradle 输出的 APK（$apkOut），本次跳过 APK 单独上传/清理旧版" -ForegroundColor DarkYellow
+    }
+}
+
+# Step 2: 创建临时打包目录
+Write-Host "`n[2/6] 打包项目文件..." -ForegroundColor Green
+$deployPkg = "k-deploy.tar.gz"
+
+# 创建临时目录结构
+$tmpDir = "$env:TEMP\k-deploy"
+if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir }
+New-Item -ItemType Directory -Path "$tmpDir\server" -Force | Out-Null
+New-Item -ItemType Directory -Path "$tmpDir\client" -Force | Out-Null
+New-Item -ItemType Directory -Path "$tmpDir\shared" -Force | Out-Null
+
+# 复制服务端文件（node_modules 在服务器上重新安装，避免原生模块不兼容；
+# workspaces 迁移后 lockfile 在根目录，见下方根配置复制）
+Copy-Item -Recurse "server\dist" "$tmpDir\server\dist"
+Copy-Item "server\package.json" "$tmpDir\server\"
+Copy-Item "server\ecosystem.config.js" "$tmpDir\server\"
+
+# 复制共享类型包（服务端依赖 file:../shared，服务器安装时需要同目录结构）
+Copy-Item -Recurse "shared\dist" "$tmpDir\shared\dist"
+Copy-Item "shared\package.json" "$tmpDir\shared\"
+
+# 复制客户端构建产物
+Copy-Item -Recurse "client\dist" "$tmpDir\client\dist"
+
+# 把新版 APK 放进部署包的 dist/apk/（与网页一起下发；若残留旧包则一并携带）
+if ($APK_LOCAL -and $APK_NAME) {
+    $apkDir = "$tmpDir\client\dist\apk"
+    New-Item -ItemType Directory -Path $apkDir -Force | Out-Null
+    Copy-Item -Force $APK_LOCAL (Join-Path $apkDir $APK_NAME)
+    # 发布清单与 APK 同目录下发（applicationId/版本/签名指纹/SHA-256/源码摘要，
+    # 任何历史包的来历都可据此核对 —— 见 android/scripts/release-manifest.mjs）
+    if ($APK_MANIFEST) {
+        [IO.File]::WriteAllText((Join-Path $apkDir "release-manifest.json"), $APK_MANIFEST + "`n")
+    }
+}
+
+# 复制客户端 public 目录（音乐源文件在 public/music，服务端 /api/music 扫描此目录；
+# 缺失会导致音乐列表为空、播放器组件不显示）
+Copy-Item -Recurse "client\public" "$tmpDir\client\public"
+
+# 复制根目录配置（package-lock.json 为 workspaces 单一 lockfile，远端根安装依赖用）
+# 注意：.env 会整体覆盖远端现有配置——若曾直接在服务器上改过环境变量，
+# 下次部署会被本地 .env 悄悄改回去。本地 .env 必须是生产配置的唯一事实来源。
+if (-not (Test-Path ".env")) {
+    Write-Host "  [警告] 未找到本地 .env：远端将沿用现有配置（首次部署必须提供）" -ForegroundColor Yellow
+} else {
+    # ★ 部署前闸门：远端 .env 里"本地没有"的键会被这次整体覆盖**悄悄抹掉**。
+    #   2026-09-29 就是这么出的事：STEP_API_KEY（云端朗读）当初只加在服务器上，
+    #   0.1.16 的部署用本地 .env 覆盖后，安卓端「朗读」立刻变成"服务端缺少 STEP_API_KEY"，
+    #   而两端本地的 .env 里都找不到它（远端 `.env.bak-*` 也没有）—— 排查成本全在这上面。
+    #   本地 .env 既然是唯一事实来源，这里就**响亮失败**，而不是静默回退到旧配置。
+    Assert-NoRemoteOnlyEnvKeys -Server $SERVER -User $USER -RemoteDir $REMOTE_DIR -LocalEnv ".env" -KeyFile $KEY -UseKey $useKey
+}
+Copy-Item ".env" "$tmpDir\"
+if (-not (Test-Path "package-lock.json")) {
+    Write-Host "  [警告] 未找到 package-lock.json：远端将回退为 npm install（非确定性安装）" -ForegroundColor Yellow
+}
+Copy-Item "package.json" "$tmpDir\"
+Copy-Item "package-lock.json" "$tmpDir\" -ErrorAction SilentlyContinue
+
+# 不复制 uploads 目录（E2 修复：本地 dev uploads 是开发数据，入包会覆盖远端生产
+# 用户上传；uploads 只在首次部署时手动初始化，日常部署排除）
+# if (Test-Path "server\uploads") {
+#     Copy-Item -Recurse "server\uploads" "$tmpDir\server\uploads"
+# }
+
+# 复制图书数据目录（server/books，含所有图书文本——源数据，保留）
+if (Test-Path "server\books") {
+    Copy-Item -Recurse "server\books" "$tmpDir\server\books"
+}
+
+Write-Host "  文件打包完成 ✓" -ForegroundColor Green
+
+# Step 3: 压缩
+Write-Host "`n[3/6] 压缩部署包..." -ForegroundColor Green
+Push-Location $env:TEMP
+tar -czf "$deployPkg" -C $tmpDir .
+Pop-Location
+$pkgPath = "$env:TEMP\$deployPkg"
+$pkgSize = (Get-Item $pkgPath).Length / 1MB
+Write-Host "  部署包大小: $([math]::Round($pkgSize, 1)) MB ✓" -ForegroundColor Green
+
+# Step 4: SFTP 上传 + 远端部署 + 部署后核验（deploy-sftp.py）
+Write-Host "`n[4/6] SFTP 上传与远端部署..." -ForegroundColor Green
+Write-Host "  传输后端: $SFTP_BACKEND" -ForegroundColor Yellow
+
+if ($PASSWORD) {
+    $env:DEPLOY_PASSWORD = $PASSWORD
+}
+# 用数组 + splat 调用 native 命令，避免字符串变量被当作单个参数传给 argparse
+$sftpArgs = @("--server", $SERVER, "--package", $pkgPath)
+# 有新 APK 时传给 SFTP 后端做单独上传 + 保留10个/清理旧版；
+# 同时把本地 sha256 传过去：远端同名文件内容一致时后端直接跳过上传（省十几 MB）
+if ($APK_LOCAL -and $APK_NAME) {
+    $sftpArgs += @("--apk", $APK_LOCAL, "--apk-name", $APK_NAME)
+    if ($APK_SHA) {
+        $sftpArgs += @("--apk-sha", $APK_SHA)
+    }
+}
+& python $SFTP_BACKEND @sftpArgs
+$sftpExit = $LASTEXITCODE
+# 用完即清，避免明文密码滞留环境
+Remove-Item Env:DEPLOY_PASSWORD -ErrorAction SilentlyContinue
+if ($sftpExit -ne 0) {
+    Write-Host "  部署失败（SFTP 后端退出码 $sftpExit）!" -ForegroundColor Red
+    Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+    Remove-Item -Force $pkgPath -ErrorAction SilentlyContinue
+    exit 1
+}
+Write-Host "  上传与远端部署完成 ✓" -ForegroundColor Green
+
+# Step 5: 验证
+Write-Host "`n[5/6] 本地侧验证服务..." -ForegroundColor Green
+Start-Sleep -Seconds 1
+# 全站 HTTPS（Let's Encrypt）后经 nginx 443 验证；裸 IP 访问证书域名不匹配，需跳过校验
+try {
+    $response = Invoke-WebRequest -Uri "https://$SERVER/api/health" -TimeoutSec 10 -UseBasicParsing -SkipCertificateCheck
+    Write-Host "  服务状态: $($response.StatusCode) ✓" -ForegroundColor Green
+    Write-Host "  API 响应: $($response.Content)" -ForegroundColor Gray
+} catch {
+    Write-Host "  健康检查失败，尝试访问首页..." -ForegroundColor Yellow
+    try {
+        $response = Invoke-WebRequest -Uri "https://$SERVER/" -TimeoutSec 10 -UseBasicParsing -SkipCertificateCheck
+        Write-Host "  首页状态: $($response.StatusCode) ✓" -ForegroundColor Green
+    } catch {
+        Write-Host "  服务可能需要几秒钟启动，请稍后访问 https://$SERVER" -ForegroundColor Yellow
+    }
+}
+
+Write-Host "`n=== 部署完成! ===" -ForegroundColor Cyan
+Write-Host "访问地址: https://$SERVER" -ForegroundColor Green
+Write-Host "管理后台: https://$SERVER (使用管理员账号登录)" -ForegroundColor Green
+
+# 清理临时文件
+Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
+Remove-Item -Force $pkgPath -ErrorAction SilentlyContinue

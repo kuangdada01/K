@@ -1,0 +1,176 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同分支新推送取消仍在跑的旧 CI，省排队与额度
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # 行尾策略由仓库里的 .gitattributes 决定（`* text=auto eol=lf`；*.bat/*.cmd 钉 CRLF）。
+      # 这道守卫拦「仓库里混进 CRLF」：属性漏掉的类型、或有人绕过归一化提交。
+      - name: 行尾检查（仓库内不得出现 CRLF）
+        run: |
+          bad=$(git ls-files --eol | awk '$1 == "i/crlf" { print $4 }')
+          if [ -n "$bad" ]; then
+            echo "::error::以下文件在仓库里是 CRLF，应为 LF（*.bat/*.cmd 除外）："
+            echo "$bad"
+            exit 1
+          fi
+          echo "行尾检查通过：仓库内无 CRLF 文本文件"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          # npm workspaces：单一根 lockfile 覆盖全部三个 workspace
+          cache-dependency-path: package-lock.json
+
+      - name: 安装依赖（npm ci 一次装全部 workspace）
+        run: npm ci
+
+      - name: Prettier 格式检查
+        run: npm run format:check
+
+      # 独立于 build：server 的 build 走 tsconfig.json（不含 test/），
+      # 因此测试文件与 e2e 规格的类型错误不会被 build 捕获。
+      # typecheck 额外覆盖 server/test、e2e/、playwright.config.ts。
+      # 注意：该脚本会**先 build shared** —— server/client/e2e 都经
+      # node_modules/@k/shared 的 package.json（types → dist/*.d.ts）解析依赖，
+      # 干净环境下 dist 不存在会直接 TS2307（CI 曾因此失败，本地被残留 dist 掩盖）。
+      - name: 类型检查（含测试与 e2e，build 不覆盖）
+        run: npm run typecheck
+
+      - name: 生产依赖漏洞扫描
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: 构建（shared → server → client）
+        run: npm run build
+
+      - name: Lint
+        run: npm run lint
+
+      - name: 测试（server + client vitest）
+        run: npm run test
+
+      - name: E2E（Playwright，覆盖只读冒烟 + 注册/发帖/互动真实写路径）
+        env:
+          # E3 修复：build 步骤已产出 dist，webServer 跳过重复构建
+          SKIP_BUILD: '1'
+        run: |
+          npx playwright install --with-deps chromium
+          npm run e2e
+
+      - name: 上传 e2e 失败产物（截图/报告，仅失败时）
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # 独立 job 验证 Docker 镜像可构建（历史上镜像构建期 chown/卷属主问题曾静默损坏运行时上传，
+  # 只有 docker build 能发现）。与主 job 并行跑，不阻塞其结果。
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      - name: Docker 镜像构建验证
+        run: docker build -t k-ci-check:latest .
+
+      # 冒烟：容器能通过健康检查（同时验证非 root 卷属主/预建目录等运行时前提）
+      - name: 容器健康检查冒烟
+        run: |
+          docker run -d --name k-smoke -p 3000:3000 \
+            -e JWT_SECRET=ci-secret-ci-secret-ci-secret-1234 \
+            k-ci-check:latest
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3000/api/health > /dev/null; then
+              echo "healthcheck passed"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "healthcheck failed"
+          docker logs k-smoke
+          exit 1
+
+  # Android：编译 + 实际单元测试 + Lint（P1-3.3）。
+  # 不用 `gradlew test`（各模块禁用了常规测试任务，会“成功但零测试”），
+  # 而是走与本地完全相同的 Node runner（android:test）：
+  #   - 它先经 Gradle 编译（dumpTestClasspath 依赖 compileDebugUnitTestKotlin），
+  #     指定类也用最新代码；
+  #   - 未发现任何测试类时直接非零退出 —— “零测试不算通过”由 runner 自己保证；
+  #   - 编译错误 / 断言失败 / Lint 问题都会让 job 失败。
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+
+      # jvmToolchain(25)：直接装 JDK 25，Gradle 无需 toolchain 解析器
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: 安装 SDK 组件（platform 37 + build-tools 36）
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager 'platforms;android-37' 'build-tools;36.0.0' > /dev/null
+
+      - name: Gradle 缓存（wrapper 与依赖）
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/variables.gradle', 'android/gradle/wrapper/gradle-wrapper.properties', 'android/gradle/libs.versions.toml') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: 环境体检（doctor：Node/JDK/SDK/Wrapper）
+        run: npm run android:doctor
+
+      - name: 编译 + 单元测试（Node runner，零测试即失败）
+        run: |
+          # pipefail：npm run 的失败不能被 tee 吃掉
+          set -o pipefail
+          npm run android:test 2>&1 | tee android-test.log
+
+      - name: Android Lint（:native lintDebug）
+        run: |
+          cd android
+          sh gradlew --no-daemon :native:lintDebug
+
+      - name: 上传测试与 Lint 产物（始终）
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-checks
+          path: |
+            android-test.log
+            android/native/build/reports/
+          retention-days: 7
+          if-no-files-found: ignore

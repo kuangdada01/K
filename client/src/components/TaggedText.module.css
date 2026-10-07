@@ -1,0 +1,12 @@
+/* 话题链接片段：跟随主题强调色，可点击 */
+.tag {
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 500;
+  /* 相邻话题/文字之间留出间隙，避免贴在一起 */
+  margin: 0 3px;
+}
+
+.tag:hover {
+  color: var(--accent-hover);
+}

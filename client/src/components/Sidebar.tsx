@@ -1,0 +1,244 @@
+/**
+ * ============================================================
+ * 侧边栏组件 (Sidebar)
+ * ============================================================
+ * 左侧导航栏（参考稿 premium-celadon/obsidian 样式）
+ *
+ * 功能:
+ * - 品牌区: K 渐变标 + 品牌名 Kuangdada
+ * - 公开导航: 首页、搜索、图书（无需登录）
+ * - 需登录导航: 消息、分享、公告、主页、管理（管理员）
+ * - 未读消息徽章 / 未读公告徽章（仅登录用户，30秒轮询 + SSE）
+ *   消息角标与消息页共用 `state/inboxStore` 的单份数据（4.3）：
+ *   两个消费方只有一个轮询定时器（消息页 10s、其他页面 30s），
+ *   SSE 一次事件也只打一次请求
+ * - 底部用户 Chip：点击头像打开二级菜单（个人主页 / 主题 / 退出登录）
+ * - 移动端自动变为底部导航栏（CSS媒体查询，含头像入口）
+ * ============================================================
+ */
+
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import {
+  Home,
+  Search,
+  MessageCircle,
+  PlusSquare,
+  User,
+  Megaphone,
+  Shield,
+  BookOpen,
+  AudioLines,
+} from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { useEvent } from '../context/EventContext';
+import { useVoiceInRoom } from '../context/VoiceContext';
+import { loadCreatePost } from '../router/composerChunks';
+import { events } from '../state/events';
+import { refreshInbox, selectUnreadTotal } from '../state/inboxStore';
+import { useInbox } from '../hooks/useInbox';
+import { useSse } from '../hooks/useSse';
+import { saveHomeScrollPosition, getScrollTarget } from '../lib/scroll';
+import api from '../api/http';
+import AvatarMenu from './AvatarMenu';
+import styles from './Sidebar.module.css';
+
+/** 非消息页时的轮询间隔（消息页由 useConversations 拉到 10s，取最小） */
+const SIDEBAR_POLL_MS = 30000;
+
+export default function Sidebar() {
+  const [announcementCount, setAnnouncementCount] = useState(0);
+  const location = useLocation();
+  const { user } = useAuth();
+  const { openCreate } = useEvent();
+  const inRoom = useVoiceInRoom();
+
+  // 消息角标：与消息页**同源**（会话未读 + 未读通知），不再自己算一套
+  const inbox = useInbox(SIDEBAR_POLL_MS);
+  const unreadCount = selectUnreadTotal(inbox);
+
+  /** 预取发布弹层（懒加载 chunk）。失败静默：真正点开时 lazy 会再取一次 */
+  const prefetchCreatePost = useCallback(() => {
+    void loadCreatePost().catch(() => {});
+  }, []);
+
+  /** 公告未读数（只有侧边栏消费，30s 轮询 + announcement SSE 兜底） */
+  const refreshAnnouncements = useCallback(async () => {
+    if (!user) return;
+    try {
+      // 后台轮询：失败不重试（30s 后自然再问；见 api/retry.ts）
+      const res = await api.get('/announcements', { kRetry: false });
+      setAnnouncementCount(res.data.unread_count || 0);
+    } catch {}
+  }, [user]);
+
+  // 公告定时轮询 (30秒) - 仅登录用户（SSE 失败时的兜底）
+  useEffect(() => {
+    if (!user) return;
+    // 首帧后拉一次：经 setTimeout 宏任务触发，避开 react-hooks/set-state-in-effect
+    // （与 useChatActions 同一处理方式）。真正的首屏渲染不依赖这个值。
+    const kickoff = setTimeout(refreshAnnouncements, 0);
+    const interval = setInterval(refreshAnnouncements, SIDEBAR_POLL_MS);
+    return () => {
+      clearTimeout(kickoff);
+      clearInterval(interval);
+    };
+  }, [refreshAnnouncements, user]);
+
+  // SSE 实时推送：新消息/通知 → 刷新共享收件箱；新公告 → 刷新公告角标
+  useSse(user?.id, (type) => {
+    if (type === 'announcement') {
+      refreshAnnouncements();
+    } else if (type === 'message' || type === 'notification') {
+      void refreshInbox();
+    }
+  });
+
+  // 已读事件（mitt 总线）：乐观部分已由 store 的动作完成（消息清除未读 /
+  // 通知标已读），这里只负责让服务器值尽快对上（单飞请求会与消息页的合并）
+  useEffect(() => {
+    const handler = (payload: { source: 'notif' | 'msg' | 'ann' }) => {
+      if (!user) return;
+      if (payload.source === 'ann') refreshAnnouncements();
+      else void refreshInbox();
+    };
+    events.on('badge:changed', handler);
+    return () => {
+      events.off('badge:changed', handler);
+    };
+  }, [user, refreshAnnouncements]);
+
+  const isActive = (path: string) => {
+    if (path === '/') return location.pathname === '/';
+    return location.pathname.startsWith(path);
+  };
+
+  const itemClass = (path: string) => `${styles.item} ${isActive(path) ? styles.active : ''}`;
+
+  const lastHomeClickRef = useRef(0);
+  const goHome = (e: React.MouseEvent) => {
+    if (location.pathname === '/') {
+      const now = Date.now();
+      const isDouble = now - lastHomeClickRef.current < 350;
+      lastHomeClickRef.current = now;
+      if (isDouble) {
+        e.preventDefault();
+        const target = getScrollTarget();
+        if (target === window) window.scrollTo({ top: 0, behavior: 'smooth' });
+        else (target as HTMLElement).scrollTo({ top: 0, behavior: 'smooth' });
+        // 清除持久化的滚动，避免切页后又被 useScrollRestore 拉回原位
+        try {
+          sessionStorage.removeItem('home_scrollY');
+        } catch {}
+        return;
+      }
+      saveHomeScrollPosition();
+    }
+  };
+
+  return (
+    <nav className={styles.sidebar}>
+      {/* 品牌区 */}
+      <div className={styles.brand}>
+        <span className={styles.brandMark}>K</span>
+        <span className={styles.brandName}>Kuangdada</span>
+      </div>
+
+      <div className={styles.nav}>
+        <Link to="/" className={itemClass('/')} onClick={goHome}>
+          <span className={styles.itemIcon}>
+            <Home size={22} />
+          </span>
+          <span className={styles.itemLabel}>首页</span>
+        </Link>
+        {/* —— 以下三项为桌面端专属（窄屏隐藏）：移动端入口已重新安家 ——
+            搜索 → 首页页头圆钮；分享 → 首页 FAB；公告 / 管理 → 头像二级菜单 */}
+        <Link to="/explore" className={`${itemClass('/explore')} ${styles.itemDesktopOnly}`} onClick={goHome}>
+          <span className={styles.itemIcon}>
+            <Search size={22} />
+          </span>
+          <span className={styles.itemLabel}>搜索</span>
+        </Link>
+        {user && (
+          <Link to="/messages" className={itemClass('/messages')} onClick={goHome}>
+            <span className={styles.itemIcon}>
+              <MessageCircle size={22} />
+              {unreadCount > 0 && <span className={styles.badge}>{unreadCount}</span>}
+            </span>
+            <span className={styles.itemLabel}>消息</span>
+          </Link>
+        )}
+        {user && (
+          <button
+            className={`${styles.item} ${styles.itemDesktopOnly}`}
+            onClick={openCreate}
+            // 发布弹层是懒加载的（P1-7）：在「想点」的瞬间就把 chunk 拉回来，
+            // 把首次打开多出的那一次网络往返藏进 hover→点击之间
+            onMouseEnter={prefetchCreatePost}
+            onFocus={prefetchCreatePost}
+            onTouchStart={prefetchCreatePost}
+          >
+            <span className={styles.itemIcon}>
+              <PlusSquare size={22} />
+            </span>
+            <span className={styles.itemLabel}>分享</span>
+          </button>
+        )}
+        {user && (
+          <Link
+            to="/announcements"
+            className={`${itemClass('/announcements')} ${styles.itemDesktopOnly}`}
+            onClick={goHome}
+          >
+            <span className={styles.itemIcon}>
+              <Megaphone size={22} />
+              {announcementCount > 0 && <span className={styles.badge}>{announcementCount}</span>}
+            </span>
+            <span className={styles.itemLabel}>公告</span>
+          </Link>
+        )}
+        <Link to="/books" className={itemClass('/books')} onClick={goHome}>
+          <span className={styles.itemIcon}>
+            <BookOpen size={22} />
+          </span>
+          <span className={styles.itemLabel}>图书</span>
+        </Link>
+        <Link to="/voice" className={itemClass('/voice')} onClick={goHome}>
+          <span className={styles.itemIcon}>
+            <AudioLines size={22} />
+          </span>
+          <span className={styles.itemLabel}>
+            语音
+            {inRoom && <span className={styles.voiceDot} title="语音进行中" />}
+          </span>
+        </Link>
+        {user && (
+          <Link to="/profile" className={itemClass('/profile')} onClick={goHome}>
+            <span className={styles.itemIcon}>
+              <User size={22} />
+            </span>
+            <span className={styles.itemLabel}>主页</span>
+          </Link>
+        )}
+        {user?.role === 'admin' && (
+          <Link to="/admin" className={`${itemClass('/admin')} ${styles.itemDesktopOnly}`} onClick={goHome}>
+            <span className={styles.itemIcon}>
+              <Shield size={22} />
+            </span>
+            <span className={styles.itemLabel}>管理</span>
+          </Link>
+        )}
+      </div>
+
+      {/* 底部用户 Chip（点击打开二级菜单：个人主页 + 主题 + 退出登录） */}
+      <div className={styles.bottom}>
+        <AvatarMenu
+          showUsername
+          subtitle={user?.bio || (user ? 'k' : '登录后即可互动')}
+          size={40}
+          triggerClassName={styles.userChipTrigger}
+        />
+      </div>
+    </nav>
+  );
+}

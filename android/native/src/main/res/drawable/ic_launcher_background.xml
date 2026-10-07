@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  K · Adaptive Icon 背景层
+  视口 108 x 108dp
+  形状：Squircle（超椭圆），采用 AOSP AdaptiveIconDrawable 默认遮罩的同款曲线
+      —— 将 AOSP 100x100 坐标系下的 M50,0 C10,0 0,10 0,50 ... 等比放大 1.08 倍得到。
+      等效圆角半径约 37dp（占画布 34%），与绝大多数国产 Launcher（MIUI / ColorOS /
+      HarmonyOS 等）的裁切形状一致，避免"自己画的圆角"和"系统遮罩"打架。
+  配色取自前端浅色主题「青瓷黛绿」：主色 #2F5D50 松柏深绿
+  结构：线性渐变底色 + 一层青瓷釉面径向高光（模拟瓷器光泽）
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 底色：松柏深绿，由左上主色向右下 accent-hover 压深 -->
+    <path android:pathData="M54,0C10.8,0 0,10.8 0,54C0,97.2 10.8,108 54,108C97.2,108 108,97.2 108,54C108,10.8 97.2,0 54,0Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="linear"
+                android:startX="0"
+                android:startY="0"
+                android:endX="108"
+                android:endY="108">
+                <item android:offset="0" android:color="#FF2F5D50" />
+                <item android:offset="1" android:color="#FF24493E" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- 青瓷釉光：左上角柔和高光，避免大面积平涂显得死板 -->
+    <path android:pathData="M54,0C10.8,0 0,10.8 0,54C0,97.2 10.8,108 54,108C97.2,108 108,97.2 108,54C108,10.8 97.2,0 54,0Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:type="radial"
+                android:centerX="30"
+                android:centerY="22"
+                android:gradientRadius="88">
+                <item android:offset="0" android:color="#26FFFFFF" />
+                <item android:offset="0.5" android:color="#0BFFFFFF" />
+                <item android:offset="1" android:color="#00000000" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+</vector>

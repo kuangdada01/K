@@ -1,0 +1,194 @@
+/* 首页布局与下拉刷新（参考稿 premium-celadon/obsidian 布局） */
+
+.layout {
+  display: grid;
+  /* 三列网格：左留白 | 信息流(恒定居中) | 右栏(贴右缘)；列间距统一 44px */
+  grid-template-columns: minmax(0, 1fr) auto minmax(280px, 1fr);
+  gap: 44px;
+  align-items: start;
+  padding: 34px 44px 90px 16px;
+  width: 100%;
+}
+
+.feed {
+  grid-column: 2;
+  width: 100%;
+  max-width: 620px;
+  min-width: 0;
+}
+
+/* 桌面端精确居中补偿：左导航占位(220px+28px 间距) + 右栏最小 280px + 非对称
+   内边距(左16/右44)共同使帖子栏中心落在浏览器可见中线左侧约 18px（1600/1920
+   宽下实测恒定），相对定位右移抵消。改导航宽度/列间距/内边距/帖子最大宽时需同步调整。 */
+@media (min-width: 1021px) {
+  .feed {
+    position: relative;
+    left: 18px;
+  }
+}
+
+/* 页头：标题 + 副标题 */
+.feedHead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.feedHead h1 {
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: -0.04em;
+  color: var(--text-primary);
+}
+
+/* 移动端首页右上角搜索入口
+   —— 底部导航压到 5 项后，「搜索」的入口由这里承担（桌面端左导航已有搜索，隐藏）。
+   底用 --surface + 描边，不用凹陷色：浅色凹陷色与页底只有 1.04:1，边界读不出来。 */
+.searchBtn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border-radius: var(--radius-pill);
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--border-color);
+  transition:
+    transform var(--dur-fast) var(--ease-standard),
+    background var(--dur-base) var(--ease-standard);
+}
+
+.searchBtn:active {
+  transform: scale(0.92);
+  background: var(--accent-soft);
+}
+
+@media (max-width: 768px) {
+  .searchBtn {
+    display: flex;
+  }
+}
+
+/* 发布悬浮按钮（FAB）
+   —— 底部导航压到 5 项后，「分享（发布）」的入口由这里承担，仅移动端显示。
+   绝对/固定定位在胶囊之上，与胶囊按 --nav-capsule-* 令牌留 32px 间距，
+   改胶囊尺寸时这里自动跟随。z-index 低于胶囊（200），重叠时导航优先。 */
+.fab {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .fab {
+    display: flex;
+    position: fixed;
+    right: 16px;
+    bottom: calc(var(--nav-capsule-gap) + var(--nav-capsule-h) + 32px + var(--safe-area-bottom));
+    width: 56px;
+    height: 56px;
+    border-radius: var(--radius-pill);
+    align-items: center;
+    justify-content: center;
+    background: var(--accent);
+    color: var(--on-accent);
+    border: none;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
+    z-index: 190;
+    transition: transform var(--dur-fast) var(--ease-standard);
+  }
+
+  .fab:active {
+    transform: scale(0.92);
+  }
+}
+
+.sidebar {
+  grid-column: 3;
+  justify-self: end;
+  /* 负右边距抵消布局 44px 右内边距，使卡片右缘与容器右缘对齐，
+     与左侧导航齐贴容器左缘对称：窗口两侧留白相等 */
+  margin-right: -44px;
+  width: 280px;
+  position: sticky;
+  top: 34px;
+  align-self: start;
+}
+
+@media (max-width: 1020px) {
+  .sidebar {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .layout {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 auto !important;
+    grid-template-columns: minmax(0, 1fr);
+    /* 底部预留跟随 --nav-reserve（= 胶囊高 + 浮起 + 呼吸），改胶囊尺寸无需再改这里 */
+    padding: 22px 16px var(--nav-reserve);
+    gap: 0;
+  }
+
+  .feed {
+    grid-column: 1;
+    max-width: 100%;
+    margin: 0 auto;
+  }
+
+  /* 页头：标题与右侧 38px 圆钮垂直居中（基线对齐会让 24px 字与圆钮重心错位） */
+  .feedHead {
+    align-items: center;
+    margin-bottom: 14px;
+  }
+
+  .feedHead h1 {
+    font-size: 24px;
+  }
+
+  .sidebar {
+    display: none;
+  }
+}
+
+/* Pull-to-refresh: finger-following indicator */
+.pullIndicator {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Progress circle (shown during pull, hidden during refresh) */
+.pullProgress {
+  display: block;
+}
+
+.pullIndicator.refreshing .pullProgress {
+  display: none;
+}
+
+/* Spinner (hidden during pull, shown during refresh) */
+.pullSpinner {
+  display: none;
+  width: 26px;
+  height: 26px;
+  border: 3px solid var(--border-color);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: homePullSpin 0.7s linear infinite;
+}
+
+.pullIndicator.refreshing .pullSpinner {
+  display: block;
+}
+
+@keyframes homePullSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}

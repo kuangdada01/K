@@ -1,0 +1,34 @@
+# 行尾策略：由**仓库**决定，而不是各人机器上的 core.autocrlf
+#
+# 背景：Windows 上 Git for Windows 默认 core.autocrlf=true（说「工作区用 CRLF」），
+# 而 .prettierrc.json 是 endOfLine: "lf"（说「写出来是 LF」）——两套权威互相矛盾，
+# 结果是「谁最后碰过文件谁说了算」：工作区里 507 个 CRLF、460 个 LF，还出现
+# git 报 modified 而 git diff 为空的**幻影修改**（CRLF↔LF 会改变文件字节数）。
+#
+# 规则：文本文件进仓库一律 LF；**检出到工作区也是 LF**（所有人、所有系统）。
+# 这条属性会覆盖个人的 core.autocrlf，所以 prettier、eslint、CI 与工作区终于一致。
+* text=auto eol=lf
+
+# cmd.exe 的批处理对纯 LF 在个别结构（标签/goto/多行块）上有兼容问题，显式钉回 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 显式声明二进制，避免被 text=auto 误判后做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.avif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.mp3 binary
+*.mp4 binary
+*.webm binary
+*.apk binary
+*.aab binary
+*.keystore binary
+*.db binary
+*.sqlite binary

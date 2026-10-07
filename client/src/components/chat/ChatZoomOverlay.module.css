@@ -1,0 +1,78 @@
+/* 聊天图片缩放遮罩（原 messages.css 的 chat-zoom-* 规则） */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 500;
+  /* 全屏看图：禁原生手势（滚动/页面缩放），平移/缩放全交给 JS（useImagePinchZoom） */
+  touch-action: none;
+  opacity: 1;
+  /* 入场：一次性淡入动画 */
+  animation: chatZoomFadeIn 0.2s ease;
+  /* ★ transition 只挂在 .closing 上：淡出（= 露出下层消息列表）必须晚于双击窗口
+     （见 useCancelableClose 的 CANCELABLE_CLOSE_FADE_DELAY_MS）。
+     曾经关闭用 animation 切换 animation-name（撤销时入场动画从头重播 = 闪），
+     也试过把 transition 放基类做「平滑淡回」——后者会让双击撤销期间
+     「遮罩变淡 → 露出下层 → 再淡回」，同样是可见的闪烁。 */
+}
+
+.overlay.closing {
+  opacity: 0;
+  /* 时长与 CANCELABLE_CLOSE_FADE_MS 一致（keepMs 按它计算卸载时机） */
+  transition: opacity 180ms ease;
+}
+
+.close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: none;
+  border: none;
+  color: white;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 50%;
+  transition: background 0.15s;
+}
+
+@media (hover: hover) {
+  .close:hover {
+    background: rgba(255, 255, 255, 0.15);
+  }
+}
+
+.image {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 8px;
+  /* 双指缩放 transform-origin 中心（useImagePinchZoom 以元素中心为原点计算平移） */
+  transform-origin: center;
+  /* 入场淡入：**只动 opacity，绝不碰 transform**。
+     手势缩放把 translate3d/scale 写成 img 的 inline transform，动画若同时动
+     transform 会按优先级盖掉它（缩放失效/回弹）；而切换 animation-name 又会
+     让动画重播。透明度动画与 inline transform 互不干扰，最省心。 */
+  animation: chatZoomImageIn 0.2s ease;
+}
+
+@keyframes chatZoomFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes chatZoomImageIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

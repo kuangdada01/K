@@ -1,0 +1,780 @@
+/* ============================================================
+   对战象棋面板样式（棋盘 / 邀请横幅 / 状态条 / 操作条）
+   颜色全部取设计令牌，亮暗主题自动跟随。
+   ============================================================ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0 22px; /* 上与共享舞台/头部、下与成员头像网格拉开距离 */
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+/* ---------- 横幅（邀请 / 求和 / 终局） ---------- */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+
+.banner svg {
+  flex: none;
+  color: var(--accent);
+}
+
+.endedBanner {
+  background: var(--surface-sunken);
+}
+
+/* 终局块：居中列布局，"再来一局"为主操作 */
+.endedBlock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 12px 12px;
+  border-radius: 10px;
+  background: var(--surface-sunken);
+}
+
+.endedTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.endedTitle svg {
+  color: var(--accent);
+}
+
+.endedTitle .endedDetail {
+  margin-left: 4px;
+}
+
+.rematchBtn {
+  background: var(--accent);
+  border: none;
+  border-radius: 10px;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 9px 34px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.rematchBtn:hover {
+  background: var(--accent-hover);
+}
+
+.rematchBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 绝杀闪现：全屏大字，1.8s 内弹出并淡出（挂载即播放，纯 CSS 无定时器） */
+.mateFlash {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  font-size: clamp(56px, 13vw, 104px);
+  font-weight: 900;
+  color: #b03a2e;
+  text-shadow:
+    0 2px 22px rgba(176, 58, 46, 0.5),
+    0 0 4px rgba(255, 255, 255, 0.6);
+  animation: mateFlash 1.8s ease forwards;
+}
+
+@keyframes mateFlash {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  18% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  32% {
+    transform: scale(1);
+  }
+  72% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.02);
+  }
+}
+
+.endedHint {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.endedActions {
+  display: flex;
+  gap: 8px;
+}
+
+.endedActions .endedDetail {
+  margin-left: 0;
+}
+
+.winText {
+  color: var(--accent);
+}
+
+.loseText {
+  color: var(--danger, #b0483a);
+}
+
+.endedDetail {
+  font-style: normal;
+  color: var(--text-secondary);
+  margin-left: 8px;
+  font-size: 12px;
+}
+
+/* ---------- 按钮 ---------- */
+.acceptBtn,
+.declineBtn,
+.iconBtn {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border-radius: 8px;
+  padding: 4px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+/* 成员卡上的"对弈"入口（复用按钮基样式做不到 —— 卡片样式在另一份 module） */
+.cardInviteBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: center;
+  margin-top: 4px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.cardInviteBtn:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.acceptBtn {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.acceptBtn:hover {
+  background: var(--accent-hover);
+}
+
+.declineBtn:hover,
+.iconBtn:hover {
+  background: var(--bg-hover);
+}
+
+.iconBtn {
+  padding: 4px 6px;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ---------- 状态条 ---------- */
+.statusBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.seat {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+}
+
+.seatTurn {
+  border-color: var(--accent);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.seatRed,
+.seatBlack {
+  font-style: normal;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  font-size: 12px;
+  color: #fff;
+}
+
+.seatRed {
+  background: #b03a2e;
+}
+
+.seatBlack {
+  background: #2c3440;
+}
+
+.vs {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+
+.checkBadge {
+  color: #b03a2e;
+  font-weight: 700;
+  animation: chessPulse 1s ease-in-out infinite;
+}
+
+@keyframes chessPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* ---------- 操作条 ---------- */
+.actionBar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.moveCount {
+  margin-right: auto;
+  font-size: 12px;
+}
+
+/* ---------- 棋盘 ---------- */
+.board {
+  width: min(100%, 460px);
+  height: auto;
+  align-self: center;
+  user-select: none;
+}
+
+/* 盘面质感（外框/盘面/棋子的渐变与木纹滤镜）在 TSX 的 <defs> 里，
+   色值与 Android 端 BoardColors 同源 —— 这里只留线宽与描边。 */
+.gridBorderOuter {
+  fill: none;
+  stroke: #7e5626;
+  stroke-width: 2.2;
+}
+
+.gridBorderInner {
+  fill: none;
+  stroke: #7e5626;
+  stroke-width: 1.3;
+}
+
+.gridLine line,
+.gridLine {
+  stroke: #7e5626;
+  stroke-width: 1.6;
+}
+
+.starMark {
+  fill: none;
+  stroke: #7e5626;
+  stroke-width: 1.8;
+}
+
+.riverText {
+  font-size: 26px;
+  dominant-baseline: central;
+  text-anchor: middle;
+  font-weight: 600;
+  fill: #7a5228;
+  opacity: 0.85;
+  filter: drop-shadow(0 1px 0.5px rgba(255, 255, 255, 0.4));
+}
+
+.lastMoveMark {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  opacity: 0.85;
+}
+
+.selectedRing {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.pieceRing {
+  fill: none;
+  stroke: #ae8a50;
+  stroke-width: 1.5;
+}
+
+.innerRingRed {
+  fill: none;
+  stroke: #b03a2e;
+  stroke-opacity: 0.92;
+  stroke-width: 1.7;
+}
+
+.innerRingBlack {
+  fill: none;
+  stroke: #2c3440;
+  stroke-opacity: 0.92;
+  stroke-width: 1.7;
+}
+
+.pieceText {
+  font-size: 26px;
+  font-weight: 700;
+  dominant-baseline: central;
+  text-anchor: middle;
+  pointer-events: none;
+  filter: drop-shadow(0.8px 1.2px 0.5px rgba(0, 0, 0, 0.28));
+}
+
+.pieceTextRed {
+  fill: #b03a2e;
+}
+
+.pieceTextBlack {
+  fill: #2c3440;
+}
+
+.targetDot {
+  fill: var(--accent);
+  opacity: 0.55;
+}
+
+.targetRing {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2.5;
+  opacity: 0.8;
+}
+
+/* ---------- 棋钟（二期） ---------- */
+.clock {
+  font-style: normal;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 1px 8px;
+  border-radius: 6px;
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.clockActive {
+  background: var(--accent);
+  color: #fff;
+}
+
+.clockLow {
+  background: #b03a2e;
+  color: #fff;
+  animation: chessPulse 1s ease-in-out infinite;
+}
+
+/* ---------- 暂停遮罩（三期）：棋钟冻结、双方停走，任一棋手可恢复 ---------- */
+.pauseOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: rgba(20, 24, 30, 0.45);
+  border-radius: 4px;
+}
+
+.pauseBadge {
+  padding: 10px 26px;
+  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  text-indent: 4px; /* 抵消末字后的字距，让文字视觉居中 */
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+}
+
+/* ---------- 被吃子陈列（二期） ---------- */
+.capturedRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  min-height: 18px;
+}
+
+/* ---------- 棋谱条（二期） ---------- */
+.notationStrip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.notationText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- 复盘弹窗（三期） ---------- */
+.reviewOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 16px;
+}
+
+.reviewModal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(720px, 100%);
+  max-height: min(86vh, 900px);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.reviewHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.reviewHeader svg {
+  color: var(--accent);
+}
+
+.reviewStats {
+  margin-right: auto;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.reviewHeader .iconBtn {
+  margin-left: auto;
+}
+
+.reviewHeader:has(.reviewStats) .iconBtn {
+  margin-left: 0;
+}
+
+.reviewEmpty {
+  padding: 24px 8px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.reviewList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.reviewRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-primary);
+  transition: border-color 0.15s ease;
+}
+
+.reviewRow:hover {
+  border-color: var(--accent);
+}
+
+.reviewRowMain {
+  font-weight: 600;
+}
+
+.reviewRowMeta {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.reviewPlayback {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.reviewBoardWrap {
+  flex: 0 1 420px;
+  min-width: 300px;
+}
+
+.reviewBoardWrap .board {
+  width: 100%;
+}
+
+.reviewSide {
+  flex: 1 1 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 200px;
+}
+
+.reviewResult {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reviewResult i {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.reviewControls {
+  display: flex;
+  gap: 6px;
+}
+
+.reviewMoves {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.reviewMoveRow {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.reviewMoveRow:hover {
+  background: var(--bg-hover);
+}
+
+.reviewMoveActive {
+  background: var(--accent);
+  color: #fff;
+}
+
+.reviewMoveActive:hover {
+  background: var(--accent);
+}
+
+/* ---------- 空闲态入口条（三期） ---------- */
+.idleBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* ---------- 绝杀动画（三期） ---------- */
+
+/* 棋盘震动（checkmate 触发，随 overlay 移除而停止） */
+.boardShake {
+  animation: chessShake 0.45s ease-in-out 0.05s 4;
+}
+
+@keyframes chessShake {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+  20% {
+    transform: translate(-5px, 2px) rotate(-0.4deg);
+  }
+  40% {
+    transform: translate(5px, -2px) rotate(0.4deg);
+  }
+  60% {
+    transform: translate(-4px, -1px) rotate(-0.3deg);
+  }
+  80% {
+    transform: translate(4px, 1px) rotate(0.3deg);
+  }
+}
+
+/* 全盘红光：两次呼吸后渐隐（与 overlay 生命周期一致，2.8s） */
+.mateOverlay {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(176, 58, 46, 0.4) 0%, rgba(176, 58, 46, 0) 70%);
+  animation: mateFlash 2.8s ease-out forwards;
+}
+
+@keyframes mateFlash {
+  0% {
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  32% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.9;
+  }
+  70% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* "绝杀"书法大字：盖章式砸下 + 保持 + 随 overlay 渐隐 */
+.mateSplash {
+  font-size: 96px;
+  font-weight: 900;
+  letter-spacing: 12px;
+  color: #b03a2e;
+  text-shadow:
+    0 0 2px #fff,
+    2px 2px 0 rgba(255, 255, 255, 0.9),
+    0 0 24px rgba(176, 58, 46, 0.85);
+  font-family: 'STKaiti', 'KaiTi', 'SimKai', 'Noto Serif SC', serif;
+  animation: mateStamp 2.8s cubic-bezier(0.2, 1.6, 0.4, 1) forwards;
+}
+
+@keyframes mateStamp {
+  0% {
+    opacity: 0;
+    transform: scale(2.4) rotate(-8deg);
+  }
+  18% {
+    opacity: 1;
+    transform: scale(1) rotate(-3deg);
+  }
+  75% {
+    opacity: 1;
+    transform: scale(1) rotate(-3deg);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.06) rotate(-3deg);
+  }
+}
+
+/* 被绝杀老将：红光脉冲 */
+.kingFlash {
+  fill: none;
+  stroke: #b03a2e;
+  stroke-width: 3;
+  animation: kingPulse 0.7s ease-in-out infinite;
+}
+
+@keyframes kingPulse {
+  0%,
+  100% {
+    stroke-opacity: 1;
+  }
+  50% {
+    stroke-opacity: 0.25;
+  }
+}

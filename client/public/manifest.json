@@ -1,0 +1,16 @@
+{
+  "name": "K",
+  "short_name": "K",
+  "description": "仿 Instagram 风格的社交平台",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#863bff",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

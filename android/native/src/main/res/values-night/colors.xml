@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色冷启动底色 = 令牌 bgPage（深色 玄夜鎏金 #0D0F14）。
+         旧 WebView 版这里写的是 #0f0f0f，与页面底色 #0d0f14 不一致 ——
+         冷启动瞬间会闪一下（设计稿 §0 第 8 条：深色冷启动色闪）。 -->
+    <color name="k_window_background">#0D0F14</color>
+</resources>

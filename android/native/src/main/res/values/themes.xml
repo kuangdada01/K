@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- 字体缩放交给 Compose 的 sp；这里只提供窗口底色。
+         深色对应的值在 values-night/themes.xml -->
+    <style name="Theme.KNative" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/k_window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- API 29+ 的属性；minSdk 27 上这行会被忽略、不会崩，用 tools:targetApi 说明是故意的 -->
+        <item name="android:forceDarkAllowed" tools:targetApi="q">false</item>
+    </style>
+
+    <!--
+      注：曾经有一个 `Theme.KNative.Viewer`（全屏黑底、窗口背景纯黑、无系统切换动画），
+      专供 `ImageViewerActivity`。M5 把图片查看器搬进了 Shell 的覆盖层（为了做共享元素），
+      已经没有第二个 Activity 要用它，所以连同那个 Activity 一起退役 ——
+      "黑底"现在由覆盖层自己的 `Box(background = Black)` 提供，第一帧会不会闪由它决定。
+    -->
+    <!--
+      屏幕共享**全屏宿主**的主题（`ShareFullscreenActivity`）。
+
+      为什么必须有独立主题：
+       1. **窗口底色纯黑**。全屏的第一帧是"Activity 起来了但画面还没接上"的那一下，
+          底色不是黑就会闪一下白/浅色；而且黑边最终就是这层露出来的底色
+          （画面框之外的部分）。用 `Theme.KNative` 的话它是 bgPage（浅色青瓷），
+          进全屏会先白一下 —— 这是"直播类 App 全屏不能闪"的最基本一条。
+       2. **无 ActionBar**：父主题 `Theme.Material.NoActionBar` 已经保证；
+          状态栏/导航栏的隐藏由 Activity 在窗口上做（`WindowInsetsControllerCompat`），
+          与房间内页的 `ImmersiveSystemBars` 同一套 API、同一个 behavior，
+          这里不重复实现第二份。
+       3. **`windowIsTranslucent=false` + `windowNoTitle`**：让窗口一开始就是不透明的，
+          避免"启动的一瞬间能看穿到房间页"的花屏。
+    -->
+    <style name="Theme.KNative.ShareFullscreen" parent="Theme.KNative">
+        <item name="android:windowBackground">@color/k_share_fullscreen_background</item>
+        <!-- 全屏宿主是纯看图/看共享的窗口，不参与输入法避让 -->
+        <item name="android:windowSoftInputMode">stateAlwaysHidden</item>
+    </style>
+</resources>

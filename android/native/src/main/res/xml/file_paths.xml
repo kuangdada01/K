@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 的可共享路径。
+  · `KRecordings`：语音房录制落点（外部存储 `Music/K/`），录完可直接分享；
+  · `KInternal`：应用内部 cache/files（图片、上传用的临时文件）——
+    给需要把内部文件交给外部组件的场景留位（当前用不到，保持最小暴露面）。
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <external-path
+        name="KRecordings"
+        path="Music/K/" />
+    <cache-path
+        name="KInternal"
+        path="." />
+</paths>

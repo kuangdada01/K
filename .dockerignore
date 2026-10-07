@@ -1,0 +1,38 @@
+# 构建上下文瘦身：避免把整个仓库树（node_modules/dist/数据/Android 工程）
+# 打进 docker build context（整树打包），镜像构建更快、上下文更小。
+
+# VCS / CI / 测试
+.git
+.github
+.jspace
+e2e
+test-results
+playwright-report
+
+# Node
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+
+# 本地环境与密钥（运行时挂载 .env，不拷进镜像）
+.env
+.env.*
+!.env.example
+
+# 数据目录（运行时通过 VOLUME 挂载）
+server/k.db
+server/k.db-*
+server/uploads
+server/books
+
+# Android 原生工程（Web 镜像不需要）
+client/android
+
+# 压缩包产物
+*.tgz
+*.tar.gz
+*.zip
+
+# 日志
+*.log

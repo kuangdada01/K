@@ -1,0 +1,622 @@
+/**
+ * ============================================================
+ * 帖子仓库（post.repository）
+ * ============================================================
+ * 所有帖子/评论/点赞/收藏/转发/分享相关的 SQL 收敛于此，
+ * 路由层不再直接编写 SQL。行类型化，杜绝 as any。
+ *
+ * 未登录用户传 userId = undefined：EXISTS 状态列用 -1 恒假，
+ * 与原"登录/未登录"两套 SQL 的行为完全一致。
+ */
+
+import { getDb, stmt } from '../db/connection';
+import { count, escapeLike, uid } from '../db/helpers';
+import { HARD_LIST_CAP, capRows, probeLimit } from '../lib/listLimits';
+import { AppError } from '../middleware/error';
+
+// ============================================================
+// 行类型定义
+// ============================================================
+
+/** posts 表原始行 */
+export interface PostRow {
+  id: number;
+  user_id: number;
+  image_url: string;
+  title: string;
+  description: string;
+  location: string;
+  close_comments: number;
+  pinned: number;
+  video_url: string | null;
+  video_cover: string | null;
+  share_count: number;
+  repost_count: number;
+  created_at: string;
+}
+
+/** 带作者信息与计数的帖子行（列表/详情响应用） */
+export interface PostWithUser extends PostRow {
+  username: string;
+  avatar: string | null;
+  like_count: number;
+  comment_count: number;
+  /** 当前用户状态（未登录时不存在） */
+  liked?: number;
+  shared?: number;
+  bookmarked?: number;
+  reposted?: number;
+}
+
+// ============================================================
+// 公共查询片段（与原路由 SQL 逐字段一致，保证响应形状不变）
+// ============================================================
+
+/**
+ * 信息流/搜索查询（登录状态列: liked/shared/reposted）
+ * 参数顺序: [userId, userId, userId, ...额外条件]
+ * 未登录时 userId = -1，EXISTS 恒假
+ */
+const POST_FEED_SELECT = `
+  SELECT p.*, u.username, u.avatar,
+    (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
+    (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
+    EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = ?) as liked,
+    EXISTS(SELECT 1 FROM shares WHERE post_id = p.id AND user_id = ?) as shared,
+    EXISTS(SELECT 1 FROM reposts WHERE post_id = p.id AND user_id = ?) as reposted
+  FROM posts p
+  JOIN users u ON p.user_id = u.id
+`;
+
+/**
+ * 详情查询（登录状态列: liked/shared/bookmarked/reposted）
+ */
+const POST_DETAIL_SELECT = `
+  SELECT p.*, u.username, u.avatar,
+    (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
+    (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
+    EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = ?) as liked,
+    EXISTS(SELECT 1 FROM shares WHERE post_id = p.id AND user_id = ?) as shared,
+    EXISTS(SELECT 1 FROM bookmarks WHERE post_id = p.id AND user_id = ?) as bookmarked,
+    EXISTS(SELECT 1 FROM reposts WHERE post_id = p.id AND user_id = ?) as reposted
+  FROM posts p
+  JOIN users u ON p.user_id = u.id
+`;
+
+// ============================================================
+// 帖子查询
+// ============================================================
+
+/** 信息流列表（按创建时间倒序，分页） */
+export function listPosts(
+  page: number,
+  limit: number,
+  userId?: number
+): { posts: PostWithUser[]; total: number } {
+  const total = count('SELECT COUNT(*) as count FROM posts');
+  const posts = stmt(`${POST_FEED_SELECT} ORDER BY p.created_at DESC, p.id DESC LIMIT ? OFFSET ?`).all(
+    uid(userId),
+    uid(userId),
+    uid(userId),
+    limit,
+    (page - 1) * limit
+  ) as PostWithUser[];
+  return { posts, total };
+}
+
+// ============================================================
+// 信息流游标分页（P2-4.3）
+// ============================================================
+
+/** 游标编码：`createdAt|id`（created_at 是 ISO 文本，不含 `|`，分隔符安全） */
+export function encodeFeedCursor(post: { created_at: string | Date; id: number }): string {
+  const createdAt = post.created_at instanceof Date ? post.created_at.toISOString() : post.created_at;
+  return `${createdAt}|${post.id}`;
+}
+
+/** 解析游标；格式非法抛 400（AppError 由路由层直接对外） */
+export function decodeFeedCursor(cursor: string): { createdAt: string; id: number } {
+  const sep = cursor.lastIndexOf('|');
+  if (sep <= 0 || sep === cursor.length - 1) {
+    throw new AppError(400, '无效的分页游标');
+  }
+  const createdAt = cursor.slice(0, sep);
+  const id = Number(cursor.slice(sep + 1));
+  if (!Number.isInteger(id) || id <= 0 || !/^\d{4}-\d{2}-\d{2}T/.test(createdAt)) {
+    throw new AppError(400, '无效的分页游标');
+  }
+  return { createdAt, id };
+}
+
+/**
+ * 信息流游标分页：基于 `(created_at, id)` 的稳定游标（P2-4.3）。
+ *
+ * 与 OFFSET 的差别：翻页期间插入/删除帖子不会移动边界 —— 游标锚定在
+ * “上一页最后一行”上，与行数无关，存量剩余记录不跳不重；深页查询也不再
+ * 随偏移线性变慢（匹配索引 idx_posts_feed_cursor）。
+ *
+ * @param cursor 上一页返回的 next_cursor；null = 第一页
+ * @returns 多取一行判断 has_more，next_cursor 为 null 表示到底
+ */
+export function listPostsByCursor(
+  cursor: string | null,
+  limit: number,
+  userId?: number
+): { posts: PostWithUser[]; next_cursor: string | null; has_more: boolean } {
+  const boundary = cursor ? decodeFeedCursor(cursor) : null;
+  // POST_FEED_SELECT 的三个 EXISTS 占位在前，游标条件（3 个）与 LIMIT 按序跟在后面
+  const where = boundary ? 'WHERE (p.created_at < ? OR (p.created_at = ? AND p.id < ?))' : '';
+  const params: unknown[] = [uid(userId), uid(userId), uid(userId)];
+  if (boundary) params.push(boundary.createdAt, boundary.createdAt, boundary.id);
+  params.push(limit + 1); // 多取一行判断 has_more
+
+  const rows = stmt(`${POST_FEED_SELECT} ${where} ORDER BY p.created_at DESC, p.id DESC LIMIT ?`).all(
+    ...params
+  ) as PostWithUser[];
+
+  const hasMore = rows.length > limit;
+  const posts = hasMore ? rows.slice(0, limit) : rows;
+  const last = posts[posts.length - 1];
+  return {
+    posts,
+    next_cursor: hasMore && last ? encodeFeedCursor(last) : null,
+    has_more: hasMore,
+  };
+}
+
+/** 搜索帖子：给定话题时按 post_tags 精确匹配，否则按标题/描述模糊匹配 */
+export function searchPosts(
+  keyword: string,
+  page: number,
+  limit: number,
+  userId?: number,
+  tag?: string
+): { posts: PostWithUser[]; total: number } {
+  if (tag) {
+    const total = count(
+      'SELECT COUNT(*) as count FROM posts p JOIN post_tags pt ON pt.post_id = p.id WHERE pt.tag = ?',
+      tag
+    );
+    const posts = stmt(
+      `
+        ${POST_FEED_SELECT}
+        JOIN post_tags pt ON pt.post_id = p.id
+        WHERE pt.tag = ?
+        ORDER BY p.created_at DESC, p.id DESC
+        LIMIT ? OFFSET ?
+      `
+    ).all(uid(userId), uid(userId), uid(userId), tag, limit, (page - 1) * limit) as PostWithUser[];
+    return { posts, total };
+  }
+
+  const escapedKeyword = escapeLike(keyword);
+  const likePattern = `%${escapedKeyword}%`;
+  const total = count(
+    "SELECT COUNT(*) as count FROM posts p WHERE p.title LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\'",
+    likePattern,
+    likePattern
+  );
+  const posts = stmt(
+    `${POST_FEED_SELECT} WHERE p.title LIKE ? ESCAPE '\\' OR p.description LIKE ? ESCAPE '\\' ORDER BY p.created_at DESC, p.id DESC LIMIT ? OFFSET ?`
+  ).all(
+    uid(userId),
+    uid(userId),
+    uid(userId),
+    likePattern,
+    likePattern,
+    limit,
+    (page - 1) * limit
+  ) as PostWithUser[];
+  return { posts, total };
+}
+
+/** 单个帖子详情 */
+export function getPostById(postId: number, userId?: number): PostWithUser | undefined {
+  return stmt(`${POST_DETAIL_SELECT} WHERE p.id = ?`).get(
+    uid(userId),
+    uid(userId),
+    uid(userId),
+    uid(userId),
+    postId
+  ) as PostWithUser | undefined;
+}
+
+/** 用户帖子列表（公开，无登录状态列；按置顶+时间排序） */
+export function listUserPosts(
+  targetUserId: number,
+  page: number,
+  limit: number
+): { posts: PostWithUser[]; total: number } {
+  const total = count('SELECT COUNT(*) as count FROM posts WHERE user_id = ?', targetUserId);
+  const posts = stmt(
+    `
+    SELECT p.*, u.username, u.avatar,
+      (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
+      (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count
+    FROM posts p
+    JOIN users u ON p.user_id = u.id
+    WHERE p.user_id = ?
+    ORDER BY p.pinned DESC, p.created_at DESC, p.id DESC
+    LIMIT ? OFFSET ?
+  `
+  ).all(targetUserId, limit, (page - 1) * limit) as PostWithUser[];
+  return { posts, total };
+}
+
+/**
+ * **某个用户**转发的帖子（他人主页的「转发」标签）。
+ *
+ * 与 [listRepostedPosts] 的差别只有两处，但都很关键：
+ *  1. 目标用户是**别人**（`r.user_id = targetUserId`），那个是"我的"（来自 JWT）；
+ *  2. 登录状态列（liked / reposted）按**观察者** `viewerId` 计算 ——
+ *     公开接口也要能标出"我看过没有"，否则点开别人的转发列表，所有心都是空的，
+ *     用户会以为自己的点赞丢了。未登录时传 undefined（EXISTS 恒假，见 `uid()`）。
+ *
+ * 硬上限见 HARD_LIST_CAP：一次请求最多物化 上限+1 行（每行还带 2 个 COUNT(*) +
+ * 2 个 EXISTS，同步 SQLite 期间事件循环停摆），多取的那一行只用于判断 `has_more`。
+ */
+export function listUserReposts(
+  targetUserId: number,
+  viewerId: number | undefined,
+  cap: number = HARD_LIST_CAP
+): { rows: PostWithUser[]; has_more: boolean } {
+  const raw = stmt(
+    `
+    SELECT p.*, u.username, u.avatar,
+      (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
+      (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
+      EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = ?) as liked,
+      EXISTS(SELECT 1 FROM reposts WHERE post_id = p.id AND user_id = ?) as reposted
+    FROM reposts r
+    JOIN posts p ON r.post_id = p.id
+    JOIN users u ON p.user_id = u.id
+    WHERE r.user_id = ?
+    ORDER BY r.created_at DESC, r.post_id DESC
+    LIMIT ?
+  `
+  ).all(uid(viewerId), uid(viewerId), targetUserId, probeLimit(cap)) as PostWithUser[];
+  return capRows(raw, cap);
+}
+
+/**
+ * 当前用户收藏的帖子（按收藏时间倒序）。
+ *
+ * 硬上限见 HARD_LIST_CAP：此前无 LIMIT，收藏多的账号一次请求会把全部行连同
+ * 每行的 2 个 COUNT(*) + 1 个 EXISTS 一起跑完（同步 SQLite，期间事件循环停摆）。
+ * 多取一行用于精确判断 `has_more`。
+ */
+export function listBookmarkedPosts(
+  userId: number,
+  cap: number = HARD_LIST_CAP
+): { rows: PostWithUser[]; has_more: boolean } {
+  const raw = stmt(
+    `
+    SELECT p.*, u.username, u.avatar,
+      (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
+      (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
+      EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = ?) as liked,
+      1 as bookmarked
+    FROM bookmarks b
+    JOIN posts p ON b.post_id = p.id
+    JOIN users u ON p.user_id = u.id
+    WHERE b.user_id = ?
+    ORDER BY b.created_at DESC, b.post_id DESC
+    LIMIT ?
+  `
+  ).all(userId, userId, probeLimit(cap)) as PostWithUser[];
+  return capRows(raw, cap);
+}
+
+/** 当前用户转发的帖子（按转发时间倒序；登录状态列: liked + reposted=1；硬上限同收藏） */
+export function listRepostedPosts(
+  userId: number,
+  cap: number = HARD_LIST_CAP
+): { rows: PostWithUser[]; has_more: boolean } {
+  const raw = stmt(
+    `
+    SELECT p.*, u.username, u.avatar,
+      (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
+      (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count,
+      EXISTS(SELECT 1 FROM likes WHERE post_id = p.id AND user_id = ?) as liked,
+      1 as reposted
+    FROM reposts r
+    JOIN posts p ON r.post_id = p.id
+    JOIN users u ON p.user_id = u.id
+    WHERE r.user_id = ?
+    ORDER BY r.created_at DESC, r.post_id DESC
+    LIMIT ?
+  `
+  ).all(userId, userId, probeLimit(cap)) as PostWithUser[];
+  return capRows(raw, cap);
+}
+
+// ============================================================
+// 帖子写入
+// ============================================================
+
+/** 创建图文帖子 */
+export function createPost(input: {
+  userId: number;
+  imageUrl: string;
+  title: string;
+  description: string;
+  location: string;
+  closeComments: number;
+  pinned: number;
+}): PostWithUser {
+  const result = stmt(
+    'INSERT INTO posts (user_id, image_url, title, description, location, close_comments, pinned) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    input.userId,
+    input.imageUrl,
+    input.title,
+    input.description,
+    input.location,
+    input.closeComments,
+    input.pinned
+  );
+  return getCreatedPost(Number(result.lastInsertRowid))!;
+}
+
+/** 创建视频帖子 */
+export function createVideoPost(input: {
+  userId: number;
+  videoUrl: string;
+  videoCover: string | null;
+  description: string;
+  closeComments: number;
+  pinned: number;
+}): PostWithUser {
+  const result = stmt(
+    'INSERT INTO posts (user_id, image_url, title, description, close_comments, pinned, video_url, video_cover) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    input.userId,
+    '[]',
+    '',
+    input.description,
+    input.closeComments,
+    input.pinned,
+    input.videoUrl,
+    input.videoCover
+  );
+  return getCreatedPost(Number(result.lastInsertRowid))!;
+}
+
+/**
+ * 创建视频帖子并在**同一事务**内写入话题。
+ *
+ * 此前路由分两步调用（createVideoPost + syncPostTags，后者自带独立事务）：
+ * 两步之间失败会留下「帖子已建但话题缺失」，而路由此时已经把视频/封面文件
+ * 移入正式目录，回滚文件又得先知道帖子建没建 —— 把两步合成一个事务后，
+ * 失败即整条回滚，路由可以无条件按「未创建」回删媒体文件。
+ */
+export function createVideoPostWithTags(
+  input: {
+    userId: number;
+    videoUrl: string;
+    videoCover: string | null;
+    description: string;
+    closeComments: number;
+    pinned: number;
+  },
+  tags: string[]
+): PostWithUser {
+  return getDb().transaction(() => {
+    const post = createVideoPost(input);
+    syncPostTags(post.id, tags);
+    return post;
+  })();
+}
+
+/** 创建响应形状（计数为 0，无登录状态列——与原路由一致） */
+export function getCreatedPost(postId: number): PostWithUser | undefined {
+  return stmt(
+    `
+    SELECT p.*, u.username, u.avatar,
+      0 as like_count, 0 as comment_count
+    FROM posts p
+    JOIN users u ON p.user_id = u.id
+    WHERE p.id = ?
+  `
+  ).get(postId) as PostWithUser | undefined;
+}
+
+/** 编辑响应形状（含计数，无登录状态列——与原路由一致） */
+export function getPostWithCounts(postId: number): PostWithUser | undefined {
+  return stmt(
+    `
+    SELECT p.*, u.username, u.avatar,
+      (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as like_count,
+      (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comment_count
+    FROM posts p
+    JOIN users u ON p.user_id = u.id
+    WHERE p.id = ?
+  `
+  ).get(postId) as PostWithUser | undefined;
+}
+
+/** 更新自己的帖子（图片列表/描述/评论开关/置顶） */
+export function updatePost(input: {
+  postId: number;
+  userId: number;
+  imageUrl: string;
+  description: string;
+  location: string;
+  closeComments: number;
+  pinned: number;
+}): PostWithUser | undefined {
+  const result = stmt(
+    'UPDATE posts SET image_url = ?, description = ?, location = ?, close_comments = ?, pinned = ? WHERE id = ? AND user_id = ?'
+  ).run(
+    input.imageUrl,
+    input.description,
+    input.location,
+    input.closeComments,
+    input.pinned,
+    input.postId,
+    input.userId
+  );
+  if (result.changes === 0) return undefined;
+  return getPostWithCounts(input.postId);
+}
+
+/**
+ * 创建图文帖子并在**同一事务**内写入话题（P1-3.5：与 createVideoPostWithTags 同构）。
+ * 此前 service 分两步调用（createPost + syncPostTags），两步之间失败会留下
+ * 「帖子已建但话题缺失」的半完成记录；合成一个事务后失败即整条回滚，
+ * service 按「未创建」补偿删除已压缩的新文件即可。
+ */
+export function createPostWithTags(
+  input: {
+    userId: number;
+    imageUrl: string;
+    title: string;
+    description: string;
+    location: string;
+    closeComments: number;
+    pinned: number;
+  },
+  tags: string[]
+): PostWithUser {
+  return getDb().transaction(() => {
+    const post = createPost(input);
+    syncPostTags(post.id, tags);
+    return post;
+  })();
+}
+
+/**
+ * 编辑帖子并在**同一事务**内同步话题（P1-3.5）。
+ * 此前「更新行 → 删旧图 → syncPostTags」三步分离：标签同步失败时帖子正文已换、
+ * 旧图已删，话题却还挂在旧正文解析出的集合上；合成一个事务后失败即整条回滚，
+ * 旧文件删除推迟到事务提交之后。
+ */
+export function updatePostWithTags(
+  input: {
+    postId: number;
+    userId: number;
+    imageUrl: string;
+    description: string;
+    location: string;
+    closeComments: number;
+    pinned: number;
+  },
+  tags: string[]
+): PostWithUser | undefined {
+  return getDb().transaction(() => {
+    const updated = updatePost(input);
+    if (updated) syncPostTags(input.postId, tags);
+    return updated;
+  })();
+}
+
+/** 查询自己的帖子原始行（编辑/删除前置检查） */
+export function findOwnPost(postId: number, userId: number): PostRow | undefined {
+  return stmt('SELECT * FROM posts WHERE id = ? AND user_id = ?').get(postId, userId) as PostRow | undefined;
+}
+
+/** 删除帖子（外键级联自动删除评论、点赞、通知等） */
+export function deletePost(postId: number): void {
+  stmt('DELETE FROM posts WHERE id = ?').run(postId);
+}
+
+// ============================================================
+// 帖子话题
+// ============================================================
+
+/** 同步帖子话题（发帖/编辑后调用：先删后插，与 description 解析结果保持一致） */
+export function syncPostTags(postId: number, tags: string[]): void {
+  getDb().transaction(() => {
+    stmt('DELETE FROM post_tags WHERE post_id = ?').run(postId);
+    const insert = stmt('INSERT OR IGNORE INTO post_tags (post_id, tag) VALUES (?, ?)');
+    for (const tag of tags) insert.run(postId, tag);
+  })();
+}
+
+// ============================================================
+// 点赞
+// ============================================================
+
+/** 前置校验帖子存在，不存在则抛 404（替代外键约束导致的 500） */
+function requirePost(postId: number): void {
+  const exists = stmt('SELECT 1 FROM posts WHERE id = ?').get(postId);
+  if (!exists) throw new AppError(404, '帖子不存在');
+}
+
+/** 点赞（INSERT OR IGNORE 防重复），返回最新点赞数 */
+export function likePost(userId: number, postId: number): number {
+  requirePost(postId);
+  stmt('INSERT OR IGNORE INTO likes (user_id, post_id) VALUES (?, ?)').run(userId, postId);
+  return countPostLikes(postId);
+}
+
+/** 取消点赞，返回最新点赞数 */
+export function unlikePost(userId: number, postId: number): number {
+  requirePost(postId);
+  stmt('DELETE FROM likes WHERE user_id = ? AND post_id = ?').run(userId, postId);
+  return countPostLikes(postId);
+}
+
+function countPostLikes(postId: number): number {
+  return count('SELECT COUNT(*) as count FROM likes WHERE post_id = ?', postId);
+}
+
+// ============================================================
+// 分享
+// ============================================================
+
+/** 记录分享（每用户每帖只计一次），返回分享数与状态 */
+export function sharePost(userId: number, postId: number): { share_count: number; shared: boolean } {
+  requirePost(postId);
+  const result = stmt('INSERT OR IGNORE INTO shares (user_id, post_id) VALUES (?, ?)').run(userId, postId);
+  if (result.changes === 1) {
+    stmt('UPDATE posts SET share_count = share_count + 1 WHERE id = ?').run(postId);
+  }
+  const row = stmt('SELECT share_count FROM posts WHERE id = ?').get(postId) as
+    { share_count: number } | undefined;
+  return { share_count: row?.share_count || 0, shared: true };
+}
+
+// ============================================================
+// 收藏
+// ============================================================
+
+/** 收藏帖子 */
+export function bookmarkPost(userId: number, postId: number): void {
+  requirePost(postId);
+  stmt('INSERT OR IGNORE INTO bookmarks (user_id, post_id) VALUES (?, ?)').run(userId, postId);
+}
+
+/** 取消收藏 */
+export function unbookmarkPost(userId: number, postId: number): void {
+  requirePost(postId);
+  stmt('DELETE FROM bookmarks WHERE user_id = ? AND post_id = ?').run(userId, postId);
+}
+
+// ============================================================
+// 转发
+// ============================================================
+
+/** 转发（每用户每帖只计一次），返回转发数与状态 */
+export function repostPost(userId: number, postId: number): { reposted: boolean; repost_count: number } {
+  requirePost(postId);
+  const result = stmt('INSERT OR IGNORE INTO reposts (user_id, post_id) VALUES (?, ?)').run(userId, postId);
+  if (result.changes === 1) {
+    stmt('UPDATE posts SET repost_count = repost_count + 1 WHERE id = ?').run(postId);
+  }
+  const row = stmt('SELECT repost_count FROM posts WHERE id = ?').get(postId) as
+    { repost_count: number } | undefined;
+  return { reposted: true, repost_count: row?.repost_count || 0 };
+}
+
+/** 取消转发，返回转发数与状态 */
+export function unrepostPost(userId: number, postId: number): { reposted: boolean; repost_count: number } {
+  requirePost(postId);
+  const result = stmt('DELETE FROM reposts WHERE user_id = ? AND post_id = ?').run(userId, postId);
+  if (result.changes === 1) {
+    stmt('UPDATE posts SET repost_count = MAX(0, repost_count - 1) WHERE id = ?').run(postId);
+  }
+  const row = stmt('SELECT repost_count FROM posts WHERE id = ?').get(postId) as
+    { repost_count: number } | undefined;
+  return { reposted: false, repost_count: row?.repost_count || 0 };
+}
