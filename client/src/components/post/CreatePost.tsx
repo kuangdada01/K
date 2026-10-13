@@ -479,7 +479,7 @@ export default function CreatePost() {
                     {videoFile.name} ({(videoFile.size / 1024 / 1024).toFixed(1)}MB)
                   </div>
                   {videoError ? (
-                    <div style={{ fontSize: 12, color: '#ffb74d' }}>
+                    <div style={{ fontSize: 12, color: '#e0586b' }}>
                       {tempVideoUploading || transcoding
                         ? '视频转码中（约需 1 分钟内），完成后自动显示预览…'
                         : '视频预览暂不可用（HEVC/编码限制），不影响发布'}

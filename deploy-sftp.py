@@ -89,11 +89,15 @@ def main():
     sftp = c.open_sftp()
     def progress(sent, total):
         print(f"\r  ↑ {sent*100//total}% ({sent/1048576:.1f}/{total/1048576:.1f} MB)", end="", flush=True)
-    sftp.put(a.package, "/tmp/k-deploy.tar.gz", callback=progress)
+    # 包路径按进程唯一：并发部署在拿到远端锁之前也上传时不再互踩同一文件
+    # （真正的互斥由远端脚本的 .deploy-lock 保证，锁抢不到时这个包会被留到
+    # 会话结束——无害，/tmp 会自动清理）
+    remote_pkg = f"/tmp/k-deploy-{os.getpid()}.tar.gz"
+    sftp.put(a.package, remote_pkg, callback=progress)
     print()
     sftp.close()
     # 核验远端包大小
-    _, out, _ = c.exec_command("stat -c %s /tmp/k-deploy.tar.gz", timeout=60)
+    _, out, _ = c.exec_command(f"stat -c %s {remote_pkg}", timeout=60)
     remote_size = out.read().decode().strip()
     local_size = str(os.path.getsize(a.package))
     print(f"  远端包 {remote_size} B vs 本地 {local_size} B")
@@ -111,11 +115,26 @@ def main():
     #      —— 两次都是同分区 rename，瞬间完成且没有"目录不存在"的中间态
     #   4. 备份目录即上一版完整产物，可直接改名回滚（脚本末尾打印回滚命令）
     # 注意：本字符串是 Python f-string，shell 里不要出现裸的 { }，需要时用 {{{{ }}}}
+    #
+    # ★ 并发部署锁（mkdir 原子性）：两个终端同时部署会共用同一个 /tmp 包与 staging
+    # 目录，互相覆盖、交错 rename，产物可能混装两版。开跑前抢锁，已存在即中止；
+    # 部署结束（无论成败）在 finally 里释放。异常断连留下的锁由下条命令手工清：
+    #   rm -rf /var/www/k/.deploy-lock
     script = rf"""set -e
 D={REMOTE_DIR}
 TS=$(date +%Y%m%d-%H%M%S)
 STAGE=$D/.deploy-staging
 BK=$D/.deploy-backup/$TS
+LOCK=$D/.deploy-lock
+
+echo '--- 部署锁检查（防并发部署互相覆盖） ---'
+if ! mkdir $LOCK 2>/dev/null; then
+    echo "[FAIL] 检测到未释放的部署锁：$LOCK 已存在。"
+    echo "  另一个部署可能正在进行；确认没有在跑后手工删除该目录即可重试："
+    echo "  rm -rf $LOCK"
+    exit 1
+fi
+trap 'rm -rf $LOCK' EXIT
 
 echo '--- 创建部署目录 ---'
 mkdir -p $D
@@ -123,7 +142,7 @@ mkdir -p $D
 echo '--- [1/7] 解压到 staging（不触碰现行产物） ---'
 rm -rf $STAGE
 mkdir -p $STAGE
-tar -xzf /tmp/k-deploy.tar.gz -C $STAGE
+tar -xzf {remote_pkg} -C $STAGE
 
 echo '--- [2/7] 部署包完整性预检 ---'
 for f in server/dist/index.js client/dist/index.html shared/dist/index.js package.json server/package.json client/public; do

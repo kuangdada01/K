@@ -1,18 +1,17 @@
 package top.kuangdada.k.nativeapp.ui
 
 import androidx.activity.compose.PredictiveBackHandler
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -32,17 +31,19 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -54,6 +55,7 @@ import top.kuangdada.k.core.data.BookRepository
 import top.kuangdada.k.core.data.ComposerRepository
 import top.kuangdada.k.core.data.CommentRepository
 import top.kuangdada.k.core.data.FriendRepository
+import top.kuangdada.k.core.data.InboxStore
 import top.kuangdada.k.core.data.MessageRepository
 import top.kuangdada.k.core.data.PostRepository
 import top.kuangdada.k.core.data.RealtimeClient
@@ -64,6 +66,10 @@ import top.kuangdada.k.core.data.VoiceRepository
 import top.kuangdada.k.core.data.resolveUrl
 import top.kuangdada.k.core.data.model.BookChapter
 import top.kuangdada.k.core.data.model.BookDetail
+import top.kuangdada.k.nativeapp.AppGraph
+import top.kuangdada.k.nativeapp.notify.InboxPollCadence
+import top.kuangdada.k.nativeapp.notify.KPush
+import top.kuangdada.k.nativeapp.notify.NotifyPreference
 import top.kuangdada.k.nativeapp.notify.SocialNotifier
 import top.kuangdada.k.core.data.model.VoiceRoom
 import top.kuangdada.k.core.designsystem.component.KButton
@@ -92,7 +98,7 @@ import top.kuangdada.k.nativeapp.voice.VoiceRoomController
  * 导航状态里只放 `roomId`（要能被序列化以支持进程回收恢复），房间名/简介这类信息
  * 放这里。缓存丢失时（进程被回收）房内页会退回列表页，而不是显示一个信息不全的房间。
  */
-private val VoiceRoomCache = mutableMapOf<Long, VoiceRoom>()
+private val VoiceRoomCache = LinkedHashMap<Long, VoiceRoom>()
 
 /**
  * 待编辑帖子的进程内缓存（导航状态里只放 postId）。
@@ -116,7 +122,7 @@ data class ComposerEditSource(
     val openDeleteConfirm: Boolean = false,
 )
 
-private val ComposerEdits = mutableMapOf<Long, ComposerEditSource>()
+private val ComposerEdits = LinkedHashMap<Long, ComposerEditSource>()
 
 /**
  * 沉浸页里把悬浮胶囊**挪出窗口**的平移量（px，绘制期）。
@@ -126,6 +132,23 @@ private val ComposerEdits = mutableMapOf<Long, ComposerEditSource>()
  * 为什么不写 dp：它必须原样大于窗口像素，跟密度无关才稳。
  */
 private const val NavParkedTranslationPx = 10_000f
+
+/**
+ * 进程内缓存 Map 的**容量上限**（VoiceRoomCache / ComposerEdits / BookReaderEntries 共用）。
+ *
+ * 这三张表此前都只增不减：每看一本书（Detail+Chapter）、每编辑过一次的帖子、
+ * 每进过的房间都常驻进程。量级小但无界 —— 超限时按 LinkedHashMap 的插入序
+ * 丢最老的（丢掉的代价只是"那本书重新加载一次"，没有正确性问题）。
+ */
+private const val SHELL_CACHE_MAX = 32
+
+/** 超限时丢最老的条目（三张 shell 缓存表共用） */
+private fun <K, V> MutableMap<K, V>.trimToCap() {
+    while (size > SHELL_CACHE_MAX) {
+        keys.firstOrNull() ?: break
+        remove(keys.first())
+    }
+}
 
 /**
  * ============================================================
@@ -158,21 +181,23 @@ fun AppShell(
     voice: VoiceRepository,
     messages: MessageRepository,
     realtime: RealtimeClient,
+    /**
+     * 收件箱（会话 / 通知 / 公告 / 未读角标）的唯一来源。
+     *
+     * 导航胶囊的角标、消息页的列表都读它 —— 取代了原来"SSE 事件里顺手算一次未读总数"
+     * 与"消息页进页面时回填角标"那种双来源。冷启动 / 回前台 / 轮询 / 事件四条来源
+     * 都在它内部合并，见 [InboxStore] 的类注释。
+     */
+    inbox: InboxStore,
+    /** 通知偏好（「离线推送」开关由它落盘；是否上报 regId 由 AppShell/设置页读它） */
+    notifyPref: NotifyPreference,
     composer: ComposerRepository,
     admin: AdminRepository,
     navigator: AppNavigator,
     themeMode: ThemePreference.Mode = ThemePreference.Mode.System,
     onThemeChange: (ThemePreference.Mode) -> Unit = {},
-    /**
-     * 返回栈已空时再按返回键的兜底动作（把 App 最小化，而不是杀进程）。
-     *
-     * 由 MainActivity 传进来（`moveTaskToBack(true)`）：返回键的处理已经搬到本函数
-     * （因为三个覆盖层里有两个是 Shell 自己的状态），但"最小化"是 Activity 的能力。
-     */
-    minimize: () -> Unit = {},
 ) {
     val c = KTheme.colors
-    val scope = rememberCoroutineScope()
     // 系统关掉动画时，Shell 的进出场（FAB）直接到位，不做缩放/淡入
     val animationsEnabled = LocalAnimationsEnabled.current
     // 打开图片查看器时要拿它做后台预解码（Coil 需要一个 Context）
@@ -181,8 +206,22 @@ fun AppShell(
     // 首页信息流列表：在 Shell 层创建一次 → 跨 tab 存活（切走再回来不重拉、不丢滚动位置）
     val feedList = remember { posts.newList(PostRepository.Source.Feed) }
 
-    // 未读数：消息页加载会话后回填、SSE 事件到达时也会刷新，用于导航胶囊的消息角标
-    var unread by remember { mutableIntStateOf(0) }
+    /**
+     * 未读角标 / 会话 / 通知：**全部来自 [InboxStore]**（不再由本文件自己算）。
+     *
+     * 2026-10 修复：这里原来是一个 `var unread by remember { mutableIntStateOf(0) }`，
+     * 只有两个写入点 —— SSE 事件到达时顺手拉一次未读总数、消息页进页面时回填。
+     * 于是"冷启动 / 从后台回来"时角标**必然是 0**，用户必须点进消息页才看得到消息
+     * （用户实测反馈）。现在 store 会在挂载、回前台、轮询、事件四条路径上对账。
+     *
+     * ★ 壳层只订阅**角标数字**（map + distinctUntilChanged，2026-10-11）：
+     * 每次 refresh 都会产生新 Snapshot 实例（内容没变也一样），订阅整份快照会让
+     * 近 2000 行的壳连同当前页面跟着每次轮询/事件整体重组。会话列表只在
+     * 聊天页分支（见 AppDestination.ChatDest）里按需订阅——只有那一页消费它。
+     */
+    val unread by remember(inbox) {
+        inbox.state.map { it.unreadTotal }.distinctUntilChanged()
+    }.collectAsState(0)
 
     // 当前登录用户 id：决定帖子卡片上要不要显示"编辑"入口（只有自己的帖子能编辑）
     val authState by session.state.collectAsState()
@@ -209,66 +248,34 @@ fun AppShell(
     val myUsername = (authState as? SessionRepository.AuthState.LoggedIn)?.user?.username
         ?: session.cachedUsername.orEmpty()
 
-    /**
-     * App 是否在前台。
-     *
-     * 用途只有一个：**通知栏提醒只在不前台时发**（见下面那段的注释）。
-     * 与实时连接共用同一个生命周期观察者，不额外挂一个 observer。
-     */
-    var appInForeground by remember { mutableStateOf(true) }
-
-    /**
-     * 实时连接的生命周期：**登录着就保持长连接**。
-     *
-     * ⚠️ 这里与改动前**刻意不同**：以前 `ON_STOP` 会 `realtime.stop()`（理由是"挂着白耗电"），
-     * 但那样 App 一退到后台就收不到任何事件 —— 通知栏提醒也就无从谈起
-     * （用户要求"App 在后台时能收到通知"）。现在只在两处真正断开：
-     *
-     *  · **登出**：`RealtimeClient.runLoop` 自己发现没有 token 就结束循环；
-     *  · **这个组合离开**（Activity 销毁 / App 被划掉）：下面的 `onDispose`。
-     *
-     * 代价是后台常挂一条 SSE：客户端只会建一条连接，服务端上限 5 条/账号，
-     * 其余端仍可用、不会互踢；画面不可见时除了 25s 一次的心跳没有任何流量。
-     * 仍需"被划掉后也能收"的话得接厂商推送通道（本项目尚未接入）。
-     */
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, isLoggedIn) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            when (event) {
-                androidx.lifecycle.Lifecycle.Event.ON_START -> {
-                    appInForeground = true
-                    if (isLoggedIn) realtime.start(scope)
-                }
-                androidx.lifecycle.Lifecycle.Event.ON_STOP -> appInForeground = false
-                else -> Unit
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        if (isLoggedIn) realtime.start(scope)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            realtime.stop()
-        }
-    }
-
-    // ==================================================================
-    // 通知栏提醒（新私信 / 互动 / 公告）
-    // ==================================================================
-
+    /** Context 快照：通知权限 / 推送上报 / 登出清理都要用 */
     val notifyContext = LocalContext.current
+
+    /**
+     * ★ 2026-10-10：实时连接的生命周期**已整体挪到进程级**（见
+     * `notify/ForegroundRealtime.kt`）。
+     *
+     * 原来这里是 `DisposableEffect(lifecycleOwner)` 观察 ON_START/ON_STOP 来
+     * `realtime.start/stop` + `inbox.refresh()` + `NotifyDiag.report`。
+     * 现在的连接条件是**进程级**的：`AppForeground.isForeground && isLoggedIn` ——
+     * 只有整个 App 退到后台才断开（断开后由厂商推送兜底），
+     * "回前台对账（`inbox.refresh`）"与"退后台上报（`NotifyDiag`）"同步挪到了那里。
+     *
+     * 进程级连接比 Activity 级更稳：Activity 生命周期会因转屏、多窗口切换等
+     * 频繁抖动，而"用户在不在用 App"是进程级事实。
+     */
+
+    // ==================================================================
+    // 通知权限 / 离线推送（OPPO）
+    // ==================================================================
 
     /**
      * Android 13+ 需要 `POST_NOTIFICATIONS` **运行时权限**，这里只主动问一次。
      *
      * 为什么把"问过"记在 prefs 里而不是每次冷启动都 launch：Android 在用户拒绝两次后
-     * 不再弹系统框，反复调只会拿到一串无意义的空回调。用户之后想开可以去系统设置。
-     *
-     * 注：Manifest 里**早就**声明过这条权限（语音房前台服务的通知也一直受它管），
-     * 但代码从没申请过 —— 所以 Android 13+ 上连语音房那条保活通知其实也一直不显示。
+     * 不再弹系统框，反复调只会拿到一串无意义的空回调。用户之后想开可以去系统设置 ——
+     * 设置弹层里的「通知诊断」行会显示当前状态并给一个跳转入口（那里是**唯一**的解释点）。
      */
-    val notifyPrefs = remember(notifyContext) {
-        notifyContext.getSharedPreferences("k_notify", android.content.Context.MODE_PRIVATE)
-    }
     val notifPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
     ) { /* 拒绝不影响任何功能，只是收不到通知栏提醒 */ }
@@ -293,8 +300,11 @@ fun AppShell(
                 top.kuangdada.k.nativeapp.voice.VoiceRoomSessionHub.get()
                     .leaveActive("登录态失效")
                 // 清掉上一个账号留下的通知栏提醒（换人登录后不该看到别人的消息摘要）。
-                // 注意 [SocialNotifier.clearAll] 是 cancelAll —— 会连带清掉语音房那条保活通知；
-                // 上一行已真正退房（服务随之停止），不会留下"服务在跑却没有通知"的假死态。
+                // [SocialNotifier.clearAll] 是**按已知 id 逐个撤**（不再 cancelAll）——
+                // 语音房那条前台服务通知不会被误删（它会随上一行真正退房而停止）。
+                // 注：离线推送的**解绑**不在这里 —— "点退出登录"路径在 ProfileScreen 里
+                // 先调 KPush.unbindOnLogout 再登出（那时才拿得到 Bearer）；401 被动登出
+                // 拿不到凭证，留下的绑定会在下次任意账号登录时被 upsert 改写。
                 SocialNotifier.clearAll(notifyContext)
             }
             return@LaunchedEffect
@@ -302,89 +312,63 @@ fun AppShell(
         wasLoggedIn = true
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return@LaunchedEffect
         if (SocialNotifier.hasPermission(notifyContext)) return@LaunchedEffect
-        if (notifyPrefs.getBoolean("asked", false)) return@LaunchedEffect
-        notifyPrefs.edit().putBoolean("asked", true).apply()
+        if (notifyPref.askedPermission) return@LaunchedEffect
+        notifyPref.askedPermission = true
         notifPermissionLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
     }
 
     /**
-     * 收到事件 → 落一条系统通知。
+     * 登录态生效时同步一次 OPPO 推送注册（设备注册在 KApp.init 已做，这里补"上报"）。
      *
-     * **只在不前台时发**：前台时页面自己会刷出内容、底部导航也有未读角标，
-     * 再弹一次通知栏等于同一件事说两遍（用户正在看的那条会话尤其烦人）。
+     * 时序：冷启动 → `KApp.onCreate` 先把设备注册到 OPPO（无论有没有登录）→
+     * 回调拿到 regId 存盘 → 登录态恢复完成后由这里上报给服务端。
+     * 若 regId 还没回来（注册慢/失败），KPush.onLogin 会再触发一次注册，回调里补报。
      *
-     * 摘要走**已有的只读列表接口**，不新开接口、也不改服务端：
-     *  · 私信 → `conversations()` 的 `username` + `last_message`
-     *    （服务端已把图片消息拼成占位文案）。**绝不能用 `history()`** —— 那个接口
-     *    **有副作用**，会把对方发来的消息标记成已读（`listMessageHistory` 里就这么写的），
-     *    拿它取摘要会静默吃掉未读。
-     *  · 互动 → `notifications()` 的第一条（列表按时间倒序）。
-     *  · 公告 → `myAnnouncements()` 的第一条。
-     *
-     * 拉取失败就退化成通用文案：通知栏宁可少说一句，也不能因一次网络抖动就不提醒。
+     * 退出登录的**解绑**不在这里做：必须在 `session.logout()` 之前调用（拿得到 Bearer），
+     * 见 ProfileScreen 的退出登录按钮与 KPush.unbindOnLogout 的注释。
      */
-    LaunchedEffect(realtime, isLoggedIn, myUserId) {
-        if (!isLoggedIn) return@LaunchedEffect
-        realtime.events.collect { event ->
-            if (appInForeground) return@collect
-            when {
-                // 只提醒"发给我的"：服务端对**收发双方**都推 `message`，所以自己发的
-                // （`to != me`）要在 `isNewMessage` 之上再筛一次；撤回也走同一个事件类型。
-                event.isNewMessage && myUserId > 0L && event.to == myUserId -> {
-                    val partnerId = event.from ?: return@collect
-                    val conv = messages.conversations()
-                        .let { if (it is ApiResult.Success) it.data else emptyList() }
-                        .firstOrNull { it.raw.partnerId == partnerId }
-                    SocialNotifier.notifyMessage(
-                        context = notifyContext,
-                        partnerId = partnerId,
-                        name = conv?.raw?.username,
-                        preview = conv?.raw?.lastMessage,
-                    )
-                }
-                event.isNotification -> {
-                    val latest = messages.notifications()
-                        .let { if (it is ApiResult.Success) it.data else emptyList() }
-                        .firstOrNull()
-                    SocialNotifier.notifyInteraction(
-                        context = notifyContext,
-                        fromName = latest?.raw?.fromUsername,
-                        type = latest?.raw?.type.orEmpty(),
-                        content = latest?.raw?.content,
-                        // 事件里的 post_id 更可信（它对应"刚发生的这一次"），拿不到才退回列表首条
-                        postId = event.postId ?: latest?.raw?.postId,
-                    )
-                }
-                event.isAnnouncement -> {
-                    val latest = admin.myAnnouncements()
-                        .let { if (it is ApiResult.Success) it.data else emptyList() }
-                        .firstOrNull()
-                    SocialNotifier.notifyAnnouncement(notifyContext, latest?.title)
-                }
-            }
-        }
+    LaunchedEffect(isLoggedIn) {
+        if (isLoggedIn) KPush.onLogin(notifyContext)
+    }
+
+    /**
+     * 收件箱轮询兜底（前台 30s，与 Web 版 Sidebar 的 `SIDEBAR_POLL_MS` 同口径）。
+     *
+     * 已经有 SSE 了为什么还要轮询：
+     *  · SSE 可能是**半死连接** —— 客户端 `readTimeout` 是 0、OkHttp 也不开 TCP keepalive，
+     *    链路假死时读会永远挂着、不报错也不重连，`RealtimeClient.status` 还显示"已连接"；
+     *  · 服务端**没有离线补偿**（没有在线连接的事件直接丢弃），漏掉就永远补不回来。
+     * 消息页自己也 retain 一份（10s，仅前台）：合并轮询取最小间隔，全 App 只有一根定时器。
+     *
+     * ★ 后台节奏由 [InboxPollCadence.shell] 判定（修复"退后台后仍 30s 空打三个请求"）：
+     *  · **已绑定厂商推送**（`KPush.Status.serverBound`）→ 停表：后台提醒由系统推送
+     *    服务承担，App 进程参不参与都行，轮询纯属电量与流量浪费；
+     *  · **未绑定**（非 OPPO 机型 / regId 上报失败）→ 降到 90s：厂商推送发不出来，
+     *    轮询是唯一的后台提醒渠道，不能停但要省着用。
+     * 退到后台后组合树仍存活（DisposableEffect 不会自动释放），所以必须显式按
+     * 前后台切节奏，而不是只在进组合时 retain 一次。
+     */
+    val appForeground by AppGraph.from(notifyContext).foreground.flow.collectAsState()
+    val pushStatus by KPush.status.collectAsState()
+    val inboxPollMs = InboxPollCadence.shell(appForeground, pushStatus.serverBound)
+    DisposableEffect(isLoggedIn, inbox, inboxPollMs) {
+        if (!isLoggedIn || inboxPollMs == 0) return@DisposableEffect onDispose { }
+        val release = inbox.retainPoll(inboxPollMs)
+        onDispose { release() }
     }
 
     /**
      * 事件分发（"微信/小红书那种自己更新"）。
      *
-     * 这里只做**跨页面**的两件事：角标未读数、以及事件所指帖子的计数。
-     * 页面自己的列表刷新由各页面收集同一个事件流完成（消息页、聊天页、帖子详情页）——
-     * 只有它们知道自己当前在看什么，在 Shell 层猜反而会多拉请求。
+     * 这里现在只剩**一件事**：有人评论/回复了某条帖子 → 就地刷新那条帖子的计数
+     * （包括首页卡片上的评论数）。未读角标已由 [InboxStore] 统一负责，
+     * 通知栏提醒已由 `SocialNotificationCenter` 负责（两者都订阅同一个事件流，
+     * 在 Shell 层再算一遍只会多打请求）。
+     * 页面自己的列表刷新仍由各页面收集事件流完成（消息页、聊天页、帖子详情页）——
+     * 只有它们知道自己当前在看什么。
      */
     LaunchedEffect(realtime) {
         realtime.events.collect { event ->
-            when {
-                // 新私信/新通知/新公告：都可能改变未读角标
-                event.isMessage || event.isNotification || event.isAnnouncement -> {
-                    when (val r = messages.unreadTotal()) {
-                        is ApiResult.Success -> unread = r.data
-                        is ApiResult.Failure -> Unit
-                    }
-                }
-                else -> Unit
-            }
-            // 有人评论/回复了某条帖子：就地刷新那条帖子的计数（包括首页卡片上的评论数）
             val commented = event.postId
             if (event.isNotification && commented != null) {
                 posts.refreshDetail(commented)
@@ -406,14 +390,65 @@ fun AppShell(
      */
     val contentVersion by posts.contentVersion.collectAsState()
 
+    /** 返回栈空时页面级兜底：回首页（清掉二级栈，语义 = "回不去了"） */
+    fun fallbackToRoot() {
+        navigator.resetTo(AppDestination.Home)
+    }
+
+    /** 页面顶栏"返回"：栈里有就弹，栈空走 [fallbackToRoot]（回首页） */
+    fun backOrFallback() {
+        if (!navigator.pop()) fallbackToRoot()
+    }
+
+    /**
+     * 打开一个二级页（统一入口）：**一律 Compose 压栈**。
+     *
+     * 这里曾是"层级首跳开窗"的分流点（同步 `originKeyOf` 判断 + 开
+     * `PushHostActivity` 新窗口）。2026-10-10 该方案因 OPPO 无缝动画的
+     * **残留快照**问题被整体回滚（见 `docs/android-seamless-residue-investigation.md`），
+     * 恢复成单 Activity 的压栈语义 —— 也就恢复了 Compose 的共享元素飞行。
+     *
+     * 保留这个函数（而不是把 8 个 `openXxx` 都内联成 `navigator.push`）：
+     * 它是"二级页统一入口"的单一收口，将来若要改导航方式只动这一处。
+     */
+    fun openDest(dest: AppDestination) {
+        navigator.push(dest)
+    }
+
     /**
      * 打开帖子详情。
      *
      * 不再需要记录"从哪来"：`backToPrevious()` 里的 `pop()` 本来就会回到栈里的下一页，
      * 也就是用户进来的地方。之前那些 `resetTo` 才是把"从哪进"弄丢的元凶。
      */
-    fun openPostDetail(postId: Long) {
-        navigator.push(AppDestination.PostDetailDest(postId))
+    fun openPostDetail(postId: Long) = openDest(AppDestination.PostDetailDest(postId))
+
+    /** 他人主页（压栈），见 [openDest] */
+    fun openUserProfileDest(userId: Long) = openDest(AppDestination.UserProfileDest(userId))
+
+    /** 沉浸视频播放页（探索页卡片视频区 / 详情页正文视频） */
+    fun openVideo(postId: Long) = openDest(AppDestination.VideoDest(postId))
+
+    /** 图书详情（压栈） */
+    fun openBookDetail(bookId: String) = openDest(AppDestination.BookDetailDest(bookId))
+
+    /** 语音房（压栈） */
+    fun openVoiceRoom(roomId: Long) = openDest(AppDestination.VoiceRoomDest(roomId))
+
+    /** 聊天（会话行 / 他人主页「私信」钮） */
+    fun openChat(partnerId: Long, partnerName: String?, partnerAvatar: String? = null) =
+        openDest(AppDestination.ChatDest(partnerId, partnerName, partnerAvatar))
+
+    /** 关注 / 粉丝列表（主页统计数字点入） */
+    fun openFollowList(userId: Long, showFollowers: Boolean) =
+        openDest(AppDestination.FollowListDest(userId, showFollowers))
+
+    /** 公告列表（消息页的公告入口卡） */
+    fun openAnnouncements() = openDest(AppDestination.Announcements)
+
+    /** 进搜索发现页（点正文里的 #话题 / 页头搜索钮）：带返回的二级页，压栈 */
+    fun openExplore(tag: String?) {
+        navigator.push(AppDestination.Explore(tag = tag))
     }
 
     /**
@@ -515,10 +550,11 @@ fun AppShell(
         if (userId <= 0L) return
         postMenu = null
         if (myUserId > 0L && userId == myUserId) {
+            // 切到「主页」tab（一级 tab = 同级切换，清掉二级栈）
             navigator.switchTab(AppDestination.Profile)
             return
         }
-        navigator.push(AppDestination.UserProfileDest(userId))
+        openUserProfileDest(userId)
     }
 
     /**
@@ -565,6 +601,36 @@ fun AppShell(
      * 用登录页的实例号会让底下这个详情页被当成"新实例"（滚动位置丢掉）。
      */
     val baseSeq = if (dest is AppDestination.Login) navigator.previousSeq ?: 0L else navigator.currentSeq
+
+    /**
+     * ============================================================
+     * 全屏视频页的**退场交接**（`videoExit`）
+     * ============================================================
+     * 解决的问题（用户实测）：进全屏有动画、**退出没有**。
+     *
+     * ## 为什么退出读不出动画
+     * `AppDestination.VideoDest` 是**重页面**（[AppDestination.isHeavyPage]），
+     * Shell 在两条渲染分支之间**瞬间切换** —— 也就是说全屏视频页活着的时候，
+     * **详情页整个不在组合里**。于是退场那 250ms 里，视频在缩小、但背后是**纯黑**：
+     * 用户看到的是"视频在黑洞里变小了一下"，读不出"缩回详情页那一块"。
+     *
+     * 图片查看器没有这个问题，因为它是浮在**活着的页面**之上的覆盖层 ——
+     * 缩小时背后就是那张缩略图。
+     *
+     * ## 修法
+     * 退场飞行这 250ms 里，让 Shell 把**详情页也组合出来**（画在视频页**下面**），
+     * 于是视频缩小时背后就是它要落回去的那一页；飞行结束再真正 `pop`，
+     * 视觉上完全连续（视频落在详情页那一块上，然后那一页顶上来）。
+     *
+     * ## 代价与安全边界（为什么不担心"两份独占资源"）
+     * 重页面之所以不做双份组合，是因为怕"同一份独占资源建两遍"（第二个 ExoPlayer /
+     * 第二条 WebSocket）。而这条路径上：
+     *  · 视频页的 `ExoPlayer` 在**退场开始时就已经把进度交回交接单、随后随页面销毁释放**
+     *    （见 `VideoPlayerScreen.beginClose`）—— 不存在两个播放器同时解码；
+     *  · 详情页的内联播放器**复用同一段视频**，它起来时全屏那个已经在释放路上；
+     *  · 窗口只有 250ms（[VIDEO_FLIGHT_MS]），且**只有这一条导航路径**会用到它。
+     */
+    var videoExit by remember { mutableStateOf<VideoExitHandoff?>(null) }
 
     /**
      * 每个目的地的 `rememberSaveable` 状态保管箱。
@@ -635,7 +701,12 @@ fun AppShell(
      * 换实例（`replace()`）时内容要重建，不能复用被替换那页的状态。
      */
     val shellPage = remember(base, baseSeq) {
-        ShellPage(dest = base, op = navigator.lastOp, depth = navigator.depth, seq = baseSeq)
+        ShellPage(
+            dest = base,
+            op = navigator.lastOp,
+            depth = navigator.depth,
+            seq = baseSeq,
+        )
     }
 
     /**
@@ -667,7 +738,7 @@ fun AppShell(
                 isLoggedIn = isLoggedIn,
                 onRequireLogin = { navigator.push(AppDestination.Login) },
                 // 页头右上角的搜索圆钮 → 搜索发现（设计稿映射表：搜索发现高亮「首页」）
-                onOpenExplore = { navigator.push(AppDestination.Explore()) },
+                onOpenExplore = { openExplore(null) },
                 refreshKey = contentVersion,
                 myUserId = myUserId,
                 // 首页卡片上**不再有编辑入口**（用户要求）：编辑统一从「个人主页 → 我的作品」进。
@@ -677,7 +748,7 @@ fun AppShell(
                 // 全屏看图 / 全屏播放属于详情页里的二次动作（用户明确要求）
                 onOpenPost = { postId -> openPostDetail(postId) },
                 // 点正文里的 #话题 → 搜该话题的相关帖子（同一个搜索页，带 tag 参数）
-                onTagClick = { tag -> navigator.push(AppDestination.Explore(tag = tag)) },
+                onTagClick = { tag -> openExplore(tag) },
                 // 点卡片上的头像 / 昵称 → 进这个人的主页（自己的话切到「主页」tab）
                 onOpenUser = { userId -> openUserProfile(userId) },
             )
@@ -688,11 +759,11 @@ fun AppShell(
                 session = session,
                 myUserId = myUserId,
                 initialTag = page.tag,
-                onTagClick = { tag -> navigator.push(AppDestination.Explore(tag = tag)) },
+                onTagClick = { tag -> openExplore(tag) },
                 // 同上：搜索结果的卡片也不放编辑入口
                 onEdit = null,
                 onOpenPost = { postId -> openPostDetail(postId) },
-                onOpenVideo = { postId -> navigator.push(AppDestination.VideoDest(postId)) },
+                onOpenVideo = { postId -> openVideo(postId) },
                 onOpenUser = { userId -> openUserProfile(userId) },
             )
 
@@ -704,7 +775,7 @@ fun AppShell(
                 session = session,
                 realtime = realtime,
                 myUserId = myUserId,
-                onBack = { navigator.pop() },
+                onBack = { backOrFallback() },
                 onRequireLogin = { navigator.push(AppDestination.Login) },
                 onEdit = { post ->
                     ComposerEdits[post.id] = ComposerEditSource(
@@ -713,14 +784,17 @@ fun AppShell(
                         images = post.post.images,
                         location = post.location,
                     )
+                    ComposerEdits.trimToCap()
                     navigator.push(AppDestination.ComposerDest(editingPostId = post.id))
                 },
                 // 详情页的视频不再跳全屏播放器：正文块里的视频**进来就带声自动播放**
                 // 并在画面底部带进度条（用户要求），所以这里不再传 onOpenVideo。
                 // 评论数变化同步到列表卡片（详情页是"发一条 +1、删一条 -1"）
                 onCommentCountChanged = { delta -> posts.bumpCommentCount(page.postId, delta) },
-                // 正文视频的全屏入口 → 沉浸播放器（地址由 VideoDest 自己从缓存取）
-                onOpenVideo = { navigator.push(AppDestination.VideoDest(page.postId)) },
+                // 正文视频的全屏入口 → 沉浸播放器（地址由 VideoDest 自己从缓存取）。
+                // 进度已经由详情页写进 VideoHandoff 交接单，这里不需要再转一次 ——
+                // 点全屏的那条路径是"详情页 offer → 全屏页 take"，Shell 只是发起导航。
+                onOpenVideo = { _, _ -> openVideo(page.postId) },
                 // 帖子已不存在（详情接口 404）→ 摘掉这个死页面后退回**进来时那一页**
                 // （从消息点通知进来就回消息，不再把人甩去首页）
                 onPostGone = { goneId ->
@@ -731,10 +805,10 @@ fun AppShell(
                         dest is AppDestination.PostDetailDest && dest.postId == goneId
                     }
                     // 栈空（深链直接进详情页）时没有"上来那一页"可回，兜底回首页
-                    if (!popped) navigator.resetTo(AppDestination.Home)
+                    if (!popped) fallbackToRoot()
                 },
                 // 点正文里的 #话题 → 搜该话题
-                onTagClick = { tag -> navigator.push(AppDestination.Explore(tag = tag)) },
+                onTagClick = { tag -> openExplore(tag) },
                 // 点作者行（头像 / 昵称）→ 这个人的主页
                 onOpenUser = { userId -> openUserProfile(userId) },
             )
@@ -749,13 +823,11 @@ fun AppShell(
                 myUserId = myUserId,
                 // 深链 `/profile/:id` 直接推上来时返回栈是空的（没有"上来那一页"），
                 // 这时兜底回首页；正常从卡片/详情进来则是 pop 回那一页
-                onBack = { if (!navigator.pop()) navigator.resetTo(AppDestination.Home) },
+                onBack = { backOrFallback() },
                 onRequireLogin = { navigator.push(AppDestination.Login) },
                 onOpenPost = { postId -> openPostDetail(postId) },
                 // 点「私信」→ 与这个人聊天（昵称顺手带下去，聊天页顶栏要用）
-                onOpenChat = { userId, name ->
-                    navigator.push(AppDestination.ChatDest(userId, name))
-                },
+                onOpenChat = { userId, name -> openChat(userId, name) },
                 // 「…」→ 设置弹层（与主页同一个弹层；层级见 profileSettingsFrom 的注释）
                 onOpenSettings = {
                     profileSettingsFrom = encodeDest(page)
@@ -765,9 +837,7 @@ fun AppShell(
                 onRequestPostMenu = { source -> postMenu = source },
                 postsRefreshKey = contentVersion,
                 // 点「粉丝 / 关注」统计 → 列表页（二级页，落在对应的标签）
-                onOpenFollowList = { showFollowers ->
-                    navigator.push(AppDestination.FollowListDest(page.userId, showFollowers))
-                },
+                onOpenFollowList = { showFollowers -> openFollowList(page.userId, showFollowers) },
             )
 
             // 关注 / 粉丝列表（从两个主页的统计数字点进来）。
@@ -779,7 +849,7 @@ fun AppShell(
                 friends = friends,
                 myUserId = myUserId,
                 // 深链/进程回收恢复时返回栈可能为空，兜底回首页（与 UserProfileDest 同一写法）
-                onBack = { if (!navigator.pop()) navigator.resetTo(AppDestination.Home) },
+                onBack = { backOrFallback() },
                 onRequireLogin = { navigator.push(AppDestination.Login) },
                 onOpenUser = { targetId -> openUserProfile(targetId) },
             )
@@ -789,10 +859,43 @@ fun AppShell(
                 val cached = posts.cached(page.postId)
                 val videoUrl = resolveUrl(cached?.post?.videoUrl, session.api.baseUrl)
                 if (videoUrl != null) {
+                    // 退场期间要露出的目标页（返回栈顶那一页）。栈空时没有目标可露，
+                    // 那就还是纯黑退场（与从前一致，不会出错）
+                    val previous = navigator.previous
+                    val previousSeq = navigator.previousSeq
                     VideoPlayerScreen(
                         url = videoUrl,
                         title = cached?.title,
-                        onBack = { navigator.pop() },
+                        // 续播交接单与飞行来源几何都按 postId 配对（见 VideoHandoff）
+                        postId = page.postId,
+                        onBack = {
+                            /**
+                             * 退场：**先把目标页亮出来，再 pop**。
+                             *
+                             * ★ 顺序很重要（用户实测"退出没有动画"的根因）：
+                             * 早先是"缩完 → 立刻 pop"，而这一页是重页面，
+                             * pop 之前详情页**整个不在组合里** —— 视频在纯黑背景上缩小，
+                             * 读不出"缩回详情页那一块"。
+                             *
+                             * 现在改成：先把详情页塞进 [videoExit]（Shell 会把它画在
+                             * 视频页**下面**），于是视频缩小时背后就是它要落回去的那一页；
+                             * 缩完由 `onExitFinished` 真正 pop。
+                             */
+                            if (previous != null && previousSeq != null) {
+                                videoExit = VideoExitHandoff(previous, previousSeq)
+                            } else {
+                                backOrFallback()
+                            }
+                        },
+                        /**
+                         * 退场飞行播完（或判定不该飞）时调用 —— 真正离开这一页。
+                         * 与 `onBack` 分成两步，就是为了让"露出目标页"和"切页"之间
+                         * 隔着那 250ms 的动画。
+                         */
+                        onExitFinished = {
+                            videoExit = null
+                            backOrFallback()
+                        },
                     )
                 } else {
                     androidx.compose.runtime.LaunchedEffect(page.postId) { navigator.pop() }
@@ -800,30 +903,29 @@ fun AppShell(
             }
 
             is AppDestination.Messages -> MessagesScreen(
-                messages = messages,
-                admin = admin,
                 realtime = realtime,
+                // 会话 / 通知 / 公告 / 未读的唯一来源（与导航角标读同一份，见 InboxStore）
+                inbox = inbox,
                 isLoggedIn = session.isLoggedIn,
-                onOpenChat = { partnerId, name, avatar ->
-                    navigator.push(AppDestination.ChatDest(partnerId, name, avatar))
-                },
-                onOpenAnnouncements = { navigator.push(AppDestination.Announcements) },
+                // 进程级前台状态：本页 10s 轮询只在前台保持（后台门控见 InboxPollCadence）
+                foreground = AppGraph.from(notifyContext).foreground.flow,
+                onOpenChat = { partnerId, name, avatar -> openChat(partnerId, name, avatar) },
+                onOpenAnnouncements = { openAnnouncements() },
                 // 点互动通知 → 打开它指向的帖子（通知里带 post_id）
                 onOpenPost = { postId -> openPostDetail(postId) },
                 onRequireLogin = { navigator.push(AppDestination.Login) },
-                onUnreadChanged = { unread = it },
             )
 
             is AppDestination.Announcements -> AnnouncementsScreen(
                 repo = admin,
                 isLoggedIn = session.isLoggedIn,
-                onBack = { navigator.pop() },
+                onBack = { backOrFallback() },
                 onRequireLogin = { navigator.push(AppDestination.Login) },
             )
 
             is AppDestination.Admin -> AdminScreen(
                 repo = admin,
-                onBack = { navigator.pop() },
+                onBack = { backOrFallback() },
                 onNewAnnouncement = { navigator.push(AppDestination.NewAnnouncement) },
                 refreshKey = announcementRefreshKey,
             )
@@ -832,26 +934,46 @@ fun AppShell(
             // 不重拉的话新公告不会出现在列表里（用户会以为发布失败）
             is AppDestination.NewAnnouncement -> NewAnnouncementScreen(
                 repo = admin,
-                onBack = { navigator.pop() },
+                onBack = { backOrFallback() },
                 onCreated = {
                     navigator.pop()
                     announcementRefreshKey += 1
                 },
             )
 
-            is AppDestination.ChatDest -> ChatScreen(
-                messages = messages,
-                partnerId = page.partnerId,
-                partnerName = page.partnerName,
-                // 对方头像由会话列表带过来（消息接口里没有头像字段）
-                partnerAvatar = page.partnerAvatar,
-                // 自己的头像取当前登录用户；未登录/无头像 → 默认人像。
-                // 走 [myAvatarUrl]（含"落盘的上一份"兜底）而不是直接读 authState ——
-                // 否则冷启动首帧是 null、要等 /auth/me 回来才出图（用户实测的"先占位再变"）
-                myAvatar = myAvatarUrl,
-                realtime = realtime,
-                onBack = { navigator.pop() },
-            )
+            is AppDestination.ChatDest -> {
+                /**
+                 * 昵称/头像**从收件箱补一次**（2026-10-07 用户实测反馈）。
+                 *
+                 * 场景：点通知栏那条「XXX 给你发来一条消息」进来 —— 通知的深链只带
+                 * `chat:<partnerId>`，没有昵称也没有头像，于是聊天页标题退化成
+                 * `用户15`（`ChatScreen` 的兜底文案），而用户从消息列表点进去看到的是
+                 * `223311`。同一个人两个名字，用户会以为"点通知进错了会话"。
+                 *
+                 * 补在这里而不是往深链里塞昵称：深链是**外部入口**（系统通知、浏览器、
+                 * 分享），任何一条路径都可能缺名字，只有这里能一次性覆盖全部来源。
+                 * 收件箱本来就有会话列表（含 `username` 与头像地址），零额外请求。
+                 *
+                 * 整份快照只在**本分支组合期间**订阅（壳层其余部分只订角标，
+                 * 见上面 unread 的注释）。
+                 */
+                val inboxState by inbox.state.collectAsState()
+                val known = inboxState.conversations.firstOrNull { it.raw.partnerId == page.partnerId }
+                ChatScreen(
+                    messages = messages,
+                    inbox = inbox,
+                    partnerId = page.partnerId,
+                    partnerName = page.partnerName?.ifBlank { null } ?: known?.raw?.username,
+                    // 对方头像由会话列表带过来（消息接口里没有头像字段）
+                    partnerAvatar = page.partnerAvatar ?: known?.avatarUrl,
+                    // 自己的头像取当前登录用户；未登录/无头像 → 默认人像。
+                    // 走 [myAvatarUrl]（含"落盘的上一份"兜底）而不是直接读 authState ——
+                    // 否则冷启动首帧是 null、要等 /auth/me 回来才出图（用户实测的"先占位再变"）
+                    myAvatar = myAvatarUrl,
+                    realtime = realtime,
+                    onBack = { backOrFallback() },
+                )
+            }
 
             is AppDestination.ComposerDest -> ComposerScreen(
                 composer = composer,
@@ -916,7 +1038,7 @@ fun AppShell(
                         goneId != null && dest is AppDestination.PostDetailDest && dest.postId == goneId
                     }
                     // 栈空（深链/进程回收后直接进详情页）：没有"上来那一页"可回，兜底回首页
-                    if (!popped) navigator.resetTo(AppDestination.Home)
+                    if (!popped) fallbackToRoot()
                     // 内容变了：首页/主页的列表都要重拉（deletePost 里已就地移除，
                     // 这里补一次版本号让各页面按自己的口径刷新）
                     posts.bumpContentVersion()
@@ -925,7 +1047,7 @@ fun AppShell(
 
             is AppDestination.Books -> BooksScreen(
                 books = books,
-                onOpenDetail = { id -> navigator.push(AppDestination.BookDetailDest(id)) },
+                onOpenDetail = { id -> openBookDetail(id) },
                 // **没有 onOpenExplore**：图书页的搜索是它自己的（就地搜书名/作者，见 BooksScreen）。
                 // 曾经这里 push 的是首页那个"搜索发现"—— 那是搜帖子的，搜书名一条也搜不到。
             )
@@ -937,7 +1059,8 @@ fun AppShell(
                     // 把房间对象放进进程内缓存：导航状态里只带 roomId（可序列化），
                     // 进程被回收后恢复时缓存为空 → 会让用户回到列表页而不是空白房内页
                     VoiceRoomCache[room.id] = room
-                    navigator.push(AppDestination.VoiceRoomDest(room.id))
+                    VoiceRoomCache.trimToCap()
+                    openVoiceRoom(room.id)
                 },
             )
 
@@ -958,7 +1081,9 @@ fun AppShell(
                     // 放进 remember 的 lambda 里会报 "Composable invocations can only
                     // happen from the context of a @Composable function"
                     val appContext = LocalContext.current
-                    // 控制器与页面同生命周期：进房建、离房销毁（leave 会关 WS 与麦克风）
+                    // 控制器与页面同生命周期：进房建、离房销毁（leave 会关 WS 与麦克风）。
+                    // 2026-10：点击卡片**立即**导航到这里，连接在房内静默进行
+                    // （顶栏「正在连接…」），不再有列表页等待或整屏连接遮罩。
                     val controller = remember(page.roomId) {
                         VoiceRoomController(
                             context = appContext,
@@ -970,7 +1095,7 @@ fun AppShell(
                         voice = voice,
                         controller = controller,
                         room = room,
-                        onBack = { navigator.pop() },
+                        onBack = { backOrFallback() },
                         /**
                          * 清空聊天记录的权限（设计稿「文字聊天 → 清空」）：
                          * **房间创建者或管理员**，与 Web 端 `canClearChat` 同一判据
@@ -1023,9 +1148,7 @@ fun AppShell(
                 onOpenPost = { postId -> openPostDetail(postId) },
                 // 点「粉丝 / 关注」统计 → 列表页（看的就是自己，userId 用当前登录用户）
                 onOpenFollowList = { showFollowers ->
-                    myUserId.takeIf { it > 0 }?.let {
-                        navigator.push(AppDestination.FollowListDest(it, showFollowers))
-                    }
+                    myUserId.takeIf { it > 0 }?.let { openFollowList(it, showFollowers) }
                 },
             )
 
@@ -1035,7 +1158,7 @@ fun AppShell(
                 users = users,
                 session = session,
                 user = (authState as? SessionRepository.AuthState.LoggedIn)?.user,
-                onBack = { navigator.pop() },
+                onBack = { backOrFallback() },
                 // 保存成功后就地返回主页，并让主页重拉一次公开资料
                 // （会话里的用户对象已由编辑页替换，但主页渲染的是 /users/:id 的结果）
                 onSaved = {
@@ -1051,9 +1174,10 @@ fun AppShell(
             is AppDestination.BookDetailDest -> BookDetailScreen(
                 books = books,
                 bookId = page.bookId,
-                onBack = { navigator.pop() },
+                onBack = { backOrFallback() },
                 onRead = { detail, chapter ->
                     BookReaderEntries[detail.id] = detail to chapter
+                    BookReaderEntries.trimToCap()
                     navigator.push(readerDestination(detail, chapter))
                 },
             )
@@ -1062,7 +1186,7 @@ fun AppShell(
                 books = books,
                 bookId = page.bookId,
                 chapterFile = page.chapterFile,
-                onBack = { navigator.pop() },
+                onBack = { backOrFallback() },
                 // 阅读器的 ☀ 工具切的是 App 主题（Q5：阅读器跟随 App 主题）
                 themeMode = themeMode,
                 onThemeChange = onThemeChange,
@@ -1071,29 +1195,48 @@ fun AppShell(
     }
 
     /**
-     * 返回键：**先关弹层 → 再退页面栈 → 最后最小化**。
+     * ============================================================
+     * 返回键统一出口（M2 起）
+     * ============================================================
+     * 优先级与绘制顺序一致：**查看器 → 登录弹层 → 设置弹层 → 作品选单 → 页面栈**，
+     * 前四者是覆盖态、最后一个是正常返回栈。
      *
-     * 为什么从 `MainActivity` 搬到这里（M2）：三个覆盖层里有两个（设置弹层 / 作品选单）
-     * 是 Shell 自己的布尔状态，MainActivity 看不到它们 —— 留在那边就会出现
-     * **"设置弹层开着按返回键，App 直接被最小化"**（因为 `navigator.pop()` 在 tab 页上返回 false）。
+     *  · 用 `PredictiveBackHandler` 而不是 `BackHandler`：它是 M2 引入的统一出口。
+     *    页面内部（如发布页的地图选点层）注册得更晚，天然盖过这里（后注册先响应）。
+     *  · **根页必须让系统接管**：`enabled` 只在"确实有关得掉的东西"时为 true
+     *    （见 [backDismissible]）。`PredictiveBackHandler` 一旦以 enabled 注册，androidx
+     *    就会在窗口上注册 PRIORITY_DEFAULT 的 OnBackInvokedCallback，系统据此认为
+     *    "返回由 App 自己处理" —— **返回主屏幕的预览动画（窗口缩小 + 露出桌面）不再播放**
+     *    （官方文档「回调最佳实践」明确写着这条）。根页不注册 → 系统默认行为接管
+     *    （根 Activity 的返回 = 把任务移到后台，与旧的 `moveTaskToBack` 同语义）。
+     *    这套切换是有效的：androidx 的调度器**动态注册/注销**平台回调（最后一个启用
+     *    回调禁用时即注销，见 navigationevent 的 OnBackInvokedInput）。
      *
-     * 为什么用 `PredictiveBackHandler` 而不是 `BackHandler`：`BackHandler` 会**吞掉手势进度**，
-     * 系统拿不到 progress 就没法做预测式返回的预览（Android 13+ 的返回手势观感）。
-     * 这里把 `progress` 收下来不用（M4 会把它透给弹层做"跟手"），
-     * **`collect` 正常结束 = 手势已提交**（用户确实要返回）；手势中途取消时
-     * `collect` 抛 CancellationException 直接结束协程，下面的分支不会执行 —— 这正是想要的。
+     *  · 注：2026-10-13 曾在此实现过"跟手预测式返回"（预览层 + 补偿通道 + 手势交接
+     *    转场），因系统级开关（enable_back_animation）默认关闭、真机上拿不到手势进度，
+     *    当日整体回滚 —— 回滚时只删动画链路，**保留了这条分派骨架与根页交还语义**。
      */
-    PredictiveBackHandler(enabled = true) { progress ->
+
+    // 根页（无弹层、返回栈也空）时**不注册**，把返回整个交还给系统（见上面的注释）。
+    // 用 depth（state）而不是 canGoBack（读的是非状态化的返回栈，不会触发重组）。
+    val backDismissible = viewer != null || dest is AppDestination.Login ||
+        showProfileSettings || postMenu != null || navigator.depth > 1
+
+    PredictiveBackHandler(enabled = backDismissible) { progress ->
+        // 手势进度这里不消费（跟手动画已回滚）；正常结束 = 手势已提交，走下方分派。
         progress.collect { }
         when {
-            // 图片查看器在最上层（M5）：返回键先退它，再退弹层、页面栈 —— 与绘制顺序一致。
-            // 这里只是**请求**退场：飞行由查看器播完（缩回来源缩略格）再回来把 viewer 置空，
-            // 直接置空会让飞行腰斩（旧实现就是这么丢掉"飞回去"的）。
+            // 图片查看器是独立窗口（Dialog），手势通常到不了这里（它在自己的窗口里处理）；
+            // 保留这条只是兜底：真收到就按"请求退场"走（飞行由查看器播完）。
             viewer != null -> viewerClosing = true
-            navigator.current is AppDestination.Login -> navigator.pop()
-            showProfileSettings -> showProfileSettings = false
+            dest is AppDestination.Login -> navigator.pop()
+            showProfileSettings -> {
+                showProfileSettings = false
+                profileSettingsFrom = null
+            }
             postMenu != null -> postMenu = null
-            !navigator.pop() -> minimize()
+            // 页面栈返回；enabled 已保证 depth > 1，栈空的极窄竞态下 pop 返回 false，无害
+            else -> navigator.pop()
         }
     }
 
@@ -1241,10 +1384,24 @@ fun AppShell(
      * 之前这些地方只能用系统黑框 Toast，观感与主题脱节（2026-09-27 用户要求统一）。
      */
     val toastState = rememberKToastState()
-    // 查看器全屏期间冻结底层页面的状态栏安全区：Dialog 藏状态栏会全局清零 statusBars
-    // inset，页面若跟着实时值走就会在查看器背后整体挪一截，退出时再挪回来 —— 用户看到的
-    // "退出全屏界面跳动"。冻结后页面按打开前的老位置画，状态栏回归时页面纹丝不动。
-    val frozenStatusBarInsets = rememberFrozenStatusBarInsets(active = viewer != null)
+    /**
+     * 「谁正在占着整个窗口」（Shell 级）。
+     *
+     * 这两种宿主都会**改系统栏可见性**，而系统栏可见性是**窗口级**的：
+     *   · **图片查看器**（[viewer]）：它是一个独立 Dialog 窗口，由 ViewerWindow 藏状态栏；
+     *   · **全屏视频页**（[AppDestination.VideoDest]）：它在本窗口里藏状态栏
+     *     （见 VideoPlayerScreen 的沉浸那段）。
+     *
+     * 无论哪一种，Activity 收到的 `statusBars` inset 都会**立刻清零**，
+     * 而每个页面的顶栏都按 [kTopBar]（= 状态栏 inset）定位 —— 于是底层页面
+     * 整体上移一截，退出时再挪回来。用户看到的就是**「退出全屏，界面跟着状态栏跳一下」**
+     * （退场飞行恰好露出底层页面，这一跳特别显眼）。
+     */
+    val immersiveHostActive = viewer != null || dest is AppDestination.VideoDest
+    // 冻结底层页面的状态栏安全区：上面那两种宿主开着（含退场动画）期间，页面按"打开那一刻"
+    // 的老位置画，从头到尾纹丝不动；解除要等实时 inset **恢复到冻结值**。
+    // 完整机理与两个真机踩过的坑见 [rememberFrozenStatusBarInsets] 的注释。
+    val frozenStatusBarInsets = rememberFrozenStatusBarInsets(active = immersiveHostActive)
     CompositionLocalProvider(
         LocalMediaSaveOpener provides { target -> mediaSaveTarget = target },
         LocalToast provides toastState,
@@ -1283,16 +1440,30 @@ fun AppShell(
             /**
              * 重页面（独占资源页）：**只做一次性入场，不做双份组合**。
              *
-             * `AnimatedContent` 的转场要求新旧两屏同时在组合里，对语音房/视频/聊天/阅读器
+             * `AnimatedContent` 的转场要求新旧两屏同时在组合里，对语音房/视频/阅读器
              * 就等于同一份独占资源建两遍（第二个 ExoPlayer、第二条 WebSocket）。
              * 所以这些页面走"瞬间切换 + 入场动画"：离场时不做淡出，
              * 麦克风/解码器立刻释放（详见 MotionEnterOnce 的注释）。
+             *
+             * ------------------------------------------------------------
+             * ★ 唯一例外：全屏视频页**退场期间**要露出目标页（见 [videoExit]）
+             * ------------------------------------------------------------
+             * 退场那 250ms 里把详情页也画出来（在视频页**下面**），用户的视频才"缩得回去"。
+             * 只在 [videoExit] 非空时成立，也就是只有"全屏视频 → 返回"这一条路径，
+             * 窗口 250ms —— 不影响语音房/阅读器那两条重页面（它们没有这个需求）。
              */
-            MotionEnterOnce(modifier = Modifier.fillMaxSize()) {
-                // key 里带实例号：重页面（阅读器/语音房/聊天）每次进来也是全新的一次访问
-                val pageStateKey = destStateKey(base, baseSeq)
-                if (baseSeq > 0L) savedPageKeys += pageStateKey
-                stateHolder.SaveableStateProvider(pageStateKey) { pageContent(base) }
+            Box(modifier = Modifier.fillMaxSize()) {
+                // 退场目标页（详情页）画在**下面**：视频缩小时背后就是它
+                videoExit?.let { exit ->
+                    val exitKey = destStateKey(exit.dest, exit.seq)
+                    stateHolder.SaveableStateProvider(exitKey) { pageContent(exit.dest) }
+                }
+                MotionEnterOnce(modifier = Modifier.fillMaxSize()) {
+                    // key 里带实例号：重页面（阅读器/语音房/聊天）每次进来也是全新的一次访问
+                    val pageStateKey = destStateKey(base, baseSeq)
+                    if (baseSeq > 0L) savedPageKeys += pageStateKey
+                    stateHolder.SaveableStateProvider(pageStateKey) { pageContent(base) }
+                }
             }
         } else {
             /**
@@ -1325,7 +1496,11 @@ fun AppShell(
                                 outFraction = 8,
                             )
                             // 退：与 Push 严格反向
-                            NavOp.Pop -> pageTransform(intoFromRight = false, inFraction = 4, outFraction = 8)
+                            NavOp.Pop -> pageTransform(
+                                intoFromRight = false,
+                                inFraction = 4,
+                                outFraction = 8,
+                            )
                             // 切 tab / 重置：同级，不左右滑动（滑动会误导用户以为层级变了）
                             NavOp.Tab, NavOp.Reset ->
                                 fadeIn(KMotion.effects()) togetherWith fadeOut(KMotion.effects())
@@ -1614,6 +1789,7 @@ fun AppShell(
                             images = ui?.post?.images ?: menu.images,
                             location = menu.location,
                         )
+                        ComposerEdits.trimToCap()
                         navigator.push(AppDestination.ComposerDest(editingPostId = menu.id))
                     },
                     onDelete = {
@@ -1627,6 +1803,7 @@ fun AppShell(
                             location = menu.location,
                             openDeleteConfirm = true,
                         )
+                        ComposerEdits.trimToCap()
                         navigator.push(AppDestination.ComposerDest(editingPostId = menu.id))
                     },
                     onDismiss = { postMenu = null },
@@ -1659,7 +1836,8 @@ fun AppShell(
     }
     }
 
-    // 返回键已由本函数开头的 PredictiveBackHandler 统一处理（弹层 → 页面栈 → 最小化）
+    // 返回键已由本函数开头的 PredictiveBackHandler 统一处理
+    // （查看器 → 弹层 → 页面栈；根页不注册、交还系统播"返回主屏幕"动画）
 }
 
 /**
@@ -1742,16 +1920,27 @@ private fun pageTransform(
     // 叠影窗口越小，掉帧的暴露也同比缩小。
     //
     // ★ 2026-10-04：滑动那一条从 `spatial(Fast)`（k=1200）再提到 [KMotion.pageSlide]
-    // （k=3200，~230ms 收尾）。原因不是观感，而是**手势锁时长 = 转场时长**：
+    // （当时 k=3200，~230ms 收尾）。原因不是观感，而是**手势锁时长 = 转场时长**：
     // 用户实测"进图书详情立刻上滑要等 330ms 才放行，太长"。锁不能短于转场
     // （盖不满飞行，落地硬切跳变会回来，见 PostDetailScreen `scrollLocked`），
-    // 所以只能把转场本身调快。淡入淡出沿用 Fast（本来就比滑动先收尾，不是限制项）。
+    // 所以只能把转场本身调快。
+    //
+    // ★ 2026-10-10：用户反馈"有点快"，[KMotion.pageSlide] 放慢到 k=1300（~360ms）。
+    // 同时**把淡入淡出从 Fast 提到 Default**：原先 Fast（~150ms 收尾）配 230ms 的滑动
+    // 是"滑还没停、透明已经到底"，差别不大；滑动变 360ms 之后这个差就看得出来了
+    // ——新页在还没滑到位时就已经完全不透明，读起来像"闪出来"。
+    // 提到 Default（~190ms）让两者收尾更接近，又不至于像 Slow 那样拖出叠影窗口
+    // （09-25 那次"顶栏渲染变慢"正是叠影过长造成的，别过头）。
     val enter = slideInHorizontally(animationSpec = KMotion.pageSlide()) { full ->
         sign * (full / inFraction)
-    } + fadeIn(KMotion.effects(KMotion.Preset.Fast))
+    } + fadeIn(KMotion.effects(KMotion.Preset.Default))
     val exit = slideOutHorizontally(animationSpec = KMotion.pageSlide()) { full ->
         // 注意取负：旧页退向与进场相反的一侧
         -sign * (full / outFraction)
+        // 出场淡出**刻意保持 Fast**（比进场更快收尾）：
+        // 旧页多留一帧就多一帧叠影，而 09-25 那次"顶栏渲染变慢"正是叠影窗口过长
+        // 造成的（见上方注释）。进场稍慢、出场更快 = "新页稳稳落位、旧页干脆让开"，
+        // 这个不对称是有意的，不要为了"对称好看"把它改成 Default。
     } + fadeOut(KMotion.effects(KMotion.Preset.Fast))
     return enter togetherWith exit
 }
@@ -1788,6 +1977,18 @@ private val AppDestination.isHeavyPage: Boolean
         is AppDestination.ReaderDest -> true
         else -> false
     }
+
+/**
+ * 全屏视频页退场时的**目标页交接**（见 AppShell 里 `videoExit` 的长注释）。
+ *
+ * 它只回答一件事：这 250ms 的退场飞行期间，视频页**背后**该画哪一页。
+ * 存的是目的地 + 实例号（与 `destStateKey` 同一套），所以目标页的状态
+ * （详情页的滚动位置等）能原样恢复。
+ */
+private class VideoExitHandoff(
+    val dest: AppDestination,
+    val seq: Long,
+)
 
 /**
  * 这一页有没有**设置入口**（决定 Shell 上那个设置弹层要不要跟着页面收掉）。
@@ -1886,7 +2087,7 @@ private fun ReaderHost(
  * 详情页 → 阅读器的**进程内传递**（避免把整个 BookDetail 序列化进导航状态）。
  * 进程被回收时这里为空，[ReaderHost] 会自动回退到重新请求详情。
  */
-private val BookReaderEntries = mutableMapOf<String, Pair<BookDetail, BookChapter>>()
+private val BookReaderEntries = LinkedHashMap<String, Pair<BookDetail, BookChapter>>()
 
 /** 5 个导航项（图标是自绘的 lucide 形状，见 [Glyph]）；消息项带未读角标 */
 @Composable

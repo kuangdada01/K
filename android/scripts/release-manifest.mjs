@@ -24,7 +24,8 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { androidDir, isWindows, resolveJavaHome } from './gradle-env.mjs';
 
@@ -49,14 +50,42 @@ if (!process.env.JAVA_HOME) {
   if (resolved) process.env.JAVA_HOME = resolved;
 }
 
+/** Windows 命令行参数加引号（路径含空格/中文时必需；原来的直接拼接在含空格路径上会碎） */
+function quoteWinArg(s) {
+  return /[\s"&^|<>]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/**
+ * 运行外部工具并捕获输出（stdout+stderr 合并）。
+ *
+ * ⚠️ 实现方式刻意**不用 Node 的管道**（`encoding: 'utf8'` 那种）：在部分受限环境
+ * （本机沙箱/作业对象限制）里，Node 为子进程创建管道会直接 `EBUSY` ——
+ * 表现是 aapt2 明明可用、脚本却报"未能解析出 package 行"（2026-10-08 实际踩到）。
+ * 改成 **shell 层重定向到临时文件 + stdio inherit**：不经过 Node 建管道，
+ * 受限与非受限环境行为一致；顺带把"参数直接字符串拼接"换成逐参数加引号
+ * （原写法在工程路径含空格时会碎）。
+ */
 function runCapture(file, argsList) {
-  // Windows 上 .exe/.bat 都不能无 shell 直接 spawn（Node 18.20+ 的安全限制）
-  const needsShell = process.platform === 'win32' && /\.(exe|bat|cmd)$/i.test(file);
-  const r = needsShell
-    ? spawnSync(`${file} ${argsList.join(' ')}`, { encoding: 'utf8', shell: true, windowsHide: true })
-    : spawnSync(file, argsList, { encoding: 'utf8', shell: false, windowsHide: true });
-  if (r.error || r.status !== 0) return null;
-  return `${r.stdout || ''}${r.stderr || ''}`;
+  if (process.platform !== 'win32') {
+    const r = spawnSync(file, argsList, { encoding: 'utf8' });
+    if (r.error || r.status !== 0) return null;
+    return `${r.stdout || ''}${r.stderr || ''}`;
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'k-manifest-'));
+  const outFile = join(dir, 'out.txt');
+  const cmdline = [file, ...argsList].map(quoteWinArg).join(' ') + ` > "${outFile}" 2>&1`;
+  const r = spawnSync(cmdline, { shell: true, stdio: 'inherit', windowsHide: true });
+  let out = '';
+  try {
+    out = readFileSync(outFile, 'utf8');
+  } catch {
+    out = '';
+  }
+  rmSync(dir, { recursive: true, force: true });
+  if (r.error) return null;
+  // 有输出即返回（部分工具退出码非 0 但输出仍含所需信息，如 keytool 的告警）
+  if (r.status !== 0 && !out) return null;
+  return out || null;
 }
 
 /** 在 SDK 里找 build-tools 下的 aapt2 / apksigner */

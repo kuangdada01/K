@@ -126,7 +126,7 @@ fun KEmojiButton(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     // 面板开着或被按下都点亮：后者是即时触感，前者是"当前状态"
-    val fg = if (active || pressed) c.accent else c.textSecondary
+    val fg = if (active || pressed) c.accentText else c.textSecondary
     Box(
         modifier = modifier
             // 默认 44dp 触控目标（KDimens.minTouchTarget）：视觉 20dp 的图标钮，

@@ -2,6 +2,7 @@ package top.kuangdada.k.core.data
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import java.lang.ref.WeakReference
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -186,8 +187,35 @@ class PostRepository(private val session: SessionRepository) {
         }
     }
 
-    /** 所有已创建的列表 —— 互动结果要同步到全部，避免同一帖子在不同页状态不一致 */
-    private val lists = mutableListOf<PostList>()
+    /**
+     * 所有**仍被使用**的列表 —— 互动结果要同步到全部，避免同一帖子在不同页状态不一致。
+     *
+     * ★ 弱引用登记（2026-10-11）：此前是强引用 MutableList 且只增不减 —— 每次搜索
+     * （ExploreScreen 每个关键词一条）、每次进他人主页（两条）都会 new 一条
+     * PostList（连着整页帖子数据）永久滞留；applyToAll/removeLocal 还要线性扫
+     * 全部滞留列表，随使用越走越慢。改为 WeakReference：使用中的列表由持有方
+     * （AppShell 的 remember / 页面状态 / listsBySource）强引用、必然存活；
+     * 页面离开组合后即可被 GC 回收。登记处只做惰性清理，无需淘汰策略。
+     */
+    private val lists = mutableListOf<WeakReference<PostList>>()
+
+    /** 遍历仍存活（未被 GC）的登记列表；顺手清掉已失效的弱引用 */
+    @Synchronized
+    private fun forEachLiveList(block: (PostList) -> Unit) {
+        lists.removeAll { it.get() == null }
+        lists.forEach { ref -> ref.get()?.let(block) }
+    }
+
+    /** 在存活列表上找第一个非空结果（[findPost] 用）；同样顺手清理弱引用 */
+    @Synchronized
+    private fun <T> firstFromLiveLists(block: (PostList) -> T?): T? {
+        lists.removeAll { it.get() == null }
+        for (ref in lists) {
+            val hit = ref.get()?.let(block)
+            if (hit != null) return hit
+        }
+        return null
+    }
 
     /**
      * **单帖状态表**：`postId -> 这一条帖子的最新状态`。
@@ -279,7 +307,10 @@ class PostRepository(private val session: SessionRepository) {
     }
 
     @Synchronized
-    fun newList(source: Source): PostList = PostList(source).also { lists.add(it) }
+    fun newList(source: Source): PostList = PostList(source).also {
+        lists.removeAll { it.get() == null } // 惰性清掉已被 GC 的旧登记
+        lists.add(WeakReference(it))
+    }
 
     /**
      * 按 source 复用的列表（见 [listFor]）；搜索源只留最近几次，避免无限增长。
@@ -323,7 +354,7 @@ class PostRepository(private val session: SessionRepository) {
     /** 失效：帖子在别处被删除/更新后，用它可以强制整表重拉（本轮未接线，留给 M3） */
     @Synchronized
     fun invalidateAll() {
-        lists.forEach { it.mutate { st -> st.copy(page = 0, endReached = false) } }
+        forEachLiveList { it.mutate { st -> st.copy(page = 0, endReached = false) } }
     }
 
     // ---------------------------------------------------------------
@@ -509,7 +540,7 @@ class PostRepository(private val session: SessionRepository) {
      */
     @Synchronized
     fun removeLocal(postId: Long) {
-        lists.forEach { list ->
+        forEachLiveList { list ->
             list.mutate { st ->
                 val next = st.posts.filterNot { it.id == postId }
                 // 只有真的少了一条才 copy：没这条帖子的列表保持原引用，
@@ -530,12 +561,12 @@ class PostRepository(private val session: SessionRepository) {
      */
     @Synchronized
     private fun findPost(postId: Long): PostUi? =
-        lists.firstNotNullOfOrNull { l -> l.snapshot().posts.firstOrNull { it.id == postId } }
+        firstFromLiveLists { l -> l.snapshot().posts.firstOrNull { it.id == postId } }
             ?: detailStates[postId]?.value
 
     @Synchronized
     private fun applyToAll(postId: Long, transform: (PostUi) -> PostUi) {
-        lists.forEach { list ->
+        forEachLiveList { list ->
             list.mutate { st ->
                 st.copy(posts = st.posts.map { if (it.id == postId) transform(it) else it })
             }

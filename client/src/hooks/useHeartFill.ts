@@ -19,7 +19,7 @@ export function useHeartFill(heartRef: RefObject<SVGSVGElement | null>, liked: b
     if (!path) return;
     // SVG presentation attribute 不支持 var()，需读取 CSS 变量实际值
     const dangerColor =
-      getComputedStyle(document.documentElement).getPropertyValue('--danger').trim() || '#ed4956';
+      getComputedStyle(document.documentElement).getPropertyValue('--danger').trim() || '#a84a40';
     const c = liked ? dangerColor : 'none';
     const s = liked ? dangerColor : 'currentColor';
     path.setAttribute('fill', c);

@@ -1,10 +1,18 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48">
+  <!--
+    K · favicon
+    主体：粗体几何「K」标记（2026-10 定稿，两臂端头斜切、上短下长），矢量化重绘：
+    竖笔平头 + 两条斜臂在腰点相会、臂端水平平切，竖笔右缘与两臂间保留两道斜向分缝。
+    与 BrandK.tsx / Android ic_launcher_foreground.xml 同源（母版网格 530x562）；
+    放置：视觉重心补偿 +24/562（字形墨迹偏向左侧，折半右移；两轮真机反馈收敛值）。
+  -->
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2f5d50"/>
-      <stop offset="1" stop-color="#7fa390"/>
+      <stop offset="0" stop-color="#325d51"/>
+      <stop offset="1" stop-color="#4c8070"/>
     </linearGradient>
   </defs>
   <rect width="48" height="48" rx="15" fill="url(#g)"/>
-  <text x="24" y="35" text-anchor="middle" font-family="'MiSans', 'PingFang SC', 'Microsoft YaHei', sans-serif" font-size="29" font-weight="900" fill="#f5faf6">K</text>
+  <path transform="translate(13.71 12) scale(0.0427)" fill="#ffffff"
+        d="M0,0 L172,0 L172,218 L325,0 L530,0 L325,264 L530,562 L325,562 L172,334 L172,562 L0,562 Z"/>
 </svg>

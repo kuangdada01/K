@@ -41,6 +41,7 @@ import { useSse } from '../hooks/useSse';
 import { saveHomeScrollPosition, getScrollTarget } from '../lib/scroll';
 import api from '../api/http';
 import AvatarMenu from './AvatarMenu';
+import BrandK from './BrandK';
 import styles from './Sidebar.module.css';
 
 /** 非消息页时的轮询间隔（消息页由 useConversations 拉到 10s，取最小） */
@@ -78,7 +79,11 @@ export default function Sidebar() {
     // 首帧后拉一次：经 setTimeout 宏任务触发，避开 react-hooks/set-state-in-effect
     // （与 useChatActions 同一处理方式）。真正的首屏渲染不依赖这个值。
     const kickoff = setTimeout(refreshAnnouncements, 0);
-    const interval = setInterval(refreshAnnouncements, SIDEBAR_POLL_MS);
+    const interval = setInterval(() => {
+      // 后台标签跳过：公告角标不追求实时，SSE 推送仍会在前台触发刷新
+      if (document.hidden) return;
+      void refreshAnnouncements();
+    }, SIDEBAR_POLL_MS);
     return () => {
       clearTimeout(kickoff);
       clearInterval(interval);
@@ -140,7 +145,9 @@ export default function Sidebar() {
     <nav className={styles.sidebar}>
       {/* 品牌区 */}
       <div className={styles.brand}>
-        <span className={styles.brandMark}>K</span>
+        <span className={styles.brandMark}>
+          <BrandK />
+        </span>
         <span className={styles.brandName}>Kuangdada</span>
       </div>
 

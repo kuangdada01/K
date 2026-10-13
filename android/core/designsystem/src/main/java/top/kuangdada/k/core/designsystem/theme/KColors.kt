@@ -9,16 +9,19 @@ import androidx.compose.ui.graphics.Color
  * ============================================================
  * 唯一来源：设计稿《K App 双主题 UI 优化基线》组件规范区「一 · 色彩令牌与实测对比度」。
  *
- * 浅色 · 青瓷黛绿 / 深色 · 玄夜鎏金 —— **色相体系不变**，全表只有 4 个色值相对旧 Web 版变动：
- *   · textMuted：浅 #82948B → #5A6D63、深 #6D7178 → #8B9098（旧值对比度 2.83/3.91 不达标）
- *   · danger   ：浅 #B5544A → #A84A40（4.29 → 4.99 过 AA）
- *   · success  ：浅 #3A7D5C → #347252（4.35 → 5.05 过 AA）
- *   · surface（深）：#161A22 → #1E232D（深色卡与页底分离度 1.09 → 1.17）
+ * 2026-10 配色改版 · 松绿 + 黑白中性（Pine & Monochrome）：
+ *   · 主题色统一 #325D51（浅色/深色同值）：主按钮、链接、强调元素、激活状态
+ *   · 语义色只保留红色（警告/危险/错误/删除）；原独立 success 绿并入主题绿
+ *   · 其余元素（背景/文字/边框/图标）只用黑、白与中性灰阶，无任何彩色倾向
+ *   · 深色下填充仍用 #325D51（配白字 7.45:1）；直接落在深底上的链接/图标
+ *     文字需要用同色相提亮档 #7FB5A2（同 Web 的 --accent-text，≥6.68:1）。
+ *     注意：Compose 侧凡是「accent 文字直接落在表面/页底上」的场景，
+ *     深色应取 0xFF7FB5A2 —— 可先查 `KColors.accent` 的使用处再决定。
  *
  * 两条硬约束（会直接影响实现，别绕开）：
- *  1. **accent 的明度在两主题间是反相的**：浅色 accent 是深绿（需要浅色字），
- *     深色 accent 是浅金（需要深色字）。任何「实心 accent 底 + 图标/文字」的组件
- *     必须用 [onAccent]，**不能固定白色** —— 深色下白字只有 3.63:1，不达标。
+ *  1. **accent 不再两主题反相**：改版前浅色=深绿 / 深色=浅金（onAccent 需反色）；
+ *     改版后两主题 accent 都是深绿 #325D51，[onAccent] 两主题都是白色（7.45:1），
+ *     "深色下白字不达标"的特例随鎏金一起取消。
  *  2. 需要边界的次级控件一律 `surface + borderStrong`，**不存在「凹陷色」令牌**（决策 Q6：
  *     旧 --bg-input #E9EFE9 与页底 #EEF2EE 只有 1.04:1，读不出边界，已取消该语义）。
  */
@@ -46,11 +49,11 @@ data class KColors(
 
     // ---- 强调 ----
     val accent: Color,
-    /** accent 底上的文字/图标（**反相**，禁止固定白色） */
+    /** accent 底上的文字/图标（两主题均为白色：#325D51 底上 7.45:1） */
     val onAccent: Color,
     /** 选中底、幽灵按钮 hover */
     val accentSoft: Color,
-    /** 幽灵按钮描边 */
+    /** 强调按钮描边（已关注胶囊等；同 accent 文字档，深色为提亮绿） */
     val accentBorder: Color,
 
     // ---- 语义 ----
@@ -125,9 +128,23 @@ data class KColors(
     val accentPressed: Color
         get() = if (isLight) KLightAccentPressed else KDarkAccentPressed
 
+    /**
+     * 「直接落在背景上的主题色」文字 / 图标 / 描边档 —— 深色下用同色相提亮版 #7FB5A2。
+     *
+     * 为什么需要：主题色 #325D51 在深色底上只有 2.3–2.6:1（不可读），
+     * 而它又必须作为品牌色出现在链接、图标、选中态描边里。规则：
+     * **填充（背景）用 [accent]；文字/图标/描边用 [accentText]。**
+     * 浅色 = accent 原值（白卡 7.45:1）；深色 = #7FB5A2（卡面 ≥6.68:1）。
+     *
+     * 例外：棋盘、地图这类「固定浅色底的道具」上的标记仍用 [accent] 原值
+     * （深色下 #7FB5A2 压在浅木/浅图底上反而不可读，见 ChessBoardView / LocationPicker）。
+     */
+    val accentText: Color
+        get() = if (isLight) accent else KDarkAccentText
+
     /** 禁用态的面与字（设计稿上是浅灰面 + 弱化字，两主题都读得出来） */
     val disabledSurface: Color
-        get() = if (isLight) Color(0xFFE6ECE6) else Color(0xFF2A2F3A)
+        get() = if (isLight) Color(0xFFE8E8E8) else Color(0xFF2C2C2C)
 
     /**
      * 「比页面底稍稍离开一点」的中性面：浅色用 [surfaceSunken]（比页底深一档），
@@ -141,79 +158,77 @@ data class KColors(
         get() = if (isLight) surfaceSunken else surfaceRaised
 }
 
-/** 浅色 · 青瓷黛绿 */
+/** 浅色 · 松绿 + 黑白中性 */
 val KLightColors: KColors = KColors(
-    bgPage = Color(0xFFEEF2EE),
+    bgPage = Color(0xFFF5F5F5),
     surface = Color(0xFFFFFFFF),
     surfaceRaised = Color(0xFFFFFFFF),
-    surfaceSunken = Color(0xFFE8F0E8),
+    surfaceSunken = Color(0xFFEDEDED),
 
-    textPrimary = Color(0xFF1F2B26),
-    textSecondary = Color(0xFF55645D),
-    textMuted = Color(0xFF5A6D63),
+    textPrimary = Color(0xFF171717),
+    textSecondary = Color(0xFF525252),
+    textMuted = Color(0xFF6B6B6B),
 
-    accent = Color(0xFF2F5D50),
-    onAccent = Color(0xFFF5FAF6),
-    accentSoft = Color(0xFFD1DBD6),
-    accentBorder = Color(0xFFA8BFB5),
+    accent = Color(0xFF325D51),
+    onAccent = Color(0xFFFFFFFF),
+    accentSoft = Color(0x1F325D51), // rgba(50,93,81,.12)
+    accentBorder = Color(0xFF325D51),
 
     danger = Color(0xFFA84A40),
     dangerSoft = Color(0xFFE8DEDB),
-    success = Color(0xFF347252),
+    success = Color(0xFF325D51),
 
-    borderSubtle = Color(0xFFDEE8DE),
-    borderStrong = Color(0xFFBAC9BA),
+    borderSubtle = Color(0xFFEFEFEF),
+    borderStrong = Color(0xFFD4D4D4),
 
-    scrim = Color(0x73141F1A), // rgba(20,31,26,.45)
-    focusRing = Color(0xFF2F5D50),
-    // 玻璃 = 页底同色（青瓷）+ 真模糊（haze），alpha 55%：模糊把底下的内容抹匀，
-    // 色相跟页底走才不会在青瓷页上发白（白色玻璃实测突兀，用户反馈）。
+    scrim = Color(0x73000000), // rgba(0,0,0,.45)
+    focusRing = Color(0xFF325D51),
+    // 玻璃 = 页底同色（中性浅灰）+ 真模糊，alpha 55%：色相跟页底走，
+    // 否则在灰底页上会"发白"（白色玻璃实测突兀，用户反馈）。
     // frostedSolid 是 API 27-30（无 RenderEffect）的降级：页底色的不透明档。
-    frosted = Color(0x8CEEF2EE),
-    frostedSolid = Color(0xFFEEF2EE),
-    // 材质化玻璃：页底同色 + 96% 不透明。
-    // 为什么是 96% 而不是 90%：90% 时底下的深色文字仍能看清（用户实测反馈
-    // "还是只有半透明，能看到后面的字"）—— 而**看得清字**正是磨砂玻璃的反面。
-    // 没有模糊时唯一能压住"看清"的办法就是提高不透明度；96% 是"看不见字、
-    // 但仍有一丝透光暗示"的临界点。要彻底不留痕迹就用 frostedSolid。
-    frostedMaterial = Color(0xF5EEF2EE),
+    frosted = Color(0x8CF5F5F5),
+    frostedSolid = Color(0xFFF5F5F5),
+    // 材质化玻璃：页底同色 + 96% 不透明（"看不见字、但仍有一丝透光暗示"的临界点）。
+    frostedMaterial = Color(0xF5F5F5F5),
     isLight = true,
 )
 
-/** 深色 · 玄夜鎏金 */
+/** 深色 · 松绿 + 中性黑 */
 val KDarkColors: KColors = KColors(
-    bgPage = Color(0xFF0D0F14),
-    surface = Color(0xFF1E232D),
-    surfaceRaised = Color(0xFF262B36),
-    surfaceSunken = Color(0xFF141721),
+    bgPage = Color(0xFF121212),
+    surface = Color(0xFF1C1C1C),
+    surfaceRaised = Color(0xFF242424),
+    surfaceSunken = Color(0xFF0F0F0F),
 
-    textPrimary = Color(0xFFE8E6E1),
-    textSecondary = Color(0xFFA8ABAF),
-    textMuted = Color(0xFF8B9098),
+    textPrimary = Color(0xFFF5F5F5),
+    textSecondary = Color(0xFFB3B3B3),
+    textMuted = Color(0xFF919191),
 
-    accent = Color(0xFFC9A962),
-    onAccent = Color(0xFF0D0F14),
-    accentSoft = Color(0xFF2E2B21),
-    accentBorder = Color(0xFF6B5C38),
+    accent = Color(0xFF325D51), // 与浅色同值：深色下填充/主按钮不变
+    onAccent = Color(0xFFFFFFFF), // 白字压 #325D51 = 7.45:1
+    accentSoft = Color(0x3850927C), // rgba(80,146,124,.22)
+    accentBorder = Color(0xFF7FB5A2), // 深底上的强调描边（同 Web --accent-text）
 
     danger = Color(0xFFE0586B),
     dangerSoft = Color(0xFF2E1A21),
-    success = Color(0xFF7FBF8F),
+    success = Color(0xFF7FB5A2),
 
-    borderSubtle = Color(0xFF1F242E),
-    borderStrong = Color(0xFF454F5E),
+    borderSubtle = Color(0xFF232323),
+    borderStrong = Color(0xFF404040),
 
     scrim = Color(0x9E000000), // rgba(0,0,0,.62)
-    focusRing = Color(0xFFC9A962),
-    // 玻璃 = 页底同色（玄夜）+ 真模糊，alpha 55%：与浅色同一规则（色相跟 bgPage 走，
-    // 见 frosted 的注释）。深色无模糊时代要 94% 才压得住，那是没有模糊的前提。
-    frosted = Color(0x8C0D0F14),
-    frostedSolid = Color(0xFF0D0F14),
+    focusRing = Color(0xFF7FB5A2),
+    // 玻璃 = 页底同色（中性黑）+ 真模糊，alpha 55%：与浅色同一规则（见 frosted 注释）。
+    frosted = Color(0x8C121212),
+    frostedSolid = Color(0xFF121212),
     // 材质化玻璃：深色 97%（比浅色更高 —— 深底上浅色内容的对比更强，更"藏不住"）
-    frostedMaterial = Color(0xF70D0F14),
+    frostedMaterial = Color(0xF7121212),
     isLight = false,
 )
 
-/** 按下态（两主题共用规则：往 accent 深处推一档，与旧 Web 的 --accent-hover 一致） */
-val KLightAccentPressed: Color = Color(0xFF24493E)
-val KDarkAccentPressed: Color = Color(0xFFD9BD7C)
+/** 按下态（两主题共用规则：往 accent 深处推一档，与 Web 的 --accent-hover 对齐） */
+val KLightAccentPressed: Color = Color(0xFF27493F)
+val KDarkAccentPressed: Color = Color(0xFF3A6B5C)
+
+/** 深色下的「主题色文字/图标」提亮档（同色相，保证深底上 ≥6.68:1） */
+val KDarkAccentText: Color = Color(0xFF7FB5A2)

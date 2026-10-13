@@ -10,11 +10,13 @@ import top.kuangdada.k.core.data.api.AnnouncementApi
 import top.kuangdada.k.core.data.api.AuthApi
 import top.kuangdada.k.core.data.api.BookApi
 import top.kuangdada.k.core.data.api.ComposerApi
+import top.kuangdada.k.core.data.api.DiagApi
 import top.kuangdada.k.core.data.api.EventApi
 import top.kuangdada.k.core.data.api.FriendsApi
 import top.kuangdada.k.core.data.api.MessageApi
 import top.kuangdada.k.core.data.api.NotificationsApi
 import top.kuangdada.k.core.data.api.PostApi
+import top.kuangdada.k.core.data.api.PushApi
 import top.kuangdada.k.core.data.api.TtsApi
 import top.kuangdada.k.core.data.api.UserApi
 import top.kuangdada.k.core.data.api.VoiceApi
@@ -155,6 +157,10 @@ class KApi(
     val messages: MessageApi by lazy { retrofit.create(MessageApi::class.java) }
     val composer: ComposerApi by lazy { retrofit.create(ComposerApi::class.java) }
     val events: EventApi by lazy { retrofit.create(EventApi::class.java) }
+    /** 通知链路的自检上报（`POST /api/notify-diag`，服务端只写日志） */
+    val diag: DiagApi by lazy { retrofit.create(DiagApi::class.java) }
+    /** 推送设备注册（`/api/push/devices`）：离线推送（OPPO）的 token 上报与解绑 */
+    val push: PushApi by lazy { retrofit.create(PushApi::class.java) }
     val admin: AdminApi by lazy { retrofit.create(AdminApi::class.java) }
     val announcements: AnnouncementApi by lazy { retrofit.create(AnnouncementApi::class.java) }
     // 通知接口。原先因为 release(R8) 下 create() 抛 ClassCastException 被摘掉，

@@ -160,7 +160,7 @@
 .followBtn {
   margin-left: auto;
   padding: 7px 13px;
-  border: 1px solid rgba(47, 93, 80, 0.22);
+  border: 1px solid var(--accent);
   border-radius: 999px;
   font-size: 13px;
   font-weight: 700;
@@ -179,15 +179,12 @@
 
 .followBtn.following {
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-text);
+  border-color: var(--accent-border);
 }
 
 .followBtn.following:hover {
   background: var(--accent-soft);
-}
-
-[data-theme='dark'] .followBtn {
-  border-color: rgba(201, 169, 98, 0.38);
 }
 
 .comments {
@@ -285,12 +282,12 @@
 }
 
 .bookmarkBtn.bookmarked {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .bookmarkBtn.bookmarked svg {
-  fill: var(--accent) !important;
-  stroke: var(--accent) !important;
+  fill: var(--accent-text) !important;
+  stroke: var(--accent-text) !important;
 }
 
 .shareTooltip {
@@ -349,7 +346,7 @@
   border: 1px solid var(--border-color);
   border-radius: 16px;
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-text);
   font-size: 13px;
   cursor: pointer;
 }
@@ -390,7 +387,7 @@
 }
 
 .replyingToBar button {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 600;
   font-size: 13px;
   background: none;
@@ -399,7 +396,7 @@
 }
 
 .submit {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 600;
   font-size: 14px;
   background: none;
@@ -430,7 +427,7 @@
 }
 
 .editBtn:hover {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 @media (max-width: 768px) {

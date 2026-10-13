@@ -68,7 +68,8 @@ test('P0-1：授权弹窗期间退出房间 → 麦克风必须关闭、且不�
     await page.addInitScript(MIC_INIT_SCRIPT);
     await page.goto('/voice');
 
-    // 进入刚建的房间 → 触发 join() → getUserMedia 挂起 2.5s（等价于「授权弹窗还没点」）
+    // 进入刚建的房间 → 触发 join() → getUserMedia 挂起 2.5s（等价于「授权弹窗还没点」）。
+    // 点击立即进入房间视图（连接在房内静默进行）—— 授权挂起期间这里就有退出出口。
     await page.getByText(roomName).first().click();
     const leaveBtn = page.locator('button[title="退出房间"]');
     await expect(leaveBtn).toBeVisible({ timeout: 10_000 });

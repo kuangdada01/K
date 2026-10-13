@@ -138,7 +138,7 @@ fun AnnouncementsScreen(
                                     Text(
                                         text = "$unread 条未读",
                                         style = KType.footnote,
-                                        color = c.accent,
+                                        color = c.accentText,
                                     )
                                 }
                                 KButton("返回", onClick = onBack, variant = KButtonVariant.Ghost)
@@ -151,7 +151,7 @@ fun AnnouncementsScreen(
             when {
                 loading && items.isEmpty() -> item {
                     Box(Modifier.fillMaxWidth().padding(KSpacing.xxl), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = c.accent)
+                        CircularProgressIndicator(color = c.accentText)
                     }
                 }
 
@@ -252,7 +252,7 @@ private fun AnnouncementCard(row: AnnouncementDto, onRead: () -> Unit, modifier:
                         color = c.textMuted,
                     )
                     if (row.targetUserId != null) {
-                        Text("定向", style = KType.footnote, color = c.accent)
+                        Text("定向", style = KType.footnote, color = c.accentText)
                     }
                 }
                 Text(

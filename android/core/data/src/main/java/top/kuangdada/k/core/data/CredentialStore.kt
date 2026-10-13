@@ -67,6 +67,22 @@ class SecureCredentialStore(context: Context) : CredentialStore {
     @Volatile
     private var memoryOnlyMode = false
 
+    /**
+     * token 的**写穿式内存快照**（2026-10-11）。
+     *
+     * 为什么要它：EncryptedSharedPreferences 的每次 `getString` 都要过 Tink 解密，
+     * 而 token 的读取在**主线程热路径**上（SessionRepository.isLoggedIn、每个仓库的
+     * 请求头组装、AppShell 组合期判登录态）。`memoryOnly` 分支本来就有内存快照
+     * （memoryToken），加密分支反而每次读盘 —— 这里补齐：写时同步更新快照，
+     * 读时只碰内存；null（未登录）同样可缓存（有 loaded 标记区分"未初始化"）。
+     * 快照的唯一失效点是写路径，本类是 token 的唯一写入口，不存在脏读。
+     */
+    @Volatile
+    private var tokenSnapshot: String? = null
+
+    @Volatile
+    private var tokenSnapshotLoaded = false
+
     override val memoryOnly: Boolean get() = memoryOnlyMode
 
     /** 加密存储；首次访问时顺带做旧明文迁移（失败仅记录，不阻塞功能） */
@@ -99,15 +115,23 @@ class SecureCredentialStore(context: Context) : CredentialStore {
     }
 
     override var token: String?
-        get() = if (memoryOnlyMode) memoryToken.get() else prefs?.getString(KEY_TOKEN, null)
+        get() {
+            if (tokenSnapshotLoaded) return tokenSnapshot
+            val v = if (memoryOnlyMode) memoryToken.get() else prefs?.getString(KEY_TOKEN, null)
+            tokenSnapshot = v
+            tokenSnapshotLoaded = true
+            return v
+        }
         set(value) {
             if (memoryOnlyMode) {
                 memoryToken.set(value)
-                return
+            } else {
+                prefs?.edit()?.apply {
+                    if (value.isNullOrEmpty()) remove(KEY_TOKEN) else putString(KEY_TOKEN, value)
+                }?.apply()
             }
-            prefs?.edit()?.apply {
-                if (value.isNullOrEmpty()) remove(KEY_TOKEN) else putString(KEY_TOKEN, value)
-            }?.apply()
+            tokenSnapshot = value
+            tokenSnapshotLoaded = true
         }
 
     override fun guestOwnerToken(roomId: Long): String? =

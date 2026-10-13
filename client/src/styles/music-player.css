@@ -33,7 +33,7 @@
   padding: 0 10px 0 16px;
   margin-top: 16px;
   background: var(--bg-frosted);
-  border: 1px solid rgba(210, 221, 210, 0.92);
+  border: 1px solid rgba(229, 229, 229, 0.92);
   border-radius: 22px;
   box-shadow: var(--shadow);
   backdrop-filter: blur(18px) saturate(180%);
@@ -43,7 +43,7 @@
 
 [data-theme='dark'] .music-player-inline {
   background: var(--bg-frosted);
-  border-color: rgba(38, 43, 53, 0.95);
+  border-color: rgba(64, 64, 64, 0.95);
 }
 
 .music-player-inline .music-player-info {

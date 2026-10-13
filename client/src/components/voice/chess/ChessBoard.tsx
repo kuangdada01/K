@@ -14,7 +14,7 @@
  * ============================================================
  */
 
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { legalMoves, parseFen, pieceSide, type ChessMove, type ChessSide, type ChessSquare } from '@k/shared';
 import styles from './chess.module.css';
 import woodUrl from './wood3.jpg';
@@ -104,7 +104,10 @@ function centerPieceGlyph(el: SVGTextElement | null, cx: number, cy: number): vo
   }
 }
 
-export default function ChessBoard({
+// memo：对局期间面板的棋钟每 500ms 触发一次整块重渲，而棋盘的 props
+// （fen/lastMove/…）只在走子时变化 —— memo + 稳定的 onMove（见面板的
+// useCallback）让棋盘跳过这些纯走秒重渲（约 200+ SVG 节点/次）。
+export default memo(function ChessBoard({
   fen,
   lastMove,
   mySide,
@@ -396,4 +399,4 @@ export default function ChessBoard({
       })}
     </svg>
   );
-}
+});

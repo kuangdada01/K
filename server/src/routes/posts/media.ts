@@ -155,7 +155,35 @@ export function sweepTempVideos(now: number = Date.now()): number {
   } catch {
     /* 忽略目录级错误 */
   }
+  // compressImage 的 `.tmp-*` 中间文件（写完 rename 前进程被杀则永留）顺带清扫：
+  // 它们散落在 uploads/avatars 等正式目录里，不会出现在 uploads/temp，
+  // 所以单独按同一 TTL 扫一遍 uploads 根目录。
+  removed += sweepStaleTmpFiles(PATHS.uploads, now - TEMP_VIDEO_TTL_MS);
   pruneChunkUploads();
+  return removed;
+}
+
+/** 删除 dir 下超过 cutoff 的 `.tmp-*` 中间文件（compressImage 崩溃窗口遗留），返回删除数 */
+function sweepStaleTmpFiles(dir: string, cutoff: number): number {
+  let removed = 0;
+  try {
+    if (!fs.existsSync(dir)) return 0;
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.includes('.tmp-')) continue;
+      const p = path.join(dir, name);
+      try {
+        const st = fs.statSync(p);
+        if (st.isFile() && st.mtimeMs < cutoff) {
+          fs.unlinkSync(p);
+          removed++;
+        }
+      } catch {
+        /* 忽略单个文件错误 */
+      }
+    }
+  } catch {
+    /* 忽略目录级错误 */
+  }
   return removed;
 }
 
@@ -426,9 +454,12 @@ router.get(
     if (!TEMP_VIDEO_NAME_RE.test(name)) {
       throw new AppError(400, '无效的视频引用');
     }
-    // 属主校验（与 DELETE /video-temp 一致）：暴露文件是否转码完成属隐私信息
+    // 属主校验（与 DELETE /video-temp 完全一致）：暴露文件是否转码完成属隐私信息。
+    // 无登记的遗留文件（上传会话持久化之前落盘的）一律拒绝 —— DELETE 同场景是 403，
+    // status 之前放行是两者的不一致（文件字节经静态目录可读本来就是另一回事，
+    // 但"有没有登记"这个判据必须两个端点说同一句话）。
     const owner = getChunkOwner(name);
-    if (owner && owner.userId !== req.user!.id) {
+    if (!owner || owner.userId !== req.user!.id) {
       throw new AppError(403, '无权查看该临时视频');
     }
     const filePath = path.join(PATHS.uploadsTemp, name);
@@ -506,6 +537,106 @@ const videoFields = videoUpload.fields([
   { name: 'video', maxCount: 1 },
   { name: 'cover', maxCount: 1 },
 ]);
+
+/**
+ * 临时视频消费路径（A3 拆分）：校验属主与完整性 → temp 移入正式目录 → 入队转码。
+ * 返回 `/uploads/<name>`。`staged` 登记"已移入正式目录"的绝对路径，
+ * 失败时由调用方的 catch 统一回删（与拆分前同一补偿语义）。
+ */
+async function consumeTempVideo(req: Request, videoUrlField: string, staged: string[]): Promise<string> {
+  const name = path.basename(videoUrlField);
+  if (!TEMP_VIDEO_NAME_RE.test(name)) {
+    throw new AppError(400, '无效的视频引用');
+  }
+  // 属主校验（P1-3.4）：无登记（部署前遗留/来历不明）按未知属主隔离拒绝，
+  // 不能被新请求接管；有属主且非本人 → 拒绝（防冒用他人草稿）
+  const owner = getChunkOwner(name);
+  if (!owner) {
+    throw new AppError(403, '视频已失效，请重新选择视频');
+  }
+  if (owner.userId !== req.user!.id) {
+    throw new AppError(403, '无权使用该临时视频');
+  }
+  const tempPath = path.join(PATHS.uploadsTemp, name);
+  const finalPath = path.join(PATHS.uploads, name);
+  if (!fs.existsSync(tempPath)) {
+    throw new AppError(400, '视频已失效，请重新选择视频');
+  }
+  // 分片会话发布前完整性校验（P0）：片数收齐 + 实际字节数与会话记账一致
+  // （客户端另行声明的 video_bytes 亦须吻合，兜住客户端侧切片错位）。
+  // 客户端还可带 video_sha256（整文件摘要）做端到端校验；不匹配按损坏拒绝，
+  // 绝不把残缺/重复字节的内容发布出去。旧客户端不带摘要时仍以片数+大小为准。
+  if (owner.totalChunks > 0) {
+    if (owner.nextChunk < owner.totalChunks) {
+      throw new AppError(400, '视频尚未上传完成', { expectedChunkIndex: owner.nextChunk });
+    }
+    const declaredBytes = parseInt(req.body.video_bytes as string, 10);
+    if (Number.isInteger(declaredBytes) && declaredBytes !== owner.receivedBytes) {
+      throw new AppError(400, '视频大小校验失败，请重新上传', { expectedChunkIndex: owner.nextChunk });
+    }
+    const actualSize = fs.statSync(tempPath).size;
+    if (actualSize !== owner.receivedBytes) {
+      safeDeleteFile(`/uploads/temp/${name}`, 'uploads');
+      releaseChunkUpload(name);
+      throw new AppError(400, '视频大小校验失败，请重新上传');
+    }
+  }
+  const clientTotalSha =
+    typeof req.body.video_sha256 === 'string' && /^[0-9a-f]{64}$/i.test(req.body.video_sha256)
+      ? req.body.video_sha256.toLowerCase()
+      : null;
+  if (clientTotalSha && (await sha256File(tempPath)) !== clientTotalSha) {
+    safeDeleteFile(`/uploads/temp/${name}`, 'uploads');
+    releaseChunkUpload(name);
+    throw new AppError(400, '视频校验失败，请重新上传');
+  }
+  fs.renameSync(tempPath, finalPath);
+  // 分片上传会话随文件消费而结束：标记已消费（保留属主记录供追溯，退出配额与活跃判定）
+  markChunkUploadConsumed(name);
+  // 兼容旧客户端残留的非 .mp4 临时文件名：统一规范化并入队转码
+  const normalizedName = normalizeVideoToMp4(PATHS.uploads, name);
+  const videoAbs = path.join(PATHS.uploads, normalizedName);
+  staged.push(videoAbs);
+  enqueueVideoTranscode(videoAbs, normalizedName);
+  return `/uploads/${normalizedName}`;
+}
+
+/**
+ * 直传路径（A3 拆分）：multipart 文件已由 multer 落在 uploads/，二次校验 →
+ * 统一改存 .mp4 → 入队转码。`coverFile` 传进来是因为两条失败分支要当场清理它
+ * （multer 落盘的文件不进 staged，catch 的回删覆盖不到）。
+ */
+function storeDirectVideo(
+  uploadedVideo: Express.Multer.File,
+  coverFile: Express.Multer.File | undefined,
+  staged: string[]
+): string {
+  // 二次验证视频文件类型（防御性检查，fileFilter 已拦截大部分非法文件）
+  const videoExt = path.extname(uploadedVideo.originalname).toLowerCase();
+  if (!uploadedVideo.mimetype.startsWith('video/') && !VIDEO_EXTS.includes(videoExt)) {
+    // 删除已上传的文件
+    safeDeleteFile(`/uploads/${uploadedVideo.filename}`, 'uploads');
+    // 封面也一并清理（与下方"过小文件"分支同口径；拆分前这里漏删——
+    // coverFile 尚未登记进 staged，catch 回删覆盖不到，文件会滞留到永不被清扫）
+    if (coverFile) safeDeleteFile(`/uploads/${coverFile.filename}`, 'uploads');
+    throw new AppError(400, '仅支持视频格式文件');
+  }
+
+  // 拒绝过小/被截断的视频文件（如云端文件只上传了文件头）
+  if (uploadedVideo.size < 1024) {
+    safeDeleteFile(`/uploads/${uploadedVideo.filename}`, 'uploads');
+    if (coverFile) safeDeleteFile(`/uploads/${coverFile.filename}`, 'uploads');
+    throw new AppError(400, '视频文件无效或不完整，请重新选择后再发布');
+  }
+
+  // 统一改存 .mp4 扩展名，后台串行转码（发布立即成功，转码完成后原地替换）
+  const normalizedName = normalizeVideoToMp4(PATHS.uploads, uploadedVideo.filename);
+  const videoAbs = path.join(PATHS.uploads, normalizedName);
+  staged.push(videoAbs);
+  enqueueVideoTranscode(videoAbs, normalizedName);
+  return `/uploads/${normalizedName}`;
+}
+
 router.post(
   '/video',
   authMiddleware,
@@ -526,8 +657,6 @@ router.post(
       throw new AppError(400, parsedText.error.issues[0]?.message || '参数错误');
     }
 
-    let videoUrl: string;
-
     /**
      * 本次请求已移入正式目录（server/uploads）的媒体文件绝对路径。
      * 视频/封面都是「先落盘、后写库」，两者之间任何一步失败（转码队列满 429、
@@ -537,90 +666,18 @@ router.post(
     const staged: string[] = [];
 
     try {
-      if (videoUrlField) {
-        // 使用选择视频时已上传的临时文件，移动到正式目录
-        const name = path.basename(videoUrlField);
-        if (!TEMP_VIDEO_NAME_RE.test(name)) {
-          throw new AppError(400, '无效的视频引用');
-        }
-        // 属主校验（P1-3.4）：无登记（部署前遗留/来历不明）按未知属主隔离拒绝，
-        // 不能被新请求接管；有属主且非本人 → 拒绝（防冒用他人草稿）
-        const owner = getChunkOwner(name);
-        if (!owner) {
-          throw new AppError(403, '视频已失效，请重新选择视频');
-        }
-        if (owner.userId !== req.user!.id) {
-          throw new AppError(403, '无权使用该临时视频');
-        }
-        const tempPath = path.join(PATHS.uploadsTemp, name);
-        const finalPath = path.join(PATHS.uploads, name);
-        if (!fs.existsSync(tempPath)) {
-          throw new AppError(400, '视频已失效，请重新选择视频');
-        }
-        // 分片会话发布前完整性校验（P0）：片数收齐 + 实际字节数与会话记账一致
-        // （客户端另行声明的 video_bytes 亦须吻合，兜住客户端侧切片错位）。
-        // 客户端还可带 video_sha256（整文件摘要）做端到端校验；不匹配按损坏拒绝，
-        // 绝不把残缺/重复字节的内容发布出去。旧客户端不带摘要时仍以片数+大小为准。
-        if (owner.totalChunks > 0) {
-          if (owner.nextChunk < owner.totalChunks) {
-            throw new AppError(400, '视频尚未上传完成', { expectedChunkIndex: owner.nextChunk });
-          }
-          const declaredBytes = parseInt(req.body.video_bytes as string, 10);
-          if (Number.isInteger(declaredBytes) && declaredBytes !== owner.receivedBytes) {
-            throw new AppError(400, '视频大小校验失败，请重新上传', { expectedChunkIndex: owner.nextChunk });
-          }
-          const actualSize = fs.statSync(tempPath).size;
-          if (actualSize !== owner.receivedBytes) {
-            safeDeleteFile(`/uploads/temp/${name}`, 'uploads');
-            releaseChunkUpload(name);
-            throw new AppError(400, '视频大小校验失败，请重新上传');
-          }
-        }
-        const clientTotalSha =
-          typeof req.body.video_sha256 === 'string' && /^[0-9a-f]{64}$/i.test(req.body.video_sha256)
-            ? req.body.video_sha256.toLowerCase()
-            : null;
-        if (clientTotalSha && (await sha256File(tempPath)) !== clientTotalSha) {
-          safeDeleteFile(`/uploads/temp/${name}`, 'uploads');
-          releaseChunkUpload(name);
-          throw new AppError(400, '视频校验失败，请重新上传');
-        }
-        fs.renameSync(tempPath, finalPath);
-        // 分片上传会话随文件消费而结束：标记已消费（保留属主记录供追溯，退出配额与活跃判定）
-        markChunkUploadConsumed(name);
-        // 兼容旧客户端残留的非 .mp4 临时文件名：统一规范化并入队转码
-        const normalizedName = normalizeVideoToMp4(PATHS.uploads, name);
-        const videoAbs = path.join(PATHS.uploads, normalizedName);
-        staged.push(videoAbs);
-        enqueueVideoTranscode(videoAbs, normalizedName);
-        videoUrl = `/uploads/${normalizedName}`;
-      } else {
-        if (!uploadedVideo) {
-          throw new AppError(400, '请选择视频');
-        }
-
-        // 二次验证视频文件类型（防御性检查，fileFilter 已拦截大部分非法文件）
-        const videoExt = path.extname(uploadedVideo.originalname).toLowerCase();
-        if (!uploadedVideo.mimetype.startsWith('video/') && !VIDEO_EXTS.includes(videoExt)) {
-          // 删除已上传的文件
-          safeDeleteFile(`/uploads/${uploadedVideo.filename}`, 'uploads');
-          throw new AppError(400, '仅支持视频格式文件');
-        }
-
-        // 拒绝过小/被截断的视频文件（如云端文件只上传了文件头）
-        if (uploadedVideo.size < 1024) {
-          safeDeleteFile(`/uploads/${uploadedVideo.filename}`, 'uploads');
-          if (coverFile) safeDeleteFile(`/uploads/${coverFile.filename}`, 'uploads');
-          throw new AppError(400, '视频文件无效或不完整，请重新选择后再发布');
-        }
-
-        // 统一改存 .mp4 扩展名，后台串行转码（发布立即成功，转码完成后原地替换）
-        const normalizedName = normalizeVideoToMp4(PATHS.uploads, uploadedVideo.filename);
-        const videoAbs = path.join(PATHS.uploads, normalizedName);
-        staged.push(videoAbs);
-        enqueueVideoTranscode(videoAbs, normalizedName);
-        videoUrl = `/uploads/${normalizedName}`;
-      }
+      // A3 拆分：两条来源路径各自成函数（临时迁移 / 直传），handler 只留编排——
+      // 封面兜底、事务写库与 staged 补偿是两条路径共享的尾部，保持原位。
+      const videoUrl = videoUrlField
+        ? await consumeTempVideo(req, videoUrlField, staged)
+        : storeDirectVideo(
+            uploadedVideo ??
+              (() => {
+                throw new AppError(400, '请选择视频');
+              })(),
+            coverFile,
+            staged
+          );
 
       // 封面：优先用客户端截取的封面图；缺失时服务端自动从视频截帧兜底
       // （客户端 canvas 截帧可能失败：浏览器解不了 HEVC、同值 seek 不触发 seeked 等）

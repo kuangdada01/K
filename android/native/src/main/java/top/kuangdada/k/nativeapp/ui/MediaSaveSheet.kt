@@ -285,14 +285,14 @@ private fun SheetRow(
             style = KType.body,
             color = when {
                 danger -> c.danger
-                highlighted -> c.accent
+                highlighted -> c.accentText
                 else -> c.textPrimary
             },
         )
         if (busy) {
             Spacer(Modifier.width(KSpacing.xs))
             CircularProgressIndicator(
-                color = c.accent,
+                color = c.accentText,
                 strokeWidth = 1.5.dp,
                 modifier = Modifier.size(14.dp),
             )

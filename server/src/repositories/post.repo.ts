@@ -122,7 +122,11 @@ export function decodeFeedCursor(cursor: string): { createdAt: string; id: numbe
   }
   const createdAt = cursor.slice(0, sep);
   const id = Number(cursor.slice(sep + 1));
-  if (!Number.isInteger(id) || id <= 0 || !/^\d{4}-\d{2}-\d{2}T/.test(createdAt)) {
+  // 时间分隔符兼容 T（ISO，新 schema 的 strftime 默认值）与空格（老 schema 的
+  // CURRENT_TIMESTAMP 默认值）——线上库存量为空格格式，严格要求 T 会让第二页
+  // 游标校验必 400，无限滚动在第一页后永远断掉（游标比较是纯文本比较，同一
+  // 库内格式自洽，兼容两种分隔符不影响 seek 正确性）
+  if (!Number.isInteger(id) || id <= 0 || !/^\d{4}-\d{2}-\d{2}[T ]/.test(createdAt)) {
     throw new AppError(400, '无效的分页游标');
   }
   return { createdAt, id };
@@ -565,16 +569,22 @@ function countPostLikes(postId: number): number {
 // 分享
 // ============================================================
 
-/** 记录分享（每用户每帖只计一次），返回分享数与状态 */
+/** 记录分享（每用户每帖只计一次），返回分享数与状态。
+ *  三步写（登记/计数/回读）包进事务：进程在中间崩溃时不会出现
+ *  shares 行已插入而 share_count 冗余列未加的漂移。 */
 export function sharePost(userId: number, postId: number): { share_count: number; shared: boolean } {
   requirePost(postId);
-  const result = stmt('INSERT OR IGNORE INTO shares (user_id, post_id) VALUES (?, ?)').run(userId, postId);
-  if (result.changes === 1) {
-    stmt('UPDATE posts SET share_count = share_count + 1 WHERE id = ?').run(postId);
-  }
-  const row = stmt('SELECT share_count FROM posts WHERE id = ?').get(postId) as
-    { share_count: number } | undefined;
-  return { share_count: row?.share_count || 0, shared: true };
+  const shareCount = getDb().transaction(() => {
+    const result = stmt('INSERT OR IGNORE INTO shares (user_id, post_id) VALUES (?, ?)').run(userId, postId);
+    if (result.changes === 1) {
+      stmt('UPDATE posts SET share_count = share_count + 1 WHERE id = ?').run(postId);
+    }
+    return (
+      (stmt('SELECT share_count FROM posts WHERE id = ?').get(postId) as { share_count: number } | undefined)
+        ?.share_count ?? 0
+    );
+  })();
+  return { share_count: shareCount, shared: true };
 }
 
 // ============================================================
@@ -597,26 +607,38 @@ export function unbookmarkPost(userId: number, postId: number): void {
 // 转发
 // ============================================================
 
-/** 转发（每用户每帖只计一次），返回转发数与状态 */
+/** 转发（每用户每帖只计一次），返回转发数与状态（三步写同一事务，理由同 sharePost） */
 export function repostPost(userId: number, postId: number): { reposted: boolean; repost_count: number } {
   requirePost(postId);
-  const result = stmt('INSERT OR IGNORE INTO reposts (user_id, post_id) VALUES (?, ?)').run(userId, postId);
-  if (result.changes === 1) {
-    stmt('UPDATE posts SET repost_count = repost_count + 1 WHERE id = ?').run(postId);
-  }
-  const row = stmt('SELECT repost_count FROM posts WHERE id = ?').get(postId) as
-    { repost_count: number } | undefined;
-  return { reposted: true, repost_count: row?.repost_count || 0 };
+  const repostCount = getDb().transaction(() => {
+    const result = stmt('INSERT OR IGNORE INTO reposts (user_id, post_id) VALUES (?, ?)').run(userId, postId);
+    if (result.changes === 1) {
+      stmt('UPDATE posts SET repost_count = repost_count + 1 WHERE id = ?').run(postId);
+    }
+    return (
+      (
+        stmt('SELECT repost_count FROM posts WHERE id = ?').get(postId) as
+          { repost_count: number } | undefined
+      )?.repost_count ?? 0
+    );
+  })();
+  return { reposted: true, repost_count: repostCount };
 }
 
-/** 取消转发，返回转发数与状态 */
+/** 取消转发，返回转发数与状态（三步写同一事务，理由同 sharePost） */
 export function unrepostPost(userId: number, postId: number): { reposted: boolean; repost_count: number } {
   requirePost(postId);
-  const result = stmt('DELETE FROM reposts WHERE user_id = ? AND post_id = ?').run(userId, postId);
-  if (result.changes === 1) {
-    stmt('UPDATE posts SET repost_count = MAX(0, repost_count - 1) WHERE id = ?').run(postId);
-  }
-  const row = stmt('SELECT repost_count FROM posts WHERE id = ?').get(postId) as
-    { repost_count: number } | undefined;
-  return { reposted: false, repost_count: row?.repost_count || 0 };
+  const repostCount = getDb().transaction(() => {
+    const result = stmt('DELETE FROM reposts WHERE user_id = ? AND post_id = ?').run(userId, postId);
+    if (result.changes === 1) {
+      stmt('UPDATE posts SET repost_count = MAX(0, repost_count - 1) WHERE id = ?').run(postId);
+    }
+    return (
+      (
+        stmt('SELECT repost_count FROM posts WHERE id = ?').get(postId) as
+          { repost_count: number } | undefined
+      )?.repost_count ?? 0
+    );
+  })();
+  return { reposted: false, repost_count: repostCount };
 }

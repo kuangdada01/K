@@ -31,6 +31,7 @@ import musicRoutes from './routes/music'; // 音乐列表: /api/music
 import voiceRoutes from './routes/voice'; // 语音房间路由: /api/voice
 import ttsRoutes from './routes/tts'; // 云端朗读代理: /api/tts（Key 只在服务端）
 import eventRoutes from './routes/events'; // SSE 事件流: /api/events
+import pushRoutes from './routes/push'; // 推送设备注册: /api/push（OPPO 离线推送，见 sse.ts）
 import metaRoutes from './routes/meta'; // 系统元信息: /api/health、/api/app/version
 import { initMediaJobRecovery } from './lib/video/queue'; // 转码任务持久化恢复（P1-3.4）
 
@@ -165,6 +166,7 @@ export function createApp(): express.Express {
   app.use('/api/voice', voiceRoutes); // 语音: 房间 CRUD、ICE 配置（信令走 /api/voice/ws）
   app.use('/api/tts', ttsRoutes); // 朗读: 文字聊天的云端音色合成（代理 StepFun，Key 不出服务端）
   app.use('/api/events', eventRoutes); // SSE: 实时事件流
+  app.use('/api/push', pushRoutes); // 推送: 设备注册/解绑（离线推送走 OPPO 通道）
 
   // ============================================================
   // 系统元信息路由（健康检查 + App 版本检测）

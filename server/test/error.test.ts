@@ -48,6 +48,17 @@ describe('errorHandler', () => {
     expect(res.jsonBody).toEqual({ error: '服务器内部错误' });
   });
 
+  it('非 AppError 但带 status 的错误：状态码保留，内部 message 不外发（duck typing 收紧）', () => {
+    const res = mockRes();
+    // 模拟依赖抛出的普通 Error 恰好带 status（内部 message 可能含 URL/上游细节）
+    const fake = Object.assign(new Error('上游细节 http://internal-service/query'), { status: 502 });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    errorHandler(fake, {} as any, res, vi.fn());
+    spy.mockRestore();
+    expect(res.statusCode).toBe(502);
+    expect(res.jsonBody).toEqual({ error: '请求被拒绝' });
+  });
+
   it('Multer 大小超限返回 400 提示', () => {
     const res = mockRes();
     errorHandler({ code: 'LIMIT_FILE_SIZE' }, {} as any, res, vi.fn());

@@ -139,7 +139,7 @@ fun PostCard(
             if (post.title.isNotBlank()) {
                 Text(
                     text = post.title,
-                    style = KType.subtitle,
+                    style = KType.subtitle.copy(fontWeight = FontWeight.Normal),
                     color = c.textPrimary,
                 )
             }
@@ -147,7 +147,7 @@ fun PostCard(
             TaggedBody(
                 parts = taggedParts,
                 style = KType.body,
-                color = c.textSecondary,
+                color = c.textPrimary,
                 maxLines = 6,
             )
 
@@ -161,10 +161,12 @@ fun PostCard(
                     // 共享元素（M3）：详情页里的同一张图用同一个 key，于是点卡片是"图放大过去"
                     postId = post.id,
                 )
-                post.hasVideo -> VideoCover(
-                    post,
-                    onClick = onVideoClick,
-                )
+                post.hasVideo -> Box {
+                    VideoCover(
+                        post,
+                        onClick = onVideoClick,
+                    )
+                }
             }
 
             // 关键词：在图片**下面**（点它 → 搜该话题的相关帖子）
@@ -261,7 +263,7 @@ private fun PostHeader(post: PostUi, onOpenUser: (() -> Unit)? = null) {
             }
         }
         if (post.post.isPinned) {
-            Text("置顶", style = KType.tiny, color = c.accent)
+            Text("置顶", style = KType.tiny, color = c.accentText)
         }
     }
 }
@@ -292,7 +294,7 @@ fun Avatar(
 ) {
     val c = KTheme.colors
     val bgColor = bg ?: c.accentSoft
-    val fgColor = fg ?: c.accent
+    val fgColor = fg ?: c.accentText
     Box(
         modifier = modifier
             // 共享元素放在链首，圆角（这里是圆）紧跟其后 ——
@@ -711,7 +713,7 @@ internal fun PostActions(
                 .padding(horizontal = KSpacing.xxs, vertical = KSpacing.xs),
         ) {
             Glyph(
-                tint = if (post.isBookmarked) c.accent else c.textSecondary,
+                tint = if (post.isBookmarked) c.accentText else c.textSecondary,
                 kind = GlyphKind.Bookmark,
                 size = ACTION_ICON,
                 filled = post.isBookmarked,
@@ -743,7 +745,7 @@ internal fun ActionItem(
     icon: @Composable (Color, Boolean) -> Unit,
 ) {
     val c = KTheme.colors
-    val tint = if (selected) c.accent else c.textSecondary
+    val tint = if (selected) c.accentText else c.textSecondary
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(KRadius.chip))

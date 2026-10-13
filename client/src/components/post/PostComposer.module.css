@@ -250,8 +250,8 @@
 }
 
 .gridAdd:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--accent-text);
+  color: var(--accent-text);
 }
 
 .gridNewBadge {

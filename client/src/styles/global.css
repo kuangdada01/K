@@ -15,51 +15,57 @@
 }
 
 /* ============================================================
-   主题色板
+   主题色板 — 松绿 + 黑白中性 (Pine & Monochrome)
    ------------------------------------------------------------
-   浅色: 青瓷黛绿 (Celadon Pine)
-     --bg-page  页面底色 #eef2ee / 卡片表面 #ffffff / 松绿强调 #2f5d50
-   暗色: 玄夜鎏金 (Obsidian & Gold)
-     --bg-page  页面底色 #0d0f14 / 卡片表面 #161a22 / 鎏金强调 #c9a962
+   主题色 #325D51（松绿）：主按钮 / 链接 / 强调元素 / 激活状态，
+   浅色与深色使用同一色相；深色下填充用原色 #325D51（配白字 7.45:1），
+   直接落在深底上的链接/图标文字用同色相提亮档 --accent-text #7fb5a2。
+   语义色：仅保留红色（警告/危险/错误/删除）。
+   其余元素（背景/文字/边框/图标）：只用黑、白与中性灰阶（无彩色倾向）。
+   ------------------------------------------------------------
+   浅色: 页底 #f5f5f5 / 卡片 #ffffff / 主题 #325d51
+   深色: 页底 #121212 / 卡片 #1c1c1c / 主题 #325d51
    ============================================================ */
 :root {
-  /* ---------- 页面与表面 ---------- */
-  --bg-page: #eef2ee; /* 页面底色（青瓷） */
-  --bg-primary: #ffffff; /* 卡片/表面（白瓷） */
+  /* ---------- 页面与表面（中性灰阶） ---------- */
+  --bg-page: #f5f5f5; /* 页面底色 */
+  --bg-primary: #ffffff; /* 卡片/表面 */
   --bg-secondary: #ffffff; /* 次级表面 */
-  --bg-hover: #dfe8df; /* 悬停/浅表面 */
+  --bg-hover: #f0f0f0; /* 悬停/浅表面 */
   /* 表面三层（实心卡片的材质来自这里，不再靠毛玻璃） */
   --surface: #ffffff; /* 正文卡片实心面 */
   --surface-raised: #ffffff; /* 模态/下拉菜单 */
-  --surface-sunken: #e8f0e8; /* 图片位/进度槽等凹陷面 */
+  --surface-sunken: #ededed; /* 图片位/进度槽等凹陷面 */
   --bg-frosted: rgba(255, 255, 255, 0.66); /* 仅浮层（导航胶囊/模态）用毛玻璃 */
 
-  /* ---------- 描边 ---------- */
-  --border-color: #d2ddd2; /* 瓷缘灰绿 */
-  --border-subtle: #dee8de; /* 卡片/行内分隔线 */
-  --border-strong: #bac9ba; /* 输入框/次级按钮默认描边 */
-  --accent-border: #a8bfb5; /* 幽灵按钮描边 */
+  /* ---------- 描边（仅中性灰；强调按钮另走 --accent-border） ---------- */
+  --border-color: #e5e5e5; /* 主描边/分隔线 */
+  --border-subtle: #efefef; /* 卡片/行内细分隔线 */
+  --border-strong: #d4d4d4; /* 输入框/次级按钮默认描边 */
+  --accent-border: #325d51; /* 强调按钮描边（已关注胶囊等） */
 
   /* ---------- 文字 ---------- */
-  --text-primary: #1f2b26;
-  --text-secondary: #55645d;
-  --text-muted: #5a6d63; /* 对比度 2.83:1 → 4.88:1（原 #82948b 不达 AA） */
+  --text-primary: #171717;
+  --text-secondary: #525252;
+  --text-muted: #6b6b6b; /* 对比度 5.33:1（白卡）/ 4.89:1（页底） */
 
-  /* ---------- 强调 ---------- */
-  --accent: #2f5d50; /* 松柏深绿 */
-  --accent-hover: #24493e;
-  --accent-soft: rgba(47, 93, 80, 0.15);
-  --on-accent: #f5faf6; /* 强调色上的文字 */
+  /* ---------- 强调（主题绿 #325D51：主按钮 / 链接 / 强调 / 激活态） ---------- */
+  --accent: #325d51; /* 松绿：填充用（主按钮/选中底/徽标） */
+  --accent-hover: #27493f; /* 悬停：压深 */
+  --accent-soft: rgba(50, 93, 81, 0.12); /* 淡底（选中行/幽灵按钮 hover） */
+  --accent-text: #325d51; /* 落在背景上的主题色文字/图标/描边 */
+  --on-accent: #ffffff; /* 主题填充上的文字 */
+  --on-danger: #ffffff; /* 危险填充上的文字 */
 
-  /* ---------- 语义色 ---------- */
-  --danger: #a84a40; /* 对比度 4.29:1 → 4.99:1 */
+  /* ---------- 语义色（仅保留红色：警告/危险/错误/删除） ---------- */
+  --danger: #a84a40; /* 对比度 5.65:1 */
   --danger-hover: #8e3d34;
   --danger-soft: #e8dedb; /* 危险区按钮底 */
-  --success: #347252; /* 对比度 4.35:1 → 5.05:1 */
+  --success: #325d51; /* 成功/在线：并入主题绿（原独立绿色取消） */
 
   /* ---------- 遮罩 / 焦点 ---------- */
-  --scrim: rgba(20, 31, 26, 0.45);
-  --focus-ring: #2f5d50;
+  --scrim: rgba(0, 0, 0, 0.45);
+  --focus-ring: #325d51;
 
   /* ---------- 尺度：圆角（原项目散落 18 种取值，收敛为 6 档）---------- */
   --radius-chip: 6px;
@@ -100,66 +106,68 @@
   --sidebar-width-expanded: 220px;
   --radius: 16px;
   /* 卡片阴影：近距 1 层做边缘定义 + 远距 1 层做浮起感（原单层 0.06 太弱） */
-  --shadow: 0 6px 20px rgba(31, 60, 48, 0.08), 0 1px 3px rgba(31, 60, 48, 0.06);
+  --shadow: 0 6px 20px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.06);
   --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
   --safe-area-right: env(safe-area-inset-right, 0px);
 
   /* 扩展变量：输入框、按钮、标签等 */
-  --bg-input: #e9efe9;
-  --bg-input-hover: #dfe8df;
-  --bg-btn-secondary: #dfe8df;
-  --bg-btn-secondary-hover: #d2ddd2;
-  --bg-tag-admin: #d8e6de;
-  --text-tag-admin: #2f5d50;
+  --bg-input: #f2f2f2;
+  --bg-input-hover: #e8e8e8;
+  --bg-btn-secondary: #f0f0f0;
+  --bg-btn-secondary-hover: #e5e5e5;
+  --bg-tag-admin: rgba(50, 93, 81, 0.1);
+  --text-tag-admin: #325d51;
   --bg-danger-light: rgba(168, 74, 64, 0.12);
-  --shadow-dropdown: 0 8px 24px rgba(31, 60, 48, 0.14);
+  --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.14);
 
   /* 浅色主题：浏览器按此渲染原生控件/滚动条（不设置时深色页面会残留浅色滚动条） */
   color-scheme: light;
 }
 
-/* 暗色模式变量覆盖（玄夜鎏金） */
+/* 暗色模式变量覆盖（松绿 + 中性黑：与浅色同色相，其余全黑白灰） */
 [data-theme='dark'] {
-  --bg-page: #0d0f14;
-  --bg-primary: #1e232d; /* 卡面由 #161a22 提起，与页底分离度 1.09 → 1.17 */
-  --bg-secondary: #1e232d;
-  --bg-hover: #1e232d;
-  --surface: #1e232d;
-  --surface-raised: #262b36; /* 模态/下拉比卡片再提一层 */
-  --surface-sunken: #141721;
-  --bg-frosted: rgba(28, 32, 42, 0.72); /* 深色下需更高不透明度，否则玻璃上的弱化文字掉出 4.5:1 */
+  --bg-page: #121212;
+  --bg-primary: #1c1c1c; /* 卡面与页底分离度 1.10:1 */
+  --bg-secondary: #1c1c1c;
+  --bg-hover: #242424;
+  --surface: #1c1c1c;
+  --surface-raised: #242424; /* 模态/下拉比卡片再提一层 */
+  --surface-sunken: #0f0f0f;
+  --bg-frosted: rgba(28, 28, 28, 0.72); /* 深色下需更高不透明度，否则玻璃上的弱化文字掉出 4.5:1 */
 
-  --border-color: #262b35;
-  --border-subtle: #1f242e;
-  --border-strong: #454f5e;
-  --accent-border: #6b5c38;
+  --border-color: #2c2c2c;
+  --border-subtle: #232323;
+  --border-strong: #404040;
+  --accent-border: #7fb5a2;
 
-  --text-primary: #e8e6e1;
-  --text-secondary: #a8abaf;
-  --text-muted: #8b9098; /* 对比度 3.91:1 → 5.97:1（原 #6d7178 不达 AA） */
+  --text-primary: #f5f5f5;
+  --text-secondary: #b3b3b3;
+  --text-muted: #919191; /* 对比度 5.41:1（卡面）/ 4.93:1（浮起面） */
 
-  --accent: #c9a962; /* 鎏金 */
-  --accent-hover: #d9bd7c;
-  --accent-soft: rgba(201, 169, 98, 0.18);
-  --on-accent: #0d0f14; /* 金底用深字 */
+  --accent: #325d51; /* 与浅色同值：深色下填充/主按钮依旧是 #325D51 */
+  --accent-hover: #3a6b5c; /* 深色下悬停提亮（白字 6.11:1） */
+  --accent-soft: rgba(80, 146, 124, 0.22);
+  --accent-text: #7fb5a2; /* 同色相提亮档：深底上的链接/图标/描边（≥6.68:1） */
+  --on-accent: #ffffff; /* 白字压 #325D51 底 = 7.45:1 */
+  --on-danger: #121212; /* #E0586B 底配深字 5.15:1（白字只有 3.63:1 不达 AA） */
 
   --danger: #e0586b;
   --danger-hover: #ea7080;
   --danger-soft: #2e1a21;
-  --success: #7fbf8f;
+  --success: #7fb5a2;
 
   --scrim: rgba(0, 0, 0, 0.62);
-  --focus-ring: #c9a962;
+  --focus-ring: #7fb5a2;
 
   --shadow: 0 6px 20px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
-  --bg-input: #1e232d;
-  --bg-input-hover: #262b35;
-  --bg-btn-secondary: #1e232d;
-  --bg-btn-secondary-hover: #262b35;
-  --bg-tag-admin: rgba(201, 169, 98, 0.15);
-  --text-tag-admin: #c9a962;
+  --bg-input: #242424;
+  --bg-input-hover: #2c2c2c;
+  --bg-btn-secondary: #242424;
+  --bg-btn-secondary-hover: #2c2c2c;
+  --bg-tag-admin: rgba(127, 181, 162, 0.16);
+  --text-tag-admin: #7fb5a2;
   --bg-danger-light: rgba(224, 88, 107, 0.15);
   --shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.45);
 

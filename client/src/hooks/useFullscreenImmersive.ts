@@ -30,11 +30,11 @@ export function useFullscreenImmersive(stageRef: RefObject<HTMLDivElement | null
 
   // 全屏时刷新 theme-color：部分移动浏览器（微信 X5/QQ 内核等）进入全屏后系统
   // 状态栏变黑（忽略初始 theme-color），强制替换 meta 元素触发浏览器重新读取，
-  // 让状态栏恢复页面主题色（浅色 #eef2ee 或深色 #0d0f14）
+  // 让状态栏恢复页面主题色（浅色 #f5f5f5 或深色 #121212）
   const refreshThemeColor = useCallback(() => {
     const meta = document.querySelector('meta[name="theme-color"]');
     if (meta && meta.parentNode) {
-      const color = meta.getAttribute('content') || '#eef2ee';
+      const color = meta.getAttribute('content') || '#f5f5f5';
       const fresh = document.createElement('meta');
       fresh.name = 'theme-color';
       fresh.content = color;

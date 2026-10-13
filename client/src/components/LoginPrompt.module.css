@@ -185,7 +185,7 @@
 .registerLink {
   font-size: 14px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-text);
   margin-left: 16px;
   padding: 0;
 }
@@ -203,7 +203,7 @@
   padding: 0;
   font-size: 14px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-text);
   cursor: pointer;
 }
 
@@ -236,7 +236,7 @@
 }
 
 .forgotLink:hover {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .link {

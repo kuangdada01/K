@@ -79,6 +79,7 @@ import android.content.ClipData
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.unit.dp
@@ -148,8 +149,11 @@ fun PostDetailScreen(
      * 正文里的视频要点全屏 → 打开沉浸播放器（AppShell 推 `VideoDest`）。
      *
      * 视频地址由 Shell 从仓库缓存里取（导航状态只带 postId，见 `VideoDest` 的注释）。
+     * 两个参数是**点下去那一刻的进度与时长**：详情页在跳转时会离开组合、内联播放器
+     * 随之释放，进度不走这一步就丢了（见 [VideoHandoff]）。调用方只需转交，
+     * 真正的登记在 [PostDetailBody] 里已经做完。
      */
-    onOpenVideo: () -> Unit = {},
+    onOpenVideo: (positionMs: Long, durationMs: Long) -> Unit = { _, _ -> },
     /**
      * 这条帖子**已经不存在了**（详情接口 404）。
      *
@@ -577,7 +581,7 @@ fun PostDetailScreen(
             val current = post
             when {
                 current == null && loadingPost -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = c.accent)
+                    CircularProgressIndicator(color = c.accentText)
                 }
 
                 current == null -> KPlaceholder(
@@ -693,7 +697,7 @@ fun PostDetailScreen(
                     when {
                         loadingComments && commentList.isEmpty() -> item(key = "loading") {
                             Box(Modifier.fillMaxWidth().padding(KSpacing.xl), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(color = c.accent)
+                                CircularProgressIndicator(color = c.accentText)
                             }
                         }
 
@@ -862,7 +866,7 @@ fun PostDetailScreen(
                                 Text(
                                     "取消",
                                     style = KType.footnote,
-                                    color = c.accent,
+                                    color = c.accentText,
                                     modifier = Modifier.clickable { replyTo = null },
                                 )
                             }
@@ -1119,7 +1123,15 @@ private fun PostDetailBody(
     onRepost: () -> Unit,
     onShare: () -> Unit,
     onImageClick: (List<String>, Int, Long?) -> Unit,
-    onVideoClick: () -> Unit,
+    /**
+     * 正文视频点全屏。
+     *
+     * 参数是**当前进度与时长**（点下去那一刻从内联播放器读出来的）：
+     * 详情页在这一跳里会离开组合、内联播放器随之被释放，进度不走这一步就丢了
+     * （用户实测反馈「详情页点击全屏不能续播」）。调用方把它写进 [VideoHandoff]，
+     * 由全屏页建播放器时取走 —— 详见 [VideoHandoff] 的类注释。
+     */
+    onVideoClick: (positionMs: Long, durationMs: Long) -> Unit,
     /** 点正文里的 #话题 → 搜该话题的相关帖子 */
     onTagClick: ((String) -> Unit)? = null,
     /** 点作者行（头像 / 昵称）→ 这个人的主页；null = 不可点 */
@@ -1217,7 +1229,11 @@ private fun PostDetailBody(
         val taggedParts = remember(post.description) { splitTags(post.description) }
 
         if (post.title.isNotBlank()) {
-            Text(post.title, style = KType.subtitle, color = c.textPrimary)
+            Text(
+                post.title,
+                style = KType.subtitle.copy(fontWeight = FontWeight.Normal),
+                color = c.textPrimary,
+            )
         }
         if (post.description.isNotBlank()) {
             // 详情页不截断正文（列表卡片才截断）
@@ -1307,13 +1323,55 @@ private fun PostDetailBody(
                     }
 
                     if (playerVisible) {
+                        /**
+                         * 续播的另一半：从全屏页退出回来时，接着刚才的位置播。
+                         *
+                         * 详情页在全屏那一跳里离开过组合，这个 `KVideoPlayer` 是**新组合出来的**
+                         * —— 不给它起播位置就会从 0 重播（用户"点全屏不能续播"的另一半：
+                         * 进去丢了、回来也丢）。`VideoHandoff` 的单子是全屏页退场时写下的，
+                         * 读一次就清（见 [videoFullscreenHandoff]）。
+                         *
+                         * `remember(url)`：只在**这个播放器被创建**的那一次读 ——
+                         * 写成每次组合都读的话，任何一次重组（点赞、评论数变化）都可能
+                         * 把新单子读进来再重建播放器，表现为"看着看着跳回去一点"。
+                         */
+                        val resumeMs = remember(url) {
+                            videoFullscreenHandoff(post.id).positionMs ?: 0L
+                        }
+                        /**
+                         * 位置探针：每帧量"画面这一块在哪"，点全屏时打包进交接单，
+                         * 供全屏页算进/退场飞行的几何（见 [VideoRectProbe]）。
+                         *
+                         * `remember(post.id)`：与这一块视频同生共死 ——
+                         * 重建的话飞行起点会丢（探针里还没量到值）。
+                         */
+                        val rectProbe = remember(post.id) { VideoRectProbe() }
                         KVideoPlayer(
                             url = url,
                             autoPlay = true,
                             muted = false,
                             loop = true,
+                            startPositionMs = resumeMs,
+                            rectProbe = rectProbe,
+                            rectProbeCorner = KRadius.row,
                             title = post.title.ifBlank { null },
-                            onFullscreen = onVideoClick,
+                            onFullscreen = { positionMs, durationMs ->
+                                // 点全屏：把"播到哪了 + 我在哪一块 + 封面"一起写进交接单，
+                                // 全屏页建播放器时一次取走（见 [VideoHandoff]）
+                                val probeOrigin = rectProbe.toOrigin(
+                                    aspect = 16f / 9f,
+                                    // 封面一起带过去：飞行块画它才看得见位移
+                                    // （纯色块在深色主题下几乎与遮罩同色，等于没动画）
+                                    coverUrl = post.videoCoverUrl,
+                                )
+                                VideoHandoff.offer(
+                                    postId = post.id,
+                                    positionMs = positionMs,
+                                    durationMs = durationMs,
+                                    origin = probeOrigin,
+                                )
+                                onVideoClick(positionMs, durationMs)
+                            },
                             onFirstFrame = { firstFrame = true },
                             modifier = Modifier.fillMaxSize(),
                         )
@@ -1363,7 +1421,9 @@ private fun PostDetailBody(
                     }
                 }
             } else {
-                // 理论上不会有（hasVideo 由 videoUrl 推出），但真到了这一步要给个可点的封面兜底
+                // 理论上不会有（hasVideo 由 videoUrl 推出），但真到了这一步要给个可点的封面兜底。
+                // 这一支**没有播放器**，所以交不出进度（0/0 = 全屏页从 0 起播，
+                // 与"根本没有内联播放器可续"这个事实一致）
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1371,7 +1431,7 @@ private fun PostDetailBody(
                         .sharedBoundsIfAvailable(postVideoKey(post.id))
                         .clip(RoundedCornerShape(KRadius.row))
                         .background(c.accentSoft)
-                        .clickable(onClick = onVideoClick),
+                        .clickable { onVideoClick(0L, 0L) },
                     contentAlignment = Alignment.Center,
                 ) {
                     Text("▶ 视频", style = KType.caption, color = c.textPrimary)
@@ -1727,15 +1787,16 @@ private fun CommentRow(
             )
             if (comment.raw.parentUsername != null) {
                 // 回复别人的评论：在正文前标出"回复 @谁"（服务端会把父评论作者名带下来）
+                // 2026-10-13：不再用强调色 —— 评论正文按用户要求一律普通黑字
                 Text(
                     text = "回复 @${comment.raw.parentUsername}",
                     style = KType.caption,
-                    color = c.accent,
+                    color = c.textMuted,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            Text(comment.raw.content, style = KType.body, color = c.textSecondary)
+            Text(comment.raw.content, style = KType.body, color = c.textPrimary)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(KSpacing.sm),

@@ -87,6 +87,19 @@ export default function BookReaderPage() {
     return <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>加载中...</div>;
   }
 
+  // 章节加载失败：此前 contentQuery 失败被 `?? ''` 吞掉 —— 读者看到的是一块
+  // 无声的空白（连"内容本来就是空的"都区分不了），也没有重试入口。
+  if (file && contentQuery.isError) {
+    return (
+      <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-secondary)' }}>
+        <div style={{ marginBottom: 12 }}>章节加载失败，请稍后重试</div>
+        <button onClick={() => contentQuery.refetch()} style={{ cursor: 'pointer', padding: '6px 18px' }}>
+          重试
+        </button>
+      </div>
+    );
+  }
+
   const title = flatChapters[currentIndex]?.title || '阅读';
 
   return (

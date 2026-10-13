@@ -35,16 +35,26 @@ function makePost(id: number, desc: string): Record<string, unknown> {
 const PAGE1 = Array.from({ length: 20 }, (_, i) => makePost(i + 1, `feed-item-${i + 1}`));
 const PAGE2 = Array.from({ length: 5 }, (_, i) => makePost(21 + i, `feed-item-${21 + i}`));
 
-/** 拦截信息流分页接口（仅 GET /api/posts?page=…） */
+/**
+ * 拦截信息流分页接口（GET /api/posts）。
+ *
+ * ★ 4.3 游标分页迁移后 usePostsFeed 走 `?cursor=…`（InfiniteQuery），不再翻 `page`
+ * 参数 —— mock 若仍按 page 模式应答（不带 next_cursor），第二页永远加载不出来
+ * （B1 曾因此失败：首屏 20 条之后哨兵触发了请求、但响应里没有下一页游标）。
+ */
 async function mockFeed(page: Page) {
   await page.route('**/api/posts?*', (route: Route) => {
     const url = new URL(route.request().url());
-    const pageNum = parseInt(url.searchParams.get('page') || '1', 10);
-    const posts = pageNum >= 2 ? PAGE2 : PAGE1;
+    const cursor = url.searchParams.get('cursor');
+    const posts = cursor ? PAGE2 : PAGE1;
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ posts, total: 25, page: pageNum, totalPages: 2 }),
+      body: JSON.stringify(
+        cursor
+          ? { posts, next_cursor: null, has_more: false }
+          : { posts, next_cursor: 'cursor-page-2', has_more: true }
+      ),
     });
   });
 }

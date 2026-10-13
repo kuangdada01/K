@@ -116,7 +116,7 @@
 
 @media (hover: hover) {
   .imageBtn:hover {
-    color: var(--accent);
+    color: var(--accent-text);
     background: var(--accent-soft);
   }
 }
@@ -248,7 +248,7 @@
 .quoteUser {
   font-size: 12px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .quoteText {

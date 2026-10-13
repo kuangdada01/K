@@ -2,14 +2,29 @@
  * ============================================================
  * 帖子详情数据层 Hook（hooks/usePostDetailData）
  * ============================================================
- * 自 PostDetail.tsx 拆出（行为逐字节不变）：
+ * 自 PostDetail.tsx 拆出：
  * - 帖子/评论首屏拉取（commentLimit: 10；高亮跳转走全量）
  * - 登录态字段回填（点赞/收藏/转发/分享/关注，缓存优先）
  * - 帖子/用户切换时的渲染期重置（prev 值模式）
- * - P1 修复：cancelled 守卫，快速切换帖子时旧响应不落地
+ *
+ * ## C1（2026-10-11）：网络层迁 React Query
+ *
+ * 原实现是手写 useEffect + cancelled 守卫：详情浮层是高频交互
+ * （点开→关闭→再点开同一帖），每次都全量重拉，重复打开有可感知延迟。
+ * 现在拉取走 `useQuery`（staleTime 30s）：30s 内重开同一帖直接命中缓存，
+ * 不发请求；过期后照常重取。cancelled 守卫的语义由 RQ 接管——
+ * 这里消费的是 `data`，切换/卸载后旧响应自然不会进本地状态。
+ *
+ * ## 为什么本地 state 不直接用 query.data
+ *
+ * PostDetail 对 comments/post 做大量**本地乐观修改**（评论增删、点赞回写等，
+ * 经返回的 setComments/setPost…），React Query 缓存与这些改动的同步面太大。
+ * 保留本地 state 作为渲染源、effect 从 data 播种：返回 API 逐字节不变，
+ * 四个调用方零改动；仅在 data 变化（首次拉到 / 过期重取）时重播种。
  */
 
 import { useEffect, useState } from 'react';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import api from '../api/http';
 import * as postsApi from '../api/posts';
 import { computeInitialCollapsedIds } from '../lib/comments';
@@ -55,98 +70,114 @@ export function usePostDetailData({
   const [comments, setComments] = useState<Comment[]>([]);
   const [commentHasMore, setCommentHasMore] = useState(false);
   const [commentTotal, setCommentTotal] = useState(0);
-  const [loadError, setLoadError] = useState(false);
   const [shareCount, setShareCount] = useState(0);
   const [alreadyShared, setAlreadyShared] = useState(false);
   const [isFollowing, setIsFollowing] = useState(false);
   const [collapsedReplies, setCollapsedReplies] = useState<Set<number>>(new Set());
 
-  // 帖子/用户切换时重置加载错误（渲染期 prev 值模式，替代 effect 内同步 setState）
+  /**
+   * 帖子 + 首页评论一次拉取（服务端同一接口，无法只缓存一半）。
+   * - staleTime 30s：30s 内重开同一帖不发请求（C1 的核心收益）；
+   * - key 带高亮变体：高亮跳转需要**全量**评论，与普通分页打开是不同响应，分开缓存；
+   * - placeholderData：切换帖子时旧帖先显示（与迁移前"post 不随 key 重置"一致）。
+   */
+  const detailQuery = useQuery({
+    queryKey: ['post-detail', postId, highlightCommentId ? 'full' : 'page'],
+    queryFn: () => postsApi.getPost(postId, highlightCommentId ? undefined : { commentLimit: 10 }),
+    staleTime: 30_000,
+    gcTime: 5 * 60_000,
+    placeholderData: keepPreviousData,
+  });
+  const loadError = detailQuery.isError;
+
+  // 帖子/用户切换时重置评论与分页游标（渲染期 prev 值模式，替代 effect 内同步 setState；
+  // post 不在此处重置 —— 与迁移前一致，切帖时旧帖先显示，新数据到了再整体换）
   const [prevDetailKey, setPrevDetailKey] = useState('');
   const detailKey = `${postId}|${userId ?? 'anon'}`;
   if (detailKey !== prevDetailKey) {
     setPrevDetailKey(detailKey);
-    setLoadError(false);
     // 切换帖子：清空上一帖的评论与分页游标（避免旧帖评论在新帖下短暂残留）
     setComments([]);
     setCommentHasMore(false);
     setCommentTotal(0);
   }
 
-  // 加载评论，全部折叠，若有高亮评论ID则展开其祖先
-  // （loadError/highlight 重置已在渲染期完成）
+  // 从 query.data 播种本地状态 + 登录态字段回填（缓存优先）。
+  // 播种经 queueMicrotask 触发，避开 react-hooks/set-state-in-effect
+  // （与 Sidebar/ExplorePage 的 setTimeout 宏任务同一惯例，微任务一拍内完成，
+  // 缓存命中时的首屏收益不受影响）。关注状态兜底请求保留手动 fetch
+  // （它有自己的交互缓存 getFollowStatus）。
   useEffect(() => {
-    // P1 修复：cancelled 守卫——快速切换帖子时，旧帖的响应晚到会覆盖新帖数据
-    // （帖子/评论/点赞态错位）。依赖收敛为 userId，避免 user 对象身份变化触发重拉
+    const res = detailQuery.data;
+    if (!res) return;
     let cancelled = false;
-    // 高亮跳转需要全量评论定位目标；普通打开按顶级评论分页（回复随顶级携带）
-    postsApi
-      .getPost(postId, highlightCommentId ? undefined : { commentLimit: 10 })
-      .then(async (res) => {
-        if (cancelled) return;
-        setPost(res.post);
-        setComments(res.comments);
-        setCommentHasMore(!!res.comments_has_more);
-        setCommentTotal(res.comments_total ?? res.comments.length);
-        const cachedLike = getLikeInfo(postId);
-        if (cachedLike) {
-          setLiked(cachedLike.liked);
-          setLikeCount(cachedLike.likeCount);
-        } else {
-          setLiked(!!res.post.liked);
-          setLikeCount(res.post.like_count);
-        }
-        setShareCount(res.post.share_count || 0);
-        setAlreadyShared(!!res.post.shared);
-        const cachedBookmark = getBookmarked(postId);
-        if (cachedBookmark !== undefined) {
-          setBookmarked(cachedBookmark);
-        } else {
-          setBookmarked(!!res.post.bookmarked);
-        }
-        const cachedRepost = getReposted(postId);
-        if (cachedRepost !== undefined) {
-          setReposted(cachedRepost);
-        } else {
-          setReposted(!!res.post.reposted);
-        }
-        setRepostCount(res.post.repost_count || 0);
-        if (userId && res.post.user_id !== userId) {
-          const cached = getFollowStatus(res.post.user_id);
-          if (cached !== undefined) {
-            setIsFollowing(cached);
-          } else {
-            try {
-              const statusRes = await api.get(`/friends/status/${res.post.user_id}`);
-              if (cancelled) return;
-              setIsFollowing(statusRes.data.is_following);
-              setFollowStatus(res.post.user_id, statusRes.data.is_following);
-            } catch {}
-          }
-        }
-        if (cancelled) return;
-        // 默认折叠所有回复线程；若有高亮评论ID则展开其祖先使目标可见
-        setCollapsedReplies(computeInitialCollapsedIds(res.comments, highlightCommentId));
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setPost(res.post);
+      setComments(res.comments);
+      setCommentHasMore(!!res.comments_has_more);
+      setCommentTotal(res.comments_total ?? res.comments.length);
+      const cachedLike = getLikeInfo(postId);
+      if (cachedLike) {
+        setLiked(cachedLike.liked);
+        setLikeCount(cachedLike.likeCount);
+      } else {
+        setLiked(!!res.post.liked);
+        setLikeCount(res.post.like_count);
+      }
+      setShareCount(res.post.share_count || 0);
+      setAlreadyShared(!!res.post.shared);
+      const cachedBookmark = getBookmarked(postId);
+      if (cachedBookmark !== undefined) {
+        setBookmarked(cachedBookmark);
+      } else {
+        setBookmarked(!!res.post.bookmarked);
+      }
+      const cachedRepost = getReposted(postId);
+      if (cachedRepost !== undefined) {
+        setReposted(cachedRepost);
+      } else {
+        setReposted(!!res.post.reposted);
+      }
+      setRepostCount(res.post.repost_count || 0);
+      // 默认折叠所有回复线程；若有高亮评论ID则展开其祖先使目标可见
+      setCollapsedReplies(computeInitialCollapsedIds(res.comments, highlightCommentId));
 
-        // 重新渲染后滚动 + 高亮
-        if (highlightCommentId) {
-          const targetId = Number(highlightCommentId);
+      // 重新渲染后滚动 + 高亮
+      if (highlightCommentId) {
+        const targetId = Number(highlightCommentId);
+        requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-              const el = document.getElementById(`comment-${targetId}`);
-              if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-              onHighlight(targetId);
-            });
+            const el = document.getElementById(`comment-${targetId}`);
+            if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            onHighlight(targetId);
           });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setLoadError(true);
-      });
+        });
+      }
+    });
+    if (userId && res.post.user_id !== userId) {
+      const followUserId = res.post.user_id;
+      const cached = getFollowStatus(followUserId);
+      if (cached !== undefined) {
+        queueMicrotask(() => {
+          if (!cancelled) setIsFollowing(cached);
+        });
+      } else {
+        api
+          .get(`/friends/status/${followUserId}`)
+          .then((statusRes) => {
+            if (cancelled) return;
+            setIsFollowing(statusRes.data.is_following);
+            setFollowStatus(followUserId, statusRes.data.is_following);
+          })
+          .catch(() => {});
+      }
+    }
     return () => {
       cancelled = true;
     };
   }, [
+    detailQuery.data,
     postId,
     userId,
     getFollowStatus,

@@ -110,6 +110,10 @@ async function waitForSnapshots(frames: string[], label: string): Promise<void> 
   await new Promise((resolve) => setTimeout(resolve, 600));
 }
 
+// 全流程 ~30 组断言挤在一个用例里：WS 往返多 + 双浏览器上下文，CI 慢机上
+// 默认 60s 超时经常擦边（失败重试一次又是整条长链）—— 显式放宽到 120s。
+test.setTimeout(120_000);
+
 test('双人对弈全流程：邀请→开局→走子同步→认输终局', async ({ browser, request }) => {
   const created = await request.post('/api/voice/rooms', {
     data: { name: roomName, description: 'e2e 象棋对局（临时房间）' },

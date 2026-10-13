@@ -10,7 +10,7 @@
  */
 
 import type { Database } from 'better-sqlite3';
-import { getDb } from '../db/connection';
+import { getDb, stmt } from '../db/connection';
 import type { ChessMove } from '@k/shared';
 
 /** 终局留档写入载荷（棋谱数组由对局管理器在终局时给出） */
@@ -55,11 +55,12 @@ const SUMMARY_COLUMNS =
 
 /** 终局留档（对局管理器在 game-ended 广播的同时调用；失败只记日志不抛出） */
 export function insertVoiceGameRecord(input: VoiceGameRecordInput, db: Database = getDb()): void {
-  db.prepare(
+  stmt(
     `INSERT INTO voice_room_games
        (room_id, game_id, red_user_id, black_user_id, red_name, black_name,
         result, reason, move_count, moves, notations, started_at, ended_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    db
   ).run(
     input.roomId,
     input.gameId,
@@ -86,18 +87,18 @@ export function listRoomGames(
   const { beforeId, limit } = opts;
   const condition = beforeId !== undefined ? 'room_id = ? AND id < ?' : 'room_id = ?';
   const params = beforeId !== undefined ? [roomId, beforeId] : [roomId];
-  const games = db
-    .prepare(
-      `SELECT ${SUMMARY_COLUMNS} FROM voice_room_games
-       WHERE ${condition} ORDER BY id DESC LIMIT ?`
-    )
-    .all(...params, limit) as VoiceGameSummaryRow[];
+  const games = stmt(
+    `SELECT ${SUMMARY_COLUMNS} FROM voice_room_games
+     WHERE ${condition} ORDER BY id DESC LIMIT ?`,
+    db
+  ).all(...params, limit) as VoiceGameSummaryRow[];
   let hasMore = false;
   if (games.length > 0) {
     const oldestId = games[games.length - 1]!.id;
-    hasMore = !!db
-      .prepare('SELECT 1 FROM voice_room_games WHERE room_id = ? AND id < ? LIMIT 1')
-      .get(roomId, oldestId);
+    hasMore = !!stmt('SELECT 1 FROM voice_room_games WHERE room_id = ? AND id < ? LIMIT 1', db).get(
+      roomId,
+      oldestId
+    );
   }
   return { games, has_more: hasMore };
 }
@@ -108,18 +109,17 @@ export function getVoiceGame(
   gameId: string,
   db: Database = getDb()
 ): VoiceGameDetailRow | undefined {
-  return db
-    .prepare(
-      `SELECT id, room_id, game_id, red_user_id, black_user_id, red_name, black_name,
-              result, reason, move_count, moves, notations, started_at, ended_at
-       FROM voice_room_games WHERE room_id = ? AND game_id = ?`
-    )
-    .get(roomId, gameId) as VoiceGameDetailRow | undefined;
+  return stmt(
+    `SELECT id, room_id, game_id, red_user_id, black_user_id, red_name, black_name,
+            result, reason, move_count, moves, notations, started_at, ended_at
+     FROM voice_room_games WHERE room_id = ? AND game_id = ?`,
+    db
+  ).get(roomId, gameId) as VoiceGameDetailRow | undefined;
 }
 
 /** 删除某房间的全部对局留档（房间删除时级联清理） */
 export function deleteRoomGames(roomId: number, db: Database = getDb()): void {
-  db.prepare('DELETE FROM voice_room_games WHERE room_id = ?').run(roomId);
+  stmt('DELETE FROM voice_room_games WHERE room_id = ?', db).run(roomId);
 }
 
 /** 用户维度战绩（跨房间聚合；result 以红黑计，换算成请求方视角） */
@@ -132,9 +132,8 @@ export interface ChessUserStats {
 
 /** 某用户的对战战绩（voice_room_games 按 red/black 席位与结果聚合） */
 export function getUserGameStats(userId: number, db: Database = getDb()): ChessUserStats {
-  const row = db
-    .prepare(
-      `SELECT
+  const row = stmt(
+    `SELECT
          SUM(CASE
                WHEN (result = 'red-win' AND red_user_id = ?) OR (result = 'black-win' AND black_user_id = ?)
                THEN 1 ELSE 0 END) AS wins,
@@ -143,9 +142,9 @@ export function getUserGameStats(userId: number, db: Database = getDb()): ChessU
                THEN 1 ELSE 0 END) AS losses,
          SUM(CASE WHEN result = 'draw' AND (red_user_id = ? OR black_user_id = ?) THEN 1 ELSE 0 END) AS draws,
          SUM(CASE WHEN red_user_id = ? OR black_user_id = ? THEN 1 ELSE 0 END) AS total
-       FROM voice_room_games`
-    )
-    .get(userId, userId, userId, userId, userId, userId, userId, userId) as {
+       FROM voice_room_games`,
+    db
+  ).get(userId, userId, userId, userId, userId, userId, userId, userId) as {
     wins: number | null;
     losses: number | null;
     draws: number | null;

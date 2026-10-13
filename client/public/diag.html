@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#eef2ee" />
+    <meta name="theme-color" content="#f5f5f5" />
     <title>K 兼容性自检</title>
     <!-- 样式可内联（CSP 的 style-src 放行 unsafe-inline）；
          脚本**必须**外链 —— 站点 CSP 是 script-src 'self'，内联 script 会被直接拦掉。
@@ -11,22 +11,22 @@
     <style>
       :root {
         color-scheme: light dark;
-        --bg: #eef2ee;
+        --bg: #f5f5f5;
         --card: #ffffff;
-        --text: #1f2b26;
-        --muted: #55645d;
-        --line: #d2ddd2;
-        --ok: #2f5d50;
+        --text: #171717;
+        --muted: #525252;
+        --line: #e5e5e5;
+        --ok: #325d51;
         --bad: #a84a40;
       }
       @media (prefers-color-scheme: dark) {
         :root {
-          --bg: #0d0f14;
-          --card: #1e232d;
-          --text: #e8e6e1;
-          --muted: #a8abaf;
-          --line: #262b35;
-          --ok: #7fbf8f;
+          --bg: #121212;
+          --card: #1c1c1c;
+          --text: #f5f5f5;
+          --muted: #b3b3b3;
+          --line: #2c2c2c;
+          --ok: #7fb5a2;
           --bad: #e0586b;
         }
       }
@@ -129,7 +129,7 @@
         color: var(--ok);
       }
       .verdict-warn .verdict-title {
-        color: #ba7517;
+        color: var(--bad);
       }
       .verdict-bad {
         border-color: var(--bad);

@@ -1,5 +1,7 @@
 ext {
-    minSdkVersion = 24
+    // minSdkVersion 不放在这里：三个模块各自钉 minSdk 27（Compose + WebRTC 的舒适
+    // 下限，native/build.gradle 有说明）—— 之前留在这里的 24 无人消费，改它没有任何
+    // 效果，是误导后来者的死配置（2026-10-11 删除）。
     // compileSdk 37：AndroidX/Compose 的 2026 年版本要求依赖方 compile 到 37 或更高
     // （见 gradle/libs.versions.toml 顶部说明）。
     compileSdkVersion = 37

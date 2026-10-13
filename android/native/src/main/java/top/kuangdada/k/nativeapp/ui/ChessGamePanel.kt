@@ -659,7 +659,7 @@ private fun ChessPillButton(
     val fg = when {
         !enabled -> c.textMuted
         danger -> c.danger
-        primary -> c.accent
+        primary -> c.accentText
         else -> c.textSecondary
     }
     Box(
@@ -733,7 +733,7 @@ private fun ChessSeat(
     val c = KTheme.colors
     val clockColor = when {
         clockLow -> c.danger
-        clockActive -> c.accent
+        clockActive -> c.accentText
         else -> c.textMuted
     }
     Row(

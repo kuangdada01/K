@@ -15,10 +15,10 @@ export const IMAGE_PREVIEW_FALLBACK =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
     `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160">` +
-      `<rect width="160" height="160" rx="14" fill="#eef2ee"/>` +
-      `<rect x="1" y="1" width="158" height="158" rx="13" fill="none" stroke="#d2ddd2" stroke-width="2"/>` +
-      `<text x="80" y="72" text-anchor="middle" font-family="sans-serif" font-size="22" font-weight="700" fill="#55645d">HEIC</text>` +
-      `<text x="80" y="96" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#82948b">发布后自动转换</text>` +
+      `<rect width="160" height="160" rx="14" fill="#f5f5f5"/>` +
+      `<rect x="1" y="1" width="158" height="158" rx="13" fill="none" stroke="#e5e5e5" stroke-width="2"/>` +
+      `<text x="80" y="72" text-anchor="middle" font-family="sans-serif" font-size="22" font-weight="700" fill="#525252">HEIC</text>` +
+      `<text x="80" y="96" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#6b6b6b">发布后自动转换</text>` +
       `</svg>`
   );
 

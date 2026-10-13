@@ -48,11 +48,11 @@
 }
 
 .card:hover {
-  border-color: var(--accent);
+  border-color: var(--accent-text);
 }
 
 .card.unread {
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid var(--accent-text);
 }
 
 .cardHeader {

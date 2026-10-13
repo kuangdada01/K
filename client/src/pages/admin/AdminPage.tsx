@@ -27,7 +27,7 @@
  * ============================================================
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Suspense, lazy } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { updatePostsFeed } from '../../hooks/usePostsFeed';
@@ -35,7 +35,9 @@ import { useDebouncedValue } from '../../hooks/useDebouncedValue';
 import { Users, FileText, Megaphone } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { showToast } from '../../components/ui/Toast';
-import PostDetail from '../../components/post/PostDetail';
+// PostDetail 懒加载：浮层只在点开帖子时用到（与 HomePage 同一处理）
+import { loadPostDetail } from '../../router/composerChunks';
+const LazyPostDetail = lazy(loadPostDetail);
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import api, { getApiErrorMessage } from '../../api/http';
 import AdminUsersTab from './AdminUsersTab';
@@ -483,7 +485,11 @@ export default function AdminPage() {
       </div>
 
       {/* Post detail modal（页面级：切换 tab 保持打开） */}
-      {selectedPostId && <PostDetail postId={selectedPostId} onClose={() => setSelectedPostId(null)} />}
+      {selectedPostId && (
+        <Suspense fallback={null}>
+          <LazyPostDetail postId={selectedPostId} onClose={() => setSelectedPostId(null)} />
+        </Suspense>
+      )}
 
       {/* Confirm dialog */}
       {confirmAction && (

@@ -144,7 +144,7 @@ private object BoardColors {
     val pieceRim = Color(0xFFD5B478)
     val pieceRing = Color(0xFFAE8A50)
     val pieceRed = Color(0xFFB03A2E)
-    val pieceBlack = Color(0xFF2C3440)
+    val pieceBlack = Color(0xFF262626)
 }
 
 /** 点击命中要读的一组"最新值"（见 [ChessBoardView] 里 `rememberUpdatedState` 的注释） */

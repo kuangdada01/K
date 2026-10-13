@@ -32,7 +32,7 @@ import androidx.compose.ui.graphics.graphicsLayer
  * 设计令牌 -> [KColors] -> Material3 [ColorScheme] -> 组件。
  *
  * **刻意不套用 Material3 默认色、也不开动态取色**：设计稿是特定色板（浅色青瓷黛绿 /
- * 深色玄夜鎏金），动态取色会把品牌观感换成用户壁纸的颜色。
+ * 深色松绿中性），动态取色会把品牌观感换成用户壁纸的颜色。
  *
  * 用法：
  * ```

@@ -18,8 +18,8 @@
 
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { androidDir, isWindows, resolveJavaHome, runGradle } from './gradle-env.mjs';
 
@@ -100,12 +100,27 @@ if (buildType === 'release') {
    * 漏了这一步的表现（09-27 实测踩到）：`/api/app/version` 正常返回新版本，
    * App 里点「立即更新」下到的是一个 1.4 KB 的 HTML（SPA 兜底页），装不上。
    *
-   * 只复制、不删除：同名包被本次构建覆盖，历史版本的包留着不影响（`/apk/` 不在任何清单里）。
+   * 历史包保留最近 2 个（2026-10-11 之前是无限累积：本地实测堆到 17 个共
+   * ~285MB，被 docker build context 与部署 tar 整体吞下）。远端的保留策略
+   * 在 deploy-sftp.py（最近 5 个），本地只需覆盖「立即更新」要用的当前包。
    */
   const publicApkDir = join(root, 'client', 'public', 'apk');
   mkdirSync(publicApkDir, { recursive: true });
   const published = join(publicApkDir, publishName);
   copyFileSync(artifact, published);
+  // 清理历史包：按修改时间留最新 2 个（本次刚复制的必然在其中）
+  const KEEP_APKS = 2;
+  const apks = readdirSync(publicApkDir)
+    .filter((f) => f.endsWith('.apk'))
+    .map((f) => {
+      const p = join(publicApkDir, f);
+      return { p, mtime: statSync(p).mtimeMs };
+    })
+    .sort((a, b) => b.mtime - a.mtime);
+  for (const old of apks.slice(KEEP_APKS)) {
+    rmSync(old.p);
+    console.log(`  已清理历史 APK: ${basename(old.p)}`);
+  }
   console.log(`  已投放到待发布目录: ${published}`);
   console.log('  （接着跑 `npm run build --prefix client` 即可把它带进 dist/apk/）');
 }

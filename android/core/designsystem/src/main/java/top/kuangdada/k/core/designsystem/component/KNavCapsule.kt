@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -184,11 +185,11 @@ fun KNavCapsule(
     }
 }
 
-/** 胶囊阴影色：与 `scrim` 同一色系（rgba(20,31,26,·)），比纯黑更贴合青瓷黛绿底 */
-private val KNavShadow = Color(0x2E141F1A)
+/** 胶囊阴影色：与 `scrim` 同一中性黑，比带色相的黑更贴合松绿 + 黑白灰的底 */
+private val KNavShadow = Color(0x2E000000)
 
 /**
- * 单项。选中态用「实心 accent 块 + onAccent 反色」（浅色墨绿块近白字 / 深色鎏金块近黑字）；
+ * 单项。选中态用「实心 accent 块 + onAccent 反色」（两主题都是深绿 #325D51 块 + 白字 7.45:1）；
  * **未选中用 textPrimary（近黑）**——用户要求未选中的图标与标签是黑的，不是灰的（2026-09-22）。
  *
  * M3 起**底色不再由每一项自己画**（那是位置跳变的根源），改由外层的滑动指示块承担；
@@ -204,7 +205,7 @@ private fun KNavCapsuleItem(
     val c = KTheme.colors
     // 颜色走效果档（阻尼比 1.0、不过冲）：颜色"弹一下"会先冲过目标色再回来，观感是脏的
     val fg by animateColorAsState(
-        // 未选中用 textPrimary（#1F2B26 近黑）：不用 textSecondary（灰）——
+        // 未选中用 textPrimary（#171717 近黑）：不用 textSecondary（灰）——
         // 胶囊是浅色玻璃面，近黑的可读性更好，也是用户指定的观感
         targetValue = if (selected) c.onAccent else c.textPrimary,
         animationSpec = KMotion.effects(),
@@ -271,19 +272,29 @@ private fun KNavCapsuleItem(
     }
 }
 
-/** 导航角标（与 KBadge 同规则：底色 danger、文字 onAccent） */
+/**
+ * 导航角标（与 `KStatus.KBadge` 同观感：底色 danger、文字 onAccent）。
+ *
+ * 数字**不封顶**：有多少显示多少（2026-10-11 反馈"超过 9 条变成 9+"，用户要看到真实未读数）。
+ * 与 `KStatus.KBadge` 的 >99 显示 99+（设计稿 §3.2 的通用规则）是**两条并存的规则**，
+ * 不要顺手合并 —— 消息未读就是要能看准数。
+ */
 @Composable
 private fun KBadgeCount(count: Int) {
     val c = KTheme.colors
     Box(
         modifier = Modifier
-            .size(KDimens.badge)
+            // 宽度按数字撑开（min 而不是固定 size）：一位数仍是 15dp 圆，
+            // 两位/三位数字变成胶囊 —— 固定 15×15 装不下 "10" 以上的数字。
+            // 做法与 KStatus.KBadge 的 minWidth 撑宽一致（设计稿 §3.2 记录过的同一问题）。
+            .defaultMinSize(minWidth = KDimens.badge, minHeight = KDimens.badge)
             .clip(CircleShape)
-            .background(c.danger),
+            .background(c.danger)
+            .padding(horizontal = 4.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = if (count > 9) "9+" else count.toString(),
+            text = count.toString(),
             color = c.onAccent,
             style = KType.tiny,
             textAlign = TextAlign.Center,

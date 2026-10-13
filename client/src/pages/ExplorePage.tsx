@@ -12,20 +12,74 @@
  * ============================================================
  */
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, Suspense, lazy, memo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Search, X, Heart, MessageCircle, Layers, Play } from 'lucide-react';
 import { getApiErrorMessage } from '../api/http';
 import { listPosts, searchPosts } from '../api/posts';
 import { resolveMediaUrl } from '../utils';
 import { showToast } from '../components/ui/Toast';
-import PostDetail from '../components/post/PostDetail';
+// PostDetail 懒加载：浮层只在点击时用到，静态 import 会把它（连着 PostMedia
+// 与图片手势 hook 的整棵子树）打进本页 chunk —— 与 HomePage 同一处理。
+import { loadPostDetail } from '../router/composerChunks';
 import { useInfiniteScrollSentinel } from '../hooks/useInfiniteScrollSentinel';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useExplorePostEventsSync } from '../hooks/useExplorePostEventsSync';
 import { parsePostImages } from '../lib/parsePostImages';
 import { Post } from '../types';
 import styles from './ExplorePage.module.css';
+
+const LazyPostDetail = lazy(loadPostDetail);
+
+/**
+ * 网格项（memo 化）：点赞/评论事件同步、翻页追加都会重渲染整页 ——
+ * 未 memo 时几百个缩略图项每次全量 reconcile。post 引用在事件同步时
+ * 只替换被改的那一条，其余项凭 memo 跳过。
+ */
+const ExploreGridItem = memo(function ExploreGridItem({
+  post,
+  thumbnail,
+  multiCount,
+  onOpen,
+}: {
+  post: Post;
+  thumbnail: string;
+  multiCount: number;
+  onOpen: (id: number) => void;
+}) {
+  return (
+    <div className={styles.gridItem} onClick={() => onOpen(post.id)}>
+      <img src={thumbnail} alt={post.title || post.description || ''} loading="lazy" />
+
+      {/* 视频标识 */}
+      {post.video_url && (
+        <span className={styles.videoBadge}>
+          <Play size={12} fill="white" />
+          视频
+        </span>
+      )}
+
+      {/* 多图标识 */}
+      {!post.video_url && multiCount > 1 && (
+        <span className={styles.multiBadge}>
+          <Layers size={20} />
+        </span>
+      )}
+
+      {/* Hover 叠加层 */}
+      <div className={styles.gridOverlay}>
+        <span className={styles.gridStat}>
+          <Heart size={18} fill="white" />
+          {post.like_count}
+        </span>
+        <span className={styles.gridStat}>
+          <MessageCircle size={18} fill="white" />
+          {post.comment_count}
+        </span>
+      </div>
+    </div>
+  );
+});
 
 export default function ExplorePage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -63,7 +117,14 @@ export default function ExplorePage() {
       if (seq !== reqSeqRef.current) return; // 已有更新的请求，丢弃过期响应
       const newPosts: Post[] = data.posts || [];
 
-      setPosts((prev) => (append ? [...prev, ...newPosts] : newPosts));
+      // 追加时按 id 去重（与首页 usePostsFeed 的 feedPostsFlat 同一防御）：
+      // 偏移分页下，翻页间隙有新帖插入会把上一页出现过的帖子再发一遍，
+      // 不去重的话网格里出现重复卡片
+      setPosts((prev) => {
+        if (!append) return newPosts;
+        const seen = new Set(prev.map((p) => p.id));
+        return [...prev, ...newPosts.filter((p) => !seen.has(p.id))];
+      });
       setHasMore(pageNum < data.totalPages);
       setTotalResults(data.total || 0);
       setPage(pageNum);
@@ -118,9 +179,11 @@ export default function ExplorePage() {
   }, [debouncedKeyword, loadPosts]);
 
   // 加载更多：哨兵可见时追加下一页（哨兵逻辑自 IntersectionObserver effect 拆出）
+  // ★ 用防抖后的关键词：输入到一半、哨兵恰可见时，用未防抖的 raw keyword 会把
+  // 「半截关键词的第 2 页」追加到上一个查询的结果里（短暂展示错误数据后被覆盖）
   const handleLoadMore = useCallback(() => {
-    loadPosts(page + 1, keyword, true);
-  }, [loadPosts, page, keyword]);
+    loadPosts(page + 1, debouncedKeyword, true);
+  }, [loadPosts, page, debouncedKeyword]);
 
   // IntersectionObserver 自动加载更多（自 useInfiniteScrollSentinel 拆出，行为不变）
   useInfiniteScrollSentinel(loadMoreRef, {
@@ -135,6 +198,9 @@ export default function ExplorePage() {
     // 清除 URL 中的 ?tag=，避免与"全部帖子"状态不一致
     if (urlTag) setSearchParams({}, { replace: true });
   };
+
+  /** 打开详情浮层（稳定引用：网格项 memo 依赖它，setState 本身就恒定） */
+  const openPost = useCallback((id: number) => setOverlayPostId(id), []);
 
   const handlePostChange = (postId: number, liked: boolean, likeCount: number) => {
     setPosts((prev) =>
@@ -182,6 +248,7 @@ export default function ExplorePage() {
             className={styles.input}
             name="search"
             placeholder="搜索"
+            aria-label="搜索帖子"
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
           />
@@ -201,36 +268,13 @@ export default function ExplorePage() {
         <>
           <div className={styles.grid}>
             {gridItems.map(({ post, thumbnail, multiCount }) => (
-              <div key={post.id} className={styles.gridItem} onClick={() => setOverlayPostId(post.id)}>
-                <img src={thumbnail} alt={post.title || post.description || ''} loading="lazy" />
-
-                {/* 视频标识 */}
-                {post.video_url && (
-                  <span className={styles.videoBadge}>
-                    <Play size={12} fill="white" />
-                    视频
-                  </span>
-                )}
-
-                {/* 多图标识 */}
-                {!post.video_url && multiCount > 1 && (
-                  <span className={styles.multiBadge}>
-                    <Layers size={20} />
-                  </span>
-                )}
-
-                {/* Hover 叠加层 */}
-                <div className={styles.gridOverlay}>
-                  <span className={styles.gridStat}>
-                    <Heart size={18} fill="white" />
-                    {post.like_count}
-                  </span>
-                  <span className={styles.gridStat}>
-                    <MessageCircle size={18} fill="white" />
-                    {post.comment_count}
-                  </span>
-                </div>
-              </div>
+              <ExploreGridItem
+                key={post.id}
+                post={post}
+                thumbnail={thumbnail}
+                multiCount={multiCount}
+                onOpen={openPost}
+              />
             ))}
           </div>
 
@@ -251,14 +295,16 @@ export default function ExplorePage() {
         </div>
       )}
 
-      {/* 帖子详情模态框 */}
+      {/* 帖子详情模态框（懒加载：浮层内容点击时才取 chunk） */}
       {overlayPostId && (
-        <PostDetail
-          postId={overlayPostId}
-          onClose={() => setOverlayPostId(null)}
-          onLikeChange={handlePostChange}
-          onCommentChange={handleCommentChange}
-        />
+        <Suspense fallback={null}>
+          <LazyPostDetail
+            postId={overlayPostId}
+            onClose={() => setOverlayPostId(null)}
+            onLikeChange={handlePostChange}
+            onCommentChange={handleCommentChange}
+          />
+        </Suspense>
       )}
     </div>
   );

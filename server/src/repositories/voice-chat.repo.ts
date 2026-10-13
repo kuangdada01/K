@@ -6,10 +6,12 @@
  *   （见 voice.repo.ts deleteRoom），无上限、靠游标分页。
  * - 用户名/头像在发送时快照进行内（访客没有 users 行），
  *   保证历史消息不随用户改名/删号而失真。
+ * - 全部走 stmt() 预编译语句缓存（进房/追新/每条聊天都是高频路径，
+ *   逐次 db.prepare 的重复编译是纯浪费；注入实例按 WeakMap 隔离缓存）。
  */
 
 import type { Database } from 'better-sqlite3';
-import { getDb } from '../db/connection';
+import { getDb, stmt } from '../db/connection';
 import type { VoiceChatMessage } from '@k/shared';
 
 /** voice_room_messages 行（字段与共享 VoiceChatMessage 一致） */
@@ -57,14 +59,13 @@ export function listRoomMessages(
     params = [roomId];
   }
 
-  const page = db
-    .prepare(
-      `SELECT ${MESSAGE_COLUMNS} FROM voice_room_messages
-       WHERE ${condition}
-       ORDER BY id ${afterId !== undefined ? 'ASC' : 'DESC'}
-       LIMIT ?`
-    )
-    .all(...params, limit) as VoiceChatMessageRow[];
+  const page = stmt(
+    `SELECT ${MESSAGE_COLUMNS} FROM voice_room_messages
+     WHERE ${condition}
+     ORDER BY id ${afterId !== undefined ? 'ASC' : 'DESC'}
+     LIMIT ?`,
+    db
+  ).all(...params, limit) as VoiceChatMessageRow[];
 
   // 无游标/向更早翻页：倒序取页再翻转为正序返回（首屏=最近 limit 条）
   const descending = afterId === undefined;
@@ -74,9 +75,10 @@ export function listRoomMessages(
   let hasMore = false;
   if (messages.length > 0 && afterId === undefined) {
     const oldestId = messages[0]!.id;
-    hasMore = !!db
-      .prepare('SELECT 1 FROM voice_room_messages WHERE room_id = ? AND id < ? LIMIT 1')
-      .get(roomId, oldestId);
+    hasMore = !!stmt('SELECT 1 FROM voice_room_messages WHERE room_id = ? AND id < ? LIMIT 1', db).get(
+      roomId,
+      oldestId
+    );
   }
 
   return { messages, has_more: hasMore };
@@ -93,20 +95,19 @@ export function insertVoiceChatMessage(
   },
   db: Database = getDb()
 ): VoiceChatMessage {
-  const result = db
-    .prepare(
-      `INSERT INTO voice_room_messages (room_id, sender_id, username, avatar, content, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    )
-    .run(input.roomId, input.senderId, input.username, input.avatar, input.content, new Date().toISOString());
-  const row = db
-    .prepare(`SELECT ${MESSAGE_COLUMNS} FROM voice_room_messages WHERE id = ?`)
-    .get(result.lastInsertRowid) as VoiceChatMessageRow | undefined;
+  const result = stmt(
+    `INSERT INTO voice_room_messages (room_id, sender_id, username, avatar, content, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    db
+  ).run(input.roomId, input.senderId, input.username, input.avatar, input.content, new Date().toISOString());
+  const row = stmt(`SELECT ${MESSAGE_COLUMNS} FROM voice_room_messages WHERE id = ?`, db).get(
+    result.lastInsertRowid
+  ) as VoiceChatMessageRow | undefined;
   if (!row) throw new Error('语音聊天记录写入失败：写入后无法读取');
   return rowToMessage(row);
 }
 
 /** 清空某房间的全部聊天记录（房主/管理员操作） */
 export function deleteRoomMessages(roomId: number, db: Database = getDb()): void {
-  db.prepare('DELETE FROM voice_room_messages WHERE room_id = ?').run(roomId);
+  stmt('DELETE FROM voice_room_messages WHERE room_id = ?', db).run(roomId);
 }

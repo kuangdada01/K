@@ -58,7 +58,8 @@ const upload = createUploader({
  *
  * 认证: 必须
  *
- * 返回当前用户的所有对话，按最后消息时间倒序
+ * 返回当前用户的所有对话，按最后消息时间倒序（硬上限 500 条 + has_more，
+ * 与其他无分页列表同一套约定：超限时截断并如实标注，数组形状不变）。
  * 每个会话包含: 对方用户信息、最后一条消息、未读消息数
  */
 router.get(
@@ -66,8 +67,22 @@ router.get(
   authMiddleware,
   asyncHandler(async (req: Request, res: Response) => {
     const userId = req.user!.id;
-    const conversations = messageRepo.listConversations(userId);
-    res.json({ conversations });
+    // cursor 存在即游标模式（D1，与信息流 4.3 同一形状约定）：
+    //   游标模式 → { conversations, next_cursor, has_more }（单页有界）
+    //   无 cursor → { conversations, has_more }（全量，硬上限 500，老客户端不变）
+    const cursor = typeof req.query.cursor === 'string' ? req.query.cursor.trim() : '';
+    if (cursor) {
+      const limitRaw = parseInt(req.query.limit as string, 10);
+      const limit = Number.isInteger(limitRaw) ? limitRaw : 50;
+      const { rows, has_more, next_cursor } = messageRepo.listConversationsByCursor(userId, {
+        limit,
+        cursor,
+      });
+      res.json({ conversations: rows, next_cursor, has_more });
+      return;
+    }
+    const { rows, has_more, next_cursor } = messageRepo.listConversations(userId);
+    res.json({ conversations: rows, has_more, next_cursor });
   })
 );
 

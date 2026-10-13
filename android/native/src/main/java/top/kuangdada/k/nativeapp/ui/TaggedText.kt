@@ -174,7 +174,7 @@ fun TaggedChips(
             Text(
                 text = "#$tag",
                 style = KType.caption,
-                color = c.accent,
+                color = c.accentText,
                 maxLines = 1,
                 modifier = Modifier
                     .clip(shape)

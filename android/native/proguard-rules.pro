@@ -77,3 +77,28 @@
 -dontwarn com.google.errorprone.annotations.**
 # 注解本身不参与运行，但 Tink 的部分类在注解里引用了它，保留注解可见性避免二次告警
 -keepattributes RuntimeVisibleAnnotations,RuntimeInvisibleAnnotations
+
+# ---------------------------------------------------------------------------
+# OPPO 推送 SDK（com.heytap.msp / com.heytap.mcssdk，2026-10-08）
+# ---------------------------------------------------------------------------
+# 官方接入指南要求的两条规则：SDK 的 Service 由系统推送服务（MCS）按**类名**拉起、
+# SDK 内部反射读取回调接口 —— release 下被 R8 改名/收缩会直接导致注册失败
+# （表现为"推送永远注册不上"且没有任何崩溃日志）。
+-keep public class * extends android.app.Service
+-keep class com.heytap.msp.** { *; }
+# mcssdk 是同一 AAR 里的内部实现包（PushService 等组件也在其中），一并保留
+-keep class com.heytap.mcssdk.** { *; }
+-dontwarn com.heytap.msp.**
+-dontwarn com.heytap.mcssdk.**
+#
+# 注：R8 会为这个 AAR 打印两条
+#   "oppo-push-3.7.1-runtime.jar: R8: Expected stack map table for method with
+#    non-linear control flow. In later version of R8, the method may be assumed not reachable."
+# 这是 OPPO 官方 bytecode 的既有现象（某些方法缺 StackMapTable），当前 R8 容忍并正常保留；
+# 升级 AGP/R8 后若这类方法被判"不可达"，优先升级 OPPO SDK（官方 3.7.1 之后的版本）。
+
+# 官方《快速接入指南》第 6 节要求的第三条规则（2026-10-08 补上——此前只跟了前两条）。
+# com.mcs.aidl 是 SDK 与系统推送服务（MCS）之间的 AIDL 接口，被混淆可能影响
+# bindService 相关流程（如 requestNotificationPermission 的通知权限弹窗）。
+-keep class com.mcs.aidl.** { *; }
+

@@ -193,7 +193,7 @@ fun ExploreScreen(
                             Text(
                                 text = "搜索",
                                 style = KType.caption,
-                                color = if (keyword.isBlank()) c.textMuted else c.accent,
+                                color = if (keyword.isBlank()) c.textMuted else c.accentText,
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(KRadius.chip))
                                     .clickable(enabled = keyword.isNotBlank()) { runSearch(keyword) }

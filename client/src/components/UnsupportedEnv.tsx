@@ -22,8 +22,8 @@ export default function UnsupportedEnv({ missing }: { missing: MissingCapability
         alignItems: 'center',
         justifyContent: 'center',
         padding: '24px 18px',
-        background: 'var(--bg-page, #eef2ee)',
-        color: 'var(--text-primary, #1f2b26)',
+        background: 'var(--bg-page, #f5f5f5)',
+        color: 'var(--text-primary, #171717)',
         boxSizing: 'border-box',
       }}
     >
@@ -32,7 +32,7 @@ export default function UnsupportedEnv({ missing }: { missing: MissingCapability
           width: '100%',
           maxWidth: 420,
           background: 'var(--bg-primary, #fff)',
-          border: '1px solid var(--border-subtle, #dee8de)',
+          border: '1px solid var(--border-subtle, #efefef)',
           borderRadius: 16,
           padding: '24px 20px',
           boxSizing: 'border-box',
@@ -44,7 +44,7 @@ export default function UnsupportedEnv({ missing }: { missing: MissingCapability
           style={{
             fontSize: 14,
             lineHeight: 1.7,
-            color: 'var(--text-secondary, #55645d)',
+            color: 'var(--text-secondary, #525252)',
             margin: '0 0 16px',
           }}
         >
@@ -54,7 +54,7 @@ export default function UnsupportedEnv({ missing }: { missing: MissingCapability
         {missing.length > 0 && (
           <div
             style={{
-              background: 'var(--surface-sunken, #e8f0e8)',
+              background: 'var(--surface-sunken, #ededed)',
               borderRadius: 12,
               padding: '12px 14px',
               marginBottom: 16,
@@ -67,12 +67,12 @@ export default function UnsupportedEnv({ missing }: { missing: MissingCapability
                 paddingLeft: 18,
                 fontSize: 13,
                 lineHeight: 1.9,
-                color: 'var(--text-secondary, #55645d)',
+                color: 'var(--text-secondary, #525252)',
               }}
             >
               {missing.map((m) => (
                 <li key={m.id}>
-                  <span style={{ color: 'var(--text-primary, #1f2b26)' }}>{m.label}</span>
+                  <span style={{ color: 'var(--text-primary, #171717)' }}>{m.label}</span>
                   <span> —— {m.impact}</span>
                 </li>
               ))}
@@ -80,8 +80,8 @@ export default function UnsupportedEnv({ missing }: { missing: MissingCapability
           </div>
         )}
 
-        <div style={{ fontSize: 13, lineHeight: 1.8, color: 'var(--text-secondary, #55645d)' }}>
-          <div style={{ fontWeight: 600, color: 'var(--text-primary, #1f2b26)', marginBottom: 4 }}>
+        <div style={{ fontSize: 13, lineHeight: 1.8, color: 'var(--text-secondary, #525252)' }}>
+          <div style={{ fontWeight: 600, color: 'var(--text-primary, #171717)', marginBottom: 4 }}>
             可以这样解决
           </div>
           <div>· 升级手机系统到较新版本后重试</div>
@@ -95,7 +95,7 @@ export default function UnsupportedEnv({ missing }: { missing: MissingCapability
             display: 'inline-block',
             marginTop: 18,
             fontSize: 13,
-            color: 'var(--accent, #2f5d50)',
+            color: 'var(--accent-text, #325d51)',
             textDecoration: 'underline',
           }}
         >

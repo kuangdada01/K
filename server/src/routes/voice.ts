@@ -42,6 +42,7 @@ import { env } from '../config';
 import path from 'path';
 import { createVoiceRoomSchema } from '@k/shared/schemas';
 import { createVoiceCoverUploader } from '../lib/upload';
+import { deleteVoiceCoverFile } from '../lib/voiceCoverSweep';
 import { imageFileFilter, compressImage } from '../lib/image';
 import { STUN_SERVER_URLS } from '@k/shared';
 
@@ -192,10 +193,20 @@ router.post(
  * 为什么单独一个接口：建房请求是 JSON（zod 校验），封面需要先上传拿到 URL、
  * 在建房表单里预览确认后随创建请求落库 —— 与帖子视频的两步上传同一思路。
  * 存储：公开静态目录 uploads/voice-covers；压缩到长边 1440（封面展示高度仅 108dp）。
- * 删除房间时封面文件暂不回收（孤儿文件，量小可接受）。
+ * 回收：上传与建房解耦（可只传封面不建房），独立限流 + 孤儿清扫双闸门——
+ * 未被任何房间引用的文件由 sweepOrphanVoiceCovers 按 TTL 回收；
+ * 删房时由 DELETE /rooms/:id 顺带删除封面文件。
  */
+const roomCoverLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  limit: 10,
+  legacyHeaders: false,
+  message: { error: '封面上传过于频繁，请稍后再试' },
+});
+
 router.post(
   '/rooms/cover',
+  roomCoverLimiter,
   voiceAuth,
   uploadRoomCover.single('cover'),
   asyncHandler(async (req: Request, res: Response) => {
@@ -271,6 +282,8 @@ router.delete(
     if (!isRoomOwner(req, room)) throw new AppError(403, '只有房间创建者或管理员可以删除房间');
     voiceRepo.deleteRoom(id);
     voiceHub.closeRoom(id, '房间已被删除');
+    // 封面文件随房间回收（此前永久滞留为孤儿文件）；失败不阻断删除，孤儿清扫兜底
+    deleteVoiceCoverFile(room.cover_url);
     res.json({ success: true });
   })
 );

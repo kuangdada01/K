@@ -16,11 +16,11 @@
 }
 
 .trigger:hover {
-  background: rgba(47, 93, 80, 0.08);
+  background: var(--accent-soft);
 }
 
 [data-theme='dark'] .trigger:hover {
-  background: rgba(201, 169, 98, 0.1);
+  background: var(--accent-soft);
 }
 
 .triggerWide {
@@ -72,7 +72,7 @@
 }
 
 .trigger:hover .iconTrigger {
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--bg-hover);
 }
 
@@ -188,17 +188,17 @@
 
 .itemCheck {
   margin-left: auto;
-  color: var(--accent);
+  color: var(--accent-text);
   flex-shrink: 0;
 }
 
 .itemActive {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 600;
 }
 
 .itemActive .itemIcon {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .itemDanger {
@@ -214,12 +214,12 @@
 }
 
 .itemLogin {
-  color: var(--accent);
+  color: var(--accent-text);
   font-weight: 600;
 }
 
 .itemLogin .itemIcon {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .divider {

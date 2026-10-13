@@ -12,7 +12,7 @@
 
 import crypto from 'crypto';
 import type { Database } from 'better-sqlite3';
-import { getDb } from '../db/connection';
+import { getDb, stmt } from '../db/connection';
 import type { VoiceRoom } from '@k/shared';
 
 /** voice_rooms 行（含仅服务端内部使用的列） */
@@ -53,18 +53,17 @@ export function toVoiceRoom(row: VoiceRoomRow): VoiceRoom {
 
 /** 全部房间（列表按在线人数/创建时间排序由路由层处理；LIMIT 封顶防无界增长） */
 export function listRooms(db: Database = getDb()): VoiceRoomRow[] {
-  return db
-    .prepare(
-      `SELECT ${ROOM_COLUMNS} FROM voice_rooms
-       ORDER BY created_at DESC, id DESC LIMIT 200`
-    )
-    .all() as VoiceRoomRow[];
+  return stmt(
+    `SELECT ${ROOM_COLUMNS} FROM voice_rooms
+     ORDER BY created_at DESC, id DESC LIMIT 200`,
+    db
+  ).all() as VoiceRoomRow[];
 }
 
 /** 创建者（登录用户）名下已有房间数——创建频控用 */
 export function countRoomsByCreatorId(creatorId: number, db: Database = getDb()): number {
   return (
-    db.prepare('SELECT COUNT(*) AS c FROM voice_rooms WHERE creator_id = ?').get(creatorId) as {
+    stmt('SELECT COUNT(*) AS c FROM voice_rooms WHERE creator_id = ?', db).get(creatorId) as {
       c: number;
     }
   ).c;
@@ -72,12 +71,11 @@ export function countRoomsByCreatorId(creatorId: number, db: Database = getDb())
 
 /** 创建者（访客按 IP 锚点）名下已有房间数——创建频控用 */
 export function countRoomsByCreatorIp(ip: string, db: Database = getDb()): number {
-  return (db.prepare('SELECT COUNT(*) AS c FROM voice_rooms WHERE creator_ip = ?').get(ip) as { c: number })
-    .c;
+  return (stmt('SELECT COUNT(*) AS c FROM voice_rooms WHERE creator_ip = ?', db).get(ip) as { c: number }).c;
 }
 
 export function getRoomById(roomId: number, db: Database = getDb()): VoiceRoomRow | undefined {
-  return db.prepare(`SELECT ${ROOM_COLUMNS} FROM voice_rooms WHERE id = ?`).get(roomId) as
+  return stmt(`SELECT ${ROOM_COLUMNS} FROM voice_rooms WHERE id = ?`, db).get(roomId) as
     VoiceRoomRow | undefined;
 }
 
@@ -104,21 +102,20 @@ export function createRoom(
   // 访客房间签发所有权令牌：等价于密码，客户端保存后在删除/清聊天时带上。
   // 登录用户不需要（按 creator_id 判定），保持 NULL。
   const ownerToken = storedCreatorId > 0 ? null : crypto.randomBytes(24).toString('hex');
-  const result = db
-    .prepare(
-      `INSERT INTO voice_rooms (name, description, cover_url, creator_id, creator_name, creator_avatar, creator_ip, owner_token)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(
-      name,
-      description,
-      opts.coverUrl ?? null,
-      storedCreatorId,
-      opts.creatorName ?? '',
-      opts.creatorAvatar ?? null,
-      opts.creatorIp ?? null,
-      ownerToken
-    );
+  const result = stmt(
+    `INSERT INTO voice_rooms (name, description, cover_url, creator_id, creator_name, creator_avatar, creator_ip, owner_token)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    db
+  ).run(
+    name,
+    description,
+    opts.coverUrl ?? null,
+    storedCreatorId,
+    opts.creatorName ?? '',
+    opts.creatorAvatar ?? null,
+    opts.creatorIp ?? null,
+    ownerToken
+  );
   const room = getRoomById(Number(result.lastInsertRowid), db);
   if (!room) throw new Error('创建语音房间失败：写入后无法读取');
   return room;
@@ -182,9 +179,9 @@ export function createRoomWithinLimit(
 /** 删除房间（连同其聊天记录、对局留档一起清掉） */
 export function deleteRoom(roomId: number, db: Database = getDb()): boolean {
   const tx = db.transaction(() => {
-    db.prepare('DELETE FROM voice_room_messages WHERE room_id = ?').run(roomId);
-    db.prepare('DELETE FROM voice_room_games WHERE room_id = ?').run(roomId);
-    const result = db.prepare('DELETE FROM voice_rooms WHERE id = ?').run(roomId);
+    stmt('DELETE FROM voice_room_messages WHERE room_id = ?', db).run(roomId);
+    stmt('DELETE FROM voice_room_games WHERE room_id = ?', db).run(roomId);
+    const result = stmt('DELETE FROM voice_rooms WHERE id = ?', db).run(roomId);
     return result.changes > 0;
   });
   return tx();

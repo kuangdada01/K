@@ -359,7 +359,7 @@ private fun ScopeOption(
             .background(c.surface)
             .border(
                 width = if (selected) 2.dp else 1.dp,
-                color = if (selected) c.accent else c.borderStrong,
+                color = if (selected) c.accentText else c.borderStrong,
                 shape = shape,
             )
             .clickable(onClick = onClick)
@@ -374,7 +374,7 @@ private fun ScopeOption(
                 .clip(CircleShape)
                 .border(
                     width = if (selected) 6.dp else 2.dp,
-                    color = if (selected) c.accent else c.borderStrong,
+                    color = if (selected) c.accentText else c.borderStrong,
                     shape = CircleShape,
                 ),
             contentAlignment = Alignment.Center,
@@ -416,7 +416,7 @@ private fun CandidateUserRow(user: AdminUserRow, avatar: String?, onClick: () ->
             size = 36.dp,
             glyph = GlyphKind.User,
             bg = c.surfaceSubtle,
-            fg = c.accent,
+            fg = c.accentText,
         )
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(user.username, style = KType.body, color = c.textPrimary)
@@ -439,7 +439,7 @@ private fun PickedUserRow(target: AdminUserRow, avatar: String?, onClear: () -> 
             .fillMaxWidth()
             .clip(shape)
             .background(c.surface)
-            .border(1.dp, c.accent, shape)
+            .border(1.dp, c.accentText, shape)
             .padding(horizontal = KSpacing.md, vertical = KSpacing.xs),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(KSpacing.sm),
@@ -450,11 +450,11 @@ private fun PickedUserRow(target: AdminUserRow, avatar: String?, onClear: () -> 
             size = 36.dp,
             glyph = GlyphKind.User,
             bg = c.surfaceSubtle,
-            fg = c.accent,
+            fg = c.accentText,
         )
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(target.username, style = KType.body, color = c.textPrimary)
-            Text("将只发给这个账号（#${target.id}）", style = KType.footnote, color = c.accent)
+            Text("将只发给这个账号（#${target.id}）", style = KType.footnote, color = c.accentText)
         }
         Text(
             text = "重选",

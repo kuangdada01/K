@@ -10,6 +10,7 @@ import { asyncHandler, AppError } from '../../middleware/error';
 import { validateBody } from '../../validate';
 import { commentSchema } from '@k/shared/schemas';
 import { notifyUser } from '../../sse';
+import { getDb } from '../../db/connection';
 import * as postRepo from '../../repositories/post.repo';
 import * as commentRepo from '../../repositories/comment.repo';
 import * as notifRepo from '../../repositories/notification.repo';
@@ -88,41 +89,48 @@ router.post(
       }
     }
 
-    const comment = commentRepo.createComment(req.user!.id, postId, parentId || null, content);
+    // 评论 + 通知同一事务：通知 INSERT 失败（外键/IO）时评论一并回滚，
+    // 不会出现「评论已提交、作者却永远收不到提醒」的静默丢失
+    // （repo 层其他多步写已事务化，这里是路由编排层补齐同类保障）
+    const { comment, notifyUserId } = getDb().transaction(() => {
+      const created = commentRepo.createComment(req.user!.id, postId, parentId || null, content);
 
-    // 创建通知: 回复别人的评论时通知被回复的人
-    let notifyUserId: number | null = null;
-    if (parentId) {
-      const parentComment = commentRepo.getCommentAuthor(parentId);
-      if (parentComment && parentComment.user_id !== req.user!.id) {
-        notifRepo.insertNotification({
-          userId: parentComment.user_id,
-          type: 'reply',
-          fromUserId: req.user!.id,
-          postId,
-          commentId: comment.id,
-          content: content.trim(),
-        });
-        notifyUserId = parentComment.user_id;
+      // 创建通知: 回复别人的评论时通知被回复的人
+      let target: number | null = null;
+      if (parentId) {
+        const parentComment = commentRepo.getCommentAuthor(parentId);
+        if (parentComment && parentComment.user_id !== req.user!.id) {
+          notifRepo.insertNotification({
+            userId: parentComment.user_id,
+            type: 'reply',
+            fromUserId: req.user!.id,
+            postId,
+            commentId: created.id,
+            content: content.trim(),
+          });
+          target = parentComment.user_id;
+        }
       }
-    }
 
-    // 创建通知: 评论别人的帖子时通知帖子作者
-    if (!parentId) {
-      if (post.user_id !== req.user!.id) {
-        notifRepo.insertNotification({
-          userId: post.user_id,
-          type: 'comment',
-          fromUserId: req.user!.id,
-          postId,
-          commentId: comment.id,
-          content: content.trim(),
-        });
-        notifyUserId = post.user_id;
+      // 创建通知: 评论别人的帖子时通知帖子作者
+      if (!parentId) {
+        if (post.user_id !== req.user!.id) {
+          notifRepo.insertNotification({
+            userId: post.user_id,
+            type: 'comment',
+            fromUserId: req.user!.id,
+            postId,
+            commentId: created.id,
+            content: content.trim(),
+          });
+          target = post.user_id;
+        }
       }
-    }
 
-    // 实时推送通知事件
+      return { comment: created, notifyUserId: target };
+    })();
+
+    // 实时推送通知事件（事务提交后再发）
     if (notifyUserId !== null) {
       notifyUser(notifyUserId, { type: 'notification', comment_id: comment.id, post_id: postId });
     }

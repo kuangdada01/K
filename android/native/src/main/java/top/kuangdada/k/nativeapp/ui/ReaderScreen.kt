@@ -455,7 +455,7 @@ fun ReaderScreen(
             ) {
                 when {
                     loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = c.accent)
+                        CircularProgressIndicator(color = c.accentText)
                     }
 
                     error != null -> KPlaceholder(
@@ -539,7 +539,7 @@ fun ReaderScreen(
                                         Modifier.fillMaxSize(),
                                         contentAlignment = Alignment.Center,
                                     ) {
-                                        CircularProgressIndicator(color = c.accent)
+                                        CircularProgressIndicator(color = c.accentText)
                                     }
                                 }
                                 // 滑动侧阴影：一道渐变条钉在**动的那页**右缘，投到底页上 ——
@@ -728,7 +728,7 @@ fun ReaderScreen(
                             Text(
                                 text = ch.title.ifBlank { ch.file },
                                 style = KType.caption,
-                                color = if (ch.file == current.file) c.accent else c.textSecondary,
+                                color = if (ch.file == current.file) c.accentText else c.textSecondary,
                             )
                         }
                     }

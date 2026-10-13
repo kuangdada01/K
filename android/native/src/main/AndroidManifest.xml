@@ -10,6 +10,32 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
+      通知的震动（2026-10-07 补）。
+
+      ⚠️ 这条**一直漏着**，表现就是用户反馈的「测试通知能弹出来，但没有震动」：
+      通知栏的震动最终由系统服务执行，但平台会校验**发起通知的应用**是否持有 VIBRATE ——
+      没有它，`NotificationChannel.enableVibration(true)` 与震动模式都会被静默忽略
+      （不报错、不影响通知显示，所以极难从代码上看出来）。
+
+      普通权限（normal）：安装即授予，没有运行时弹窗，也不参与任何危险权限判定 ——
+      与 `REQUEST_INSTALL_PACKAGES` 那类会引起安全软件误报的权限完全是两回事。
+    -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!--
+      锁屏亮屏（2026-10-07 补）：消息通知的「全屏意图」。
+
+      锁屏状态下系统收到带 `setFullScreenIntent` 的通知才会点亮屏幕（或直接在锁屏上展示）；
+      没有这条权限声明，`setFullScreenIntent` 是静默无效的 —— 通知照常进通知栏，
+      但锁着的屏幕不会亮（2026-10-07 用户反馈）。
+
+      ⚠️ API 34+ 不再默认授予：只有通话/闹钟类 App 安装即得，其余要在
+      `canUseFullScreenIntent()` 为 false 时引导用户去系统设置开
+      （入口在设置页「通知诊断」行，见 ProfileScreen）。API 34 以下声明即授予。
+    -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+
+    <!--
       语音房要用的权限。**漏声明的话真机上是"静默失败"**：
       requestPermissions 会立刻回 denied，WebRTC 的 AudioRecord 建出来是无效的，
       既不抛异常也不报错，表现只是"本地永远静音、别人听不到你"。
@@ -58,6 +84,18 @@
       Android 13+ 通知权限：没有它前台服务的通知不显示（服务仍在跑，但用户看不到也退不掉）
     -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      OPPO PUSH（离线推送）。
+
+      两条自定义权限 + 两个 SDK 服务（见下面 <application> 里），全部按 OPPO 官方
+      《快速接入指南》声明；没有透传需求时它们只是让 SDK 的接收链路完整，
+      通知栏消息本身由系统推送服务（MCS）展示，App 进程不参与。
+      ⚠️ 两个回调服务**必须留在主进程** —— 见 <application> 里它们上方的警示注释。
+    -->
+    <uses-permission android:name="com.coloros.mcs.permission.RECIEVE_MCS_MESSAGE" />
+    <uses-permission android:name="com.heytap.mcs.permission.RECIEVE_MCS_MESSAGE" />
+
 
     <!--
       ⚠️ **刻意不声明 `REQUEST_INSTALL_PACKAGES`**（2026-09-28，v0.1.11 起）。
@@ -203,6 +241,42 @@
             android:name=".voice.VoiceForegroundService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback|microphone|mediaProjection" />
+
+        <!--
+          OPPO PUSH 的 SDK 接收/回调服务（官方《快速接入指南》的接入形态）。
+          · DataMessageCallbackService：Android Q 及以上（heytap mcs）
+          · CompatibleDataMessageCallbackService：Android Q 以下（coloros mcs）
+          通知栏消息由系统推送服务直接展示（App 不参与）；这两个服务承接 SDK 的
+          接收链路 —— **注册结果（onRegister 回调）也在这里解析**。
+
+          ⚠️⚠️ **绝对不要给它们加 `android:process=":push"`**（2026-10-08 事故，v0.1.15 修复）。
+          原因：注册响应由 MCS 通过 startService 投递给这两个服务，**在服务所在进程解析** ——
+          `PushService` 单例与 ICallBackResultService 回调都只存在于该进程的内存里。
+          一旦放进 `:push` 子进程，主进程（UI）永远收不到 onRegister：设置页一直显示
+          「注册中或注册失败」（pushRegistered 恒 false），失败错误码也全部丢失 ——
+          看起来像"注册不上"，其实是回调进了另一个进程。
+          带 `:push` 的写法是**阿里 mPaaS 适配层**特有的（它自带跨进程 token 通道），
+          原生 SDK 不是这么用；官方指南里这两个 service 没有 process 属性。
+          权限字段是厂商自定义权限：只有系统推送服务（MCS）能给我们投递，防第三方伪造。
+        -->
+        <service
+            android:name="com.heytap.msp.push.service.CompatibleDataMessageCallbackService"
+            android:exported="true"
+            android:permission="com.coloros.mcs.permission.SEND_MCS_MESSAGE">
+            <intent-filter>
+                <action android:name="com.coloros.mcs.action.RECEIVE_MCS_MESSAGE" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name="com.heytap.msp.push.service.DataMessageCallbackService"
+            android:exported="true"
+            android:permission="com.heytap.mcs.permission.SEND_PUSH_MESSAGE">
+            <intent-filter>
+                <action android:name="com.heytap.mcs.action.RECEIVE_MCS_MESSAGE" />
+                <action android:name="com.heytap.msp.push.RECEIVE_MCS_MESSAGE" />
+            </intent-filter>
+        </service>
 
         <!--
           录制分享用。`android:name="androidx.core.content.FileProvider"` 直接用

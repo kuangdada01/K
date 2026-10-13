@@ -168,9 +168,30 @@ export function recoverStuckMediaJobs(): number {
   return Number(info.changes);
 }
 
+/**
+ * 终态行保留时长：ready/failed 的任务行只服务于状态查询
+ * （/video-temp/status 只在上传后的几分钟轮询窗口内有意义），
+ * 保留 7 天足够覆盖「上传后隔了很久才回来看状态」的长尾。
+ */
+const FINISHED_JOB_RETENTION_MS = 7 * 24 * 3600 * 1000;
+
+/**
+ * 收敛终态行（ready/failed 且 updated_at 超过保留期）。
+ * media_jobs 此前只增不减：每次上传各插一行，表随历史无限膨胀，
+ * file_path 查询（迁移 036 索引）与表扫描都越来越贵。queued/running 不动。
+ * 返回删除的行数。
+ */
+export function pruneFinishedMediaJobs(now: number = Date.now()): number {
+  const cutoff = now - FINISHED_JOB_RETENTION_MS;
+  const info = stmt(`DELETE FROM media_jobs WHERE status IN ('ready', 'failed') AND updated_at < ?`).run(
+    cutoff
+  );
+  return Number(info.changes);
+}
+
 let recoveryTimer: NodeJS.Timeout | null = null;
 
-/** 装配期初始化（幂等）：恢复中断任务 + 启动周期巡检 */
+/** 装配期初始化（幂等）：恢复中断任务 + 启动周期巡检（巡检顺带收敛终态行） */
 export function initMediaJobRecovery(): void {
   const recovered = recoverStuckMediaJobs();
   if (recovered > 0) logger.info(`[media_jobs] 启动恢复：${recovered} 个中断的转码任务已重新排队`);
@@ -179,6 +200,8 @@ export function initMediaJobRecovery(): void {
       () => {
         const n = recoverStuckMediaJobs();
         if (n > 0) logger.info(`[media_jobs] 巡检恢复：${n} 个租约过期的任务已重新排队`);
+        const pruned = pruneFinishedMediaJobs();
+        if (pruned > 0) logger.info(`[media_jobs] 巡检清理：${pruned} 个终态任务行已删除`);
       },
       5 * 60 * 1000
     );

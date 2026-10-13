@@ -2,8 +2,10 @@
  * ============================================================
  * 语音聊天 Store 单测（hooks/useVoiceChatStore.test）
  * ============================================================
- * mock 掉 getVoiceRoomMessages 验证（§3.3）：
- * - 首次进房取最近 50 条、重连按 after_id 游标追赶补拉（100 条）
+ * mock 掉 getVoiceRoomMessages 验证（§3.3，2026-10 拉取时机调整后）：
+ * - 进房（activeRoomId 确定）即后台首拉最近 50 条，不等 connected
+ * - connected 时按 after_id 追赶（断线重连 / 首拉与订阅之间的空窗）；
+ *   首拉晚于 connected 时待其落地后立即追赶
  * - 实时消息/历史拉取按 id 去重（竞态不重复）
  * - 向上翻页 before_id 前置去重；hasMore/loadingMore 守卫
  * - 房间切换时在途响应丢弃（cancelled 标志）
@@ -68,6 +70,27 @@ describe('useVoiceChatStore', () => {
     });
     expect(h.result.current.messages.map((m) => m.id)).toEqual([1, 2]);
     expect(h.result.current.chatHasMore).toBe(true);
+  });
+
+  it('进房即后台首拉：connecting（不等 connected）就发起最近 50 条', () => {
+    setup('connecting', 1);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledWith(1, { limit: 50 });
+  });
+
+  it('connected 先到、首拉后归：首拉落地后立即按游标追赶（补订阅空窗）', async () => {
+    const h = setup('connecting', 1); // 首拉发出（挂起）
+    // connected 到达时首拉尚未归来：游标不可用 → 记账，不发请求
+    act(() => h.rerender({ s: 'connected', r: 1 }));
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    // 首拉返回 3 条 → 落地后立即追赶（afterId=3）
+    await act(async () => {
+      resolveFetch?.({ messages: [msg(1), msg(2), msg(3)], has_more: true });
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenLastCalledWith(1, { afterId: 3, limit: 100 });
+    expect(h.result.current.messages.map((m) => m.id)).toEqual([1, 2, 3]);
   });
 
   it('未连接/无房间：不发请求', () => {

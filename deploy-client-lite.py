@@ -11,6 +11,8 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="repla
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--server", required=True, help="目标服务器 IP（不内置默认值：公开仓库不暴露生产地址）")
+    ap.add_argument("--port", type=int, default=22, help="SSH 端口（默认 22；与主链路 deploy-sftp.py 对齐）")
+    ap.add_argument("--user", default="root", help="SSH 用户（默认 root；与主链路对齐）")
     ap.add_argument("--package", required=True)
     ap.add_argument("--trust-host", action="store_true",
                     help="跳过主机密钥校验（MITM 风险）。仅首次连接新服务器时使用，"
@@ -43,8 +45,8 @@ def main():
             print(f"[认证] 使用私钥 {key_path}")
             c.connect(
                 a.server,
-                22,
-                "root",
+                a.port,
+                a.user,
                 key_filename=key_path,
                 look_for_keys=False,
                 allow_agent=False,
@@ -52,7 +54,7 @@ def main():
             )
         else:
             print("[认证] 使用口令（DEPLOY_PASSWORD）")
-            c.connect(a.server, 22, "root", pwd, timeout=30)
+            c.connect(a.server, a.port, a.user, pwd, timeout=30)
     except paramiko.SSHException as e:
         print(f"[FAIL] 主机密钥校验失败（{e}）。", file=sys.stderr)
         print("首次连接该服务器可加 --trust-host；确认后建议执行：", file=sys.stderr)
@@ -63,10 +65,12 @@ def main():
     sftp = c.open_sftp()
     def progress(sent, total):
         print(f"\r  up {sent*100//total}% ({sent/1048576:.1f}/{total/1048576:.1f} MB)", end="", flush=True)
-    sftp.put(a.package, "/tmp/k-client-only.tar.gz", callback=progress)
+    # 包路径按进程唯一（与主链路同理由：并发部署上传不互踩同一文件）
+    remote_pkg = f"/tmp/k-client-only-{os.getpid()}.tar.gz"
+    sftp.put(a.package, remote_pkg, callback=progress)
     print()
     sftp.close()
-    _, out, _ = c.exec_command("stat -c %s /tmp/k-client-only.tar.gz", timeout=60)
+    _, out, _ = c.exec_command(f"stat -c %s {remote_pkg}", timeout=60)
     remote_size = out.read().decode().strip()
     local_size = str(os.path.getsize(a.package))
     print(f"  remote {remote_size} B vs local {local_size} B")
@@ -136,7 +140,8 @@ echo CLIENT_DEPLOY_DONE
             "更新接口指向的 APK 在盘上",
             "u=$(grep -m1 '^APP_APK_URL=' /var/www/k/.env | cut -d= -f2-); "
             "if [ -z \"$u\" ]; then echo 'APP_APK_URL 未配置（跳过）'; else "
-            "f=/var/www/k/client/dist${u#*kuangdada.top}; "
+            # URL 去掉协议+域名取 path（此前写死 kuangdada.top，换域名后校验会静默失效）
+            "f=/var/www/k/client/dist$(printf %s \"$u\" | sed -E 's|^https?://[^/]+||'); "
             "[ -f \"$f\" ] && stat -c 'ON_DISK %s bytes' \"$f\" || echo \"MISSING $f\"; fi; "
             "echo \"dist/apk 共 $(ls -1 /var/www/k/client/dist/apk/ 2>/dev/null | wc -l) 个文件\"",
             lambda o: "MISSING" not in o,

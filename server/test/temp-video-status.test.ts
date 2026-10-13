@@ -4,7 +4,8 @@
  * ============================================================
  * 覆盖：
  * - 未登录 401 / 无效引用 400
- * - 属主校验：他人会话 403（状态暴露属隐私，与 DELETE /video-temp 一致）
+ * - 属主校验：他人会话 403；**无登记的遗留文件也 403**（2026-10-11 对齐：
+ *   DELETE 同场景一直是 403，status 放行是两端点判据不一致）
  * - 文件不存在 → missing
  * - 文件存在但非 H.264（含本机无 ffprobe 时探测失败）→ encoding
  * （done 分支依赖真 H.264 文件 + ffprobe，属服务器环境行为，线上验证）
@@ -28,6 +29,7 @@ let db: InstanceType<typeof Database>;
 let server: http.Server;
 let base = '';
 let aliceToken = '';
+let aliceId = 0;
 
 const run = Date.now();
 const NAME = `temp-${run}-123.mp4`;
@@ -54,7 +56,7 @@ beforeAll(async () => {
   const insertUser = db.prepare(
     "INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, 'x', 'user')"
   );
-  const aliceId = Number(insertUser.run('alice', 'alice@test.com').lastInsertRowid);
+  aliceId = Number(insertUser.run('alice', 'alice@test.com').lastInsertRowid);
   // bob 用户仅用于注册（属主校验测试用不存在用户的会话模拟"他人"）
   insertUser.run('bob', 'bob@test.com');
   aliceToken = generateToken({ id: aliceId, username: 'alice' });
@@ -94,23 +96,44 @@ describe('GET /api/posts/video-temp/status', () => {
     }
   });
 
-  it('文件不存在返回 missing', async () => {
-    const { code, body } = await getStatus(`/uploads/temp/${NAME}`, aliceToken);
-    expect(code).toBe(200);
-    expect(body.status).toBe('missing');
+  it('无登记的遗留文件返回 403（与 DELETE /video-temp 判据一致）', async () => {
+    // 不登记任何上传会话（模拟会话持久化之前落盘、属主不可知的文件）
+    const { code } = await getStatus(`/uploads/temp/${NAME}`, aliceToken);
+    expect(code).toBe(403);
+  });
+
+  it('文件不存在返回 missing（属主会话已登记）', async () => {
+    registerChunkUpload(NAME, aliceId);
+    try {
+      const { code, body } = await getStatus(`/uploads/temp/${NAME}`, aliceToken);
+      expect(code).toBe(200);
+      expect(body.status).toBe('missing');
+    } finally {
+      releaseChunkUpload(NAME);
+    }
   });
 
   it('文件存在但非 H.264（含本机无 ffprobe）返回 encoding', async () => {
     // 写入假视频内容（非 h264；本机若无 ffprobe，probe 返回 null 同样落入 encoding）
-    fs.writeFileSync(path.join(PATHS.uploadsTemp, NAME), Buffer.from('not a real video file'));
-    const { code, body } = await getStatus(`/uploads/temp/${NAME}`, aliceToken);
-    expect(code).toBe(200);
-    expect(body.status).toBe('encoding');
+    registerChunkUpload(NAME, aliceId);
+    try {
+      fs.writeFileSync(path.join(PATHS.uploadsTemp, NAME), Buffer.from('not a real video file'));
+      const { code, body } = await getStatus(`/uploads/temp/${NAME}`, aliceToken);
+      expect(code).toBe(200);
+      expect(body.status).toBe('encoding');
+    } finally {
+      releaseChunkUpload(NAME);
+    }
   });
 
   it('响应禁止缓存（Cache-Control: no-store）——轮询接口必须每次读到最新状态', async () => {
-    fs.writeFileSync(path.join(PATHS.uploadsTemp, NAME), Buffer.from('not a real video file'));
-    const { cacheControl } = await getStatus(`/uploads/temp/${NAME}`, aliceToken);
-    expect(cacheControl).toBe('no-store');
+    registerChunkUpload(NAME, aliceId);
+    try {
+      fs.writeFileSync(path.join(PATHS.uploadsTemp, NAME), Buffer.from('not a real video file'));
+      const { cacheControl } = await getStatus(`/uploads/temp/${NAME}`, aliceToken);
+      expect(cacheControl).toBe('no-store');
+    } finally {
+      releaseChunkUpload(NAME);
+    }
   });
 });

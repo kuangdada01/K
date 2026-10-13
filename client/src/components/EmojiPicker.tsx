@@ -9,12 +9,18 @@
  * - 64个常用表情
  * - 点击外部自动关闭
  * - 桌面端/移动端自适应布局
+ *
+ * D5（2026-10-11）：桌面/移动两个面板此前是两份几乎相同的内联样式 JSX
+ * （表情按钮样式重复两遍、hover 靠 JS onMouseOver/Out 改 style）——
+ * 抽出共用的 renderEmojiGrid，样式迁 EmojiPicker.module.css，hover 走 CSS 伪类。
+ * 面板各自的定位/尺寸差异保留在 .panelDesktop / .panelMobile 两个变体类里。
  * ============================================================
  */
 
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { Smile } from 'lucide-react';
+import styles from './EmojiPicker.module.css';
 
 const EMOJI_LIST = [
   '😀',
@@ -154,101 +160,33 @@ export default function EmojiPicker({ onSelect, onSelected, onOpen, onClose }: E
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [open, onClose]);
 
-  // 桌面端: 400x350 弹窗，靠近图标显示
-  const desktopPanel = (
-    <div
-      data-emoji-panel
-      style={{
-        position: 'fixed',
-        top: panelPos.top,
-        left: panelPos.left,
-        width: 320,
-        height: 324,
-        background: 'var(--bg-primary)',
-        border: '1px solid var(--border-color)',
-        borderRadius: 12,
-        padding: '8px 12px',
-        display: 'grid',
-        gridTemplateColumns: 'repeat(7, 1fr)',
-        gap: 1,
-        justifyContent: 'center',
-        alignContent: 'start',
-        zIndex: 350,
-        boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
-        overflowY: 'scroll',
-        overflowX: 'hidden',
-      }}
-    >
+  /** 表情网格：桌面/移动共用同一份渲染（差异只在面板容器的列数与尺寸） */
+  const emojiGrid = (
+    <>
       {EMOJI_LIST.map((emoji) => (
-        <button
-          key={emoji}
-          onClick={() => handleSelect(emoji)}
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            fontSize: 22,
-            padding: 4,
-            borderRadius: 6,
-            transition: 'background 0.1s',
-            lineHeight: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-          onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
-          onMouseOut={(e) => (e.currentTarget.style.background = 'none')}
-        >
+        <button key={emoji} className={styles.emojiBtn} onClick={() => handleSelect(emoji)}>
           {emoji}
         </button>
       ))}
-    </div>
+    </>
   );
 
-  // 移动端: 固定在屏幕底部
-  const mobilePanel = (
+  const panel = isMobile ? (
+    <div data-emoji-panel className={`${styles.panel} ${styles.panelMobile}`}>
+      {emojiGrid}
+    </div>
+  ) : (
     <div
       data-emoji-panel
-      style={{
-        position: 'fixed',
-        bottom: 0,
-        left: 0,
-        right: 0,
-        background: 'var(--bg-primary)',
-        border: '1px solid var(--border-color)',
-        borderRadius: '12px 12px 0 0',
-        padding: 12,
-        display: 'grid',
-        gridTemplateColumns: 'repeat(8, 1fr)',
-        gap: 4,
-        justifyContent: 'center',
-        zIndex: 350,
-        boxShadow: '0 -4px 16px rgba(0,0,0,0.12)',
-        maxHeight: 240,
-        overflowY: 'auto',
-        overflowX: 'hidden',
-      }}
+      className={`${styles.panel} ${styles.panelDesktop}`}
+      style={
+        {
+          '--emoji-top': `${panelPos.top}px`,
+          '--emoji-left': `${panelPos.left}px`,
+        } as React.CSSProperties
+      }
     >
-      {EMOJI_LIST.map((emoji) => (
-        <button
-          key={emoji}
-          onClick={() => handleSelect(emoji)}
-          style={{
-            background: 'none',
-            border: 'none',
-            cursor: 'pointer',
-            fontSize: 22,
-            padding: 4,
-            borderRadius: 6,
-            transition: 'background 0.1s',
-            lineHeight: 1,
-          }}
-          onMouseOver={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
-          onMouseOut={(e) => (e.currentTarget.style.background = 'none')}
-        >
-          {emoji}
-        </button>
-      ))}
+      {emojiGrid}
     </div>
   );
 
@@ -256,18 +194,10 @@ export default function EmojiPicker({ onSelect, onSelected, onOpen, onClose }: E
     <div style={{ position: 'relative' }}>
       <button
         ref={buttonRef}
+        className={styles.trigger}
         onClick={(e) => {
           e.stopPropagation();
           handleToggle();
-        }}
-        style={{
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          padding: 4,
-          color: 'var(--text-secondary)',
-          display: 'flex',
-          alignItems: 'center',
         }}
       >
         <Smile size={22} />
@@ -283,7 +213,7 @@ export default function EmojiPicker({ onSelect, onSelected, onOpen, onClose }: E
                 zIndex: 349,
               }}
             />
-            {isMobile ? mobilePanel : desktopPanel}
+            {panel}
           </>,
           document.body
         )}

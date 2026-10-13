@@ -32,10 +32,15 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
+    "@types/node": "^25.9.1",
     "concurrently": "^10.0.0",
+    "eslint": "^9.39.0",
     "husky": "^9.1.7",
     "lint-staged": "^17.5.0",
-    "prettier": "^3.6.2"
+    "prettier": "^3.6.2",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.48.0",
+    "vitest": "^5.0.0"
   },
   "//": "npm 只承认根 package.json 的 overrides（写在 workspace 包里会被静默忽略）。qs 经 express 5 的 body-parser 传递引入，这里钉在已修复版本上防旧版原型污染。",
   "//typecheck": "typecheck 前必须先 build shared：server/client/e2e 是通过 node_modules/@k/shared 的 package.json（types → dist/*.d.ts）解析的，dist 不存在就报 TS2307。此前本地能过只是因为本地残留着旧 dist——CI（干净环境、且 typecheck 排在 build 之前）会直接失败。",

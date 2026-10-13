@@ -75,7 +75,7 @@
 }
 
 .roomActive {
-  border-color: var(--accent);
+  border-color: var(--accent-text);
   box-shadow: 0 0 0 1px var(--accent-soft);
 }
 
@@ -88,7 +88,7 @@
   justify-content: center;
   border-radius: 12px;
   background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* 房间封面缩略图（创建时上传过的房间）：与 roomIcon 同槽位同尺寸，
@@ -253,11 +253,11 @@
 }
 
 .q_good {
-  background: var(--success, #3ba55d);
+  background: var(--success, #325d51);
 }
 
 .q_fair {
-  background: #d6a02e;
+  background: #a3a3a3;
 }
 
 .q_poor {
@@ -266,7 +266,7 @@
 
 /* 说话光环 */
 .speaking {
-  border-color: var(--success, #3ba55d);
+  border-color: var(--success, #325d51);
 }
 
 .avatarWrap {
@@ -701,7 +701,7 @@
 }
 
 .ttsVoiceSelect:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: 1px;
 }
 
@@ -809,7 +809,7 @@
 
 .chatInput:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--accent-text);
 }
 
 .chatSendBtn {
@@ -926,7 +926,7 @@
 
 .input:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--accent-text);
 }
 
 .modalActions {

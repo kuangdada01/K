@@ -298,7 +298,7 @@ fun FollowListScreen(
                                     text = title,
                                     style = if (selected) KType.bodyStrong else KType.body,
                                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                    color = if (selected) c.accent else c.textMuted,
+                                    color = if (selected) c.accentText else c.textMuted,
                                     textAlign = TextAlign.Center,
                                     modifier = Modifier
                                         .weight(1f)
@@ -342,7 +342,7 @@ fun FollowListScreen(
                 when {
                     current.loading && current.users.isEmpty() -> item(key = "loading") {
                         Box(Modifier.fillMaxWidth().padding(KSpacing.xxl), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = c.accent)
+                            CircularProgressIndicator(color = c.accentText)
                         }
                     }
 
@@ -387,7 +387,7 @@ fun FollowListScreen(
                         if (current.loadingMore) {
                             item(key = "loadingMore") {
                                 Box(Modifier.fillMaxWidth().padding(KSpacing.sm), contentAlignment = Alignment.Center) {
-                                    CircularProgressIndicator(color = c.accent, modifier = Modifier.size(20.dp))
+                                    CircularProgressIndicator(color = c.accentText, modifier = Modifier.size(20.dp))
                                 }
                             }
                         } else if (!current.hasMore) {

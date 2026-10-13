@@ -11,9 +11,9 @@
  * ============================================================
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Eraser, MessageSquareText, Volume2 } from 'lucide-react';
-import { TTS_CLOUD_VOICES, TTS_SYSTEM_VOICE_KEY } from '@k/shared';
+import { TTS_CLOUD_VOICES, TTS_SYSTEM_VOICE_KEY, type VoiceChatMessage } from '@k/shared';
 import { useVoice, useVoiceChat } from '../../context/VoiceContext';
 import { clearVoiceRoomMessages } from '../../api/voice';
 import { showToast } from '../../components/ui/Toast';
@@ -21,7 +21,7 @@ import { getApiErrorMessage } from '../../api/http';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import Avatar from '../../components/ui/Avatar';
 import { useChatTTS } from '../../hooks/useChatTTS';
-import styles from '../VoicePage.module.css';
+import styles from './VoiceChatPanel.module.css';
 
 /** 聊天消息时间：今天只显示时分，跨天显示"月日 时分" */
 function formatChatTime(iso: string): string {
@@ -30,6 +30,40 @@ function formatChatTime(iso: string): string {
   const hm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   return d.toDateString() === new Date().toDateString() ? hm : `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
 }
+
+/**
+ * 单条聊天消息行（memo 化）。
+ *
+ * 为什么：`chatDraft`（输入框内容）与本列表同在一个组件里 —— 不 memo 的话，
+ * 每敲一个字就让全部消息行（进房历史 50 条起步）reconcile 一遍。
+ * props 里 `m` 来自 chat store（引用稳定）、`mine` 是布尔、`onSpeak` 经 ref 中转
+ * 保持恒定引用 —— 三个条件齐了 memo 才真的生效。
+ */
+const VoiceChatMsgRow = memo(function VoiceChatMsgRow({
+  m,
+  mine,
+  onSpeak,
+}: {
+  m: VoiceChatMessage;
+  mine: boolean;
+  onSpeak: (m: VoiceChatMessage) => void;
+}) {
+  return (
+    <div className={styles.chatMsg} onClick={() => onSpeak(m)} title="点击朗读这条消息">
+      <Avatar src={m.avatar} username={m.username} size={26} />
+      <div className={styles.chatMsgBody}>
+        <div className={styles.chatMsgMeta}>
+          <span className={styles.chatMsgName}>
+            {m.username}
+            {mine ? '（我）' : ''}
+          </span>
+          <span className={styles.chatMsgTime}>{formatChatTime(m.created_at)}</span>
+        </div>
+        <div className={styles.chatMsgText}>{m.content}</div>
+      </div>
+    </div>
+  );
+});
 
 export default function VoiceChatPanel({
   canClearChat,
@@ -81,6 +115,14 @@ export default function VoiceChatPanel({
     const el = chatListRef.current;
     if (el && autoScrollRef.current) el.scrollTop = el.scrollHeight;
   }, [chatMessages]);
+
+  // 朗读回调经 ref 中转：handleSpeakMessage 的引用随 hook 状态变化，
+  // 直接传给 memo 行会击穿 memo —— 中转后恒定，行组件只依赖消息本身
+  const speakRef = useRef(tts.handleSpeakMessage);
+  useEffect(() => {
+    speakRef.current = tts.handleSpeakMessage;
+  }, [tts.handleSpeakMessage]);
+  const onSpeakMessage = useCallback((m: VoiceChatMessage) => speakRef.current(m), []);
 
   const self = voice.participants[0];
 
@@ -165,26 +207,7 @@ export default function VoiceChatPanel({
               )}
               {chatMessages.map((m) => {
                 const mine = self !== undefined && m.sender_id === self.userId;
-                return (
-                  <div
-                    key={m.id}
-                    className={styles.chatMsg}
-                    onClick={() => tts.handleSpeakMessage(m)}
-                    title="点击朗读这条消息"
-                  >
-                    <Avatar src={m.avatar} username={m.username} size={26} />
-                    <div className={styles.chatMsgBody}>
-                      <div className={styles.chatMsgMeta}>
-                        <span className={styles.chatMsgName}>
-                          {m.username}
-                          {mine ? '（我）' : ''}
-                        </span>
-                        <span className={styles.chatMsgTime}>{formatChatTime(m.created_at)}</span>
-                      </div>
-                      <div className={styles.chatMsgText}>{m.content}</div>
-                    </div>
-                  </div>
-                );
+                return <VoiceChatMsgRow key={m.id} m={m} mine={mine} onSpeak={onSpeakMessage} />;
               })}
             </>
           )}

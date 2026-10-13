@@ -90,7 +90,7 @@ export function setStatusBarBackground(color: string): void {
 
 /**
  * 窗口/根视图背景色：EDGE-TO-EDGE 下状态栏区域透出的就是它，
- * 必须跟随网页主题（浅色 #eef2ee / 深色 #0d0f14），否则状态栏位置会露白或露黑。
+ * 必须跟随网页主题（浅色 #f5f5f5 / 深色 #121212），否则状态栏位置会露白或露黑。
  */
 export function setWindowBackgroundColor(color: string): void {
   fireAndForget('window.setBackgroundColor', { color });

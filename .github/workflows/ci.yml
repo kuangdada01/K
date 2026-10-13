@@ -62,6 +62,14 @@ jobs:
       - name: 测试（server + client vitest）
         run: npm run test
 
+      # Playwright 浏览器（~170MB 下载 + --with-deps 的 apt 安装）不缓存的话
+      # 每次 CI 白付 1-2 分钟；key 绑 lockfile（@playwright/test 版本变化即换缓存）
+      - name: 缓存 Playwright 浏览器
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       - name: E2E（Playwright，覆盖只读冒烟 + 注册/发帖/互动真实写路径）
         env:
           # E3 修复：build 步骤已产出 dist，webServer 跳过重复构建
@@ -88,12 +96,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
+      # （无 setup-node：容器内自己装 node，宿主侧的 node 没有任何消费者）
 
-      - name: Docker 镜像构建验证
-        run: docker build -t k-ci-check:latest .
+      # buildx + GHA 层缓存：容器内 npm ci 要跑两遍（build 阶段 + runtime 阶段），
+      # 无层缓存时每次 CI 都从零拉依赖；Dockerfile 的依赖层设计本身是缓存友好的
+      - name: 准备 buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker 镜像构建验证（buildx + GHA 层缓存）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: k-ci-check:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       # 冒烟：容器能通过健康检查（同时验证非 root 卷属主/预建目录等运行时前提）
       - name: 容器健康检查冒烟
@@ -138,6 +155,16 @@ jobs:
       # "Failed to find package 'tools'"，2026-10 起必挂），v4 默认包改为
       # platform-tools 且原生跑在 node24 上
       - uses: android-actions/setup-android@v4
+
+      # SDK 组件缓存：Gradle 依赖有缓存，但 platforms/build-tools 此前每次全量下载
+      # （数百 MB）。key 里钉死组件版本 —— 升级 platform/build-tools 版本时同步改 key。
+      - name: 缓存 Android SDK 组件
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ANDROID_HOME }}/platforms/android-37.0
+            ${{ env.ANDROID_HOME }}/build-tools/36.0.0
+          key: android-sdk-${{ runner.os }}-platforms-37.0-bt-36.0.0
 
       - name: 安装 SDK 组件（platform 37.0 + build-tools 36）
         run: |

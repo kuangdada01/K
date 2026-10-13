@@ -52,10 +52,16 @@ export function asyncHandler(
 export function errorHandler(rawErr: unknown, _req: Request, res: Response, _next: NextFunction): void {
   // Express 传来的错误形态开放（AppError/MulterError/SyntaxError/未知），逐分支窄化
   const err = rawErr as { status?: number; message?: string; code?: string } | null;
-  // 带状态码的业务错误（如 CORS 拒绝）；details 展开，供客户端结构化恢复（如分片续传）
+  // 带状态码的业务错误：只认 **AppError 实例**（2026-10-11 收紧）。
+  // 此前是 duck typing（err?.status 为真即把 err.message 原样下发）—— 任何依赖抛出的
+  // 带 status 属性的普通 Error（内部 message 可能含 URL/上游细节）都会直接出网。
+  if (rawErr instanceof AppError) {
+    res.status(rawErr.status).json({ error: rawErr.message, ...(rawErr.details ?? {}) });
+    return;
+  }
+  // 非 AppError 但带 status 的错误（如 CORS 拒绝中间件）：状态码可信、message 不外发
   if (err?.status) {
-    const details = (rawErr as { details?: Record<string, unknown> } | null)?.details;
-    res.status(err.status).json({ error: err.message, ...(details ?? {}) });
+    res.status(err.status).json({ error: '请求被拒绝' });
     return;
   }
 

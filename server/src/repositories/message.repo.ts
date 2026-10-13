@@ -5,6 +5,8 @@
  */
 
 import { getDb, stmt } from '../db/connection';
+import { HARD_LIST_CAP, capRows, probeLimit } from '../lib/listLimits';
+import { AppError } from '../middleware/error';
 
 export interface ConversationRow {
   partner_id: number;
@@ -13,6 +15,8 @@ export interface ConversationRow {
   last_message: string;
   last_message_at: string;
   unread_count: number;
+  /** 该会话最后一条消息的 id（D1：排序决胜键 + 游标定位键；additive，老客户端忽略） */
+  last_id: number;
 }
 
 export interface MessageRow {
@@ -30,37 +34,151 @@ export interface MessageRow {
   quoted_sender_username?: string | null;
 }
 
-/** 会话列表（按最后消息时间倒序） */
-export function listConversations(userId: number): ConversationRow[] {
-  return stmt(
-    `
+// 会话行聚合（D1 抽出共享：全量版与游标版同一条 SELECT）。
+// last_id 一并带出：既是排序决胜键，也是游标的定位键（additive 字段，老客户端忽略）。
+const CONVERSATION_SELECT = `
+  SELECT
+    t.partner_id,
+    u.username,
+    u.avatar,
+    CASE
+      WHEN m.image_url IS NOT NULL AND m.image_url != '' AND m.content = '' THEN '[图片]'
+      ELSE m.content
+    END as last_message,
+    m.created_at as last_message_at,
+    m.id as last_id,
+    t.unread_count
+  FROM (
     SELECT
-      partner_id,
-      u.username,
-      u.avatar,
-      (SELECT CASE
-        WHEN m2.image_url IS NOT NULL AND m2.image_url != '' AND m2.content = '' THEN '[图片]'
-        ELSE m2.content END
-       FROM messages m2
-       WHERE (m2.sender_id = ? AND m2.receiver_id = partner_id)
-          OR (m2.sender_id = partner_id AND m2.receiver_id = ?)
-       ORDER BY m2.created_at DESC LIMIT 1) as last_message,
-      (SELECT m3.created_at FROM messages m3
-       WHERE (m3.sender_id = ? AND m3.receiver_id = partner_id)
-          OR (m3.sender_id = partner_id AND m3.receiver_id = ?)
-       ORDER BY m3.created_at DESC LIMIT 1) as last_message_at,
-      (SELECT COUNT(*) FROM messages m4
-       WHERE m4.sender_id = partner_id AND m4.receiver_id = ? AND m4.read = 0) as unread_count
+      g.partner_id,
+      MAX(g.id) as last_id,
+      SUM(CASE WHEN g.sender_id = g.partner_id AND g.read = 0 THEN 1 ELSE 0 END) as unread_count
     FROM (
-      SELECT DISTINCT
+      SELECT id, sender_id, receiver_id, read,
         CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as partner_id
       FROM messages
       WHERE sender_id = ? OR receiver_id = ?
-    ) sub
-    JOIN users u ON u.id = partner_id
-    ORDER BY last_message_at DESC
+    ) g
+    GROUP BY g.partner_id
+  ) t
+  JOIN messages m ON m.id = t.last_id
+  JOIN users u ON u.id = t.partner_id
+`;
+
+/**
+ * 会话列表（按最后消息时间倒序），硬上限见返回值。**全量模式**（不带 cursor 的
+ * 轮询全刷客户端依赖它——旧会话的未读数靠每次全量对账刷新）。
+ *
+ * 实现：**单趟聚合** —— 每个会话一条分组行（MAX(id) 定位最后一条 + 未读计数同组算出），
+ * 再 JOIN 回最后一条消息与用户表。此前是「每个 partner 三个相关子查询、每个子查询内部
+ * OR 两个方向」，重度用户的会话数线性膨胀时每请求的扫描量是 会话数 × 表大小；
+ * 聚合版无论多少会话都只扫一遍 messages（WHERE 走 sender/receiver 两个索引的 OR 优化）。
+ */
+export function listConversations(
+  userId: number,
+  cap: number = HARD_LIST_CAP
+): { rows: ConversationRow[]; has_more: boolean; next_cursor: string | null } {
+  const raw = stmt(`${CONVERSATION_SELECT} ORDER BY m.created_at DESC, m.id DESC LIMIT ?`).all(
+    userId,
+    userId,
+    userId,
+    probeLimit(cap)
+  ) as ConversationRow[];
+  const { rows, has_more } = capRows(raw, cap);
+  // 附带 next_cursor（与信息流页码模式同一约定）：游标客户端从全量请求引导后续页
+  const last = rows[rows.length - 1];
+  return { rows, has_more, next_cursor: has_more && last ? encodeConversationCursor(last) : null };
+}
+
+// ---- 游标模式（D1，2026-10-11，形状只增不改）----
+// 排序键 = (last_message_at, last_id)；last_id 即该会话最后一条消息的 id。
+// 注意 last_message_at 会随新消息变化（与帖子的 created_at 不同）——seek 语义下，
+// 翻页期间某旧会话若收到新消息会**跳到列表头**，其旧游标之后不再返回该行
+// （不重复；该会话的最新状态由下一次全量对账带入）。这与信息流游标的取舍一致。
+
+/** 游标编码：`last_message_at|last_id`（与信息流游标同一风格） */
+export function encodeConversationCursor(row: { last_message_at: string; last_id: number }): string {
+  return `${row.last_message_at}|${row.last_id}`;
+}
+
+/** 解析游标；格式非法抛 400（AppError 由路由层直接对外） */
+export function decodeConversationCursor(cursor: string): { createdAt: string; lastMessageId: number } {
+  const sep = cursor.lastIndexOf('|');
+  if (sep <= 0 || sep === cursor.length - 1) {
+    throw new AppError(400, '无效的分页游标');
+  }
+  const createdAt = cursor.slice(0, sep);
+  const lastMessageId = Number(cursor.slice(sep + 1));
+  // 与 decodeFeedCursor 同口径：兼容 T（ISO）与空格（CURRENT_TIMESTAMP）两种时间分隔符，
+  // 老库存量消息的 last_message_at 是空格格式，严格要求 T 会让私信会话第二页必 400
+  if (!Number.isInteger(lastMessageId) || lastMessageId <= 0 || !/^\d{4}-\d{2}-\d{2}[T ]/.test(createdAt)) {
+    throw new AppError(400, '无效的分页游标');
+  }
+  return { createdAt, lastMessageId };
+}
+
+/**
+ * 会话列表**游标模式**：单页只物化 limit 行（响应体积有界），seek 条件避免
+ * 深页 OFFSET。返回 `next_cursor`/`has_more` 供客户端续拉。
+ */
+export function listConversationsByCursor(
+  userId: number,
+  opts: { limit: number; cursor: string }
+): { rows: ConversationRow[]; has_more: boolean; next_cursor: string | null } {
+  const boundary = decodeConversationCursor(opts.cursor);
+  const limit = Math.min(Math.max(1, Math.trunc(opts.limit)), HARD_LIST_CAP);
+  const raw = stmt(
+    `${CONVERSATION_SELECT}
+     WHERE (m.created_at < ? OR (m.created_at = ? AND m.id < ?))
+     ORDER BY m.created_at DESC, m.id DESC
+     LIMIT ?`
+  ).all(
+    userId,
+    userId,
+    userId,
+    boundary.createdAt,
+    boundary.createdAt,
+    boundary.lastMessageId,
+    limit + 1 // 多取一行判断 has_more（与信息流同一口径）
+  ) as (ConversationRow & { last_id: number })[];
+  const has_more = raw.length > limit;
+  const rows = has_more ? raw.slice(0, limit) : raw;
+  const last = rows[rows.length - 1];
+  return {
+    rows,
+    has_more,
+    next_cursor: has_more && last ? encodeConversationCursor(last) : null,
+  };
+}
+
+/**
+ * 某发送者发给某接收者的**最后一条**消息（含发送者昵称）。
+ * 离线推送摘要用（push.service）——SQL 自 push.service 原样下沉（A2）。
+ */
+export function latestReceivedMessage(
+  senderId: number,
+  receiverId: number
+): { name: string; content: string; image_url: string | null } | undefined {
+  return stmt(
+    `
+    SELECT u.username AS name, m.content AS content, m.image_url AS image_url
+    FROM messages m
+    JOIN users u ON u.id = m.sender_id
+    WHERE m.sender_id = ? AND m.receiver_id = ?
+    ORDER BY m.id DESC
+    LIMIT 1
   `
-  ).all(userId, userId, userId, userId, userId, userId, userId, userId) as ConversationRow[];
+  ).get(senderId, receiverId) as { name: string; content: string; image_url: string | null } | undefined;
+}
+
+/** 某发送者发给某接收者的未读消息数（离线推送的「(N条新消息)」计数标题用） */
+export function countUnreadFrom(senderId: number, receiverId: number): number {
+  return (
+    stmt('SELECT COUNT(*) AS c FROM messages WHERE sender_id = ? AND receiver_id = ? AND read = 0').get(
+      senderId,
+      receiverId
+    ) as { c: number }
+  ).c;
 }
 
 /** 标记当前用户收到的所有未读消息为已读 */

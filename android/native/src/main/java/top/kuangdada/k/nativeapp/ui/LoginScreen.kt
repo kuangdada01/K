@@ -134,7 +134,6 @@ fun LoginOverlay(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(c.scrim)
             // 点遮罩关闭（不做水波纹：遮罩本身不是可点的控件）
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
@@ -146,6 +145,12 @@ fun LoginOverlay(
             .imePadding(),
         contentAlignment = Alignment.Center,
     ) {
+        // 遮罩单独一层：根 Box 要挂 imePadding/clickable，纯色遮罩铺底走 matchParentSize
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(c.scrim),
+        )
         Surface(
             modifier = Modifier
                 // 面板上滑（遮罩的淡入在 AppShell 的 AnimatedVisibility 里）—— 设计稿的"弹层进出"
@@ -406,7 +411,7 @@ fun LoginOverlay(
                         AuthMode.Register -> "已有账号？登录"
                         AuthMode.Forgot -> "返回登录"
                     },
-                    color = c.accent,
+                    color = c.accentText,
                     onClick = {
                         switchMode(
                             when (mode) {
@@ -476,7 +481,7 @@ private fun CodeSendButton(
             Text("$cooldown", style = KType.footnote, color = c.textSecondary)
         } else {
             Glyph(
-                tint = if (enabled) c.accent else c.textMuted,
+                tint = if (enabled) c.accentText else c.textMuted,
                 kind = GlyphKind.Mail,
                 size = KDimens.navIcon,
             )

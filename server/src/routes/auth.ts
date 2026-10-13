@@ -185,6 +185,17 @@ router.post(
  * - 400: 参数缺失
  * - 401: 邮箱或密码错误
  */
+/**
+ * 防枚举的时序对齐比较：对固定哑哈希跑一次 bcrypt.compare。
+ * 哈希惰性生成一次（与注册路径同 cost 10，耗时同量级），之后复用 ——
+ * 目的是让「邮箱不存在」的 401 与「密码错误」的 401 响应时间一致。
+ */
+let dummyPasswordHash: string | null = null;
+async function dummyBcryptCompare(password: string): Promise<void> {
+  dummyPasswordHash ??= await bcrypt.hash('k-timing-alignment-dummy-password', 10);
+  await bcrypt.compare(password, dummyPasswordHash);
+}
+
 router.post(
   '/login',
   authLimiter,
@@ -195,6 +206,10 @@ router.post(
     // 根据邮箱查询用户
     const user = authRepo.findUserByEmail(email);
     if (!user) {
+      // 防用户枚举的时序对齐：邮箱不存在时也跑一次 bcrypt 比较，
+      // 否则不存在时立即返回、存在时多付 ~100ms 的 bcrypt，时序差可探测某邮箱是否注册过
+      // （forgot-password 已做同样的防枚举，登录路径这里是补齐）。
+      await dummyBcryptCompare(password);
       throw new AppError(401, '邮箱或密码错误');
     }
 

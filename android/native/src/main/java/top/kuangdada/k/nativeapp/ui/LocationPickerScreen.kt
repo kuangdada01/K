@@ -252,10 +252,10 @@ fun LocationPickerScreen(
                         CircularProgressIndicator(
                             modifier = Modifier.size(18.dp),
                             strokeWidth = 2.dp,
-                            color = c.accent,
+                            color = c.accentText,
                         )
                     } else {
-                        CrosshairIcon(tint = c.accent, size = 20.dp)
+                        CrosshairIcon(tint = c.accentText, size = 20.dp)
                     }
                 }
             }
@@ -284,7 +284,7 @@ fun LocationPickerScreen(
                         CircularProgressIndicator(
                             modifier = Modifier.size(16.dp),
                             strokeWidth = 2.dp,
-                            color = c.accent,
+                            color = c.accentText,
                         )
                     }
                 }

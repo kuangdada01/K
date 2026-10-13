@@ -18,7 +18,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #101418;
+  background: #101010;
   border-radius: var(--radius, 16px);
   overflow: hidden;
   box-shadow: var(--shadow);
@@ -72,7 +72,7 @@
   width: 100%;
   height: 100%;
   object-fit: contain;
-  background: #101418;
+  background: #101010;
   /* opacity<1 使 canvas 不符合硬件 overlay 提升条件（全屏视频/画布走 overlay 时
      部分 NVIDIA 驱动的 YUV→RGB 转换有色偏 bug，表现为整屏发绿）；0.999 视觉不可感知 */
   opacity: 0.999;
@@ -82,7 +82,7 @@
 .canvasSlot {
   position: absolute;
   inset: 0;
-  background: #101418;
+  background: #101010;
 }
 
 /* 原生系统小窗（真机踩过）：小窗里显示的是**整个 Activity**（也就是这一页 WebView），
@@ -110,9 +110,9 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  color: #9fb0a6;
+  color: #a3a3a3;
   font-size: 14px;
-  background: #101418;
+  background: #101010;
 }
 
 /* 小窗控制条按钮（跨文档原生创建，内联样式为主，这里只调间距） */
@@ -138,8 +138,8 @@
   gap: 10px;
   padding: 0 24px;
   text-align: center;
-  background: rgba(16, 20, 24, 0.55);
-  color: #dfe8e1;
+  background: rgba(16, 16, 16, 0.55);
+  color: #e5e5e5;
   pointer-events: none;
 }
 
@@ -150,7 +150,7 @@
 
 .veilSub {
   font-size: 13px;
-  color: #9fb0a6;
+  color: #a3a3a3;
   max-width: 420px;
 }
 
@@ -165,9 +165,9 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  color: #dfe8e1;
+  color: #e5e5e5;
   text-align: center;
-  background: #101418;
+  background: #101010;
 }
 
 .loading {
@@ -175,7 +175,7 @@
   flex-direction: column;
   align-items: center;
   gap: 12px;
-  color: #9fb0a6;
+  color: #a3a3a3;
   font-size: 14px;
 }
 
@@ -192,7 +192,7 @@
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(8px);
-  color: #e8efe9;
+  color: #ebebeb;
   font-size: 13px;
   font-weight: 600;
   pointer-events: none;
@@ -219,7 +219,7 @@
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(8px);
-  color: #e8efe9;
+  color: #ebebeb;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -254,7 +254,7 @@
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(8px);
-  color: #e8efe9;
+  color: #ebebeb;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -280,14 +280,14 @@
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.55);
   backdrop-filter: blur(8px);
-  color: #aebdb4;
+  color: #b3b3b3;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
 
 .statsWarn {
-  color: #ffd08a;
+  color: #e0586b;
   font-weight: 700;
 }
 

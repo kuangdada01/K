@@ -229,28 +229,60 @@ export function listFollowing(
   return capRows(raw, cap);
 }
 
-/** 随机推荐（登录用户排除已关注，游客纯随机；最多5条） */
-export function listRecommended(userId?: number): FriendUserRow[] {
+/** 单页候选：从 fromId 起按 id 升序取 limit 个（登录用户排除自己与已关注） */
+function recommendedPage(userId: number | undefined, fromId: number, limit: number): FriendUserRow[] {
   if (userId) {
     return stmt(
       `
       SELECT u.id, u.username, u.avatar
       FROM users u
-      WHERE u.id != ?
+      WHERE u.id >= ? AND u.id != ?
         AND u.id NOT IN (SELECT friend_id FROM friends WHERE user_id = ?)
-      ORDER BY RANDOM()
-      LIMIT 5
+      ORDER BY u.id
+      LIMIT ?
     `
-    ).all(userId, userId) as FriendUserRow[];
+    ).all(fromId, userId, userId, limit) as FriendUserRow[];
   }
   return stmt(
     `
     SELECT u.id, u.username, u.avatar
     FROM users u
-    ORDER BY RANDOM()
-    LIMIT 5
+    WHERE u.id >= ?
+    ORDER BY u.id
+    LIMIT ?
   `
-  ).all() as FriendUserRow[];
+  ).all(fromId, limit) as FriendUserRow[];
+}
+
+/**
+ * 随机推荐（登录用户排除已关注，游客纯随机；最多5条）。
+ *
+ * 实现：**随机起点探测**而非 `ORDER BY RANDOM()` —— 后者每请求物化全部 users 行
+ * 再排序（O(N) 内存 + 排序，且该端点匿名可调），前者用 id 主键索引从随机起点向后
+ * 取 5 个；自增 id 有空洞（删号），起点之后不足 5 个时从头部补齐并去重。
+ * 随机性：起点在 [MIN(id), MAX(id)] 上均匀采样，对自增分布足够均匀。
+ */
+export function listRecommended(userId?: number): FriendUserRow[] {
+  const bounds = stmt('SELECT MIN(id) AS minId, MAX(id) AS maxId FROM users').get() as {
+    minId: number | null;
+    maxId: number | null;
+  };
+  if (bounds.minId === null || bounds.maxId === null) return []; // 空库
+  const want = 5;
+  const start = bounds.minId + Math.floor(Math.random() * (bounds.maxId - bounds.minId + 1));
+  const picked = recommendedPage(userId, start, want);
+  if (picked.length >= want) return picked;
+  // 起点之后不足：从头部补齐（去掉与已选重复的）
+  const seen = new Set(picked.map((p) => p.id));
+  const head = recommendedPage(userId, bounds.minId, want * 2);
+  for (const row of head) {
+    if (picked.length >= want) break;
+    if (!seen.has(row.id)) {
+      picked.push(row);
+      seen.add(row.id);
+    }
+  }
+  return picked;
 }
 
 /** 当前用户关注列表（按用户名排序） */

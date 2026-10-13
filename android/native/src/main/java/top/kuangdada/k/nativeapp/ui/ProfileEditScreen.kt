@@ -253,7 +253,7 @@ fun ProfileEditScreen(
                             // 这里用 glyph 把人像补齐
                             glyph = GlyphKind.User,
                             bg = c.surfaceSubtle,
-                            fg = c.accent,
+                            fg = c.accentText,
                         )
                         if (uploading) {
                             // 上传中：同一位置上压一层页底色 + 转圈（不改变头像尺寸，避免布局跳动）
@@ -264,7 +264,7 @@ fun ProfileEditScreen(
                                     .background(c.bgPage.copy(alpha = 0.72f)),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                CircularProgressIndicator(color = c.accent, modifier = Modifier.size(28.dp))
+                                CircularProgressIndicator(color = c.accentText, modifier = Modifier.size(28.dp))
                             }
                         }
                     }
@@ -272,7 +272,7 @@ fun ProfileEditScreen(
                     Text(
                         text = if (uploading) "上传中…" else "更换头像",
                         style = KType.body,
-                        color = c.accent,
+                        color = c.accentText,
                         modifier = Modifier.clickable(enabled = !uploading) {
                             pickAvatar.launch(
                                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)

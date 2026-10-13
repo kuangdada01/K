@@ -34,12 +34,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import android.view.ContextThemeWrapper
@@ -107,8 +110,37 @@ fun KVideoPlayer(
      * 于是"想放大看"这件事没有任何入口 —— 只能点画面暂停，用户实测反馈
      * 「进入详情页点击视频是暂停没有全屏按钮」。
      * 内联播放器的进度条也不可拖动（见 [showProgressBar]），要精确拖时间同样得进全屏页。
+     *
+     * 参数是**当前进度与时长**（不是无参）：点全屏的那一刻要把"播到哪了"交给调用方，
+     * 否则全屏页新建的播放器只能从 0 开始（用户实测反馈「详情页点击全屏不能续播」）。
+     * 这是 **单向** 的交出 —— 回程由调用方在建内联播放器时通过 [startPositionMs] 还回来。
      */
-    onFullscreen: (() -> Unit)? = null,
+    onFullscreen: ((positionMs: Long, durationMs: Long) -> Unit)? = null,
+    /**
+     * 起播位置（ms；0 = 从头发起，见 [VideoPlayerScreen] 退场时交回的进度）。
+     *
+     * 用途：从全屏页退出回到详情页时，内联播放器是**新组合出来的**（详情页在那一跳里
+     * 离开过组合），不给它这个数就会从 0 重播 —— 用户来回切一次就丢一次进度。
+     */
+    startPositionMs: Long = 0L,
+    /**
+     * 「这一块在屏幕上的哪里」的探针（可选的，只有详情页需要）。
+     *
+     * 谁读它：详情页把这个 [VideoRectProbe] 传给播放器，播放器每帧量一次自己的窗口矩形；
+     * 用户点全屏时，详情页读它打包进 [VideoHandoff]，全屏页据此算进/退场飞行的几何。
+     *
+     * 为什么必须**测量方**与**播放器**绑在一起：矩形要量的是"画面那一块"，
+     * 而外面那层容器可能还有内边距/圆角，量容器就会偏 —— 让播放器自己上报最准。
+     */
+    rectProbe: VideoRectProbe? = null,
+    /**
+     * 这一块的圆角（必须与调用方那行 `clip(RoundedCornerShape(...))` 一致）。
+     *
+     * 为什么要显式传：圆角**不在**播放器自己的链上（在调用方的容器上），
+     * 播放器量不到它；而"进全屏飞行"的出发帧必须与屏幕上看到的圆角严丝合缝，
+     * 否则点下去第一帧就会"圆角跳成直角"（查看器那条路上踩过一次，见 `ViewerOrigin`）。
+     */
+    rectProbeCorner: Dp = KRadius.row,
     /** 顶部标题（卡片场景通常 null，详情页传帖子正文摘要） */
     title: String? = null,
     /**
@@ -137,6 +169,11 @@ fun KVideoPlayer(
             repeatMode = if (loop) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
             // 静音用**播放器音量**而不是系统音量：后者会影响用户其它 App 的声音
             volume = if (muted) 0f else 1f
+            // ★ 起播位置：从全屏页退出回来时接着播（见 [startPositionMs]）。
+            // **必须在 prepare() 之前 seek**：prepare 之后再 seek 会先把 0 位置那段
+            // 解出来再跳走，观感是"回到开头闪一下"。`seekTo` 只记位置，
+            // 真正的定位发生在 prepare 里 —— 顺序反过来就白做了。
+            if (startPositionMs > 0L) seekTo(startPositionMs)
             playWhenReady = autoPlay
             prepare()
         }
@@ -221,7 +258,18 @@ fun KVideoPlayer(
         }
     }
 
-    Box(modifier = modifier.background(Color.Black)) {
+    /** 圆角（px）：给"进全屏飞行"的出发帧用（与调用方那行 `clip(...)` 必须一致） */
+    val cornerRadiusPx = with(LocalDensity.current) { rectProbeCorner.toPx() }
+
+    Box(
+        modifier = modifier
+            .background(Color.Black)
+            // 每帧上报"画面这一块在哪"（见 [rectProbe] 的注释）。
+            // 用普通字段写、不触发重组：这个值每帧都在变，接进 Compose 状态会让整页每帧重组
+            .onGloballyPositioned { coords ->
+                rectProbe?.update(coords.boundsInWindow(), cornerRadiusPx)
+            },
+    ) {
         KVideoSurface(
             player = player,
             modifier = Modifier
@@ -318,7 +366,14 @@ fun KVideoPlayer(
                     .size(32.dp)
                     .clip(CircleShape)
                     .background(Color.Black.copy(alpha = 0.45f))
-                    .clickable(onClick = onFullscreen)
+                    .clickable {
+                        // 把"播到哪了"一起交出去：全屏页新建播放器时据此 seekTo
+                        // （用户实测反馈「详情页点击全屏不能续播」）。
+                        // 读的是**点击那一刻**的播放器状态 —— 上面那两个轮询出来的
+                        // `positionMs` / `durationMs` 是 250ms 前的值，够用但不精确；
+                        // 这里能直读就直读。
+                        onFullscreen(player.currentPosition.coerceAtLeast(0L), player.duration)
+                    }
                     // 无障碍：没有文字，必须给 contentDescription，否则读屏只说"按钮"
                     .semantics { contentDescription = "全屏播放" },
                 contentAlignment = Alignment.Center,

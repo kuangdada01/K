@@ -29,12 +29,25 @@ COPY client/package.json ./client/
 RUN HUSKY=0 npm ci --no-audit --no-fund
 
 # 源码层：拷代码并构建 shared → server → client
+# ★ shared 的构建必须在 COPY server **之前**（2026-10-11 修复缓存连坐）：
+#   COPY server 在前的话，任何 server 源码改动都会使后续的 build shared 层
+#   一起失效重建 —— 恰恰违背了本文件"依赖先于源码、缓存友好"的设计（E4）
 COPY shared ./shared
-COPY server ./server
 RUN npm run build --prefix shared
+COPY server ./server
 RUN npm run build --prefix server
 COPY client ./client
 RUN npm run build --prefix client
+
+# 生产依赖树（B2）：在独立目录按 lockfile 精确安装一次，runtime 直接 COPY ——
+# 原实现 runtime 阶段再联网 `npm ci --omit=dev`：双倍下载 + 二次 registry 可用性风险。
+# 目录布局（三个 package.json + 同一 lockfile）与 /app 完全一致，-w 语义不变。
+RUN mkdir -p /tmp/prod/shared /tmp/prod/server /tmp/prod/client \
+  && cp package.json package-lock.json /tmp/prod/ \
+  && cp shared/package.json /tmp/prod/shared/ \
+  && cp server/package.json /tmp/prod/server/ \
+  && cp client/package.json /tmp/prod/client/ \
+  && cd /tmp/prod && HUSKY=0 npm ci --omit=dev --no-audit --no-fund -w shared -w server
 
 # ---------- 运行时阶段 ----------
 FROM node:24-slim
@@ -57,10 +70,10 @@ COPY --from=build /app/client/dist ./client/dist
 # 并且仅 mkdir 了一个空的 client/public/music，导致容器里音乐列表恒为空。
 COPY --from=build /app/client/public ./client/public
 
-# 为 shared/server 两个 workspace 装生产依赖（client 是静态产物，不装）
-# 运行时阶段 --omit=dev 会裁掉根 devDep（husky），但 npm 仍执行根 prepare 脚本；
-# prepare 已改为 "husky || exit 0"，husky 缺失时自动跳过（见根 package.json）
-RUN HUSKY=0 npm ci --omit=dev --no-audit --no-fund -w shared -w server
+# 生产依赖树直接来自 build 阶段的预装目录（B2），不再联网安装。
+# node_modules/@k/shared 是**相对**符号链接（→ ../shared），落到 /app 后
+# 仍解析到真正的 shared 目录（其 dist 在上方 COPY）。
+COPY --from=build /tmp/prod/node_modules ./node_modules
 
 # E4：非 root 运行
 # k.db 预建为空文件（不声明 VOLUME）：新版 Docker/containerd 拒绝把卷挂到已存在的

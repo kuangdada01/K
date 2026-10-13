@@ -247,7 +247,7 @@ fun FeedScreen(
                             Modifier.fillMaxWidth().padding(KSpacing.md),
                             contentAlignment = Alignment.Center,
                         ) {
-                            CircularProgressIndicator(color = c.accent, modifier = Modifier.size(20.dp))
+                            CircularProgressIndicator(color = c.accentText, modifier = Modifier.size(20.dp))
                         }
                     }
                 }
@@ -306,7 +306,7 @@ private fun FeedHeader(onOpenExplore: () -> Unit) {
                     .clickable(onClickLabel = "搜索", onClick = onOpenExplore),
                 contentAlignment = Alignment.Center,
             ) {
-                Glyph(tint = c.accent, kind = GlyphKind.Search, size = KDimens.navIcon)
+                Glyph(tint = c.accentText, kind = GlyphKind.Search, size = KDimens.navIcon)
             }
         },
     )

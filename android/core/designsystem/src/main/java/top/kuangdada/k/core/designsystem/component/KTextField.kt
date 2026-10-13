@@ -243,7 +243,7 @@ private fun KTextFieldContainer(
 
     // 选中文字的高亮跟着强调色走（未设时 Compose 默认是主题 primary，这里是显式钉住）
     val selectionColors = TextSelectionColors(
-        handleColor = c.accent,
+        handleColor = c.accentText,
         backgroundColor = c.accent.copy(alpha = 0.30f),
     )
 

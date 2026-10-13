@@ -113,7 +113,7 @@ fun KButton(
             }
             KButtonVariant.Ghost -> {
                 bg = c.accentSoft
-                fg = c.accent
+                fg = c.accentText
                 border = c.accentBorder
             }
             KButtonVariant.Danger -> {

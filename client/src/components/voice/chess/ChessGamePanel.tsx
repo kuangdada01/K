@@ -238,10 +238,16 @@ export default function ChessGamePanel() {
     return game.notations.length > 4 ? `…${tail}` : tail;
   }, [game]);
 
-  const handleMove = (from: ChessSquare, to: ChessSquare) => {
-    if (!game) return;
-    chess.move(game.gameId, game.moveCount, from, to);
-  };
+  // useCallback：ChessBoard 已 memo 化，onMove 引用必须稳定，
+  // 否则棋钟每 500ms 一次的走秒重渲会击穿 memo（chess 控制器来自
+  // VoiceContext，跨渲染稳定）
+  const handleMove = useCallback(
+    (from: ChessSquare, to: ChessSquare) => {
+      if (!game) return;
+      chess.move(game.gameId, game.moveCount, from, to);
+    },
+    [game, chess]
+  );
 
   const handleResign = () => {
     if (!game) return;

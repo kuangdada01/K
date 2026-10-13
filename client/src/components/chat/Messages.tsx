@@ -12,7 +12,7 @@
  * ============================================================
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, Suspense, lazy } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { isNative } from '../../lib/native';
 import api from '../../api/http';
@@ -22,7 +22,10 @@ import { events } from '../../state/events';
 import { markNotificationReadLocal } from '../../state/inboxStore';
 import { useSse } from '../../hooks/useSse';
 import ConfirmDialog from '../ui/ConfirmDialog';
-import PostDetail from '../post/PostDetail';
+// PostDetail 懒加载：浮层只在点开帖子时用到，静态 import 会把它连着
+// PostMedia/手势 hook 的子树打进私信页 chunk（与 HomePage 同一处理）
+import { loadPostDetail } from '../../router/composerChunks';
+const LazyPostDetail = lazy(loadPostDetail);
 import ConversationSidebar from './ConversationSidebar';
 import ChatWindow, { ChatEmpty } from './ChatWindow';
 import ChatContextMenu from './ChatContextMenu';
@@ -295,15 +298,17 @@ export default function Messages() {
       )}
 
       {selectedPostId && (
-        <PostDetail
-          postId={selectedPostId}
-          highlightCommentId={highlightCommentId}
-          onClose={() => {
-            postDetailHandledBack.current = true;
-            setSelectedPostId(null);
-            setHighlightCommentId(null);
-          }}
-        />
+        <Suspense fallback={null}>
+          <LazyPostDetail
+            postId={selectedPostId}
+            highlightCommentId={highlightCommentId}
+            onClose={() => {
+              postDetailHandledBack.current = true;
+              setSelectedPostId(null);
+              setHighlightCommentId(null);
+            }}
+          />
+        </Suspense>
       )}
     </div>
   );

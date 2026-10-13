@@ -1,0 +1,69 @@
+/* 表情选择器样式（D5 自 EmojiPicker.tsx 的内联样式迁出，视觉属性一一对应） */
+
+.panel {
+  position: fixed;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  display: grid;
+  justify-content: center;
+  align-content: start;
+  z-index: 350;
+  overflow-y: scroll;
+  overflow-x: hidden;
+}
+
+/* 桌面端：320x324 弹窗，7 列，靠近表情图标 */
+.panelDesktop {
+  top: var(--emoji-top, 0);
+  left: var(--emoji-left, 0);
+  width: 320px;
+  height: 324px;
+  border-radius: 12px;
+  padding: 8px 12px;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+/* 移动端：固定屏幕底部，8 列 */
+.panelMobile {
+  bottom: 0;
+  left: 0;
+  right: 0;
+  border-radius: 12px 12px 0 0;
+  padding: 12px;
+  grid-template-columns: repeat(8, 1fr);
+  gap: 4px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.12);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+/* 表情按钮：桌面/移动共用一套（此前是两份几乎相同的内联样式） */
+.emojiBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 22px;
+  padding: 4px;
+  border-radius: 6px;
+  transition: background 0.1s;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.emojiBtn:hover {
+  background: var(--bg-hover);
+}
+
+.trigger {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+}

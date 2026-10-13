@@ -11,6 +11,7 @@ import { Router } from 'express';
 import { env } from '../config';
 import { stmt } from '../db/connection';
 import { logger } from '../lib/logger';
+import { optionalAuth } from '../middleware/auth';
 
 const router = Router();
 
@@ -62,6 +63,52 @@ router.get('/app/version', (_req, res) => {
     apkUrl: env.APP_APK_URL ?? null,
     notes: env.APP_UPDATE_NOTES ?? '',
   });
+});
+
+/**
+ * POST /api/notify-diag - 客户端「通知链路」自检上报（**只写日志，不落库**）
+ *
+ * 为什么需要它：Android 端的"收不到通知"在服务端只能看到结果（推送发送记录），
+ * 看不到原因 —— 而原因全在客户端：推送注册成功没有、通知通道与系统开关是什么
+ * 状态、声音与震动的实际取值。让 App 在切到后台时**主动上报一行**，
+ * 与服务端日志按时间对齐，一眼就能定位是哪一环断了（2026-10 那轮
+ * "杀 App 收不到推送"的排查主线索，见 docs/android-background-notify-plan.md §7）。
+ *
+ * 刻意做成可选鉴权 + 只写日志：
+ *  · 未登录时也要能上报（问题可能就发生在登录态异常时）；
+ *  · 不落库、不改任何业务状态 —— 唯一副作用是一行结构化日志，随时可删。
+ * 写入频率天然受全局 /api 写限流（120 次/分钟/IP）约束。
+ */
+router.post('/notify-diag', optionalAuth, (req, res) => {
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  // 只挑白名单字段，避免把客户端传来的任意内容整坨写进日志
+  const pick = (k: string) => {
+    const v = body[k];
+    return typeof v === 'string' ? v.slice(0, 120) : v;
+  };
+  logger.info(
+    {
+      userId: req.user?.id ?? null,
+      appVersion: pick('version'),
+      // 厂商离线推送这条路的客户端侧状态（注册/上报结果）
+      pushSupported: pick('pushSupported'),
+      pushRegistered: pick('pushRegistered'),
+      pushError: pick('pushError'),
+      // 通道适配（Android 9+ 推送必须按这个 id 指定通道；0.1.16+ 上报）
+      channelId: pick('channelId'),
+      // 应用级通知开关 + 运行时权限（"通知能发但看不到"时的第一嫌疑层）
+      notificationsEnabled: pick('notificationsEnabled'),
+      notifPermission: pick('notifPermission'),
+      // 声音/震动这条路的**实际取值**（静音模式、通知音量、渠道重要性/提示音/震动）
+      ringerMode: pick('ringerMode'),
+      notificationVolume: pick('notificationVolume'),
+      channelImportance: pick('channelImportance'),
+      channelSound: pick('channelSound'),
+      channelVibrate: pick('channelVibrate'),
+    },
+    '客户端通知诊断'
+  );
+  res.json({ ok: true });
 });
 
 export default router;

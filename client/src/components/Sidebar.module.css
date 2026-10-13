@@ -28,7 +28,7 @@
   width: 38px;
   height: 38px;
   border-radius: 12px;
-  background: linear-gradient(135deg, var(--accent), #7fa390);
+  background: linear-gradient(135deg, var(--accent), #4c8070);
   color: var(--on-accent);
   display: grid;
   place-items: center;
@@ -38,7 +38,7 @@
 }
 
 [data-theme='dark'] .brandMark {
-  background: linear-gradient(135deg, var(--accent), #7a6335);
+  background: linear-gradient(135deg, var(--accent), #24463c);
 }
 
 .brandName {
@@ -79,20 +79,20 @@
 }
 
 [data-theme='dark'] .item:hover {
-  background: rgba(30, 35, 45, 0.85);
+  background: rgba(38, 38, 38, 0.85);
   color: var(--text-primary);
 }
 
 .item.active {
   background: var(--bg-primary);
-  color: var(--accent);
+  color: var(--accent-text);
   box-shadow: var(--shadow);
   font-weight: 600;
 }
 
-/* 深色侧边栏选中项：--bg-primary(#161a22) 在页面底色 #0d0f14 上是突兀的深灰块，
-   改为淡金色底 + 去阴影，与浅色"白色卡片高亮"的选中语义保持一致。
-   此规则写在 hover 规则之后，(0,3,0) 高于 .item.active (0,2,0)，hover 选中时也保持淡金。 */
+/* 深色侧边栏选中项：--bg-primary(#1c1c1c) 在页面底色 #121212 上是突兀的深灰块，
+   改为淡绿底 + 去阴影，与浅色"白色卡片高亮"的选中语义保持一致。
+   此规则写在 hover 规则之后，(0,3,0) 高于 .item.active (0,2,0)，hover 选中时也保持淡绿。 */
 [data-theme='dark'] .item.active {
   background: var(--accent-soft);
   box-shadow: none;
@@ -123,7 +123,7 @@
   height: 8px;
   margin-left: 6px;
   border-radius: 50%;
-  background: var(--success, #3ba55d);
+  background: var(--success, #325d51);
   vertical-align: middle;
   position: relative;
   top: -0.12em;
@@ -141,14 +141,15 @@
 }
 
 /* 未读角标
-   ★ 文字色用 --on-accent 而非写死的 white：深色下 --danger(#E0586B) 配白字只有 3.63:1，
-   低于 AA；跟 on-accent 走后浅色 4.99:1、深色 5.27:1，两主题同时达标。 */
+   ★ 文字色用 --on-danger 而非写死的 white：红色填充（深色下 #E0586B）配白字
+   只有 3.63:1，低于 AA；--on-danger 走后浅色白字 5.65:1、深色深字 5.15:1，
+   两主题同时达标。 */
 .badge {
   position: absolute;
   top: -6px;
   right: -8px;
   background: var(--danger);
-  color: var(--on-accent);
+  color: var(--on-danger);
   font-size: 10px;
   font-weight: 700;
   min-width: 16px;
@@ -169,7 +170,7 @@
    overflow:hidden 裁剪成"半个边框"（默认 outline 画在元素外） */
 .sidebar :focus-visible {
   outline: none;
-  box-shadow: inset 0 0 0 2px var(--accent);
+  box-shadow: inset 0 0 0 2px var(--accent-text);
 }
 
 .bottom {
@@ -178,16 +179,16 @@
   border-top: 1px solid var(--border-color);
 }
 
-/* 用户 Chip（参考稿 user-chip：白色微透卡片 + 圆角） */
+/* 用户 Chip（参考稿 user-chip：白色微透卡片 + 圆角；描边/底一律中性） */
 .userChipTrigger {
-  border: 1px solid rgba(210, 221, 210, 0.86) !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
   background: rgba(255, 255, 255, 0.74) !important;
   border-radius: 14px !important;
 }
 
 [data-theme='dark'] .userChipTrigger {
-  border-color: rgba(38, 43, 53, 0.9) !important;
-  background: rgba(22, 26, 34, 0.8) !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  background: rgba(255, 255, 255, 0.05) !important;
 }
 
 /* 移动端头像入口（已迁移至主页右上角设置图标，移除） */

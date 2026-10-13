@@ -282,7 +282,7 @@ fun BooksScreen(
     Box(modifier = Modifier.fillMaxSize().background(c.bgPage)) {
         when {
             loading && all.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = c.accent)
+                CircularProgressIndicator(color = c.accentText)
             }
 
             error != null && all.isEmpty() -> KPlaceholder(
@@ -434,10 +434,10 @@ fun BooksScreen(
                                 CloudSyncUi.Syncing -> CircularProgressIndicator(
                                     modifier = Modifier.padding(start = KSpacing.xs).size(14.dp),
                                     strokeWidth = 2.dp,
-                                    color = c.accent,
+                                    color = c.accentText,
                                 )
                                 CloudSyncUi.Done -> Glyph(
-                                    tint = c.accent,
+                                    tint = c.accentText,
                                     kind = GlyphKind.Check,
                                     size = 14.dp,
                                     modifier = Modifier.padding(start = KSpacing.xs),
@@ -667,7 +667,7 @@ fun BookDetailScreen(
                             modifier = Modifier.fillMaxWidth().padding(top = KSpacing.xl),
                             contentAlignment = Alignment.Center,
                         ) {
-                            CircularProgressIndicator(color = c.accent)
+                            CircularProgressIndicator(color = c.accentText)
                         }
                         return@Column
                     }
@@ -710,7 +710,7 @@ fun BookDetailScreen(
                                             overflow = TextOverflow.Ellipsis,
                                         )
                                         if (chapter.isPdf) {
-                                            Text("PDF", style = KType.tiny, color = c.accent)
+                                            Text("PDF", style = KType.tiny, color = c.accentText)
                                         }
                                     }
                                 }
@@ -838,7 +838,7 @@ private fun BookCoverRow(
                     modifier = Modifier.width(104.dp).height(140.dp),
                 )
             } else {
-                Text(title.orEmpty().take(1), style = KType.title, color = c.accent)
+                Text(title.orEmpty().take(1), style = KType.title, color = c.accentText)
             }
         }
         Column(

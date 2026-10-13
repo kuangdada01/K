@@ -24,9 +24,10 @@ export function getDb(): InstanceType<typeof Database> {
  */
 const stmtCache = new WeakMap<InstanceType<typeof Database>, Map<string, Database.Statement>>();
 
-/** 获取（并缓存）预编译语句，替代 getDb().prepare(...) 的逐次编译 */
-export function stmt(sql: string): Database.Statement {
-  const db = getDb();
+/** 获取（并缓存）预编译语句，替代 getDb().prepare(...) 的逐次编译。
+ *  db 可选：repo 层带 `db: Database = getDb()` 参数的函数（如 voice 系列）转发
+ *  注入实例即可 —— 缓存按实例隔离（WeakMap），测试注入的内存库同样享受复用。 */
+export function stmt(sql: string, db: InstanceType<typeof Database> = getDb()): Database.Statement {
   let cache = stmtCache.get(db);
   if (!cache) {
     cache = new Map();

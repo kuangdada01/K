@@ -27,6 +27,8 @@ import { attachVoiceWs } from './voice/ws';
 import { closeAllStreams } from './sse';
 import { logger } from './lib/logger';
 import { startTempVideoSweeper } from './routes/posts/media';
+import { startVoiceCoverSweeper } from './lib/voiceCoverSweep';
+import { startPushRuntime } from './services/push.service';
 
 const PORT = env.PORT;
 const app = createApp();
@@ -34,6 +36,13 @@ const app = createApp();
 // 临时视频 TTL 清理（启动清一次 + 每小时一次）：必须由 bootstrap 显式启动，
 // 不能放回 media.ts 模块顶层（会打破测试的「真实 k.db 零接触」，见 startTempVideoSweeper）
 startTempVideoSweeper();
+
+// 语音封面孤儿清理（同上约束）：封面上传与建房解耦，未被任何房间引用的文件按 TTL 回收
+startVoiceCoverSweeper();
+
+// OPPO 推送运行时（启动日志 + 失效注册 id 清理定时器）。
+// 与 sweeper 同理：必须显式启动，模块顶层起定时器会污染测试。
+startPushRuntime();
 
 const server = app.listen(PORT, () => {
   logger.info(`K server running on http://localhost:${PORT}`);

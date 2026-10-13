@@ -96,6 +96,9 @@ export function useMessages({
     // 拉取 + 轮询：async 函数定义在 effect 内，await 边界可被规则正确识别
     const pollMessages = async () => {
       try {
+        // 后台标签跳过 tick：锁屏/切走时 5s 一轮的 50 条全量拉取纯属浪费
+        // （回到前台后下一 tick 自然恢复）
+        if (document.hidden) return;
         // 5s 轮询：失败不重试（下一个 tick 自然会再问；见 api/retry.ts）
         const res = await api.get(`/messages/${partnerId}`, {
           params: { limit: 50 },

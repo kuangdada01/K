@@ -26,8 +26,14 @@ server/k.db-*
 server/uploads
 server/books
 
-# Android 原生工程（Web 镜像不需要）
-client/android
+# Android 原生工程（Web 镜像不需要）：目录在仓库根的 android/（Capacitor 时代
+# 的 client/android 早已不存在，写错路径等于没排除 —— 本地构建曾把
+# android/native/build（约 400MB 构建缓存）整树打进 build context）
+android
+
+# 本地累积的历史 APK（build-apk.mjs 只复制不清理，最大可达数百 MB；
+# 线上分发走部署链的 APK 单独上传通道，镜像不需要）
+client/public/apk
 
 # 压缩包产物
 *.tgz

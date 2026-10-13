@@ -139,7 +139,7 @@ export default function VideoCoverEditor({
                         {videoFile.name} ({(videoFile.size / 1024 / 1024).toFixed(1)}MB)
                       </div>
                       {videoError ? (
-                        <div style={{ fontSize: 12, color: '#ffb74d' }}>
+                        <div style={{ fontSize: 12, color: '#e0586b' }}>
                           {previewSwitching ? (
                             <>
                               视频转码中（约需 1 分钟内），完成后自动显示预览，请稍候…

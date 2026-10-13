@@ -179,6 +179,7 @@ const retains = new Map<number, number>();
 let retainSeq = 0;
 let timer: ReturnType<typeof setInterval> | null = null;
 let timerCadence = 0;
+let visibilityHandler: (() => void) | null = null;
 
 function minCadence(): number {
   let min = 0;
@@ -197,8 +198,21 @@ function syncTimer(): void {
   timerCadence = cadence;
   if (cadence > 0) {
     timer = setInterval(() => {
+      // 后台标签不打请求（桌面端长期挂后台标签时，10s/30s 双请求纯属耗电与服务端压力；
+      // SSE 推送不受此影响）。回到前台由 visibilitychange 立即补拉一次。
+      if (document.hidden) return;
       void refreshInbox();
     }, cadence);
+    // 有消费方时监听回前台：隐藏期间的 tick 全被跳过，回来立刻补一次拉平状态
+    if (visibilityHandler === null) {
+      visibilityHandler = () => {
+        if (!document.hidden && retains.size > 0) void refreshInbox();
+      };
+      document.addEventListener('visibilitychange', visibilityHandler);
+    }
+  } else if (visibilityHandler !== null) {
+    document.removeEventListener('visibilitychange', visibilityHandler);
+    visibilityHandler = null;
   }
 }
 
@@ -225,6 +239,10 @@ export function __resetInboxForTests(): void {
     timer = null;
   }
   timerCadence = 0;
+  if (visibilityHandler !== null) {
+    document.removeEventListener('visibilitychange', visibilityHandler);
+    visibilityHandler = null;
+  }
   retains.clear();
   listeners.clear();
   inFlight = null;

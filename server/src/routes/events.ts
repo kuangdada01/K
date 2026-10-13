@@ -11,6 +11,7 @@
 
 import { Router, Request, Response } from 'express';
 import { subscribe } from '../sse';
+import type { SseClientKind } from '../sse';
 import { authMiddleware, verifyLiveToken } from '../middleware/auth';
 import { createOneTimeTicketStore } from '../lib/oneTimeTicket';
 
@@ -19,12 +20,23 @@ const router = Router();
 /** 一次性连接票据（内存态，重启即失效；语义见 lib/oneTimeTicket） */
 const tickets = createOneTimeTicketStore();
 
+/**
+ * 连接来源：`?client=android` 由原生 App 声明，是"要不要补设备推送"的判据
+ * （见 sse.ts 的 SseClientKind 说明）；不认识的值一律归 unknown。
+ */
+function parseClientKind(raw: unknown): SseClientKind {
+  if (raw === 'android') return 'android';
+  if (raw === 'web') return 'web';
+  return 'unknown';
+}
+
 /** 换取一次性 SSE 连接票据（Bearer 认证） */
 router.post('/ticket', authMiddleware, (req: Request, res: Response) => {
   res.json({ ticket: tickets.issue(req.user!.id) });
 });
 
 router.get('/', (req: Request, res: Response) => {
+  const client = parseClientKind(req.query.client);
   // 首选路径：一次性票据（读后即删，防重放）
   const ticket = typeof req.query.ticket === 'string' ? req.query.ticket : '';
   if (ticket) {
@@ -33,7 +45,7 @@ router.get('/', (req: Request, res: Response) => {
       res.status(401).json({ error: '票据无效或已过期' });
       return;
     }
-    subscribe(userId, res);
+    subscribe(userId, res, client);
     return;
   }
 
@@ -49,7 +61,7 @@ router.get('/', (req: Request, res: Response) => {
     res.status(401).json({ error: '无效 token' });
     return;
   }
-  subscribe(live.id, res);
+  subscribe(live.id, res, client);
 });
 
 export default router;

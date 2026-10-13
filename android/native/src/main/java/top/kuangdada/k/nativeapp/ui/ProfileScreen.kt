@@ -1,6 +1,7 @@
 package top.kuangdada.k.nativeapp.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -37,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,6 +64,7 @@ import top.kuangdada.k.core.designsystem.theme.KRadius
 import top.kuangdada.k.core.designsystem.theme.KSpacing
 import top.kuangdada.k.core.designsystem.theme.KTheme
 import top.kuangdada.k.core.designsystem.theme.KType
+import top.kuangdada.k.nativeapp.notify.KPush
 
 /**
  * ============================================================
@@ -335,8 +338,16 @@ fun ProfileScreen(
                     // 「粉丝 / 关注」可点进列表页（2026-10-03 用户要求）—— 帖子数没有对应的列表，不可点
                     Row(horizontalArrangement = Arrangement.spacedBy(KSpacing.xxl)) {
                         StatItem("帖子", profile?.postCount)
-                        StatItem("粉丝", profile?.followersCount) { onOpenFollowList(true) }
-                        StatItem("关注", profile?.followingCount) { onOpenFollowList(false) }
+                        StatItem(
+                            "粉丝",
+                            profile?.followersCount,
+                            onClick = { onOpenFollowList(true) },
+                        )
+                        StatItem(
+                            "关注",
+                            profile?.followingCount,
+                            onClick = { onOpenFollowList(false) },
+                        )
                     }
 
                     // 操作按钮：编辑资料（实心）+ 分享主页（白底描边），等宽各占一半
@@ -379,7 +390,7 @@ fun ProfileScreen(
                                 text = title,
                                 style = if (selected) KType.bodyStrong else KType.body,
                                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                color = if (selected) c.accent else c.textMuted,
+                                color = if (selected) c.accentText else c.textMuted,
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier
                                     .weight(1f)
@@ -403,7 +414,7 @@ fun ProfileScreen(
             when {
                 state.loading && state.posts.isEmpty() -> item {
                     Box(Modifier.fillMaxWidth().padding(KSpacing.xxl), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = c.accent)
+                        CircularProgressIndicator(color = c.accentText)
                     }
                 }
 
@@ -485,7 +496,6 @@ fun ProfilePostMenu(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(c.scrim)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -494,6 +504,12 @@ fun ProfilePostMenu(
             ),
         contentAlignment = Alignment.BottomCenter,
     ) {
+        // 遮罩单独一层（淡入淡出由 AppShell 的 AnimatedVisibility 统一做）
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(c.scrim),
+        )
         Column(
             modifier = Modifier
                 // 面板上滑（遮罩淡入在 AppShell）；与登录弹层同一套进出观感
@@ -552,10 +568,11 @@ fun ProfileSettingsOverlay(
     onLoggedOut: () -> Unit,
 ) {
     val c = KTheme.colors
+    val context = LocalContext.current
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(c.scrim)
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
@@ -564,6 +581,12 @@ fun ProfileSettingsOverlay(
             ),
         contentAlignment = Alignment.BottomCenter,
     ) {
+        // 遮罩单独一层（淡入淡出由 AppShell 的 AnimatedVisibility 统一做）
+        Box(
+            modifier = Modifier
+                .matchParentSize()
+                .background(c.scrim),
+        )
         Column(
             modifier = Modifier
                 // 面板上滑（遮罩淡入在 AppShell）；与登录弹层同一套进出观感
@@ -580,7 +603,9 @@ fun ProfileSettingsOverlay(
             ThemeModeRow(current = themeMode, onChange = onThemeChange)
 
             /**
-             * 这里**只有主题与退出登录**两件事（09-18 用户定）：
+             * 这里**只有主题与退出登录**（09-18/2026-10 用户定；2026-10-09 起「离线推送」
+             * 开关与「通知诊断」也移出设置 —— 推送全自动：注册与上报由登录态驱动、
+             * 退登自动解绑，用户侧不需要任何开关）：
              *  · 「分享主页」不在这里 —— 主页上「编辑资料 / 分享主页」那一排已经有了，
              *    设置里再放一个是重复入口（而且那一排分享的是**当前正在看**的主页，
              *    比这里只能分享自己的更符合直觉）；
@@ -593,10 +618,17 @@ fun ProfileSettingsOverlay(
                 "退出登录",
                 onClick = {
                     onDismiss()
+                    // 先解绑离线推送再登出：本函数内部同步快照 Bearer 与 regId 后
+                    // fire-and-forget 发 DELETE —— 登出后本地凭证已清，就再也解不掉了
+                    // （换人用这台手机就会收到上一个账号的消息，是隐私问题）。
+                    KPush.unbindOnLogout(context)
                     session.logout()
                     onLoggedOut()
                 },
                 variant = KButtonVariant.Danger,
+                // 圆角与「外观」等设置行保持一致（此前的默认是全圆胶囊，在"一行一行"
+                // 的面板里观感突兀 —— 用户反馈）
+                cornerRadius = KRadius.row,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -686,7 +718,7 @@ private fun AdminEntryRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(KSpacing.sm),
     ) {
-        Glyph(tint = c.accent, kind = GlyphKind.Shield, size = 20.dp)
+        Glyph(tint = c.accentText, kind = GlyphKind.Shield, size = 20.dp)
         Column(
             modifier = Modifier.weight(1f),
             // 副标题贴着标题（设计稿里这两行是一组，与图标是 12 的间距）
@@ -704,11 +736,17 @@ private fun AdminEntryRow(onClick: () -> Unit, modifier: Modifier = Modifier) {
  * 内边距画在点击区内，命中区比数字一行大得多（数字小，按字面大小几乎点不中）。
  */
 @Composable
-private fun StatItem(label: String, value: Int?, onClick: (() -> Unit)? = null) {
+private fun StatItem(
+    label: String,
+    value: Int?,
+    onClick: (() -> Unit)? = null,
+    /** 无缝开窗的来源登记挂这里（关注/粉丝列表从统计数字起飞，S2） */
+    modifier: Modifier = Modifier,
+) {
     val c = KTheme.colors
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
+        modifier = modifier
             .clip(RoundedCornerShape(KRadius.chip))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = KSpacing.xs, vertical = KSpacing.xxs),

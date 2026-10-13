@@ -30,7 +30,7 @@
 }
 
 .images .previewItem.newFile {
-  outline: 2px dashed var(--accent);
+  outline: 2px dashed var(--accent-text);
   outline-offset: -2px;
 }
 
@@ -122,8 +122,8 @@
 }
 
 .add:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+  border-color: var(--accent-text);
+  color: var(--accent-text);
 }
 @media (max-width: 768px) {
   .overlay {

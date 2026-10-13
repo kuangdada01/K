@@ -20,7 +20,7 @@ import Avatar from '../ui/Avatar';
 import VolumeSlider from '../ui/VolumeSlider';
 import type { VoiceParticipant } from '../../types';
 import type { VoiceQualityLevel } from '../../voice/VoiceSession';
-import styles from '../../pages/VoicePage.module.css';
+import styles from './MemberCard.module.css';
 import chessStyles from './chess/chess.module.css';
 
 function MemberCard({
@@ -74,6 +74,7 @@ function MemberCard({
         <div className={styles.peerVolume}>
           <Volume2 size={13} />
           <VolumeSlider
+            className={styles.peerVolumeSlider}
             value={volume}
             onChange={(v) => {
               setVolume(v);

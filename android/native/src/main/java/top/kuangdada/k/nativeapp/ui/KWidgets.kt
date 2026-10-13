@@ -521,7 +521,7 @@ fun BookCard(
                 Text(
                     text = book.title.take(1),
                     style = KType.title,
-                    color = c.accent,
+                    color = c.accentText,
                 )
             }
         }
@@ -945,7 +945,7 @@ private fun KDialogButton(
  * 写死白字 = 深色主题下一处静默的可读性缺陷（与 accent 用 [KColors.onAccent] 同因）。
  */
 private val KColors.onSolidDanger: Color
-    get() = if (isLight) Color(0xFFFDF7F6) else Color(0xFF1A0F12)
+    get() = if (isLight) Color(0xFFFFFFFF) else Color(0xFF121212)
 
 /**
  * 主题模式选择行（跟随系统 / 浅色 / 深色）。

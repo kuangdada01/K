@@ -10,11 +10,16 @@ import coil3.disk.DiskCache
 // `directory(File)` 是扩展函数（定义在 coil3.disk.diskCacheKt），不 import 会报
 // "actual type is 'File', but 'Path' was expected" —— 编译器只看到 `directory(Path)` 那个成员
 import coil3.disk.directory
+import kotlinx.coroutines.CoroutineExceptionHandler
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import top.kuangdada.k.core.data.AdminRepository
 import top.kuangdada.k.core.data.BookRepository
 import top.kuangdada.k.core.data.ComposerRepository
 import top.kuangdada.k.core.data.CommentRepository
 import top.kuangdada.k.core.data.FriendRepository
+import top.kuangdada.k.core.data.InboxStore
 import top.kuangdada.k.core.data.MessageRepository
 import top.kuangdada.k.core.data.PostRepository
 import top.kuangdada.k.core.data.RealtimeClient
@@ -23,6 +28,10 @@ import top.kuangdada.k.core.data.ThemePreference
 import top.kuangdada.k.core.data.TokenStore
 import top.kuangdada.k.core.data.UserRepository
 import top.kuangdada.k.core.data.VoiceRepository
+import top.kuangdada.k.nativeapp.notify.AppForeground
+import top.kuangdada.k.nativeapp.notify.ForegroundRealtime
+import top.kuangdada.k.nativeapp.notify.NotifyPreference
+import top.kuangdada.k.nativeapp.notify.SocialNotificationCenter
 import top.kuangdada.k.nativeapp.ui.AnimationGate
 import top.kuangdada.k.nativeapp.ui.ImageLoading
 
@@ -61,6 +70,51 @@ class KApp : Application(), SingletonImageLoader.Factory {
         // 语音房活动会话持有者同样装配为进程默认：前台服务（无 Activity 上下文）与
         // 各控制器经 VoiceRoomSessionHub.get() 取到同一个实例，通知退房才能路由到控制器
         top.kuangdada.k.nativeapp.voice.VoiceRoomSessionHub.install(graph.voiceHub)
+
+        /*
+         * 「App 在不在前台」的进程级判定 + 事件→通知的进程级消费者。
+         *
+         * 两者都必须在 Application 里装配，**不能挂在组合树上**：
+         *  · 前台判定被通知中心用（Activity 被回收后它还得能回答"我在不在前台"）；
+         *  · 通知中心要在 Activity 销毁后继续工作 —— 否则进程活着、SSE 连着，
+         *    通知却没人发。
+         */
+        graph.foreground.install(this)
+        graph.notificationCenter.start()
+        // 收件箱订阅事件流：任何"可能改变未读"的事件都立刻刷一次（角标与消息页共用的那一份状态）
+        graph.inbox.start()
+        /*
+         * SSE 连接 / 收件箱对账 / 诊断上报的**进程级联动**（2026-10-10）。
+         *
+         * 连接条件 = `前台 && 已登录`（进程级）。不能留在 AppShell 的 Activity 生命周期上：
+         * Activity 生命周期会因转屏、多窗口、系统回收等频繁抖动，一旦误判离线，
+         * SSE 被掐断 → 服务端转投系统推送 → 用户对着开着的 App 收到重复提醒。
+         * 详见 ForegroundRealtime 的类注释。
+         */
+        graph.foregroundRealtime.install()
+
+        /*
+         * OPPO 离线推送：设备级注册。
+         *
+         * 只做"设备级注册"（SDK init + register → 拿 registration_id），
+         * **是否上报给服务端**由登录态决定（见 KPush.upload：未登录只存盘，登录后补报）——
+         * 放这里是因为官方建议在 Application.onCreate 注册（提高注册率），
+         * 且它不涉及任何登录态判断，失败也只记状态不打断启动。
+         * 未配置密钥（gradle.properties）时整体跳过，见 KPush.init。
+         */
+        top.kuangdada.k.nativeapp.notify.KPush.init(this)
+
+        /*
+         * 通知渠道：确保存在 + **一次性自动修复"被系统静默"**（2026-10-07）。
+         *
+         * 背景：真机上出现过"通知能弹出来，但没有声音和震动" —— 上报回来的取值是
+         * `channelSound=null` + `channelVibrate=false`，而渠道重要性明明是 HIGH，
+         * 也就是渠道被 ROM 的通知管理默认按"静默"处理了。渠道的提示音/震动**创建后不可改**，
+         * 所以这里在启动时检测一次：确实被静默了就换一个新 id 重建（只做一次，
+         * 之后若用户自己关掉就不再抢，见 SocialNotifier.migrateSilentChannelIfNeeded）。
+         */
+        top.kuangdada.k.nativeapp.notify.SocialNotifier.ensureChannels(this)
+        top.kuangdada.k.nativeapp.notify.SocialNotifier.migrateSilentChannelIfNeeded(this)
     }
 
     /**
@@ -181,6 +235,80 @@ class AppGraph(app: Context) {
     val messages: MessageRepository = MessageRepository(session)
     /** 实时事件流（SSE）：新私信 / 新通知 / 新公告，让各页面能"自己更新"而不是等用户下拉 */
     val realtime: RealtimeClient = RealtimeClient(session)
+
+    /**
+     * 公告 / 管理后台仓库。
+     *
+     * ⚠️ 声明位置**必须在 [inbox] 之前**：Kotlin 的类体初始化按声明顺序执行，
+     * 而 `inbox` 的构造要把它传进去 —— 放在后面的话这里还是未初始化的 null，
+     * 构造 `InboxStore` 时直接 NPE（`checkNotNullParameter`），
+     * 表现为"点图标就闪退"且栈里看不出业务线索。
+     */
+    val admin: AdminRepository = AdminRepository(session)
+
+    /**
+     * 进程级作用域：所有"不该跟 Activity 一起死"的常驻工作都挂在这里
+     * （收件箱轮询、SSE 连接、通知中心的事件收集）。
+     *
+     * 为什么用 `Main.immediate` 而不是 Default：这几个组件共享少量可变状态
+     * （`InboxStore` 的定时器与单飞句柄、`RealtimeClient` 的 job/source），
+     * 统一在主线程上读写就不需要给每一处都上锁；网络请求本身仍由 Retrofit/OkHttp
+     * 切到 IO（`SessionRepository` 的仓库层都是 `withContext(Dispatchers.IO)`）。
+     *
+     * ⚠️ **必须带 [crashGuard]**：`launch` 里未捕获的异常会一路冒到线程的
+     * 未捕获异常处理器 —— 也就是**崩掉整个 App**。这个作用域里跑的是轮询、事件收集
+     * 这类"后台杂活"，任何一处没想到的异常都不该让用户丢掉整个界面（尤其在后台崩，
+     * 用户看到的是"打开就闪退"，栈里还全是协程框架）。仓库层的 `call {}` 已经把
+     * 网络异常都转成了 `ApiResult.Failure`，这里是最后一道兜底。
+     */
+    val appScope: CoroutineScope = CoroutineScope(
+        SupervisorJob() + Dispatchers.Main.immediate +
+            CoroutineExceptionHandler { _, e ->
+                Log.e(TAG, "进程级协程未捕获异常（已吞掉，避免崩进程）", e)
+            }
+    )
+
+    /** 「App 在不在前台」：通知中心用它在进程级判断（取代原来 Compose 里的那个状态） */
+    val foreground: AppForeground = AppForeground()
+
+    /** 通知偏好（目前只有「是否问过通知权限」一个标记） */
+    val notifyPref: NotifyPreference = NotifyPreference(appContext)
+
+    /**
+     * 收件箱（会话 / 通知 / 公告 / 未读角标）的**唯一**来源。
+     *
+     * 用户反馈「在 App 里消息页也没有角标，一定要点进消息页才看到消息来了」的根因就是
+     * 它此前不存在：角标只有"SSE 事件到达"与"进过消息页"两个来源，
+     * 冷启动必然是 0、漏掉的事件也补不回来（服务端没有离线补偿）。
+     * 详见 [InboxStore] 的类注释。
+     */
+    val inbox: InboxStore = InboxStore(messages, admin, session, realtime, appScope)
+
+    /** 事件 → 系统通知（进程级）。取代了原来写在 `AppShell` 里的那段收集逻辑 */
+    val notificationCenter: SocialNotificationCenter = SocialNotificationCenter(
+        context = appContext,
+        session = session,
+        inbox = inbox,
+        source = realtime,
+        foreground = foreground,
+    )
+
+    /**
+     * SSE 连接 / 收件箱对账 / 诊断上报的进程级联动（S1 多窗口起，2026-10-10）。
+     *
+     * 从 `AppShell` 的生命周期观察者搬来 —— 多窗口后"前台"必须按**进程**判定
+     * （宿主窗口 start 与主窗口 stop 同帧），条件 = `foreground && 已登录`。
+     * 由 `KApp.onCreate` 调 [ForegroundRealtime.install] 启动订阅。详见其类注释。
+     */
+    val foregroundRealtime: ForegroundRealtime = ForegroundRealtime(
+        context = appContext,
+        realtime = realtime,
+        inbox = inbox,
+        session = session,
+        foreground = foreground,
+        scope = appScope,
+    )
+
     /**
      * 发帖 / 编辑仓库。
      *
@@ -189,7 +317,6 @@ class AppGraph(app: Context) {
      * （用户实测反馈"要重启 App 才刷新"）。装配点放在这里，是因为两个仓库互相引用会绕成环。
      */
     val composer: ComposerRepository = ComposerRepository(appContext, session) { posts.bumpContentVersion() }
-    val admin: AdminRepository = AdminRepository(session)
 
     companion object {
         private const val TAG = "KApp"

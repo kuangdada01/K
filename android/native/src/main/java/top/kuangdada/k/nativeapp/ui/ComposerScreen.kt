@@ -2,6 +2,7 @@ package top.kuangdada.k.nativeapp.ui
 
 import android.content.Context
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -78,6 +79,7 @@ import top.kuangdada.k.core.designsystem.component.KButtonVariant
 import top.kuangdada.k.core.designsystem.component.KEmojiPanel
 import top.kuangdada.k.core.designsystem.component.KTextField
 import top.kuangdada.k.core.designsystem.component.KTextFieldVariant
+import top.kuangdada.k.core.designsystem.theme.KMotion
 import top.kuangdada.k.core.designsystem.theme.KRadius
 import top.kuangdada.k.core.designsystem.theme.KSpacing
 import top.kuangdada.k.core.designsystem.theme.KTheme
@@ -919,9 +921,10 @@ fun ComposerScreen(
             }
         }
 
-        // 地图选点层：整屏盖住发布弹层；返回键先关它再退弹层（BackHandler 在内层生效）
+        // 地图选点层：整屏盖住发布弹层；返回键先关它再退发布页
+        // （本 handler 注册在 Shell 之后，按"后注册先响应"优先 —— 见 BackHandler 的 Precedence）。
         if (showLocationPicker) {
-            androidx.activity.compose.BackHandler { showLocationPicker = false }
+            BackHandler { showLocationPicker = false }
             LocationPickerScreen(
                 hasLocation = location.isNotBlank(),
                 onDismiss = { showLocationPicker = false },
@@ -1039,7 +1042,7 @@ private fun ComposerChip(
             style = KType.caption.copy(fontWeight = FontWeight.Medium),
             color = when {
                 danger -> c.danger
-                selected -> c.accent
+                selected -> c.accentText
                 else -> c.textPrimary
             },
             maxLines = 1,
@@ -1384,7 +1387,7 @@ private fun CoverPickerSheet(
                                 .background(c.surfaceSunken)
                                 .border(
                                     width = if (selected) 2.dp else 1.dp,
-                                    color = if (selected) c.accent else c.borderSubtle,
+                                    color = if (selected) c.accentText else c.borderSubtle,
                                     shape = RoundedCornerShape(KRadius.row),
                                 )
                                 .clickable {
@@ -1420,9 +1423,9 @@ private fun CoverPickerSheet(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Glyph(tint = c.accent, kind = GlyphKind.Image, size = 16.dp)
+                Glyph(tint = c.accentText, kind = GlyphKind.Image, size = 16.dp)
                 Spacer(Modifier.size(KSpacing.xs))
-                Text("从相册选一张图作为封面", style = KType.caption, color = c.accent)
+                Text("从相册选一张图作为封面", style = KType.caption, color = c.accentText)
             }
         }
     }

@@ -22,7 +22,7 @@
  * ============================================================
  */
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Suspense, lazy } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { postsFeedKey, updatePostsFeed } from '../../hooks/usePostsFeed';
@@ -42,7 +42,9 @@ import { useProfileData } from '../../hooks/useProfileData';
 import { useProfileEventsSync } from '../../hooks/useProfileEventsSync';
 import { cleanEditImages } from '../../lib/parsePostImages';
 import ConfirmDialog from '../ui/ConfirmDialog';
-import PostDetail from '../post/PostDetail';
+// PostDetail 懒加载：浮层只在点开帖子时用到（与 HomePage 同一处理）
+import { loadPostDetail } from '../../router/composerChunks';
+const LazyPostDetail = lazy(loadPostDetail);
 import FollowersModal from './FollowersModal';
 import ProfileHeader from './ProfileHeader';
 import ProfilePostGrid from './ProfilePostGrid';
@@ -332,12 +334,14 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
       />
 
       {selectedPostId && (
-        <PostDetail
-          postId={selectedPostId}
-          onClose={() => {
-            setSelectedPostId(null);
-          }}
-        />
+        <Suspense fallback={null}>
+          <LazyPostDetail
+            postId={selectedPostId}
+            onClose={() => {
+              setSelectedPostId(null);
+            }}
+          />
+        </Suspense>
       )}
 
       {deletePostId !== null && (

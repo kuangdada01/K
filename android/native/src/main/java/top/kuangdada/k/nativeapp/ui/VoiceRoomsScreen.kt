@@ -259,7 +259,7 @@ fun VoiceRoomsScreen(
                                 contentAlignment = Alignment.Center,
                             ) {
                                 when {
-                                    uploadingCover -> CircularProgressIndicator(color = c.accent)
+                                    uploadingCover -> CircularProgressIndicator(color = c.accentText)
                                     coverLocal != null -> AsyncImage(
                                         model = coverLocal!!.file,
                                         contentDescription = null,
@@ -318,7 +318,7 @@ fun VoiceRoomsScreen(
             when {
                 loading && rooms.isEmpty() -> item {
                     Box(Modifier.fillMaxWidth().padding(KSpacing.xxl), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = c.accent)
+                        CircularProgressIndicator(color = c.accentText)
                     }
                 }
 
@@ -349,7 +349,9 @@ fun VoiceRoomsScreen(
                         room = room,
                         full = full,
                         coverUrl = voice.roomCoverUrl(room),
-                        // 进房：真正建立 WebRTC + WS（M3 第 15 项）
+                        // 进房：真正建立 WebRTC + WS（M3 第 15 项）。
+                        // 2026-10 起**点击立即导航进房**，连接在房内静默进行 ——
+                        // 房内顶栏显示「正在连接…」，不再整屏遮罩、也不在列表页等待
                         onClick = {
                             if (full) {
                                 // 文案对齐服务端的拒绝理由（messageHandlers.ts 的「房间已满（最多10人）」）
@@ -464,7 +466,7 @@ private fun VoiceRoomCard(
                 if (full) {
                     Text("· 已满", style = KType.caption, color = c.textMuted)
                 } else if (live) {
-                    Text("· 进行中", style = KType.caption, color = c.accent)
+                    Text("· 进行中", style = KType.caption, color = c.accentText)
                 }
             }
         }

@@ -81,7 +81,7 @@
 .tagChip {
   font-size: 12px;
   line-height: 1.4;
-  color: var(--accent);
+  color: var(--accent-text);
   background: var(--accent-soft);
   border-radius: 10px;
   padding: 2px 8px;

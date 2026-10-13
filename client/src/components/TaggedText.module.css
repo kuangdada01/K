@@ -1,12 +1,13 @@
-/* 话题链接片段：跟随主题强调色，可点击 */
+/* 话题链接片段：跟随正文字色（用户要求正文一律普通黑字），可点击；
+   悬停时回到强调色作为可点的视觉反馈 */
 .tag {
-  color: var(--accent);
+  color: inherit;
+  font-weight: inherit;
   cursor: pointer;
-  font-weight: 500;
   /* 相邻话题/文字之间留出间隙，避免贴在一起 */
   margin: 0 3px;
 }
 
 .tag:hover {
-  color: var(--accent-hover);
+  color: var(--accent-text);
 }

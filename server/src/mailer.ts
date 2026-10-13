@@ -29,6 +29,12 @@ function getTransporter(): Transporter {
         user: env.SMTP_USER || '',
         pass: env.SMTP_PASS || '',
       },
+      // ★ 超时必须有：SMTP 服务器挂起时（连接不通/响应不到），发码与忘记密码请求
+      // 会跟着悬挂数分钟（占并发、拖慢响应）。上限覆盖最慢的正常服务商，
+      // 超时即按发送失败处理（验证码路径本来就有"发送失败"的响应分支）。
+      connectionTimeout: 10_000, // 建立 TCP + TLS
+      socketTimeout: 20_000, // 等响应
+      greetingTimeout: 10_000, // 等 SMTP 问候语
     });
   }
   return transporter;

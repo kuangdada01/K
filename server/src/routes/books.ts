@@ -48,15 +48,128 @@ interface BookMeta {
   volumes?: unknown;
 }
 
-/** 读取 book.json 元数据（无则返回默认值） */
-function readMeta(bookId: string): BookMeta {
-  const metaFile = path.join(BOOKS_DIR, bookId, 'book.json');
+/** 一本书的扫描结果：元数据 + 卷/章节树 */
+interface BookEntry {
+  meta: BookMeta;
+  volumes: { name: string; chapters: string[] }[];
+}
+
+// ============================================================
+// 每本书的 mtime 校验缓存
+// ============================================================
+// 列表/详情是公开端点（匿名可调），此前每请求 readFileSync(book.json) +
+// 两层 readdirSync，同步磁盘 IO 占住事件循环。缓存命中只做 stat（无内容读）；
+// 书目录/元数据/卷目录任一变化都会改变对应 mtime 而触发重建，无陈旧窗口。
+
+interface BookCacheStamp {
+  /** 书目录 mtime：卷增删/根章节增删会改变它 */
+  dirMtimeMs: number;
+  metaExists: boolean;
+  metaMtimeMs: number;
+  metaSize: number;
+  /** 卷目录 mtime（卷内章节增删会改变它）；与 entry.volumes 内的具名卷对应 */
+  volumeMtimes: { name: string; mtimeMs: number }[];
+  entry: BookEntry;
+}
+
+const bookCache = new Map<string, BookCacheStamp>();
+
+function cacheKey(booksDir: string, bookId: string): string {
+  return `${booksDir}\u0000${bookId}`;
+}
+
+function readMetaFrom(bookDir: string): BookMeta {
+  const metaFile = path.join(bookDir, 'book.json');
   if (fs.existsSync(metaFile)) {
     try {
       return JSON.parse(fs.readFileSync(metaFile, 'utf-8'));
     } catch {}
   }
   return {};
+}
+
+/**
+ * 读取一本书的（缓存后的）扫描结果；书目录不存在返回 null。
+ * booksDir 可注入（测试用临时目录验证缓存行为），路由层统一传 BOOKS_DIR。
+ */
+export function getBookEntry(booksDir: string, bookId: string): BookEntry | null {
+  const bookDir = path.join(booksDir, bookId);
+  let dirStat: fs.Stats;
+  try {
+    dirStat = fs.statSync(bookDir);
+    if (!dirStat.isDirectory()) return null;
+  } catch {
+    bookCache.delete(cacheKey(booksDir, bookId));
+    return null;
+  }
+
+  const metaFile = path.join(bookDir, 'book.json');
+  let metaExists = false;
+  let metaMtimeMs = 0;
+  let metaSize = 0;
+  try {
+    const metaStat = fs.statSync(metaFile);
+    metaExists = true;
+    metaMtimeMs = metaStat.mtimeMs;
+    metaSize = metaStat.size;
+  } catch {
+    /* 无 book.json 是合法状态 */
+  }
+
+  const key = cacheKey(booksDir, bookId);
+  const cached = bookCache.get(key);
+  if (
+    cached &&
+    cached.dirMtimeMs === dirStat.mtimeMs &&
+    cached.metaExists === metaExists &&
+    cached.metaMtimeMs === metaMtimeMs &&
+    cached.metaSize === metaSize
+  ) {
+    // 卷目录 mtime 抽查（数量与 mtime 都对上才视为有效）
+    let volumesValid = cached.volumeMtimes.length === cached.entry.volumes.filter((v) => v.name).length;
+    if (volumesValid) {
+      for (const vol of cached.volumeMtimes) {
+        try {
+          if (fs.statSync(path.join(bookDir, vol.name)).mtimeMs !== vol.mtimeMs) {
+            volumesValid = false;
+            break;
+          }
+        } catch {
+          volumesValid = false;
+          break;
+        }
+      }
+    }
+    if (volumesValid) return cached.entry;
+  }
+
+  // 重建：读 book.json + 扫描卷/章节（同步 IO，仅失效时）
+  const meta = readMetaFrom(bookDir);
+  const volumes = scanBookDir(bookDir);
+  const volumeMtimes: { name: string; mtimeMs: number }[] = [];
+  for (const vol of volumes) {
+    if (!vol.name) continue;
+    try {
+      volumeMtimes.push({ name: vol.name, mtimeMs: fs.statSync(path.join(bookDir, vol.name)).mtimeMs });
+    } catch {
+      /* 卷目录刚列出就消失的竞态：忽略，下次重建 */
+    }
+  }
+  const entry: BookEntry = { meta, volumes };
+  bookCache.set(key, {
+    dirMtimeMs: dirStat.mtimeMs,
+    metaExists,
+    metaMtimeMs,
+    metaSize,
+    volumeMtimes,
+    entry,
+  });
+  return entry;
+}
+
+/** 读取 book.json 元数据（走缓存；无则返回默认值） */
+function readMeta(bookId: string): BookMeta {
+  return getBookEntry(BOOKS_DIR, bookId)?.meta ?? {};
 }
 
 /** 按文件名自然排序（01- < 02- < 10-） */
@@ -96,9 +209,8 @@ const byVolumeName = (a: string, b: string) => {
   return byName(a, b);
 };
 
-/** 扫描书籍目录，返回章节文件列表（按卷分组） */
-function scanBook(bookId: string): { volumes: { name: string; chapters: string[] }[] } {
-  const bookDir = path.join(BOOKS_DIR, bookId);
+/** 扫描书籍目录，返回章节文件列表（按卷分组）；仅缓存失效时执行 */
+function scanBookDir(bookDir: string): { name: string; chapters: string[] }[] {
   const entries = fs
     .readdirSync(bookDir, { withFileTypes: true })
     .sort((a, b) => byVolumeName(a.name, b.name));
@@ -124,7 +236,7 @@ function scanBook(bookId: string): { volumes: { name: string; chapters: string[]
   if (rootChapters.length > 0) {
     volumes.unshift({ name: '', chapters: rootChapters });
   }
-  return { volumes };
+  return volumes;
 }
 
 /** bookId 只允许目录名安全字符（杜绝 '..'、'/'、'\' 等路径片段参与拼接） */
@@ -159,19 +271,22 @@ router.get('/', (_req: Request, res: Response) => {
     const books = fs
       .readdirSync(BOOKS_DIR, { withFileTypes: true })
       .filter((e) => e.isDirectory())
-      .map((e) => {
-        const meta = readMeta(e.name);
-        const { volumes } = scanBook(e.name);
-        const chapterCount = volumes.reduce((sum, v) => sum + v.chapters.length, 0);
-        return {
-          id: e.name,
-          title: meta.title || e.name,
-          author: meta.author || '',
-          description: meta.description || '',
-          cover: coverUrl(e.name, meta),
-          volumeCount: volumes.length,
-          chapterCount,
-        };
+      .flatMap((e) => {
+        // 书目录在 readdir 与 getBookEntry 之间被删的竞态：entry 为 null 时跳过
+        const entry = getBookEntry(BOOKS_DIR, e.name);
+        if (!entry) return [];
+        const chapterCount = entry.volumes.reduce((sum, v) => sum + v.chapters.length, 0);
+        return [
+          {
+            id: e.name,
+            title: entry.meta.title || e.name,
+            author: entry.meta.author || '',
+            description: entry.meta.description || '',
+            cover: coverUrl(e.name, entry.meta),
+            volumeCount: entry.volumes.length,
+            chapterCount,
+          },
+        ];
       });
     res.json({ books });
   } catch (err) {
@@ -219,8 +334,9 @@ router.get('/:bookId', (req: Request, res: Response) => {
     return;
   }
   try {
-    const meta = readMeta(bookId);
-    const { volumes } = scanBook(bookId);
+    const entry = getBookEntry(BOOKS_DIR, bookId);
+    const meta = entry?.meta ?? {};
+    const volumes = entry?.volumes ?? [];
     res.json({
       id: bookId,
       title: meta.title || bookId,

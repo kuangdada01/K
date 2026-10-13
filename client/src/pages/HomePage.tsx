@@ -67,7 +67,12 @@ export default function HomePage() {
     isFetchingNextPage,
   } = usePostsFeed();
   const posts = feedPostsFlat(feedData);
-  const loading = isPending || (isError && isFetching);
+  // 全屏 loading 只看 isPending（无缓存数据）：fetchNextPage 失败会翻转
+  // isError，若同时把 isFetching 计入 loading，哨兵自动重试的那一帧会把
+  // 整个信息流替换成几十像素高的"加载中..."——页面高度瞬间塌缩，浏览器把
+  // scrollY 钳回 0，表现为「滑到底加载更多时自动跳回顶部」。有数据时永远
+  // 渲染既有列表，加载/失败状态交给哨兵区与 EmptyState（loadError）表达。
+  const loading = isPending;
   const loadError = isError && !isFetching;
 
   const [refreshing, setRefreshing] = useState(false);
@@ -226,7 +231,7 @@ export default function HomePage() {
             cy="14"
             r="12"
             fill="none"
-            stroke="var(--accent)"
+            stroke="var(--accent-text)"
             strokeWidth="2.5"
             strokeDasharray={`0 ${PULL_CIRCUMFERENCE}`}
             strokeLinecap="round"

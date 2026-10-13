@@ -274,7 +274,7 @@ fun UserProfileScreen(
                             // 这一帧本来就只有几十毫秒，宁可它短暂空白。
                             glyph = GlyphKind.User.takeIf { profile != null },
                             bg = c.surfaceSubtle,
-                            fg = c.accent,
+                            fg = c.accentText,
                             /**
                              * 头像共享元素（M3 补完）：从信息流卡片 / 帖子详情页的头像飞过来。
                              *
@@ -382,7 +382,7 @@ fun UserProfileScreen(
                                 text = title,
                                 style = if (selected) KType.bodyStrong else KType.body,
                                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-                                color = if (selected) c.accent else c.textMuted,
+                                color = if (selected) c.accentText else c.textMuted,
                                 textAlign = TextAlign.Center,
                                 modifier = Modifier
                                     .weight(1f)
@@ -406,7 +406,7 @@ fun UserProfileScreen(
             when {
                 currentState.loading && currentState.posts.isEmpty() -> item(key = "loading") {
                     Box(Modifier.fillMaxWidth().padding(KSpacing.xxl), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = c.accent)
+                        CircularProgressIndicator(color = c.accentText)
                     }
                 }
 

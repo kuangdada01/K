@@ -15,8 +15,7 @@ import axios, { isAxiosError } from 'axios';
 import type { AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
 import { getApiBaseUrl } from '../config';
 import { showToast } from '../components/ui/Toast';
-import { queryClient } from '../state/queryClient';
-import { clearInteractionCaches } from '../state/cache';
+import { clearCachesOnAuthLoss } from '../state/authCache';
 import { storeRefreshedToken } from '../lib/token';
 import { currentSessionEpoch } from '../lib/sessionEpoch';
 import { delayBeforeRetry, markRetried, shouldRetryRequest } from './retry';
@@ -37,6 +36,9 @@ const api = axios.create({
  */
 const requestEpochs = new WeakMap<AxiosRequestConfig, number>();
 
+/** 请求 → 发出时是否携带了凭证（401 归因用，见响应拦截器） */
+const requestHadToken = new WeakMap<AxiosRequestConfig, boolean>();
+
 /** 该响应所属的会话是否仍是当前会话（登出/换号后的迟到响应 → false） */
 function isSameSession(config: unknown): boolean {
   const epochAtSend = requestEpochs.get(config as AxiosRequestConfig);
@@ -52,6 +54,10 @@ function isSameSession(config: unknown): boolean {
 api.interceptors.request.use((config) => {
   requestEpochs.set(config, currentSessionEpoch());
   const token = localStorage.getItem('k_token');
+  // 记录「发出时」是否带凭证：401 归因以此为准 —— 若看「响应到达时」
+  // localStorage 有没有 token，无凭证请求的迟到 401 会把刚刚注入/续期
+  // 的 token 误删（登录页/启动验证与轮询并发的经典竞态）
+  requestHadToken.set(config, !!token);
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -91,12 +97,18 @@ api.interceptors.response.use(
       showToast(error.response.data.error || '账号已被封禁，封禁期间仅可浏览');
     }
     if (error.response?.status === 401 && isSameSession(error.config)) {
-      const hadToken = !!localStorage.getItem('k_token');
-      localStorage.removeItem('k_token');
+      // ★ 以「请求发出时是否带凭证」归因，而不是看响应时刻的 localStorage：
+      //   未登录发出的请求（启动验证竞态/游客页轮询）返回 401 时，此时 localStorage
+      //   里可能刚被写入 token —— 旧逻辑会误删它并清空缓存，表现即「一打开/浏览
+      //   首页就被登出、帖子列表瞬间清空弹回顶部」。无凭证请求的 401 只交给
+      //   调用方按未登录处理，不碰凭证与缓存。
+      const hadToken = requestHadToken.get(error.config as AxiosRequestConfig) ?? false;
       if (hadToken) {
-        // B5 修复：登录失效即清空跨账号残留缓存（信息流 + 点赞/关注/收藏/转发）
-        queryClient.removeQueries();
-        clearInteractionCaches();
+        localStorage.removeItem('k_token');
+        // B5 修复（修订）：清理登录私有缓存 + 交互缓存；posts 系公开内容保留并
+        // invalidate 重取 —— 瞬间全量清空会让首页信息流打回空态、页面高度塌缩、
+        // 滚动位置被浏览器钳回 0（表现为「浏览帖子时自动跳回头部」）
+        clearCachesOnAuthLoss();
         window.dispatchEvent(new CustomEvent('auth:expired'));
       }
     }

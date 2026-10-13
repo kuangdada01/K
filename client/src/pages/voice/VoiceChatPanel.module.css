@@ -1,0 +1,258 @@
+/* 房间文字聊天面板（含朗读开关/音色下拉）—— 自 VoicePage.module.css 拆出（D4） */
+
+/* ---- 文字聊天面板（信令通道，与语音媒体分离：语音差时仍可打字交流） ---- */
+
+.chatPanel {
+  display: flex;
+  flex-direction: column;
+  height: 420px;
+  margin-bottom: 28px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius, 16px);
+  overflow: hidden;
+}
+
+.chatHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.chatClearBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+
+.chatClearBtn:hover {
+  color: var(--danger);
+  background: var(--bg-danger-light);
+}
+
+/* 朗读开关（清空按钮左侧；margin-left:auto 与清空按钮一起贴右，清空不再自己推右） */
+.ttsBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  margin-left: auto;
+  border: none;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    opacity 0.15s;
+}
+
+.ttsBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ttsOn {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.ttsOn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.ttsOff {
+  background: var(--bg-btn-secondary, var(--bg-secondary));
+  color: var(--text-primary);
+}
+
+.ttsOff:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+/* 朗读音色下拉（朗读按钮右侧）：与朗读/清空按钮同高，保持头部一排控件齐平。
+   原生 select 无法完全自定义，只做尺寸/配色对齐；max-width 防长音色名把标题挤走 */
+.ttsVoiceSelect {
+  max-width: 108px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-btn-secondary, var(--bg-secondary));
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    filter 0.15s;
+}
+
+.ttsVoiceSelect:hover {
+  filter: brightness(0.97);
+}
+
+.ttsVoiceSelect:focus-visible {
+  outline: 2px solid var(--accent-text);
+  outline-offset: 1px;
+}
+
+.ttsVoiceSelect:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chatList {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* 微信式浅色气泡背景在亮/暗主题下均可读 */
+  background: var(--bg-secondary-soft, var(--bg-primary));
+}
+
+.chatEmpty {
+  margin: auto;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.chatLoadMore {
+  align-self: center;
+  padding: 4px 12px;
+  border: none;
+  border-radius: 8px;
+  background: var(--bg-btn-secondary, var(--bg-secondary));
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chatLoadMore:hover:not(:disabled) {
+  color: var(--text-primary);
+}
+
+.chatLoadMore:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.chatMsg {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.chatMsgBody {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chatMsgMeta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.chatMsgName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.chatMsgTime {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.chatMsgText {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.chatInputRow {
+  display: flex;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border-color);
+}
+
+.chatInput {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+  box-sizing: border-box;
+}
+
+.chatInput:focus {
+  outline: none;
+  border-color: var(--accent-text);
+}
+
+.chatSendBtn {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    opacity 0.15s;
+}
+
+.chatSendBtn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.chatSendBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ---- 移动端适配（断点与侧边栏底部导航 768px 对齐） ---- */
+
+/* 控制栏抬高到底部导航（64px + 安全区）之上，聊天面板（页面最后一块）预留滚动空间 */
+@media (max-width: 768px) {
+  .chatPanel {
+    margin-bottom: calc(150px + var(--safe-area-bottom));
+  }
+}
+
+@media (max-width: 640px) {
+  /* 移动端聊天面板适当压缩高度，让成员网格更靠前 */
+  .chatPanel {
+    height: 320px;
+  }
+}

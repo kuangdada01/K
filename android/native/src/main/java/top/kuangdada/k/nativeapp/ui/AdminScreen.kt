@@ -232,7 +232,7 @@ fun AdminScreen(
             when {
                 loading -> item {
                     Box(Modifier.fillMaxWidth().padding(KSpacing.xxl), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = c.accent)
+                        CircularProgressIndicator(color = c.accentText)
                     }
                 }
 
@@ -510,7 +510,7 @@ private fun ActionPill(
         Text(
             text = text,
             style = KType.caption,
-            color = if (danger) c.danger else c.accent,
+            color = if (danger) c.danger else c.accentText,
         )
     }
 }
@@ -571,7 +571,7 @@ private fun UserCard(
                 size = 56.dp,
                 glyph = GlyphKind.User,
                 bg = c.surfaceSubtle,
-                fg = c.accent,
+                fg = c.accentText,
             )
             Column(
                 modifier = Modifier.weight(1f),
@@ -701,7 +701,7 @@ private fun AnnouncementCardRow(
                 .background(c.surfaceSubtle),
             contentAlignment = Alignment.Center,
         ) {
-            Glyph(tint = c.accent, kind = GlyphKind.Megaphone, size = 22.dp)
+            Glyph(tint = c.accentText, kind = GlyphKind.Megaphone, size = 22.dp)
         }
         Column(
             modifier = Modifier.weight(1f),

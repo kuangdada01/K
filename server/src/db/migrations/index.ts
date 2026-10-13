@@ -43,6 +43,9 @@ import migration030 from './030-voice-room-games';
 import migration031 from './031-book-progress';
 import migration032 from './032-uploads-and-media-jobs';
 import migration033 from './033-posts-feed-cursor-index';
+import migration034 from './034-push-devices';
+import migration035 from './035-push-device-channel';
+import migration036 from './036-media-jobs-file-path-index';
 import type { Migration } from './helpers';
 
 export type { Migration };
@@ -83,6 +86,9 @@ export const migrations: Migration[] = [
   migration031,
   migration032,
   migration033,
+  migration034,
+  migration035,
+  migration036,
 ];
 
 /** 迁移记录表 */

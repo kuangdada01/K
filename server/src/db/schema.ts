@@ -294,6 +294,29 @@ export function createSchema(db: InstanceType<typeof Database>): void {
       created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
     );
 
+    /* ========== 推送设备表（厂商离线推送） ==========
+     * 记录「某用户在某台设备上的推送注册 id」——设备卸载/退出登录后由客户端
+     * 主动删除，系统判定失效的由失效回执定时清理（lib/oppo-push）。
+     * - provider: 厂商（当前只有 'oppo'；预留列以便将来接小米/华为）
+     * - token:    厂商下发的 registration_id（设备级，非用户级）
+     * - package_name: 上报时的 applicationId（debug 包带 .debug 后缀，
+     *   仅用于排查"推给了哪个包"，服务端不按它过滤）
+     * - UNIQUE(provider, token)：同一台设备重复注册走 upsert —— 换账号登录时
+     *   token 绑定关系会被**改写**到新用户名下（换绑语义，见 push.repo.upsertDevice）
+     */
+    CREATE TABLE IF NOT EXISTS push_devices (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,                -- 归属用户ID
+      provider TEXT NOT NULL DEFAULT 'oppo',   -- 推送厂商
+      token TEXT NOT NULL,                     -- 厂商 registration_id
+      package_name TEXT DEFAULT NULL,          -- 上报时的包名（诊断用）
+      channel_id TEXT DEFAULT NULL,            -- 客户端上报的通知通道 id（Android 9+ 推送必带；见 035 迁移）
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      UNIQUE(provider, token),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
     /* ========== 性能优化索引 ==========
      * 为常用查询字段创建索引，加速数据检索
      */
@@ -328,5 +351,6 @@ export function createSchema(db: InstanceType<typeof Database>): void {
     CREATE INDEX IF NOT EXISTS idx_messages_sender_receiver_created ON messages(sender_id, receiver_id, created_at); -- 会话列表相关子查询
     CREATE INDEX IF NOT EXISTS idx_messages_receiver_sender_read ON messages(receiver_id, sender_id, read); -- 未读消息查询
     CREATE INDEX IF NOT EXISTS idx_comments_parent_id ON comments(parent_id); -- 评论树递归展开
+    CREATE INDEX IF NOT EXISTS idx_push_devices_user ON push_devices(user_id); -- 推送时按用户取设备列表
   `);
 }

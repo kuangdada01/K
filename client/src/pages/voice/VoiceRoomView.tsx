@@ -27,7 +27,7 @@ import { isOwnedGuestRoom } from '../../voice/roomOwnership';
 import VoiceChatPanel from './VoiceChatPanel';
 import type { VoiceRoom } from '../../types';
 import { VOICE_MAX_ROOM_SIZE } from '@k/shared';
-import styles from '../VoicePage.module.css';
+import styles from './VoiceRoomView.module.css';
 
 export default function VoiceRoomView({ rooms }: { rooms: VoiceRoom[] }) {
   const { user } = useAuth();
@@ -95,9 +95,11 @@ export default function VoiceRoomView({ rooms }: { rooms: VoiceRoom[] }) {
         <div className={styles.roomTitleWrap}>
           <h1 className={styles.roomTitle}>{voice.activeRoomName ?? '语音房间'}</h1>
           <span className={styles.roomCount}>
-            {voice.status === 'reconnecting'
-              ? '重连中…'
-              : `${voice.participants.length}/${VOICE_MAX_ROOM_SIZE} 人在线`}
+            {voice.status === 'connecting'
+              ? '正在连接…'
+              : voice.status === 'reconnecting'
+                ? '重连中…'
+                : `${voice.participants.length}/${VOICE_MAX_ROOM_SIZE} 人在线`}
           </span>
         </div>
       </div>
@@ -207,6 +209,7 @@ export default function VoiceRoomView({ rooms }: { rooms: VoiceRoom[] }) {
           <Volume2 size={16} />
           <span className={styles.volumeLabel}>麦克风</span>
           <VolumeSlider
+            className={styles.volumeGroupSlider}
             value={micVolume}
             max={1}
             onChange={(v) => {

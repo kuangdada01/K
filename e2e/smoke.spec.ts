@@ -29,11 +29,13 @@ test('首页信息流正常渲染', async ({ page }) => {
 
 test('图书列表与详情', async ({ page }) => {
   await page.goto('/books');
-  await expect(page.locator('body')).toContainText('共产党宣言');
-  await page.locator('body').getByText('共产党宣言').first().click();
-  // 详情页展示卷/章节结构（章节标题为文本）
-  await expect(page.locator('body')).toContainText('引言');
-  await expect(page.locator('body')).toContainText('卷');
+  // 结构性断言而非种子书名（书名耦合 server/books 目录内容，换书即假失败）：
+  // 断言「有书可点 → 点进第一本 → 详情页有卷/章节结构」
+  const card = page.locator('a[class*="card"]').first();
+  await card.waitFor({ timeout: 10_000 });
+  await card.click();
+  // 详情页展示卷/章节结构（由服务端 books 目录的组织方式保证）
+  await expect(page.locator('body')).toContainText(/卷|章|目录/);
 });
 
 test('探索页搜索', async ({ page }) => {

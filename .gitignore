@@ -18,7 +18,11 @@ server/uploads_private/*
 
 # Client
 client/dist/
+# TypeScript 增量编译信息（三包各一份，都是构建产物、不该入库）
 client/tsconfig.tsbuildinfo
+server/tsconfig.tsbuildinfo
+shared/tsconfig.tsbuildinfo
+tsconfig.tsbuildinfo
 # Vite 产出的哈希资源曾被误提交进 public/（两份字体共 1.6MB，无任何引用却随每次部署分发）。
 # 带哈希的构建产物只应存在于 dist/，public/ 只放需要保持稳定文件名的资源。
 client/public/*-[A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-][A-Za-z0-9_-]*.woff2
@@ -46,8 +50,12 @@ android/app/src/main/assets/web/
 # Music files (large & potential copyright)
 client/public/music/
 
-# Android keystore（签名口令在 android/keystore.properties，同样不入库）
+# Android keystore（签名口令在 android/keystore.properties
+# OPPO 推送客户端密钥（真值放本地，见 android/native/build.gradle 文件头）
+android/oppo-push.properties，同样不入库）
 android/keystore.properties
+# OPPO 推送客户端密钥（真值放本地，见 android/native/build.gradle 文件头）
+android/oppo-push.properties
 *.keystore
 *.jks
 *.p12

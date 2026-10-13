@@ -14,6 +14,36 @@ plugins {
 def versionProps = new Properties()
 file('../version.properties').withInputStream { versionProps.load(it) }
 
+// OPPO 推送客户端密钥（AppKey/AppSecret）。
+//
+// ⚠️ **单一来源是 `android/oppo-push.properties`，该文件不入库**（已加进 .gitignore）。
+// 早先它写在 `android/gradle.properties` 里，而那个文件**是被跟踪的** ——
+// 仓库是公开的，等于把凭据明文推上 GitHub（2026-10-13 修正）。
+//
+// ## 为什么按"口令"对待（而不是"反正是客户端标识"）
+// 旧注释曾论证"AppSecret 会被编译进 APK，是客户端身份标识、不是服务器密钥"，这话本身没错，
+// 但**不足以成为入库的理由**：入库意味着它出现在公开仓库的历史里，
+// 日后轮换要连带改仓库；而放在本地文件里成本几乎为零。默认取更稳的那条路。
+//
+// ## 读取顺序（后者覆盖前者，方便 CI 用环境变量注入）
+//   1. `oppoPushAppKey` / `oppoPushAppSecret`（-P 参数或已入库的 gradle.properties，均可留空）
+//   2. `android/oppo-push.properties`（推荐：本地开发放这里）
+//   3. 环境变量 `OPPO_PUSH_APP_KEY` / `OPPO_PUSH_APP_SECRET`（CI 用）
+// 三者都缺 = 空串 → App 内推送注册整体跳过（本地开发不需要真凭据，其余功能不受影响）。
+def oppoPushProps = new Properties()
+def oppoPushPropsFile = rootProject.file('oppo-push.properties')
+if (oppoPushPropsFile.exists()) {
+    oppoPushPropsFile.withInputStream { oppoPushProps.load(it) }
+}
+def oppoPushAppKey = project.findProperty('oppoPushAppKey')
+    ?: oppoPushProps.getProperty('oppoPushAppKey')
+    ?: System.getenv('OPPO_PUSH_APP_KEY')
+    ?: ''
+def oppoPushAppSecret = project.findProperty('oppoPushAppSecret')
+    ?: oppoPushProps.getProperty('oppoPushAppSecret')
+    ?: System.getenv('OPPO_PUSH_APP_SECRET')
+    ?: ''
+
 android {
     // 与 :app 不同的包名 —— 原生版与 WebView 版可同时安装在同一台机器上做对照。
     // 注意：namespace 不能用 `...k.native` —— **`native` 是 Java 关键字**，
@@ -34,6 +64,11 @@ android {
         // 服务器地址单一来源（见 docs/android-native-rewrite-plan.md §9 Q1）
         // 生产 Web 服务器带 www —— deep link 的 Manifest intent-filter 同时声明 www 与裸域
         buildConfigField "String", "SERVER_URL", '"https://www.kuangdada.top"'
+
+        // OPPO 推送（离线推送）客户端密钥：由上面的读取顺序注入 BuildConfig
+        // （见文件头说明；KPush.init 在缺省时整体跳过）
+        buildConfigField "String", "OPPO_PUSH_APP_KEY", "\"${oppoPushAppKey}\""
+        buildConfigField "String", "OPPO_PUSH_APP_SECRET", "\"${oppoPushAppSecret}\""
     }
 
     // 发布签名。keystore 与口令**都不入库**（见 .gitignore）。
@@ -130,6 +165,17 @@ kotlin {
     jvmToolchain(25)
 }
 
+// B3：Compose 稳定性配置（compose_compiler_config.conf）。
+// DTO/UI 模型被判不稳定会让所有列表卡片在父级重组里无法 skip —— 配置把它们
+// 与只读 List 声明为 stable（安全性依据见配置文件头注释）。
+// ⚠️ 写下去不等于生效：改动后跑一次 compileDebugKotlin，用 reportsDestination
+// 输出的 *-classes.txt 核对核心卡片（PostCard/MessageBubble）参数是否 stable。
+composeCompiler {
+    stabilityConfigurationFile = layout.projectDirectory.file("compose_compiler_config.conf")
+    // 强跳过模式的诊断报告（顺带开启）：CI/本地排查重组问题时的第一手证据
+    reportsDestination = layout.buildDirectory.dir('compose_reports')
+}
+
 // 本模块的 Kotlin 单测不走 Gradle 测试任务：
 // 工程路径含中文时 Gradle 给测试 worker 传 classpath 用 @argfile（UTF-8 写、ANSI 读）→
 // 中文路径变乱码 → ClassNotFoundException。绕法见 android/scripts/run-kotlin-tests.mjs。
@@ -146,9 +192,14 @@ tasks.register('dumpTestClasspath') {
     dependsOn 'compileDebugUnitTestKotlin'
     def outputFile = layout.buildDirectory.file('kotlin-test-classpath.txt')
     outputs.file(outputFile)
+    // ★ configuration cache 兼容（gradle.properties 开启 CC 后必须）：
+    // 旧实现在 doLast 里 `tasks.named(...).get()` —— 执行期触碰 tasks 脚本对象
+    // 是 CC 明令禁止的。改为**配置期**解析 classpath（此时访问 task 合法），
+    // 把 FileCollection 捕获进局部闭包并在声明为任务输入，执行期只消费值。
+    def testCp = tasks.named('testDebugUnitTest').get().classpath
+    inputs.files(testCp)
     doLast {
-        def testTask = tasks.named('testDebugUnitTest').get()
-        def entries = testTask.classpath.files
+        def entries = testCp.files
         def file = outputFile.get().asFile
         file.parentFile.mkdirs()
         file.setText(entries.join(File.pathSeparator), 'UTF-8')
@@ -157,6 +208,16 @@ tasks.register('dumpTestClasspath') {
 }
 
 dependencies {
+    // OPPO 推送 SDK（离线推送，2026-10-08）。AAR 来自 OPPO 官方发布的 3.7.1
+    // （vendor 在 native/libs/oppo-push-3.7.1.aar，接入方式与官方《快速接入指南》
+    // 的 aar 本地依赖一致）。
+    //
+    // 为什么不走 maven 仓库：OPPO 的公共 Maven（maven.columbus.heytapmobi.com）
+    // 只发布到 2021 年的 3.0.0，3.1+ 全部改为官网 AAR 下载 —— vendor 进仓库
+    // 才能让构建可离线复现，也避免构建机依赖第三方镜像。
+    // SDK 自包含（classes 里只引 org.json 等平台类），无需 gson/commons-codec。
+    implementation files('libs/oppo-push-3.7.1.aar')
+
     // 注意：构建日志里那条 "Using a Project object as a dependency notation has been deprecated"
     // **不是这两行引起的** —— 带 --stacktrace 实测，它来自 AGP 自己的
     // com.android.build.gradle.internal.dependency.VariantDependenciesBuilder（测试组件那条依赖），

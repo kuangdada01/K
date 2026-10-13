@@ -242,4 +242,27 @@ describe('引用计数轮询', () => {
     releaseA();
     releaseB();
   });
+
+  it('页面隐藏时跳过 tick，回前台立即补拉一次', async () => {
+    vi.useFakeTimers();
+    const hiddenSpy = vi.spyOn(document, 'hidden', 'get');
+    hiddenSpy.mockReturnValue(true);
+
+    const release = retainInboxPoll(10000);
+    await vi.advanceTimersByTimeAsync(30000);
+    expect(mocks.get).toHaveBeenCalledTimes(0); // 隐藏期间 tick 全部跳过
+
+    // 回到前台：visibilitychange 立即补拉一次（2 个请求：会话+通知），无需等下一个 tick
+    hiddenSpy.mockReturnValue(false);
+    document.dispatchEvent(new Event('visibilitychange'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+
+    // 恢复可见后轮询正常走
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(mocks.get).toHaveBeenCalledTimes(4);
+
+    release();
+    hiddenSpy.mockRestore();
+  });
 });

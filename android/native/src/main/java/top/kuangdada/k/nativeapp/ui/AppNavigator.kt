@@ -380,7 +380,9 @@ class AppNavigator(initial: AppDestination) {
         depth = backStack.size + 1
     }
 
-    /** 返回上一级；返回 false 表示栈空（调用方决定是否最小化 App） */
+    /**
+     * 返回上一级；返回 false 表示栈空（调用方决定是否最小化 App）。
+     */
     fun pop(): Boolean {
         val previous = backStack.removeLastOrNull() ?: return false
         current = previous.dest

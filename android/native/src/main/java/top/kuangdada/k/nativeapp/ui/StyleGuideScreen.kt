@@ -208,9 +208,9 @@ fun StyleGuideScreen() {
         Section("五 · 原生层色彩对齐检查") {
             Text(
                 text = "以下三处已从旧品牌色改为令牌色（原值见 docs/ui-optimization-plan.md §4.7）：\n" +
-                    "· colorAccent #e94560（品红）→ #2F5D50\n" +
-                    "· colorPrimary #1a1a2e → #2F5D50\n" +
-                    "· 深色窗口底 #0f0f0f → #0D0F14（消除冷启动色闪）",
+                    "· colorAccent #e94560（品红）→ #325D51\n" +
+                    "· colorPrimary #1a1a2e → #325D51\n" +
+                    "· 深色窗口底 #0f0f0f → #121212（消除冷启动色闪）",
                 style = KType.caption,
                 color = c.textSecondary,
             )
@@ -330,7 +330,7 @@ private fun AnimateItemDemo() {
                         .background(c.accentSoft)
                         .padding(KSpacing.xs),
                 ) {
-                    Text(row, style = KType.footnote, color = c.accent)
+                    Text(row, style = KType.footnote, color = c.accentText)
                 }
             }
         }
@@ -343,7 +343,7 @@ private fun Header(dark: Boolean, onToggle: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(KSpacing.xs)) {
         Text("K App 原生版 · 设计令牌验收", style = KType.title, color = c.textPrimary)
         Text(
-            text = if (dark) "当前：深色 · 玄夜鎏金" else "当前：浅色 · 青瓷黛绿",
+            text = if (dark) "当前：深色 · 松绿中性" else "当前：浅色 · 松绿中性",
             style = KType.caption,
             color = c.textSecondary,
         )
@@ -385,21 +385,21 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 @Composable
 private fun ColorTokenTable() {
     val rows = listOf(
-        Triple("bgPage 页面底", "#EEF2EE", "#0D0F14"),
-        Triple("surface 卡片表面", "#FFFFFF", "#1E232D"),
-        Triple("surfaceRaised 浮层", "#FFFFFF", "#262B36"),
-        Triple("textPrimary", "#1F2B26", "#E8E6E1"),
-        Triple("textSecondary", "#55645D", "#A8ABAF"),
-        Triple("textMuted 弱化（2.83→4.88 / 3.91→5.97）", "#5A6D63", "#8B9098"),
-        Triple("accent 强调", "#2F5D50", "#C9A962"),
-        Triple("onAccent 强调底文字（关键·反相）", "#F5FAF6", "#0D0F14"),
-        Triple("accentSoft 选中底", "#D1DBD6", "#2E2B21"),
-        Triple("accentBorder 幽灵描边", "#A8BFB5", "#6B5C38"),
-        Triple("danger（4.29→4.99）", "#A84A40", "#E0586B"),
+        Triple("bgPage 页面底", "#F5F5F5", "#121212"),
+        Triple("surface 卡片表面", "#FFFFFF", "#1C1C1C"),
+        Triple("surfaceRaised 浮层", "#FFFFFF", "#242424"),
+        Triple("textPrimary", "#171717", "#F5F5F5"),
+        Triple("textSecondary", "#525252", "#B3B3B3"),
+        Triple("textMuted 弱化（5.33 / 5.41）", "#6B6B6B", "#919191"),
+        Triple("accent 强调（浅深同值）", "#325D51", "#325D51"),
+        Triple("onAccent 强调底文字（两主题白字 7.45:1）", "#FFFFFF", "#FFFFFF"),
+        Triple("accentSoft 选中底", "#1F325D51", "#3850927C"),
+        Triple("accentBorder 强调描边", "#325D51", "#7FB5A2"),
+        Triple("danger（5.65 / 4.69）", "#A84A40", "#E0586B"),
         Triple("dangerSoft 危险底", "#E8DEDB", "#2E1A21"),
-        Triple("success（4.35→5.05）", "#347252", "#7FBF8F"),
-        Triple("borderSubtle 分隔线", "#DEE8DE", "#1F242E"),
-        Triple("borderStrong 输入框描边", "#BAC9BA", "#454F5E"),
+        Triple("success 成功（并入主题绿）", "#325D51", "#7FB5A2"),
+        Triple("borderSubtle 分隔线", "#EFEFEF", "#232323"),
+        Triple("borderStrong 输入框描边", "#D4D4D4", "#404040"),
     )
     rows.forEach { (name, light, dark) ->
         Row(
@@ -670,7 +670,7 @@ private fun EnterOnceDemo() {
                 Text(
                     text = "滑入 + 淡入，且刻意没有出场动画（重页面：语音房 / 视频 / 聊天 / 阅读器）",
                     style = KType.footnote,
-                    color = c.accent,
+                    color = c.accentText,
                     textAlign = TextAlign.Center,
                 )
             }

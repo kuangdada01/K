@@ -408,7 +408,7 @@ fun KPlaceholder(
                         KPlaceholderKind.Loading -> ""
                     },
                     style = KType.subtitle,
-                    color = c.accent,
+                    color = c.accentText,
                 )
             }
         }

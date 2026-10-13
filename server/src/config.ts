@@ -75,6 +75,24 @@ const envSchema = z.object({
   // 不设置即**不提权**（历史行为是「配了 ADMIN_EMAIL 就自动提权」，属静默提权路径，
   // 见 lib/admin-bootstrap.ts 的说明）。
   ADMIN_BOOTSTRAP: z.string().optional(),
+  // ---- OPPO PUSH（厂商离线推送，方案二；见 lib/oppo-push.ts）----
+  // 三个都来自 OPPO 推送平台「配置管理 → 应用配置」：
+  //  · APP_ID：应用 id（仅用于日志辨识，接口鉴权用不到）
+  //  · APP_KEY：客户端 SDK 与服务端 API 共用
+  //  · MASTER_SECRET（平台叫法 MasterSecret / AppServerSecret）：**只在服务端**
+  //    用于算 auth 签名，绝不下发客户端（客户端用的是 AppSecret，另一把）
+  // 未配置 APP_KEY/MASTER_SECRET 时推送整体禁用（SSE 行为不受影响），
+  // 这样本地开发/测试/e2e 无需任何 OPPO 配置即可运行。
+  OPPO_PUSH_APP_ID: z.string().optional(),
+  OPPO_PUSH_APP_KEY: z.string().optional(),
+  OPPO_PUSH_MASTER_SECRET: z.string().optional(),
+  // 私信通道 id（可选）：在 OPPO 平台申请「私信通道」后填写可获得不限量推送；
+  // 未配置则走公信通道（有日限额，见 OPPO 文档「推送服务受限说明」）
+  OPPO_PUSH_CHANNEL_ID: z.string().optional(),
+  // 推送接口域名覆盖（默认国内正式环境；沙箱/自测脚本可指向别处）
+  OPPO_PUSH_API_BASE: z.string().optional(),
+  // 离线消息 TTL（秒；默认 6 小时）。设备断网超过该时长后这条推送作废
+  OPPO_PUSH_TTL_SECONDS: z.coerce.number().int().positive().optional(),
 });
 
 /** 校验并导出环境变量（启动时执行一次） */

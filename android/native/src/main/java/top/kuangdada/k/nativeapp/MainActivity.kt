@@ -1,43 +1,20 @@
 package top.kuangdada.k.nativeapp
 
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.background
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.launch
-import top.kuangdada.k.core.data.SessionRepository
-import top.kuangdada.k.core.data.ThemePreference
-import top.kuangdada.k.core.designsystem.theme.KTheme
-import top.kuangdada.k.core.designsystem.theme.KType
 import top.kuangdada.k.nativeapp.ui.AppDestination
-import top.kuangdada.k.nativeapp.ui.AppNavigator
-import top.kuangdada.k.nativeapp.ui.AppShell
-import top.kuangdada.k.nativeapp.ui.rememberAppNavigator
+import top.kuangdada.k.nativeapp.ui.AppRoot
 
 /**
  * ============================================================
- * 原生版入口
+ * 原生版入口（唯一的 Activity）
  * ============================================================
  * M2 阶段的能力：登录/注册 · 首页信息流 · 搜索发现 · 图书列表/详情/阅读器 ·
  * 语音房间列表 · 个人主页三标签（帖子/转发/收藏）· 悬浮导航胶囊 · 沉浸态。
@@ -46,37 +23,55 @@ import top.kuangdada.k.nativeapp.ui.rememberAppNavigator
  *  1. **游客可浏览**（服务端 `/api/posts`、`/api/books`、`/api/voice/rooms` 都是 optionalAuth），
  *     只有互动与个人主页要求登录；
  *  2. **冷启动先用本地 token 乐观进入已登录态**，后台用 `/api/auth/me` 校验；
- *  3. **返回键逐层弹出**，回到一级页再按才最小化（对齐 Web 版"双击 tab 最小化"的语义）。
+ *  3. **返回键逐层弹出**，回到一级页再按**交还系统**（Android 14+ 的"返回主屏幕"预览动画
+ *     由系统播；根 Activity 的返回 = 把任务移到后台，对齐 Web 版"双击 tab 最小化"的语义。
+ *     2026-10-13 起不再自己调 `moveTaskToBack` —— 有注册返回回调时系统就不会播那个动画）。
  *
  * 服务端地址 = `BuildConfig.DEFAULT_SERVER_URL`（在 :core:data 里配置）。
  *
- * **基类是 `ComponentActivity`**：曾经它是 `FragmentActivity`，因为 `BiometricPrompt`
- * （私密文件夹解锁）只接受 `FragmentActivity`。那个功能 09-18 已整体删除，
- * 于是基类回归最朴素的那个（`setContent` / `enableEdgeToEdge` / `PredictiveBackHandler`
- * 全都来自 `androidx.activity`，与是否带 Fragment 无关）。
+ * 本类只做"Activity 独有的能力"：锁屏亮屏、进程图装配、深链解析 —— 其余启动语义
+ * （鉴权/主题/登录保护/返回处理）都在 `AppRoot` / `AppShell` 里。
  */
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        /**
+         * 全屏意图（`SocialNotifier.post` 的 `setFullScreenIntent`）在 Intent 上打的标记。
+         *
+         * 只有用带这个 extra 的 Intent 启动/送达时才允许"画在锁屏之上 + 点亮屏幕"，
+         * 并在离开前台时立刻收回（见 [onPause]）：`setShowWhenLocked(true)` 的语义是
+         * **不需要解锁验证**就能看到并操作本 Activity，常开的话"锁屏前开着 App →
+         * 按电源键亮屏"会绕过锁屏直接进 App（2026-10-11 反馈）。
+         */
+        const val EXTRA_LAUNCHED_FROM_FULL_SCREEN = "from_full_screen"
+    }
+
+    /** 传进 Compose 的深链目标；由 Compose 消费（消费后置 null，避免重复跳转）。 */
+    private var pendingDeepLink by mutableStateOf<AppDestination?>(null)
+
     /**
-     * 深链需要在这里处理，而不是只在 onCreate 里。
+     * 深链 / 通知点击的接收入口。
      *
-     * 原因：Manifest 是 `launchMode="singleTop"`（也是 :app 的配置）——
-     * Activity 已在栈顶时，新的 `VIEW` Intent **不会重建 Activity**，
-     * 只回调 [onNewIntent]。漏了这个方法的表现是：
-     * App 开着的时候点站内链接**毫无反应**（冷启动却正常，所以很容易漏）。
+     * Manifest 是 singleTop，App 开着时点站内链接**不会重建 Activity**，
+     * 只回调本方法（漏了它的表现：App 开着点链接毫无反应，冷启动却正常）。
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         pendingDeepLink = DeepLink.fromIntent(intent)
+        // App 已在运行时，全屏意图也走这里送达（singleTop + NEW_TASK 不会重建 Activity）
+        applyWakeFlags(intent.getBooleanExtra(EXTRA_LAUNCHED_FROM_FULL_SCREEN, false))
     }
-
-    /** 待处理的深链：onCreate 时解析一次，之后由 Compose 消费（消费后置 null，避免重复跳转） */
-    private var pendingDeepLink by mutableStateOf<top.kuangdada.k.nativeapp.ui.AppDestination?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        // 锁屏亮屏的另一半：通知的全屏意图把系统带到本 Activity 时，
+        // 没有这两个标志的话部分 ROM（实测 ColorOS/一加）不会真正点亮屏幕、
+        // 也不会把 Activity 画在锁屏之上 —— 表现是"屏幕闪了一下还是黑的"。
+        // 但只允许"这一趟确实是全屏意图拉起来的"才开（离开前台即关，见 [onPause]），
+        // 不能常开 —— 理由见 [EXTRA_LAUNCHED_FROM_FULL_SCREEN] 的注释。
+        applyWakeFlags(intent.getBooleanExtra(EXTRA_LAUNCHED_FROM_FULL_SCREEN, false))
         // AppGraph.from 会在 Manifest 漏配 android:name=".KApp" 时自建并打警告，
         // 而不是像 `(application as KApp)` 那样直接崩在 UI 起来之前
         val graph = AppGraph.from(this)
@@ -84,145 +79,47 @@ class MainActivity : ComponentActivity() {
         DebugEntry.maybeRunNetworkDiagnostics(intent)
         // 冷启动深链 / 通知点击
         pendingDeepLink = DeepLink.fromIntent(intent)
-        // 把 Activity 的"最小化"能力显式传进 Compose —— 在 @Composable 里直接调
-        // Activity 的方法看不到（返回键的 lambda 不是 Activity 的成员作用域）。
-        // M2 起它同时交给 AppShell（返回栈空时的兜底）与本文件的兜底 handler。
-        val minimize: () -> Unit = { moveTaskToBack(true) }
         setContent {
-            // 主题偏好：启动时同步读初值避免色闪，运行期由 DataStore 的 Flow 驱动
-            val themeMode by graph.theme.flow.collectAsState(
-                initial = graph.theme.readInitialBlocking(),
+            AppRoot(
+                graph = graph,
+                initialDestination = AppDestination.Home,
+                deepLink = pendingDeepLink,
+                onDeepLinkConsumed = { pendingDeepLink = null },
             )
-            val dark = when (themeMode) {
-                ThemePreference.Mode.System -> isSystemInDarkTheme()
-                ThemePreference.Mode.Light -> false
-                ThemePreference.Mode.Dark -> true
-            }
-            KTheme(darkTheme = dark) {
-                Root(
-                    graph = graph,
-                    minimize = minimize,
-                    themeMode = themeMode,
-                    onThemeChange = { mode ->
-                        // 写盘是挂起操作：用 Activity 的 lifecycleScope，随 Activity 销毁自动取消
-                        lifecycleScope.launch { graph.theme.set(mode) }
-                    },
-                    deepLink = pendingDeepLink,
-                    onDeepLinkConsumed = { pendingDeepLink = null },
-                )
-            }
         }
     }
-}
 
-@Composable
-private fun Root(
-    graph: AppGraph,
-    minimize: () -> Unit,
-    themeMode: ThemePreference.Mode,
-    onThemeChange: (ThemePreference.Mode) -> Unit,
-    deepLink: top.kuangdada.k.nativeapp.ui.AppDestination? = null,
-    onDeepLinkConsumed: () -> Unit = {},
-) {
-    val c = KTheme.colors
-    val authState by graph.session.state.collectAsState()
-    val navigator = rememberAppNavigator(AppDestination.Home)
-
-    // 深链 / 通知点击：等首次鉴权恢复完成后再跳，否则登录保护页会被弹回首页
-    LaunchedEffect(deepLink, authState) {
-        val target = deepLink ?: return@LaunchedEffect
-        if (authState is SessionRepository.AuthState.Restoring) return@LaunchedEffect
-        navigator.push(target)
-        onDeepLinkConsumed()
-    }
-
-    // 冷启动：本地有 token 就乐观进已登录态，同时后台用 /auth/me 校验
-    LaunchedEffect(Unit) { graph.session.restore() }
-
-    // 令牌明确失效（服务端 401）→ 推到登录页。**不静默变成游客**，
-    // 否则用户会以为"我的数据没了"。
-    LaunchedEffect(authState) {
-        val s = authState
-        if (s is SessionRepository.AuthState.Expired && navigator.current !is AppDestination.Login) {
-            navigator.push(AppDestination.Login)
-        }
+    override fun onPause() {
+        super.onPause()
+        // 用完即关：离开前台（切走/灭屏）就收回锁屏标志。全屏意图那一趟的亮屏
+        // 发生在进入前台之前，这里关掉不会打断它；之后的"手动锁屏 → 按电源键亮屏"
+        // 才会回到正常锁屏界面，而不是把 App 画在锁屏上直接可操作。
+        applyWakeFlags(false)
     }
 
     /**
-     * 返回键兜底（M2）。
+     * 开/关"锁屏亮屏"两个标志（`setTurnScreenOn` + `setShowWhenLocked`）。
      *
-     * 真正的返回处理已经搬进 `AppShell`（那里才看得到"设置弹层/作品选单开着没有"这两个
-     * Shell 自己的状态），这里的 handler 只在 **AppShell 还没进组合**时生效
-     * （冷启动读取本地登录态、显示转圈那一小段）：那时按返回应该最小化，而不是退出 App。
-     *
-     * 为什么是 `PredictiveBackHandler` 而不是 `BackHandler`：见 AppShell 里的说明 ——
-     * `BackHandler` 会吞掉预测式返回的手势进度。
-     *
-     * 优先级：`OnBackPressedDispatcher` 按**后注册先响应**派发，AppShell 在本函数之后进组合，
-     * 所以正常情况下轮不到这里（这正是想要的）。
+     * API 27+ 走 Activity 属性；24–26 用等价的 window flag（`FLAG_TURN_SCREEN_ON`/
+     * `FLAG_SHOW_WHEN_LOCKED` 已标废弃，但语义一致）。
      */
-    PredictiveBackHandler(enabled = true) { progress ->
-        progress.collect { }
-        minimize()
-    }
-
-    when (authState) {
-        is SessionRepository.AuthState.Restoring -> Box(
-            modifier = Modifier.fillMaxSize().background(c.bgPage),
-            contentAlignment = Alignment.Center,
-        ) {
-            CircularProgressIndicator(color = c.accent)
-        }
-
-        /**
-         * 离线：本地有凭证但 /auth/me 因网络原因失败（P1-3.1）。
-         * 不能进游客界面 —— 那会出现"游客 UI 但请求仍带登录凭证"的矛盾态；
-         * 给出明确的离线提示与重试入口，凭证原样保留。
-         */
-        is SessionRepository.AuthState.Offline -> Box(
-            modifier = Modifier.fillMaxSize().background(c.bgPage),
-            contentAlignment = Alignment.Center,
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = "网络不可用",
-                    style = KType.subtitle,
-                    color = c.textPrimary,
+    private fun applyWakeFlags(enabled: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setTurnScreenOn(enabled)
+            setShowWhenLocked(enabled)
+        } else {
+            @Suppress("DEPRECATION")
+            if (enabled) {
+                window.addFlags(
+                    android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                        android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED,
                 )
-                Text(
-                    text = "登录凭证已保留，恢复网络后可重试",
-                    style = KType.body,
-                    color = c.textSecondary,
-                    modifier = Modifier.padding(top = 8.dp),
+            } else {
+                window.clearFlags(
+                    android.view.WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                        android.view.WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED,
                 )
-                Button(
-                    onClick = { graph.session.retryRestore() },
-                    modifier = Modifier.padding(top = 16.dp),
-                ) {
-                    Text("重试", color = c.onAccent)
-                }
             }
         }
-
-        else -> AppShell(
-            session = graph.session,
-            posts = graph.posts,
-            comments = graph.comments,
-            books = graph.books,
-            users = graph.users,
-            friends = graph.friends,
-            voice = graph.voice,
-            messages = graph.messages,
-            realtime = graph.realtime,
-            composer = graph.composer,
-            admin = graph.admin,
-            navigator = navigator,
-            themeMode = themeMode,
-            onThemeChange = onThemeChange,
-            // 返回键的处理在 AppShell 里（它才看得到覆盖层状态），但"最小化"是 Activity 的能力
-            minimize = minimize,
-        )
     }
 }
-
-

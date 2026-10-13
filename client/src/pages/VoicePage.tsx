@@ -7,6 +7,12 @@
  * - 进房后: VoiceRoomView（成员网格/聊天面板/控制栏/录制）
  * 实时逻辑全部在 VoiceContext（WS 信令 + WebRTC Mesh，应用级、切页不断开）。
  *
+ * 进房方式（2026-10 定稿）：点击「加入」**立即切入房间视图**，连接在房内
+ * 静默进行 —— 房间框架（房名/成员/聊天/控制栏）直接呈现，连接进度由
+ * 头部状态行表达（connecting 显示「正在连接…」），不再是整屏加载或在
+ * 列表页等待。聊天历史由 useVoiceChatStore 在进房时后台预拉，进场时
+ * 通常已就绪。
+ *
  * 本层保留房间列表数据与轮询（进房期间仍 10s 刷新：人数徽标与
  * VoiceRoomView 的"清空聊天"权限依赖当前房间 isCreator，与拆分前
  * 同一数据源同一时刻）；TTS/聊天/控制栏等已拆入子组件与 useChatTTS。
@@ -57,7 +63,11 @@ export default function VoicePage() {
   // 进房期间轮询房间列表（人数徽标实时化）；会话结束后刷新一次
   useEffect(() => {
     if (!voice.inRoom) return;
-    const timer = window.setInterval(refreshRooms, 10_000);
+    const timer = window.setInterval(() => {
+      // 后台标签跳过：WebRTC 音频照常（产品行为），列表徽标无需在不可见时刷新
+      if (document.hidden) return;
+      void refreshRooms();
+    }, 10_000);
     return () => clearInterval(timer);
   }, [voice.inRoom, refreshRooms]);
 
@@ -74,6 +84,8 @@ export default function VoicePage() {
     voice.join(room.id, room.name);
   };
 
+  // 点击「加入」立即切入房间视图（原行为）：连接在房内静默进行 ——
+  // 房间框架直接呈现，进度由 VoiceRoomView 头部的「正在连接…」表达
   if (voice.inRoom) {
     return <VoiceRoomView rooms={rooms} />;
   }

@@ -87,7 +87,7 @@
 
 .followBtn.following {
   background: transparent;
-  color: var(--accent);
+  color: var(--accent-text);
   border-color: var(--accent-border);
 }
 
@@ -99,7 +99,7 @@
 
 .caption {
   padding: 12px 2px 0;
-  color: var(--text-secondary);
+  color: var(--text-primary);
   line-height: 1.6;
   font-size: var(--font-body);
   overflow: hidden;

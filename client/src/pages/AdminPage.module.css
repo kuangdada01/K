@@ -45,8 +45,8 @@
 }
 
 .tab.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+  color: var(--accent-text);
+  border-bottom-color: var(--accent-text);
 }
 
 .toolbar {
@@ -270,7 +270,7 @@
 .sendForm input:focus,
 .sendForm textarea:focus,
 .sendForm select:focus {
-  border-color: var(--accent);
+  border-color: var(--accent-text);
 }
 
 .sendForm textarea {
@@ -355,7 +355,7 @@
 }
 
 .modal input:focus {
-  border-color: var(--accent);
+  border-color: var(--accent-text);
 }
 
 /* 用户搜索选择器 */
@@ -375,7 +375,7 @@
 }
 
 .annInputRow:focus-within {
-  border-color: var(--accent);
+  border-color: var(--accent-text);
 }
 
 .annInputRow svg {
@@ -474,7 +474,7 @@
 
 .annSelected {
   font-size: 13px;
-  color: var(--accent);
+  color: var(--accent-text);
   margin-top: 4px;
   font-weight: 500;
 }

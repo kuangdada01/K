@@ -84,6 +84,31 @@ export interface AnnouncementRow {
   is_read: number;
 }
 
+/**
+ * 评论 + 评论作者昵称（离线推送摘要用，push.service）——SQL 自 push.service 原样下沉（A2）。
+ * 评论不存在（已被删）返回 undefined，调用方据此跳过推送。
+ */
+export function getCommentWithAuthor(
+  commentId: number
+): { parent_id: number | null; content: string; name: string } | undefined {
+  return stmt(
+    `
+    SELECT c.parent_id AS parent_id, c.content AS content, u.username AS name
+    FROM comments c
+    JOIN users u ON u.id = c.user_id
+    WHERE c.id = ?
+  `
+  ).get(commentId) as { parent_id: number | null; content: string; name: string } | undefined;
+}
+
+/** 公告标题与定向目标（离线推送用，push.service）；行已不存在返回 undefined */
+export function getAnnouncementTargeting(
+  announcementId: number
+): { title: string; target_user_id: number | null } | undefined {
+  return stmt('SELECT title, target_user_id FROM announcements WHERE id = ?').get(announcementId) as
+    { title: string; target_user_id: number | null } | undefined;
+}
+
 /** 用户可见的公告列表（全局 + 定向），含已读状态；硬上限见 HARD_LIST_CAP */
 export function listAnnouncements(
   userId: number,

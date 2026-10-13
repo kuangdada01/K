@@ -52,9 +52,12 @@ tasks.register('dumpTestClasspath') {
     dependsOn 'compileDebugUnitTestKotlin'
     def outputFile = layout.buildDirectory.file('kotlin-test-classpath.txt')
     outputs.file(outputFile)
+    // ★ configuration cache 兼容（与 :native 的同名任务同一修法）：
+    // 执行期触碰 tasks 脚本对象是 CC 明令禁止的，改为配置期解析并捕获。
+    def testCp = tasks.named('testDebugUnitTest').get().classpath
+    inputs.files(testCp)
     doLast {
-        def testTask = tasks.named('testDebugUnitTest').get()
-        def entries = testTask.classpath.files
+        def entries = testCp.files
         def file = outputFile.get().asFile
         file.parentFile.mkdirs()
         file.setText(entries.join(File.pathSeparator), 'UTF-8')

@@ -78,8 +78,6 @@ import top.kuangdada.k.core.data.CHAT_TTS_SYSTEM_VOICE_KEY
 import top.kuangdada.k.core.data.displayMessage
 import top.kuangdada.k.core.designsystem.component.KBreathRing
 import top.kuangdada.k.core.designsystem.component.KButton
-import top.kuangdada.k.core.designsystem.component.KPlaceholder
-import top.kuangdada.k.core.designsystem.component.KPlaceholderKind
 import top.kuangdada.k.core.designsystem.component.KTextField
 import top.kuangdada.k.core.designsystem.theme.KDimens
 import top.kuangdada.k.core.designsystem.theme.KMotion
@@ -448,9 +446,18 @@ fun VoiceRoomScreen(
                     )
                     Text(
                         // 设计稿：有人在共享时这里写「共享中」，否则写连接状态
-                        // （人数 + 状态，与设计稿「8 人在线 · 共享中」同构）
-                        text = "${state.peers.size + 1} 人在线 · " +
-                            if (state.sharingUserId > 0 || state.selfSharing) "共享中" else phaseText(state.phase),
+                        // （人数 + 状态，与设计稿「8 人在线 · 共享中」同构）。
+                        //
+                        // 连接阶段（未 Joined）**只写「正在连接…」、不报人数**：
+                        // 2026-10 起进房即呈现完整房间、连接在房内静默进行 ——
+                        // 这一行就是那个"静默加载"的进度表达（旧版是整屏遮罩）。
+                        text = when {
+                            state.sharingUserId > 0 || state.selfSharing -> "${state.peers.size + 1} 人在线 · 共享中"
+                            state.phase == VoiceRoomController.Phase.Idle ||
+                                state.phase == VoiceRoomController.Phase.Preparing ||
+                                state.phase == VoiceRoomController.Phase.Connecting -> "正在连接…"
+                            else -> "${state.peers.size + 1} 人在线 · ${phaseText(state.phase)}"
+                        },
                         style = KType.footnote,
                         color = c.textMuted,
                     )
@@ -500,7 +507,7 @@ fun VoiceRoomScreen(
                         // 只有 STUN 时对称 NAT 会连不上；把原因说清楚，别让用户对着"连接中"一直等
                         text = "服务端未配置 TURN：双方都在对称 NAT 后可能连不上音频（信令仍正常）",
                         style = KType.tiny,
-                        color = c.accent,
+                        color = c.accentText,
                     )
                 }
 
@@ -628,7 +635,7 @@ fun VoiceRoomScreen(
                             text = if (shareHasFrame) "$sharerName 正在共享屏幕"
                             else "$sharerName 正在共享屏幕（等待画面…）",
                             style = KType.caption,
-                            color = c.accent,
+                            color = c.accentText,
                             // 单行 + 省略号：首帧到达时这几个字会变短，一旦折行数变化，
                             // 下面的槽位整体上移 —— 表现就是"等到首帧画面跳一下"。
                             maxLines = 1,
@@ -820,25 +827,15 @@ fun VoiceRoomScreen(
          * 渲染器由 [ShareRenderHolder] 交过去，黑边由宿主的窗口底色提供 —— 见那两处的注释。
          */
 
-        if (state.phase == VoiceRoomController.Phase.Preparing ||
-            state.phase == VoiceRoomController.Phase.Connecting
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(c.scrim),
-                contentAlignment = Alignment.Center,
-            ) {
-                KPlaceholder(
-                    kind = KPlaceholderKind.Loading,
-                    title = when (state.phase) {
-                        VoiceRoomController.Phase.Preparing -> "正在准备音频…"
-                        else -> "正在连接语音服务…"
-                    },
-                    description = "远端音频已接通 ${state.audioConnected} 路",
-                )
-            }
-        }
+        /**
+         * ⚠️ 这里原来有一层「连接阶段全屏遮罩」（Preparing/Connecting 时整屏 scrim +
+         * KPlaceholder「正在准备音频… / 正在连接语音服务…」）—— 2026-10 按用户反馈移除：
+         * 进房即呈现完整房间（房间名 / 麦位 / 聊天 / 控制栏），连接在**房内静默进行**，
+         * 进度由顶栏的「正在连接…」状态行表达（见上方头部那一行 Text 的 when 分支）。
+         *
+         * 别再把它加回来 —— 整屏遮挡会把"进房"读成一个"加载页"，连接完成的瞬间
+         * 又是一次整屏切换，这正是用户说的"加载过程很割裂"。
+         */
 
         /**
          * 清空聊天记录的二次确认（设计稿的「清空」是破坏性操作，与消息页「清空聊天记录」
@@ -1015,7 +1012,7 @@ private fun VoiceSeatCard(
                     .clickable { onChallenge() }
                     .padding(horizontal = KSpacing.xs, vertical = 1.dp),
             ) {
-                Text("对弈", style = KType.tiny, color = c.accent, maxLines = 1)
+                Text("对弈", style = KType.tiny, color = c.accentText, maxLines = 1)
             }
         }
     }
@@ -1099,7 +1096,7 @@ private fun RoomChatPanel(
                 ) {
                     ChatMenuItem(
                         text = if (reader.systemSupported) "系统语音" else "系统语音（不支持）",
-                        color = if (reader.voiceKey == CHAT_TTS_SYSTEM_VOICE_KEY) c.accent else c.textPrimary,
+                        color = if (reader.voiceKey == CHAT_TTS_SYSTEM_VOICE_KEY) c.accentText else c.textPrimary,
                     ) {
                         voiceMenuOpen = false
                         reader.chooseVoice(CHAT_TTS_SYSTEM_VOICE_KEY)
@@ -1107,7 +1104,7 @@ private fun RoomChatPanel(
                     CHAT_TTS_CLOUD_VOICES.forEach { v ->
                         ChatMenuItem(
                             text = v.label,
-                            color = if (reader.voiceKey == v.key) c.accent else c.textPrimary,
+                            color = if (reader.voiceKey == v.key) c.accentText else c.textPrimary,
                         ) {
                             voiceMenuOpen = false
                             reader.chooseVoice(v.key)
@@ -1196,7 +1193,7 @@ private fun ChatHeaderButton(
     val c = KTheme.colors
     val fg = when {
         !enabled -> c.textMuted
-        active -> c.accent
+        active -> c.accentText
         else -> c.textSecondary
     }
     Row(
@@ -1267,13 +1264,13 @@ private fun ChatMessageRow(
                 }
                 // 只有"等云端返回"这一段才显示；出声之后高亮还在（表示这条正在念）
                 if (speaking && reader.synthesizing) {
-                    Text("合成中…", style = KType.tiny, color = c.accent)
+                    Text("合成中…", style = KType.tiny, color = c.accentText)
                 }
             }
             Text(
                 text = msg.content,
                 style = KType.caption,
-                color = if (msg.isMine) c.accent else c.textPrimary,
+                color = if (msg.isMine) c.accentText else c.textPrimary,
             )
         }
     }

@@ -50,7 +50,7 @@ function resolveTheme(mode: ThemeMode): 'light' | 'dark' {
 function updateThemeColor(theme: 'light' | 'dark') {
   const meta = document.querySelector('meta[name="theme-color"]');
   if (meta) {
-    meta.setAttribute('content', theme === 'dark' ? '#0d0f14' : '#eef2ee');
+    meta.setAttribute('content', theme === 'dark' ? '#121212' : '#f5f5f5');
   }
 }
 
@@ -75,7 +75,7 @@ function applyStatusBar(mode: ThemeMode) {
   setStatusBarStyle(mode);
 
   const effective: 'light' | 'dark' = mode === 'system' ? getSystemTheme() : mode;
-  const bgColor = effective === 'dark' ? '#0d0f14' : '#eef2ee';
+  const bgColor = effective === 'dark' ? '#121212' : '#f5f5f5';
   setStatusBarBackground(bgColor);
   setWindowBackgroundColor(bgColor);
 }

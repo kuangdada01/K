@@ -1,0 +1,102 @@
+/* 成员卡片（质量点/说话态/头像/音量行）—— 自 VoicePage.module.css 拆出（D4）。滑条定制 .peerVolumeSlider 经 className 传给 VolumeSlider */
+
+.memberCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 14px 14px;
+  background: var(--bg-primary);
+  border: 2px solid transparent;
+  border-radius: var(--radius, 16px);
+  transition: border-color 0.1s;
+}
+
+/* ---- 网络质量圆点（卡片右上角） ---- */
+
+.qDot {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--bg-primary);
+}
+
+.q_good {
+  background: var(--success, #325d51);
+}
+
+.q_fair {
+  background: #a3a3a3;
+}
+
+.q_poor {
+  background: var(--danger);
+}
+
+/* 说话光环 */
+.speaking {
+  border-color: var(--success, #325d51);
+}
+
+.avatarWrap {
+  position: relative;
+}
+
+.mutedBadge {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  border: 2px solid var(--bg-primary);
+  color: var(--danger);
+}
+
+/* 屏幕共享中徽标（头像左下角，与右下角静音徽标对称） */
+.sharingBadge {
+  position: absolute;
+  left: -2px;
+  bottom: -2px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg-primary);
+  color: var(--on-accent);
+}
+
+.memberName {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.peerVolume {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  width: 100%;
+  padding: 0 4px;
+}
+
+.peerVolumeSlider {
+  flex: 1;
+  min-width: 0;
+}

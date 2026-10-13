@@ -27,6 +27,7 @@ import { setDbForTests, resetDbForTests } from '../src/db/connection';
 import { createApp } from '../src/app';
 import { generateToken } from '../src/middleware/auth';
 import { PATHS } from '../src/config';
+import { AppError } from '../src/middleware/error';
 import { sweepTempVideos } from '../src/routes/posts/media';
 import {
   getChunkOwner,
@@ -54,7 +55,9 @@ vi.mock('../src/lib/video/queue', () => ({
   enqueueVideoTranscode: (filePath: string, _name: string) => {
     enqueued.push(filePath);
     if (queueState.fail) {
-      throw Object.assign(new Error('视频处理任务繁忙，请稍后再试'), { status: 429 });
+      // 按真实队列的形态抛（AppError）——errorHandler 只对 AppError 实例外发
+      // message（duck typing 已收紧），替身抛裸 Error 会被兜底成「请求被拒绝」
+      throw new AppError(429, '视频处理任务繁忙，请稍后再试');
     }
   },
   // 状态查询/恢复入口的替身：本文件不消费它们，但模块导入面必须完整

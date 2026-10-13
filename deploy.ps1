@@ -212,6 +212,10 @@ if ($APK_LOCAL -and $APK_NAME) {
 # 复制客户端 public 目录（音乐源文件在 public/music，服务端 /api/music 扫描此目录；
 # 缺失会导致音乐列表为空、播放器组件不显示）
 Copy-Item -Recurse "client\public" "$tmpDir\client\public"
+# 排除 public/apk 下的历史 APK（本地可能累积数百 MB）：新 APK 本来就走
+# deploy-sftp.py 的 --apk 单独上传通道（sha256 核验 + 远端保留最近 5 个），
+# tar 里再拖一份纯属每轮部署多传几百兆
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$tmpDir\client\public\apk"
 
 # 复制根目录配置（package-lock.json 为 workspaces 单一 lockfile，远端根安装依赖用）
 # 注意：.env 会整体覆盖远端现有配置——若曾直接在服务器上改过环境变量，
@@ -284,7 +288,8 @@ if ($sftpExit -ne 0) {
 }
 Write-Host "  上传与远端部署完成 ✓" -ForegroundColor Green
 
-# Step 5: 验证
+# Step 5: 验证（失败改变退出码：此前两层 catch 后照常打印"部署完成"并以 0 退出，
+# "部署失败却报成功"会误导人工判断 —— 远端 deploy-sftp.py 的核验仍会先一步失败）
 Write-Host "`n[5/6] 本地侧验证服务..." -ForegroundColor Green
 Start-Sleep -Seconds 1
 # 全站 HTTPS（Let's Encrypt）后经 nginx 443 验证；裸 IP 访问证书域名不匹配，需跳过校验
@@ -298,7 +303,8 @@ try {
         $response = Invoke-WebRequest -Uri "https://$SERVER/" -TimeoutSec 10 -UseBasicParsing -SkipCertificateCheck
         Write-Host "  首页状态: $($response.StatusCode) ✓" -ForegroundColor Green
     } catch {
-        Write-Host "  服务可能需要几秒钟启动，请稍后访问 https://$SERVER" -ForegroundColor Yellow
+        Write-Host "  [验证失败] 本地侧无法访问服务（部署远端步骤可能已部分失败），退出码 1" -ForegroundColor Red
+        exit 1
     }
 }
 

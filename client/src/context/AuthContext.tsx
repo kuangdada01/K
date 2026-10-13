@@ -20,7 +20,8 @@ import { createContext, useContext, useState, useEffect, useMemo, useCallback, R
 import { isAxiosError } from 'axios';
 import api from '../api/http';
 import { queryClient } from '../state/queryClient';
-import { clearInteractionCaches, seedFollowedUsers } from '../state/cache';
+import { clearCachesOnAuthLoss } from '../state/authCache';
+import { seedFollowedUsers } from '../state/cache';
 import { myFollowing } from '../api/friends';
 import { bumpSessionEpoch, currentSessionEpoch } from '../lib/sessionEpoch';
 import { User, AuthResponse } from '../types';
@@ -120,9 +121,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   /** 监听 token 过期事件（由 api.ts 401 拦截器触发，拦截器已校验代次） */
   useEffect(() => {
     const handler = () => {
-      // B5 修复：清空所有查询缓存与交互缓存，避免切换到新账号后残留上一个账号的数据
-      queryClient.removeQueries();
-      clearInteractionCaches();
+      // B5 修复（修订）：清登录私有缓存与交互缓存，posts 系公开内容保留并
+      // invalidate 重取 —— 全量瞬间清空会把首页信息流打回空态、页面高度塌缩、
+      // 滚动位置被浏览器钳回 0（表现为「浏览帖子时自动跳回头部」）
+      clearCachesOnAuthLoss();
       bumpSessionEpoch();
       setUser(null);
       setToken(null);
@@ -159,13 +161,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setOffline(false);
   }, []);
 
-  /** 用户登出（递增会话代次 + 清除本地状态 + 清空跨账号缓存，B5 修复） */
+  /** 用户登出（递增会话代次 + 清除本地状态 + 清理跨账号缓存，B5 修复修订版） */
   const logout = useCallback(() => {
     bumpSessionEpoch();
     localStorage.removeItem('k_token');
-    // 清空全部查询缓存与交互缓存，切换账号后不会残留上一个账号的信息流/点赞/关注状态
-    queryClient.removeQueries();
-    clearInteractionCaches();
+    // 登录私有查询与交互缓存全清；posts 系公开内容保留并 invalidate 重取，
+    // 避免信息流瞬间清空 → 页面高度塌缩 → 滚动被钳回 0（浏览中"跳回头部"）
+    clearCachesOnAuthLoss();
     setToken(null);
     setUser(null);
     setOffline(false);

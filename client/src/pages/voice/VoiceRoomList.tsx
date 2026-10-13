@@ -2,10 +2,14 @@
  * ============================================================
  * 语音房间列表（pages/voice/VoiceRoomList）
  * ============================================================
- * 自 VoicePage.tsx 拆出（§3.2，行为不变）：房间列表（在线人数徽标、
- * 活跃房间排前）+ 创建/删除房间 + 进房。
+ * 自 VoicePage.tsx 拆出（§3.2）：房间列表（在线人数徽标、活跃房间排前）
+ * + 创建/删除房间 + 进房。
  * - 未登录用户也可以创建/进入（访客身份，服务端分配负数 id）
  * - 删除权限：创建者（含访客创建者，isCreator 按访问者计算）或管理员
+ *
+ * 进房（2026-10 定稿）：点击「加入」**立即切入房间视图**（连接在房内
+ * 静默进行，进度由房间页头部的「正在连接…」表达，见 VoicePage），
+ * 本组件不承担任何过渡态 —— 不显示"进入中"、也不在列表页等待。
  *
  * 房间列表数据（rooms/loading）与轮询由 VoicePage 编排层持有——
  * 进房期间仍要按 10s 轮询保持人数徽标/创建者身份实时（VoiceRoomView
@@ -25,7 +29,7 @@ import { saveRoomOwnerToken, forgetRoomOwnerToken, isOwnedGuestRoom } from '../.
 import { resolveMediaUrl } from '../../utils';
 import type { VoiceRoom } from '../../types';
 import { VOICE_MAX_ROOM_SIZE } from '@k/shared';
-import styles from '../VoicePage.module.css';
+import styles from './VoiceRoomList.module.css';
 
 export default function VoiceRoomList({
   rooms,

@@ -345,6 +345,39 @@ export function createChessGameManager(deps: ChessGameManagerDeps) {
     return slot.game.adjudicated || slot.game.state.status !== 'playing' ? undefined : slot.game;
   };
 
+  /**
+   * 九处消息处理函数共用的**公共前导**：按用户定位其所在房间的对局（A1，2026-10-11）。
+   *
+   * 原先每个 case 开头重复同一段「getMemberRoomId → slots.get → 对局匹配 → playerOf」
+   * （约 10 行 × 9 ≈ 90 行）。定位失败时经 sendError 回错并返回 ok:false——
+   * 错误码固定 no-game，文案由 opts 显式传入（八个"进行中" case 用
+   * 『当前没有进行中的对局』，rematch 用『当前没有已结束的对局』），
+   * 调用点不再可能写出不一致的文案。
+   *
+   * `side` 可能为 null（在房间但不是本局棋手）——**是否报 not-player 由调用方决定**：
+   * 八处语义一致（null 即报 not-player，调用点保留这行），将来若有观战可读的 case
+   * 直接消费 side=null 即可，不必再开参数。
+   */
+  function locateGame(
+    user: ChessUser,
+    ws: ChessSendable,
+    msg: Record<string, unknown>,
+    opts: { requirePlaying: boolean; missingMessage: string }
+  ): { ok: true; roomId: number; slot: RoomSlot; game: ChessGame; side: ChessSide | null } | { ok: false } {
+    const roomId = deps.getMemberRoomId(user.id);
+    if (roomId === undefined) {
+      sendError(ws, 'no-game', opts.missingMessage);
+      return { ok: false };
+    }
+    const slot = slots.get(roomId);
+    const game = opts.requirePlaying ? gamePlaying(slot) : slot?.game;
+    if (!slot || !game || msg.gameId !== game.gameId) {
+      sendError(ws, 'no-game', opts.missingMessage);
+      return { ok: false };
+    }
+    return { ok: true, roomId, slot, game, side: playerOf(game, user.id) };
+  }
+
   // ---- 消息处理（messageHandlers 的 game-* 前缀统一分发到这里）----
 
   function handleMessage(
@@ -526,14 +559,12 @@ export function createChessGameManager(deps: ChessGameManagerDeps) {
   }
 
   function handleMove(user: ChessUser, ws: ChessSendable, msg: Record<string, unknown>): void {
-    const roomId = deps.getMemberRoomId(user.id);
-    if (roomId === undefined) return sendError(ws, 'no-game', '当前没有进行中的对局');
-    const slot = slots.get(roomId);
-    const game = gamePlaying(slot);
-    if (!slot || !game || msg.gameId !== game.gameId) {
-      return sendError(ws, 'no-game', '当前没有进行中的对局');
-    }
-    const side = playerOf(game, user.id);
+    const located = locateGame(user, ws, msg, {
+      requirePlaying: true,
+      missingMessage: '当前没有进行中的对局',
+    });
+    if (!located.ok) return;
+    const { roomId, game, side } = located;
     if (!side) return sendError(ws, 'not-player', '你不是本局棋手');
     // 暂停期间一律停走（先于回合校验：此时报"还没轮到你"会误导）
     if (game.clock.paused) return sendError(ws, 'game-paused', '对局已暂停，请先继续对局');
@@ -590,27 +621,23 @@ export function createChessGameManager(deps: ChessGameManagerDeps) {
   }
 
   function handleResign(user: ChessUser, ws: ChessSendable, msg: Record<string, unknown>): void {
-    const roomId = deps.getMemberRoomId(user.id);
-    if (roomId === undefined) return sendError(ws, 'no-game', '当前没有进行中的对局');
-    const slot = slots.get(roomId);
-    const game = gamePlaying(slot);
-    if (!slot || !game || msg.gameId !== game.gameId) {
-      return sendError(ws, 'no-game', '当前没有进行中的对局');
-    }
-    const side = playerOf(game, user.id);
+    const located = locateGame(user, ws, msg, {
+      requirePlaying: true,
+      missingMessage: '当前没有进行中的对局',
+    });
+    if (!located.ok) return;
+    const { roomId, game, side } = located;
     if (!side) return sendError(ws, 'not-player', '你不是本局棋手');
     endGame(roomId, game, side === 'red' ? 'black-win' : 'red-win', 'resign');
   }
 
   function handleDrawOffer(user: ChessUser, ws: ChessSendable, msg: Record<string, unknown>): void {
-    const roomId = deps.getMemberRoomId(user.id);
-    if (roomId === undefined) return sendError(ws, 'no-game', '当前没有进行中的对局');
-    const slot = slots.get(roomId);
-    const game = gamePlaying(slot);
-    if (!slot || !game || msg.gameId !== game.gameId) {
-      return sendError(ws, 'no-game', '当前没有进行中的对局');
-    }
-    const side = playerOf(game, user.id);
+    const located = locateGame(user, ws, msg, {
+      requirePlaying: true,
+      missingMessage: '当前没有进行中的对局',
+    });
+    if (!located.ok) return;
+    const { roomId, game, side } = located;
     if (!side) return sendError(ws, 'not-player', '你不是本局棋手');
     const opponent = opponentOf(game, side);
     // 对方已有未决求和时再收到我方求和 = 双方都同意 → 直接判和
@@ -623,14 +650,12 @@ export function createChessGameManager(deps: ChessGameManagerDeps) {
   }
 
   function handleDrawRespond(user: ChessUser, ws: ChessSendable, msg: Record<string, unknown>): void {
-    const roomId = deps.getMemberRoomId(user.id);
-    if (roomId === undefined) return sendError(ws, 'no-game', '当前没有进行中的对局');
-    const slot = slots.get(roomId);
-    const game = gamePlaying(slot);
-    if (!slot || !game || msg.gameId !== game.gameId) {
-      return sendError(ws, 'no-game', '当前没有进行中的对局');
-    }
-    const side = playerOf(game, user.id);
+    const located = locateGame(user, ws, msg, {
+      requirePlaying: true,
+      missingMessage: '当前没有进行中的对局',
+    });
+    if (!located.ok) return;
+    const { roomId, game, side } = located;
     if (!side) return sendError(ws, 'not-player', '你不是本局棋手');
     if (game.drawOfferBy === undefined || game.drawOfferBy === user.id) {
       return sendError(ws, 'bad-message', '没有待应答的求和');
@@ -646,14 +671,12 @@ export function createChessGameManager(deps: ChessGameManagerDeps) {
 
   /** 悔棋请求：撤回自己最近一着（对方已应手时连应手一并撤回），需对方同意 */
   function handleUndoOffer(user: ChessUser, ws: ChessSendable, msg: Record<string, unknown>): void {
-    const roomId = deps.getMemberRoomId(user.id);
-    if (roomId === undefined) return sendError(ws, 'no-game', '当前没有进行中的对局');
-    const slot = slots.get(roomId);
-    const game = gamePlaying(slot);
-    if (!slot || !game || msg.gameId !== game.gameId) {
-      return sendError(ws, 'no-game', '当前没有进行中的对局');
-    }
-    const side = playerOf(game, user.id);
+    const located = locateGame(user, ws, msg, {
+      requirePlaying: true,
+      missingMessage: '当前没有进行中的对局',
+    });
+    if (!located.ok) return;
+    const { game, side } = located;
     if (!side) return sendError(ws, 'not-player', '你不是本局棋手');
     const ownMoves = game.state.moves.filter((m) => pieceSide(m.piece) === side).length;
     if (ownMoves === 0) return sendError(ws, 'bad-message', '你还没有走出可悔的棋');
@@ -668,14 +691,12 @@ export function createChessGameManager(deps: ChessGameManagerDeps) {
   }
 
   function handleUndoRespond(user: ChessUser, ws: ChessSendable, msg: Record<string, unknown>): void {
-    const roomId = deps.getMemberRoomId(user.id);
-    if (roomId === undefined) return sendError(ws, 'no-game', '当前没有进行中的对局');
-    const slot = slots.get(roomId);
-    const game = gamePlaying(slot);
-    if (!slot || !game || msg.gameId !== game.gameId) {
-      return sendError(ws, 'no-game', '当前没有进行中的对局');
-    }
-    const side = playerOf(game, user.id);
+    const located = locateGame(user, ws, msg, {
+      requirePlaying: true,
+      missingMessage: '当前没有进行中的对局',
+    });
+    if (!located.ok) return;
+    const { roomId, game, side } = located;
     if (!side) return sendError(ws, 'not-player', '你不是本局棋手');
     if (game.undoOfferBy === undefined || game.undoOfferBy === user.id) {
       return sendError(ws, 'bad-message', '没有待应答的悔棋请求');
@@ -717,13 +738,12 @@ export function createChessGameManager(deps: ChessGameManagerDeps) {
    * 第二人点击（game-rematch-respond 同义）→ 立即开局，无接受/拒绝步骤。
    */
   function handleRematch(user: ChessUser, ws: ChessSendable, msg: Record<string, unknown>): void {
-    const roomId = deps.getMemberRoomId(user.id);
-    if (roomId === undefined) return sendError(ws, 'no-game', '当前没有已结束的对局');
-    const slot = slots.get(roomId);
-    const game = slot?.game;
-    if (!slot || !game || msg.gameId !== game.gameId) {
-      return sendError(ws, 'no-game', '当前没有已结束的对局');
-    }
+    const located = locateGame(user, ws, msg, {
+      requirePlaying: false,
+      missingMessage: '当前没有已结束的对局',
+    });
+    if (!located.ok) return;
+    const { roomId, slot, game } = located;
     if (gamePlaying(slot)) return sendError(ws, 'bad-message', '对局还在进行中');
     const side = playerOf(game, user.id);
     if (!side) return sendError(ws, 'not-player', '你不是本局棋手');
@@ -755,14 +775,12 @@ export function createChessGameManager(deps: ChessGameManagerDeps) {
    * 白送这段暂停时间。重复请求与已暂停时的再暂停都静默忽略（幂等）。
    */
   function handlePause(user: ChessUser, ws: ChessSendable, msg: Record<string, unknown>): void {
-    const roomId = deps.getMemberRoomId(user.id);
-    if (roomId === undefined) return sendError(ws, 'no-game', '当前没有进行中的对局');
-    const slot = slots.get(roomId);
-    const game = gamePlaying(slot);
-    if (!slot || !game || msg.gameId !== game.gameId) {
-      return sendError(ws, 'no-game', '当前没有进行中的对局');
-    }
-    const side = playerOf(game, user.id);
+    const located = locateGame(user, ws, msg, {
+      requirePlaying: true,
+      missingMessage: '当前没有进行中的对局',
+    });
+    if (!located.ok) return;
+    const { roomId, game, side } = located;
     if (!side) return sendError(ws, 'not-player', '你不是本局棋手');
     if (game.clock.paused) return; // 已暂停：静默忽略
     const turn = game.state.turn;
@@ -785,14 +803,12 @@ export function createChessGameManager(deps: ChessGameManagerDeps) {
 
   /** 继续：暂停期间任一棋手可触发；为轮到方重新起表（单步上限重新计满） */
   function handleResume(user: ChessUser, ws: ChessSendable, msg: Record<string, unknown>): void {
-    const roomId = deps.getMemberRoomId(user.id);
-    if (roomId === undefined) return sendError(ws, 'no-game', '当前没有进行中的对局');
-    const slot = slots.get(roomId);
-    const game = gamePlaying(slot);
-    if (!slot || !game || msg.gameId !== game.gameId) {
-      return sendError(ws, 'no-game', '当前没有进行中的对局');
-    }
-    const side = playerOf(game, user.id);
+    const located = locateGame(user, ws, msg, {
+      requirePlaying: true,
+      missingMessage: '当前没有进行中的对局',
+    });
+    if (!located.ok) return;
+    const { roomId, game, side } = located;
     if (!side) return sendError(ws, 'not-player', '你不是本局棋手');
     if (!game.clock.paused) return; // 未在暂停：静默忽略
     game.clock.paused = false;
