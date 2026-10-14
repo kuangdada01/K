@@ -248,6 +248,13 @@
   .chatPanel {
     margin-bottom: calc(150px + var(--safe-area-bottom));
   }
+
+  /* 房间内隐藏了底部胶囊导航（App 打在 .app-layout 上的标记类）时，
+     聊天面板底部留白同步收窄（控制栏 ~58px + 下边距 14px + 呼吸位；
+     拆分迁移 fe4b019 时曾漏掉这条，别再丢） */
+  :global(.mobile-nav-hidden) .chatPanel {
+    margin-bottom: calc(100px + var(--safe-area-bottom));
+  }
 }
 
 @media (max-width: 640px) {

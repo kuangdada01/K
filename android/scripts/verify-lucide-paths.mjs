@@ -54,6 +54,10 @@ const ICONS = {
   LUCIDE_USER: 'user',
   //  发布页「从相册选一张图作为封面」那个按钮（Web 端 VideoCoverEditor 用的是同一个 Image）
   LUCIDE_IMAGE: 'image',
+  //  语音房共享舞台「全屏」按钮（Web 端 VoiceShareStage 的 Maximize，M6.20）
+  LUCIDE_MAXIMIZE: 'maximize',
+  //  语音房共享舞台「小窗」按钮（Web 端 VoiceShareStage 的 PictureInPicture2，M6.20）
+  LUCIDE_PICTURE_IN_PICTURE_2: 'picture-in-picture-2',
 };
 
 /** 从 Kotlin 源码里取出 `internal val NAME = listOf( "…", … )` 的字符串列表 */

@@ -79,15 +79,19 @@ def main():
         c.close(); return 1
 
     print("\n=== [远端] 备份 + 解压 ===")
-    script = r"""set -e
+    # ★ 解压的包路径必须与实际上传的 remote_pkg 一致。这里曾硬编码 /tmp/k-client-only.tar.gz：
+    #   上传的是带 pid 的名字 → 首次使用必然"tar: 找不到文件"而失败；更糟的是，
+    #   若远端恰好残留同一个旧包，脚本会**静默解压旧包**却照常报成功。
+    #   用变量插值消除两种事故（remote_pkg 只含数字 pid，无 shell 特殊字符）。
+    script = f"""set -e
 cd /var/www/k/client
 BK=dist.bak-$(date +%Y%m%d_%H%M%S)
 cp -r dist "$BK"
 echo "backup -> $BK"
 # 只保留最近 3 个 dist.bak 备份，删除更旧的（防备份无限累积占满磁盘）
 ls -d dist.bak-* | sort | head -n -3 | xargs -r rm -rf
-tar -xzf /tmp/k-client-only.tar.gz -C /var/www/k/client
-rm /tmp/k-client-only.tar.gz
+tar -xzf {remote_pkg} -C /var/www/k/client
+rm {remote_pkg}
 echo CLIENT_DEPLOY_DONE
 """
     chan = c.get_transport().open_session()

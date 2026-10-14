@@ -13,14 +13,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -49,6 +51,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
@@ -57,19 +60,28 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import top.kuangdada.k.core.data.VoiceRepository
 import top.kuangdada.k.core.data.model.VoiceRoom
+import kotlin.math.roundToInt
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import top.kuangdada.k.core.data.ApiResult
@@ -116,6 +128,9 @@ import top.kuangdada.k.nativeapp.voice.rememberChatReader
  * 闭麦混在里面只像"没点亮、暂时不可用"，而它实际是"我现在说不出话"。
  * 麦位卡上的闭麦状态点用 `danger`，按钮与它现在同色 —— 两处说的是同一件事。
  */
+// 键盘跟随滚动（聊天输入行贴键盘）用到的 `WindowInsets.ime` 仍标着 @ExperimentalLayoutApi ——
+// 按本工程惯例函数级 opt-in（同 TaggedText 的用法），不为它改全局编译参数。
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun VoiceRoomScreen(
     voice: VoiceRepository,
@@ -139,8 +154,6 @@ fun VoiceRoomScreen(
 ) {
     val c = KTheme.colors
     val context = androidx.compose.ui.platform.LocalContext.current
-    // 提示走全局主题化 Toast（Shell 层的 KToastHost），替代系统黑框样式
-    val toast = LocalToast.current
     val state by controller.state.collectAsState()
     /**
      * 对局象棋的状态（单独一个 StateFlow，不进 [state]）。
@@ -225,30 +238,37 @@ fun VoiceRoomScreen(
      *
      * 顺序不能反：宿主 `onCreate/onResume` 里就 `addView`，而 `addView` 对"已有父"的 View 会抛
      * `IllegalStateException`。这里 detach 之后渲染器处于"无父"状态，谁先拿到都不会打架。
+     *
+     * @param enterPip 顺带进小窗（画中画）。**由宿主自己执行**（M6.18）：系统要求
+     *   "调用 `enterPictureInPictureMode` 的 Activity 必须前台且 resumed"—— 在房间页对
+     *   MainActivity 调用时，前台已经/即将是宿主，必然失败；而且小窗显示的是"整个 Activity
+     *   当前的样子"，房间页直接进只会看到可滚动的一整页（共享画面多半不在可视区）。
      */
-    fun enterFullscreen() {
+    fun enterFullscreen(enterPip: Boolean = false) {
         if (state.remoteVideoTrack == null) return
         ShareRenderHolder.detach()
         shareFullscreen = true
         val intent = android.content.Intent(context, top.kuangdada.k.nativeapp.ShareFullscreenActivity::class.java)
             .putExtra(top.kuangdada.k.nativeapp.ShareFullscreenActivity.EXTRA_SHARER, sharerName)
+            .putExtra(top.kuangdada.k.nativeapp.ShareFullscreenActivity.EXTRA_ENTER_PIP, enterPip)
         context.findActivity()?.startActivity(intent)
     }
 
     /**
-     * 退全屏回来后把画面接回内联槽位。
+     * 宿主（全屏 / 小窗）**真正退场后**把画面接回内联槽位。
      *
-     * 为什么必须监听生命周期而不是靠组合重跑：全屏期间房间页**一直活着**（只是被压住），
-     * 不会重新进入组合 —— 只靠 `AndroidView.update` 是接不回来的。
-     * `onResume` 一定晚于全屏宿主的 `onPause`（那里已经 `detach`），所以这里不会撞到"已有父"。
+     * 判据用 [ShareRenderHolder.hostAlive]（宿主 onStart/onStop 维护），**不是** MainActivity 的
+     * ON_RESUME —— M6.18 真机实测的坑：**PiP 是悬浮窗，系统会把宿主下面的 MainActivity
+     * 恢复前台**，房间页一收到 ON_RESUME 就复位 `shareFullscreen`，内联槽位随即把渲染器
+     * 从小窗里**抢回来**（症状：小窗是黑的、房间页内联槽位却在播）。
+     * 而宿主的 onStop 只在**真正退场**时到达（PiP 期间它 paused 但 started，系统不回调
+     * onStop），所以这个标记能准确区分"退全屏回来了"与"小窗还开着"。
+     *
+     * 时序：宿主退场 `onPause`（detach）→ `onStop`（标记翻 false）→ 房间页本效果重组
+     * `shareFullscreen=false` → 内联槽位 attach。**detach 一定先于 attach**，不会撞"已有父"。
      */
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) shareFullscreen = false
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    LaunchedEffect(ShareRenderHolder.hostAlive) {
+        if (!ShareRenderHolder.hostAlive) shareFullscreen = false
     }
 
     /**
@@ -356,8 +376,11 @@ fun VoiceRoomScreen(
     // （服务端还有"同 IP 并发连接上限"，泄漏几条就再也进不了房）
     DisposableEffect(Unit) {
         onDispose {
-            // 全屏宿主还活着时**不许**销毁渲染器（那是它的画面）；那种情况下只退房，
-            // 宿主会收到 requestClose 自己退场，渲染器留到下一场共享重建
+            // 全屏/小窗宿主还活着时**不许**销毁渲染器（那是它的画面），而且必须先请它退场：
+            // **小窗悬浮时用户能点到房间页的"离开房间"**（全屏铺满时点不到）—— 不通知的话
+            // 宿主会留在 PiP 里显示最后几帧，房间却已经退了，没人再管它。
+            // 宿主不在听（没进过全屏/小窗）时是空操作。
+            if (ShareRenderHolder.hostAlive) ShareRenderHolder.requestClose("离开房间")
             if (!shareFullscreen) ShareRenderHolder.release()
             controller.leave("离开房间页面")
         }
@@ -366,37 +389,6 @@ fun VoiceRoomScreen(
     fun leaveRoom() {
         controller.leave("用户退出房间")
         onBack()
-    }
-
-    /**
-     * 进小窗观看（原生画中画）。
-     *
-     * 与 Web 端「小窗模式」同语义：画面浮在桌面上，可以边看共享边用别的 App。
-     * 用**系统 PiP**而不是应用内浮窗：应用内浮窗一退出房间页就没了，
-     * 而"小窗"的价值恰恰在于能离开这个页面。
-     *
-     * 三个必须处理的点：
-     *  1. `supportsPictureInPicture` 与 `resizeableActivity` 必须在清单里开
-     *     （漏了不报错，只是 `enterPictureInPictureMode` 静默返回 false）；
-     *  2. **比例**取共享画面的真实比例（`setAspectRatio`），否则竖屏共享在小窗里会留大片黑边；
-     *  3. 失败时给一句人话（部分设备/系统设置禁用了 PiP），而不是点了没反应。
-     */
-    fun enterPip() {
-        val activity = context as? android.app.Activity ?: return
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) {
-            toast.show("系统版本不支持小窗")
-            return
-        }
-        val ratio = controller.remoteVideoAspect().takeIf { it > 0.05f } ?: (16f / 9f)
-        val ok = runCatching {
-            val params = android.app.PictureInPictureParams.Builder()
-                .setAspectRatio(android.util.Rational((ratio * 1000).toInt(), 1000))
-                .build()
-            activity.enterPictureInPictureMode(params)
-        }.getOrDefault(false)
-        if (!ok) {
-            toast.show("当前无法进入小窗（系统可能已禁用）")
-        }
     }
 
     Box(
@@ -489,11 +481,68 @@ fun VoiceRoomScreen(
             val scrollState = rememberScrollState()
             // 键盘收起器：点房间内容空白处把键盘收起（键盘挡着聊天输入）
             val keyboard = LocalSoftwareKeyboardController.current
+
+            /*
+             * 键盘跟随滚动（M6.21）：让聊天输入行**始终贴在键盘上沿**。
+             *
+             * 为什么不能在"聚焦"那一刻只滚一次（第一版）：点输入框时键盘**还没弹出** ——
+             * 那次 `scrollTo(maxValue)` 算的是"没有键盘时的底部"，输入行停在屏幕底缘；
+             * 键盘随后弹出（异步、带 ~200ms 动画）把它原样盖住 ——
+             * 用户实测"唤醒输入法看不到打了什么字"就是这条时序。
+             *
+             * 为什么底部补偿不能直接上 `imePadding()`（第二版）：滚动列的底**不在屏幕底** ——
+             * 它下面还有"控制栏 + 系统导航条"那一段（键盘弹出时控制栏被键盘盖住、只剩空白）。
+             * `imePadding()` 把**整键盘高**都补进内容底部，滚到底时输入行就停在"键盘顶再往上
+             * 这么一段"的位置 —— 用户看到的"输入框和键盘之间空隙过大"就是它。
+             *
+             * 为什么还要再扣"输入框 → 内容底"的尾巴（第三版）：滚到底对齐的是**内容底**，
+             * 而输入框之下还有：聊天卡内底部留白（KSpacing.md，见 RoomChatPanel 的
+             * `.padding(KSpacing.md)`）+ 卡片与末尾 Spacer 的间距（滚动列的 spacedBy，KSpacing.lg）
+             * + 末尾 Spacer（KSpacing.sm）—— 这三段会把输入框从键盘顶"顶上去"。
+             * 2026-10-14 真机像素实测（截图逐行扫描）：tail = 16 + 20 + 12 = 48dp，正好等于
+             * 当时残余的间隙宽度；⚠️ **改动这三处留白时必须同步改下面这个表达式**，
+             * 否则输入框又会离键盘多一条缝。
+             *
+             * 第四版校准（用户实测"太过了"）：纯按 tail 扣净后输入框会**贴死/压过**键盘顶，
+             * 用户要的是"**输入框的下边框露在键盘上方、之间留一点点**"。所以再返还
+             * [COMPOSER_LIFT_DP]：输入框底停在键盘顶上方约 6dp —— 下边框完整可见、
+             * 又几乎没有空白感。
+             *
+             * 补偿公式 = max(0, 键盘高 − 滚动列底到窗口底的距离 − tail + 6dp)。
+             * 键盘弹出不改变滚动列底到窗口底的距离（窗口不 resize），量一次即可。
+             *
+             * 跟随：键盘打开期间持续观察 `scrollState.maxValue`（底部补偿随键盘动画逐帧变化），
+             * 逐帧 `scrollTo` —— 输入行贴着键盘上沿滑动；键盘收起即停。
+             * 只在 maxValue 变化时动作，**不会**把正在手动翻聊天记录的用户拽回底部。
+             */
+            val density = LocalDensity.current
+            val windowHeightPx = LocalWindowInfo.current.containerSize.height
+            // 滚动列底 → 窗口底 的距离（= 控制栏 + 导航条；键盘弹出不会改变它）
+            var bottomChromePx by remember { mutableIntStateOf(0) }
+            // 输入框底 → 滚动内容底 的"尾巴"（三段设计常量，见上面的注释；改动要同步）
+            val composerTailPx = with(density) { (KSpacing.md + KSpacing.lg + KSpacing.sm).roundToPx() }
+            // 返还量：让输入框（含下边框）停在键盘顶**上方一点**，而不是贴死（见第四版校准）
+            val composerLiftPx = with(density) { COMPOSER_LIFT_DP.dp.roundToPx() }
+            val imePx = WindowInsets.ime.getBottom(density)
+            val keyboardOverlapPx =
+                (imePx - bottomChromePx - composerTailPx + composerLiftPx).coerceAtLeast(0)
+            val keyboardOpen = keyboardOverlapPx > 0
+            LaunchedEffect(keyboardOpen) {
+                if (!keyboardOpen) return@LaunchedEffect
+                snapshotFlow { scrollState.maxValue }.collect { scrollState.scrollTo(it) }
+            }
             Column(
                 modifier = Modifier
                     .weight(1f)
+                    // 实测"滚动列底 → 窗口底"的距离（初帧为 0，首轮布局后即为真值）
+                    .onGloballyPositioned { coords ->
+                        val bottomInWindow = coords.positionInWindow().y + coords.size.height
+                        bottomChromePx = (windowHeightPx - bottomInWindow).roundToInt().coerceAtLeast(0)
+                    }
                     .verticalScroll(scrollState)
-                    .imePadding()
+                    // 底部补偿 = "键盘侵占滚动列的部分"（见上面的长注释；全额 imePadding()
+                    // 会把控制栏 + 导航条那段也补出来，滚到底就多一条空白）
+                    .padding(bottom = with(density) { keyboardOverlapPx.toDp() })
                     // 点房间内容空白处收起键盘
                     .pointerInput(Unit) { detectTapGestures { keyboard?.hide() } }
                     .padding(horizontal = KSpacing.md),
@@ -584,13 +633,17 @@ fun VoiceRoomScreen(
                 if (state.remoteVideoTrack != null) {
                     Column(verticalArrangement = Arrangement.spacedBy(KSpacing.xs)) {
                         /**
-                         * 标题行 + 三个观看控制按钮（声音 / 全屏 / 小窗，语义与 Web 端舞台控制一致）。
+                         * 标题行 + 「共享声音」开关（M6.20：全屏 / 小窗已移进画面右上角，见下）。
                          *
-                         * **按钮必须在画面矩形之外**：`SurfaceView` 会在窗口上挖洞，盖在它上面的
-                         * Compose 元素会**根本画不出来**（这不是推测：本工程 `styles.xml` 里为
-                         * ExoPlayer 换 `texture_view` 时已经实测记录过同一条）。原来那三个图标画在
-                         * 画面框的右上角，正好落在洞里 —— 点击有反应但看不见。移到标题行右侧后
-                         * 它们才真的可见；三个按钮的图标、active 语义、点击行为一字未改。
+                         * 声音开关**继续留在画面矩形之外**：`SurfaceView` 会在窗口上挖洞，
+                         * 洞区域里的普通 Compose 元素会被"剪掉"、根本画不出来（本工程两次实测：
+                         * ExoPlayer 的进度条/遮罩、以及曾经画在画面右上角的那排按钮"能点但看不见"）。
+                         * 画面里的两个按钮用 **Popup（独立子窗口）** 绕开了这个限制 —— 见画面框处的注释；
+                         * 声音开关是低频操作，放在标题行更省画面像素，不动它。
+                         *
+                         * （M6.18 那次"把按钮移进画面"的尝试因真机"画面显示不全"被回退 ——
+                         *  后来查明那是**进房黑带**这个独立 bug 背的锅（与 Popup 无关，见
+                         *  M6.19 的黑带修复），M6.20 复查通过后重新启用。）
                          */
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -610,25 +663,6 @@ fun VoiceRoomScreen(
                                         onClick = { controller.toggleShareAudio() },
                                     )
                                 }
-                                ShareOverlayButton(
-                                    icon = GlyphKind.Maximize,
-                                    active = false,
-                                    label = "全屏观看",
-                                    onClick = { enterFullscreen() },
-                                )
-                                ShareOverlayButton(
-                                    icon = GlyphKind.Monitor,
-                                    active = false,
-                                    label = "小窗观看",
-                                    onClick = {
-                                        // **先进全屏宿主再进小窗**：系统小窗显示的是"整个 Activity
-                                        // 当前的样子"，而房间页是可滚动的一整页 —— 不切视图的话，
-                                        // 共享画面可能根本不在可视区，小窗里就看不到画面。
-                                        // 全屏宿主同样支持 PiP（它就是一个普通的 Activity）。
-                                        enterFullscreen()
-                                        enterPip()
-                                    },
-                                )
                             }
                         }
                         Text(
@@ -670,6 +704,34 @@ fun VoiceRoomScreen(
                                 active = !shareFullscreen,
                                 modifier = Modifier.fillMaxSize(),
                             )
+                            /**
+                             * 画面**里面**右上角的「全屏 / 小窗」（M6.20，用户要求与 Web 端一致：
+                             * Web 的 `.controls` 就是 absolute `top:10px right:10px`）。
+                             *
+                             * ⚠️ 为什么必须是 **Popup（独立子窗口）** 而不是普通 Compose 叠加：
+                             * 画面框里是 `SurfaceViewRenderer`（SurfaceView）—— 它在窗口上"挖洞"，
+                             * 洞区域内的窗口绘制（Compose 或原生 View）会被**剪掉**（本工程两次实测：
+                             * ExoPlayer 的进度条/遮罩、"能点但看不见"的旧版这排按钮）。
+                             * Popup 是**独立窗口**、合成在宿主窗口之上（与 Dialog/Toast 能盖住视频
+                             * 同一个机制），不受洞影响 —— 因此不必把渲染器换成 TextureView
+                             *（保住 Surface 交接、不引入额外的 GPU 拷贝与性能风险）。
+                             *
+                             * 只在画面确实在**本页内联槽位**时显示：全屏 / 小窗期间画面在宿主
+                             * 手里，若还画着，就会浮在房间页上空空如也的画面框上。
+                             */
+                            if (!shareFullscreen) {
+                                ShareInlineControlsPopup(
+                                    onFullscreen = { enterFullscreen() },
+                                    onPip = {
+                                        // **开宿主、由宿主自己缩进小窗**（M6.18）：系统要求
+                                        // `enterPictureInPictureMode` 的调用者是前台且 resumed 的
+                                        // Activity —— 房间里对 MainActivity 调（旧实现）必然失败，
+                                        // 而且小窗显示的是"整个 Activity 当前的样子"：宿主窗口里
+                                        // 才只有共享画面（房间页直接进只会看到一整页可滚动 UI）。
+                                        enterFullscreen(enterPip = true)
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -687,8 +749,9 @@ fun VoiceRoomScreen(
                     messages = state.chat,
                     input = input,
                     onInputChange = { input = it },
-                    // 输入框聚焦（键盘弹出）时滚到内容底部：否则键盘把聊天输入挡住，
-                    // 用户看不见自己打的字（用户实测"输入框固定、看不见打了什么"）
+                    // 输入框聚焦时先把输入行**带进视野**（平滑滚到底部）。
+                    // 这只是"第一下"：聚焦那一刻键盘还没弹出，滚到的是"没有键盘时的底部"，
+                    // 键盘真正弹出后的持续跟随由上面的 `imeVisible` 逻辑接管。
                     onInputFocused = {
                         scope.launch { scrollState.animateScrollTo(scrollState.maxValue) }
                     },
@@ -1411,14 +1474,75 @@ private fun VoiceControlButton(
 }
 
 /**
- * 共享画面的三个观看控制钮（声音 / 全屏 / 小窗）。
+ * 共享画面右上角的「全屏 / 小窗」按钮组（M6.20，用户要求与 Web 端舞台一致：
+ * Web 的 `.controls` 就是 absolute `top:10px right:10px`、间距 8px、34px 圆钮）。
+ *
+ * ⚠️ 为什么是 **Popup（独立子窗口）** 而不是普通 Compose 叠加：画面框里是
+ * `SurfaceViewRenderer`（SurfaceView）—— 它在窗口上"挖洞"，洞区域内的窗口绘制
+ * 会被**剪掉**（本工程两次实测：ExoPlayer 的进度条/遮罩、M6.15 时画在这里的旧按钮
+ * "能点但看不见"）。Popup 是**独立窗口**、合成在宿主窗口之上（与 Dialog/Toast
+ * 能盖住视频是同一个机制），不受洞影响 —— 于是不必把渲染器换成 TextureView，
+ * 保住了 Surface 交接与渲染性能。
+ *
+ * 位置：用 [PopupPositionProvider] 锚在**画面框**（声明它的那个 composable）的右上角 ——
+ * 10dp 内缩、按内容宽度右对齐（`anchorBounds` 与返回值都是**窗口坐标系像素**）。
+ * `focusable = false`：不抢输入焦点（不打断聊天输入/键盘），按钮之外的触摸照常
+ * 落到下面的画面框（点画面 = 全屏）。
+ *
+ * @param onFullscreen 点「全屏」
+ * @param onPip 点「小窗」
+ */
+@Composable
+private fun ShareInlineControlsPopup(
+    onFullscreen: () -> Unit,
+    onPip: () -> Unit,
+) {
+    val padPx = with(LocalDensity.current) { 10.dp.roundToPx() }
+    Popup(
+        popupPositionProvider = remember(padPx) {
+            object : PopupPositionProvider {
+                override fun calculatePosition(
+                    anchorBounds: IntRect,
+                    windowSize: IntSize,
+                    layoutDirection: LayoutDirection,
+                    popupContentSize: IntSize,
+                ): IntOffset = IntOffset(
+                    x = anchorBounds.right - popupContentSize.width - padPx,
+                    y = anchorBounds.top + padPx,
+                )
+            }
+        },
+        properties = PopupProperties(focusable = false),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ShareOverlayButton(
+                icon = GlyphKind.Maximize,
+                active = false,
+                label = "全屏观看",
+                onClick = onFullscreen,
+            )
+            ShareOverlayButton(
+                icon = GlyphKind.PictureInPicture,
+                active = false,
+                label = "小窗观看",
+                onClick = onPip,
+            )
+        }
+    }
+}
+
+/**
+ * 共享观看的控制圆钮（声音 / 全屏 / 小窗三类共用）。
  *
  * 形态对齐 Web 端舞台控件：**半透明黑底圆钮 + 白图标** —— 白图标在任何底色上都读得出来，
  * 半透明黑底则让圆钮在浅色主题下也有明确的边界（深色主题下基本只剩图标本身）。
  *
- * 位置经过一次搬迁（M6.15）：原来浮在**画面框的右上角**，而 `SurfaceView` 会在窗口上挖洞
- * ——盖在洞里的 Compose 元素根本画不出来，那三个钮其实是"能点但看不见"。
- * 现在它们排在共享块的标题行右侧（画面矩形之外），语义与点击行为一字未改。
+ * 位置变迁（都记在这里，别再翻回去）：
+ *  · M6.15：从画面框右上角 → 共享块标题行右侧（画面矩形之外）—— 当时画面内是
+ *    SurfaceView 的"洞"，普通 Compose 元素画不出来（那排钮"能点但看不见"）；
+ *  · M6.20：全屏 / 小窗**回到画面里**（用户要求与 Web 端一致）—— 关键是改用
+ *    **Popup 子窗口**承载（见 [ShareInlineControlsPopup]），不再受洞限制；
+ *    声音开关留在标题行（低频操作，且它要在两种宿主状态下都常驻）。
  *
  * @param active 高亮态（共享声音开着 = 高亮），用 accent 底区分"当前是开还是关"
  */
@@ -1464,6 +1588,15 @@ private fun phaseText(phase: VoiceRoomController.Phase): String = when (phase) {
  * 单卡 ≈ 65dp（头像 48dp + 两侧各 8dp）—— 再挤就该缩头像了。
  */
 private const val SEATS_PER_ROW = 5
+
+/**
+ * 键盘弹出时，输入框（含下边框）停在键盘顶**上方**多少 dp。
+ *
+ * 不是 0 —— 纯按 tail 扣净后输入框会**贴死/压过**键盘顶（用户实测反馈"太过了"），
+ * 用户要的是"**下边框露在键盘上方、之间留一点点**"。收敛轨迹（2026-10-14 实测）：
+ * 6dp 仍嫌贴（"再退一点"）→ 12dp。如需再调，只动这一个数。
+ */
+private const val COMPOSER_LIFT_DP = 12
 
 /**
  * **有画面在播时保持屏幕常亮**（`View.keepScreenOn`）。

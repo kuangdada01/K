@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
@@ -124,6 +125,24 @@ fun KNavCapsule(
                 ambientColor = KNavShadow,
                 spotColor = KNavShadow,
             )
+            /**
+             * 一圈 halo（2026-10-14，用户要求）：胶囊底与页底是同色玻璃，边界本来只靠阴影 ——
+             * 而上面那个 elevation 阴影是**有光源**的：浅色主题下太弱、近白底上读不出边界；
+             * 深色主题下黑阴影在近黑底（#121212）上直接不可见。
+             * 这里补一圈 `dropShadow`：它**无光源、与内容位置无关**（见 API 文档），
+             * offset 默认 Zero → 四周均匀的"一圈"；颜色随主题反相
+             * （浅色黑 0.1 / 深色白 0.1，与 Web 端同一量级），
+             * 让胶囊在白/深两种页面上都能"浮"出边界。
+             * 只管边界光影；下坠立体感仍由上面 elevation 阴影承担，两者叠加。
+             */
+            .dropShadow(shape) {
+                radius = 16.dp.toPx()
+                spread = 0f
+                color = if (c.isLight) Color.Black else Color.White
+                // 0.1 → 0.07 → 0.05（2026-10-14 真机两轮反馈："有效果，把最深的颜色改弱一点"）：
+                // 减弱贴边峰值浓度、保留一圈可读性；0.05 是用户指定的第二轮终值
+                alpha = 0.05f
+            }
             .clip(shape)
             // 调用方的背景（纯色）画的是节点矩形，必须在 clip 之内才不会露出方角，
             // 之后的 clip 裁不到它 —— 链上反着写，胶囊四角会露出方形玻璃角（见类注释）

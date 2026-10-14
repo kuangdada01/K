@@ -78,3 +78,31 @@ internal val LUCIDE_IMAGE = listOf(
     "CIRCLE 9 9 2",
     "m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21",
 )
+
+/**
+ * lucide `maximize`（语音房共享舞台「全屏」按钮，M6.20 —— 与 Web 端 `VoiceShareStage`
+ * 的 `Maximize` 同款）。
+ *
+ * ⚠️ 是 `maximize`（**四角的圆角括号**，四条各自独立的角），**不是** `maximize-2`
+ * （斜向四角箭头）—— 两者在 lucide 里是两个形状完全不同的图标。
+ * `GlyphKind.Maximize` 此前的手绘实现画的是 `maximize-2` 的形状，M6.20 按
+ * "与 Web 端同款"换成这个；视频播放器的全屏按钮共用同一 GlyphKind，一并统一。
+ */
+internal val LUCIDE_MAXIMIZE = listOf(
+    "M8 3H5a2 2 0 0 0-2 2v3",
+    "M21 8V5a2 2 0 0 0-2-2h-3",
+    "M3 16v3a2 2 0 0 0 2 2h3",
+    "M16 21h3a2 2 0 0 0 2-2v-3",
+)
+
+/**
+ * lucide `picture-in-picture-2`（语音房共享舞台「小窗」按钮，M6.20 —— 与 Web 端
+ * `VoiceShareStage` 的 `PictureInPicture2` 同款；此前是手绘的 `Monitor` 显示器形状）。
+ *
+ * 非 path 元素：第二条是画中画的内嵌小矩形 `<rect width=10 height=7 x=12 y=13 rx=2>`，
+ * 用 `RECT` 标记表示（与 `LUCIDE_IMAGE` 同一套约定）。
+ */
+internal val LUCIDE_PICTURE_IN_PICTURE_2 = listOf(
+    "M21 9V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10c0 1.1.9 2 2 2h4",
+    "RECT 12 13 10 7 2",
+)

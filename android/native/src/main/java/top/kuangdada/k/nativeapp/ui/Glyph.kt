@@ -38,7 +38,7 @@ enum class GlyphKind {
     Home, Chat, Book, Voice, User, Image, Bookmark, Repost, Share, Search, Mail,
     ChevronLeft, Menu, Sun, More, Plus, Close,
     Mic, Volume, Monitor, LogOut, Dot, Sliders, Megaphone,
-    Shield, ChevronRight, Maximize, Check,
+    Shield, ChevronRight, Maximize, PictureInPicture, Check,
 }
 
 /**
@@ -461,24 +461,18 @@ fun Glyph(
                 }
                 drawPath(shield, tint, style = stroke)
             }
-            // lucide maximize-2（四角向外：全屏/展开）
-            // 官方是四条折线：M15 3h6v6 / M9 21H3v-6 / M21 3l-7 7 / M3 21l7-7
-            GlyphKind.Maximize -> {
-                val tl = Path().apply {
-                    moveTo(o(15f, 3f).x, o(15f, 3f).y)
-                    lineTo(o(21f, 3f).x, o(21f, 3f).y)
-                    lineTo(o(21f, 9f).x, o(21f, 9f).y)
-                }
-                val br = Path().apply {
-                    moveTo(o(9f, 21f).x, o(9f, 21f).y)
-                    lineTo(o(3f, 21f).x, o(3f, 21f).y)
-                    lineTo(o(3f, 15f).x, o(3f, 15f).y)
-                }
-                drawPath(tl, tint, style = stroke)
-                drawPath(br, tint, style = stroke)
-                drawLine(tint, o(21f, 3f), o(14f, 10f), stroke.width, StrokeCap.Round)
-                drawLine(tint, o(3f, 21f), o(10f, 14f), stroke.width, StrokeCap.Round)
-            }
+            /**
+             * lucide `maximize`（四角圆角括号）：共享舞台「全屏」按钮 + 视频播放器的全屏按钮。
+             * 数据原样搬 Web 端 lucide-react（M6.20，与 Web 端 `VoiceShareStage` 的 `Maximize` 同款；
+             * 此前这里的手绘画的是另一个图标 `maximize-2` 的形状）。
+             */
+            GlyphKind.Maximize -> drawLucide(LUCIDE_MAXIMIZE, tint, s)
+
+            /**
+             * lucide `picture-in-picture-2`：共享舞台「小窗」按钮（M6.20，与 Web 端
+             * `VoiceShareStage` 的 `PictureInPicture2` 同款；此前是手绘的显示器形状）。
+             */
+            GlyphKind.PictureInPicture -> drawLucide(LUCIDE_PICTURE_IN_PICTURE_2, tint, s)
         }
     }
 }

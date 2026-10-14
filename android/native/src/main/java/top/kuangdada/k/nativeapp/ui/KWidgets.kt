@@ -536,20 +536,74 @@ fun BookCard(
             overflow = TextOverflow.Ellipsis,
         )
         Spacer(Modifier.height(KSpacing.xxs))
-        Text(
-            text = buildString {
-                if (book.author.isNotBlank()) append(book.author)
-                val read = BookProgress[book.id]
-                if (read != null && book.chapterCount > 0 && read in 0 until book.chapterCount) {
-                    if (isNotEmpty()) append(" · ")
-                    append("已读 ${(read + 1) * 100 / book.chapterCount}%")
+        // 作者 + 已读百分比（同一行）。2026-10-14 用户反馈：作者名太长时，「已读 N%」
+        // 被顶出行外消失 —— 原实现是单个 Text 拼接 + 尾部 Ellipsis，截断时先牺牲的
+        // 恰恰是尾部的已读。现在拆成 Row 两个 Text：作者 `weight(1f, fill = false)`
+        // 可被压缩截断（省略号），已读**不参与收缩、始终完整**：
+        // 空间不足时先牺牲作者的尾部。（fill=false：作者短时紧贴左侧、已读紧随其后，
+        // 保持与拆分前一致的"作者 · 已读"紧凑观感，不把已读推到行尾。）
+        val read = BookProgress[book.id]
+        val readLabel =
+            if (read != null && book.chapterCount > 0 && read in 0 until book.chapterCount) {
+                "已读 ${(read + 1) * 100 / book.chapterCount}%"
+            } else {
+                null
+            }
+        if (book.author.isNotBlank() || readLabel != null) {
+            // 作者 + 已读百分比（同一行，2026-10-14 用户定稿布局）：
+            //  · 「已读 N%」固定在行**右端**（作者 weight(1f) 占满剩余空间把已读推到最右）；
+            //  · 作者在左、超长时截断（省略号）；
+            //  · **只有作者与已读贴住时**才在已读前补 "· "（"名字…· 已读 19%"）；
+            //    有空隙时两者两端自然分开、不加分隔符（用户："已读改到右边，
+            //    除非跟作者名字贴住了才加 · 已读 x"）。
+            //  · "· " 无前导空格 —— 省略号紧贴 ·（上一条反馈：省略号后别再空一个字符位）。
+            // ⚠️ 贴住判定在首帧布局后**锁定**（不翻转）：分隔符的有无会改变已读宽度 →
+            //    反过来影响作者可用宽，恰好卡在临界窗口的作者名会无限重布局（振荡）。
+            var authorCramped by remember(book.author) { mutableStateOf<Boolean?>(null) }
+            val density = LocalDensity.current
+            Row {
+                if (book.author.isNotBlank()) {
+                    Text(
+                        text = book.author,
+                        style = KType.footnote,
+                        color = c.textMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        onTextLayout = { result ->
+                            if (authorCramped == null) {
+                                // 贴住 = 被截断，或内容宽与可用宽的间隙小于 ~4dp。
+                                // ⚠️ 内容宽必须用 getLineRight-getLineLeft 算 —— 不能用 size.width：
+                                // 作者 Text 带 weight(1f)（fill=true），约束是"固定=分配宽"，
+                                // size.width 会被拉满成可用宽 → gap 恒为 0 → 永远误判"贴住"、
+                                // 不长也加 "· "（2026-10-14 真机就是这么暴露的）。
+                                // （TextLayoutResult 没有 getLineWidth，行宽 = lineRight-lineLeft。）
+                                val tightGapPx = with(density) { 4.dp.toPx() }
+                                val textWidthPx = result.getLineRight(0) - result.getLineLeft(0)
+                                val gapPx = result.layoutInput.constraints.maxWidth - textWidthPx
+                                authorCramped = result.hasVisualOverflow || gapPx < tightGapPx
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                } else {
+                    // 无作者仍要让已读靠右（罕见：数据缺失时）
+                    Spacer(Modifier.weight(1f))
                 }
-            },
-            style = KType.footnote,
-            color = c.textMuted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+                if (readLabel != null) {
+                    Text(
+                        text =
+                            if (book.author.isNotBlank() && authorCramped == true) {
+                                "· $readLabel"
+                            } else {
+                                readLabel
+                            },
+                        style = KType.footnote,
+                        color = c.textMuted,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
     }
 }
 

@@ -140,10 +140,36 @@ object ShareRenderHolder {
         private set
 
     /**
+     * 渲染器实例代号：**每建出一个新渲染器 +1**（换轨 / 重建）。
+     *
+     * 给"画面在**别的宿主**手里"的场景用（全屏宿主 / 小窗中，房间页只是背景）：
+     * 那些宿主没有"组合重组"这条线来感知换轨，而这个代号是唯一的信号 ——
+     * 变化就说明旧渲染器已被丢下，宿主必须把**新**渲染器重新挂上去（[attach] 幂等）。
+     * 没有它时的表现：全屏/小窗中换人共享 = 画面断在旧帧（新渲染器没人挂）。
+     */
+    var rendererGeneration by mutableIntStateOf(0)
+        private set
+
+    /**
+     * 全屏/小窗宿主（`ShareFullscreenActivity`）当前是否活着（其 onStart ~ onStop 之间）。
+     *
+     * 房间页用它回答一个问题：**画面该不该留在宿主那边**。
+     *
+     * ⚠️ 这个显式状态是 M6.18 真机实测逼出来的 —— **不能**用 MainActivity 的 ON_RESUME
+     * 推断"宿主退了"：**PiP 是悬浮窗，系统会把下面的 MainActivity 恢复前台**，
+     * 房间页一收到 ON_RESUME 就复位 `shareFullscreen`，内联槽位随即把渲染器从小窗里
+     * **抢回来**（真机症状：小窗是黑的、房间页内联槽位却在播）。
+     * PiP 期间宿主是 paused 但 **started**（系统不回调 onStop），所以这个标记在小窗全程
+     * 保持 true；真正退场（finish / 被系统收掉）才翻 false。
+     */
+    var hostAlive by mutableStateOf(false)
+        internal set
+
+    /**
      * "共享已结束，全屏宿主请退场"的回调。
      *
-     * 全屏 Activity 在 `onResume` 里登记、`onPause` 里清掉 —— 于是它**只在自己活着时**被调用，
-     * 不存在"拿一个已经销毁的 Activity 去 finish"的问题。
+     * 全屏 Activity 在 `onResume` 里登记；**小窗期间（PiP）保持登记**（那里 onPause 不清）——
+     * 房内共享结束也要能把小窗里的宿主撤下来。清空时机：普通退场的 onPause、收尾的 onStop。
      */
     @Volatile
     var onCloseRequest: ((String) -> Unit)? = null
@@ -302,6 +328,54 @@ object ShareRenderHolder {
         attachedTo = null
     }
 
+    /**
+     * **只当渲染器确实挂在 [container] 上时**才摘除（挂在别处 / 无父 = 空操作）。
+     *
+     * 给"本槽位正在离开组合"的调用点用（房间内联槽位的 `onDispose`）：它和
+     * "画面交给全屏/小窗宿主"是一对**会交错**的时序 —— 宿主先把画面接走、
+     * `onDispose` 后到的话，盲摘（[detach] 无参版）会把宿主手里的画面摘掉。
+     * M6.18 真机症状就是这一类："小窗/全屏是黑的，房间页槽位却在播"。
+     */
+    fun detach(from: ViewGroup) {
+        if (attachedTo !== from) return
+        detach()
+    }
+
+    /**
+     * 重建渲染器当前的 EGL surface（= 把画面从 [container] 上摘下来再挂回去）。
+     *
+     * ## 为什么必须重建（M6.19，2026-10-14 真机定位）
+     *
+     * **EGL surface 的尺寸在创建那一刻固定**（WebRTC 的 `EglRenderer.createEglSurface`
+     * 读当时的窗口尺寸），此后 `SurfaceView` 的窗口矩形变化**不会让它跟随**；而
+     * SurfaceFlinger 对 SurfaceView 的 buffer 是**不缩放**语义（FREEZE）。
+     * 于是"进房先按兜底比例（16:9）把 surface 建出来、随后比例修正为真实比例（16:10）"
+     * 这条路径里：buffer 仍是 16:9 的尺寸，在更高的容器里**左上对齐**，
+     * **底部露出一条约 10% 框高的黑带**。
+     *
+     * 真机实测数据（截图像素分析）：黑带 47px / 框高 503px ≈ 9.3%，顶部零黑边；
+     * **"进一下全屏再退出"就恢复正常** —— 那正是这里的一次重建（所以本方法就是把
+     * 用户的手动操作自动化）。
+     *
+     * ⚠️ **只在"容器尺寸真的变了"之后调用**（比例修正 / 转屏 / 分屏）：
+     *  · 首次布局不调用 —— 第一次创建 surface 时尺寸本来就是对的；
+     *  · 调用方负责"合并连续变化"（避免一帧内多次重建各黑一帧）。
+     *
+     * @param container 只处理"当前确实挂在这个容器上"的情形：重建动作是**延后一帧**执行的，
+     *   期间画面可能已被全屏/小窗宿主接手（或槽位已离开组合）—— 那时什么都不做（竞态防御）
+     */
+    fun rebuildSurfaceFor(container: ViewGroup) {
+        if (attachedTo !== container) return
+        val view = renderer ?: return
+        if (view.parent !== container) return
+        Log.i(
+            TAG,
+            "画面框尺寸变化 → 重建 EGL surface（让渲染输出跟随新尺寸）渲染器=#${System.identityHashCode(view)}",
+        )
+        detach()
+        attach(container)
+    }
+
     /** 释放整场共享（离开房间时调用）。之后 [bindTrack] 会重新建一个 —— 那是**新的一场共享**。 */
     fun release() {
         releaseRenderer()
@@ -344,6 +418,8 @@ object ShareRenderHolder {
         return newRenderer(glContext, track).also {
             renderer = it
             slot.bind(track.id())
+            // 换渲染器的信号（见 rendererGeneration 的说明）：在别处的宿主据此重新挂载
+            rendererGeneration++
         }
     }
 

@@ -198,7 +198,7 @@
         </activity>
 
         <!--
-          屏幕共享**全屏宿主**（M6.17：全屏 = 独立 Activity + Surface 交接）。
+          屏幕共享**全屏宿主**（M6.17：全屏 = 独立 Activity + Surface 交接；M6.18：小窗也归它）。
 
           为什么是独立 Activity 而不是同一棵树里的浮层：直播类 App 的标准做法
           —— 播放器实例与 Surface 只一份，全屏只是把 Surface 交给新宿主
@@ -206,19 +206,25 @@
           所以"进全屏不黑、退出全屏不重新加载"。渲染器由
           `voice/ShareRenderHolder` 在两个宿主之间交接，全程不 release/不重新 init。
 
-          三处配置都不能省：
+          四处配置都不能省：
            · **configChanges 与 MainActivity 逐字一致**：不做的话旋转/尺寸变化会重建 Activity
              —— 而重建 = 宿主窗口换了 = 渲染器要第三次交接，画面必然黑一下。
              全屏看电脑屏幕（横向内容）时用户很自然会横过来看，这条路必须不重建。
            · **theme**：纯黑窗口底色（黑边就是它）；用应用主题的话第一帧是浅色青瓷，会闪一下白。
            · **launchMode="singleTop"**：连点两下画面不会叠出两个宿主（第二个 intent 只回调
              onNewIntent），否则第二个宿主拿不到渲染器（它已经有父了），只会看到一块黑屏。
+           · **supportsPictureInPicture="true"（M6.18）**：小窗（画中画）由**宿主自己**进入
+             （房间页「小窗观看」只带 EXTRA_ENTER_PIP 把它打开），而 PiP 是**逐 Activity 声明**
+             的能力 —— 只给 MainActivity 声明过、漏了这里的话，
+             `enterPictureInPictureMode` 会**静默返回 false**（不报错、不崩溃），
+             真机表现就是"小窗观看点了没反应"。
         -->
         <activity
             android:name=".ShareFullscreenActivity"
             android:exported="false"
             android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|navigation|uiMode|smallestScreenSize|density|fontScale|locale|layoutDirection"
+            android:supportsPictureInPicture="true"
             android:theme="@style/Theme.KNative.ShareFullscreen" />
 
         <!--

@@ -2,9 +2,17 @@
 
 /* ---- 进房视图 ---- */
 
-/* 就绪后切入（后台建连完成、成员/聊天已就绪）时的入场：极轻淡入，
+/* 房间视图容器：与列表视图同源同值（voice/VoiceRoomList.module.css 的 .page）——
+   max-width 860 + margin 0 auto + 同样的内边距，即「内容卡片列」的基准；
+   下方 .controlBar 桌面端定位按这一列宽计算（注释里的 860/20 同源），改这里要一起核对。
+   ⚠️ 拆分迁移（fe4b019）时曾漏掉这三个布局属性，房间视图撑满 .main-content
+   → 聊天面板/成员网格整体变宽（桌面端 820 → ~1072px）。别再丢。
+   就绪后切入（后台建连完成、成员/聊天已就绪）时的入场：极轻淡入，
    避免整页「啪」一下替换。纯 opacity，不做位移（防滚动与布局抖动） */
 .page {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 20px 80px;
   animation: voiceRoomIn 0.18s ease-out;
 }
 
@@ -341,6 +349,12 @@
 @media (max-width: 768px) {
   .controlBar {
     bottom: calc(64px + var(--safe-area-bottom) + 12px);
+  }
+
+  /* 房间内隐藏了底部胶囊导航（App 打在 .app-layout 上的标记类）：
+     控制栏下移到贴近安全区（拆分迁移 fe4b019 时曾漏掉这条，别再丢） */
+  :global(.mobile-nav-hidden) .controlBar {
+    bottom: calc(14px + var(--safe-area-bottom));
   }
 }
 
