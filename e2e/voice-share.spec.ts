@@ -64,11 +64,11 @@ async function readStageAspect(page: Page): Promise<number> {
 /** 观看端页面里是否存在"比例符合"的 canvas（舞台画面就是一块 canvas；内部尺寸 = 解码尺寸） */
 function hasCanvasRatio(page: Page, ratio: number, tolerance = 0.06) {
   return page.evaluate(
-    ([r, tol]) =>
+    (target: { ratio: number; tolerance: number }) =>
       Array.from(document.querySelectorAll('canvas')).some(
-        (c) => c.width > 0 && c.height > 0 && Math.abs(c.width / c.height - r) < tol
+        (c) => c.width > 0 && c.height > 0 && Math.abs(c.width / c.height - target.ratio) < target.tolerance
       ),
-    [ratio, tolerance]
+    { ratio, tolerance }
   );
 }
 
