@@ -1,7 +1,12 @@
 package top.kuangdada.k.nativeapp.voice
 
 import android.content.Context
+import android.hardware.display.DisplayManager
+import android.os.Handler
+import android.os.Looper
+import android.util.DisplayMetrics
 import android.util.Log
+import android.view.Display
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -67,6 +72,11 @@ import top.kuangdada.k.core.data.VoiceSignaling
 class VoiceSession(
     context: Context,
     private val iceServers: List<PeerConnection.IceServer>,
+    /**
+     * 初始共享档位（来自控制器的持久化偏好，见 [ShareQualityStore]）。
+     * 共享中可用 [setShareQuality] 即时切换；编码受限时自动降档也会改写它。
+     */
+    initialShareQuality: ShareQuality = ShareQuality.DEFAULT,
 ) {
 
     /** 一条远端流的状态（UI 用它画麦位与说话状态） */
@@ -111,6 +121,14 @@ class VoiceSession(
         /** 自己开始/停止说话（同上；自己那格的边框也要亮） */
         fun onSelfSpeaking(speaking: Boolean) = Unit
 
+        /**
+         * 共享档位被**内部**改动（目前只有一种：编码受限时自动降档 1080p60 → 1080p30）。
+         *
+         * 控制器据此持久化 + 更新 UI（让"极清"高亮跟着变，并提示"已自动切换"）。
+         * **用户手动切档不回调**——发起方本来就是控制器，它自己知道（见 [setShareQuality]）。
+         */
+        fun onShareQualityChanged(quality: ShareQuality) = Unit
+
         fun onError(message: String)
     }
 
@@ -126,6 +144,23 @@ class VoiceSession(
     private var screenCapturer: org.webrtc.ScreenCapturerAndroid? = null
     private var videoSource: org.webrtc.VideoSource? = null
     private var localVideoTrack: org.webrtc.VideoTrack? = null
+
+    /**
+     * 显示器监听（共享期间随采集器一起装/卸）：屏幕旋转时把采集分辨率改成新方向。
+     * 成因与安全性说明见 [startDisplayFollow]。
+     */
+    private var displayManager: DisplayManager? = null
+    private var displayListener: DisplayManager.DisplayListener? = null
+
+    /**
+     * 当前共享档位（画质/帧率，见 [ShareQuality]）。
+     *
+     * `@Volatile`：写发生在两处**不同线程** —— 用户手动切档（主线程）与统计协程的自动降档；
+     * 读在信令/统计线程。值本身是不可变枚举引用，volatile 满足可见性即可。
+     */
+    @Volatile
+    var shareQuality: ShareQuality = initialShareQuality
+        private set
 
     /** 采集观测 sink（只用于记录真实帧数；停止共享时摘掉） */
     private var frameProbe: org.webrtc.VideoSink? = null
@@ -389,6 +424,28 @@ class VoiceSession(
     // ---------------------------------------------------------------
 
     /**
+     * 切换共享档位（共享面板里的「极清 / 流畅 / 省流」，2026-10-15 用户要求"画质帧率选择"）。
+     *
+     * 共享中**立即生效**：应用到 mesh 下每一条连接的视频发送器（码率上限/帧率上限/下采样）。
+     * 未共享时只记住，等 [startScreenShare] 按它初始化。同档位重复选择直接忽略
+     * （避免无谓的 setParameters 与日志刷屏）。
+     */
+    fun setShareQuality(q: ShareQuality) {
+        if (q == shareQuality) return
+        shareQuality = q
+        Log.i(TAG, "共享档位切换：${q.id}（码率上限=${q.maxBitrateBps / 1_000_000}M 帧率上限=${q.maxFps} scale=${q.scale}）")
+        if (localVideoTrack != null) applyShareQualityToSenders()
+    }
+
+    /** 把当前档位应用到所有既有连接的视频发送器（手动切档 / 自动降档共用） */
+    private fun applyShareQualityToSenders() {
+        peers.values.forEach { pc ->
+            runCatching { pc.senders.firstOrNull { it.track()?.kind() == "video" } }
+                .getOrNull()?.let { s -> applyShareSenderTuning(s, TAG, shareQuality) }
+        }
+    }
+
+    /**
      * 开始屏幕共享。
      *
      * @param permissionData `MediaProjectionManager.createScreenCaptureIntent()` 返回的 Intent
@@ -425,6 +482,8 @@ class VoiceSession(
                 captureSizeFor(metrics.widthPixels, metrics.heightPixels)
             capturer.startCapture(captureWidth, captureHeight, SHARE_CAPTURE_FPS)
             localShareCaptureSize = captureWidth to captureHeight
+            // 跟随屏幕旋转（用户反馈"横屏游戏时投屏不会切到横屏"）：见 startDisplayFollow
+            startDisplayFollow()
             Log.i(TAG, "屏幕共享采集启动：${captureWidth}x${captureHeight}@${SHARE_CAPTURE_FPS}fps")
 
             /**
@@ -480,9 +539,9 @@ class VoiceSession(
                         "屏幕共享：已挂载视频 m-line dir=${transceiver.direction} " +
                             "senderTrack=${transceiver.sender.track()?.id() ?: "null"}"
                     )
-                    // 应用发送端调优（1080p60：码率 12M + 帧率 60 + 保分辨率降级）——
+                    // 应用发送端调优（按当前档位：码率上限 + 帧率上限 + 保分辨率降级）——
                     // 不设的话走 WebRTC 默认（BALANCED = 带宽紧就降分辨率 + 帧率不保证），文字会糊、帧率会掉
-                    applyShareSenderTuning(transceiver.sender, TAG, maxFps = SHARE_CAPTURE_FPS)
+                    applyShareSenderTuning(transceiver.sender, TAG, shareQuality)
                 }.onFailure { t ->
                     Log.e(TAG, "屏幕共享：挂载视频轨失败：${t.message}")
                 }
@@ -577,26 +636,25 @@ class VoiceSession(
                 )
 
                 /**
-                 * 自动纠偏（对齐 Web 端 `shareStatsMonitor`）：
-                 * 60fps 被**编码器吞吐**卡住时（不是带宽），硬撑只会让画面更抖。
-                 * 连续 2 次命中才降、一次会话只降一次（避免与"用户手动设的 60"反复拉锯）。
+                 * 自动纠偏（对齐 Web 端 `shareStatsMonitor`，2026-10-15 起与档位联动）：
+                 * **仅当用户选的是「极清 1080p60」时**才判——60fps 被**编码器吞吐**卡住时
+                 * （不是带宽），硬撑只会让画面更抖，自动切到「流畅 1080p30」。
+                 * 连续 2 次命中才切、一次共享会话只切一次（避免与"用户手动选的档位"反复拉锯）；
+                 * 切完经 [Listener.onShareQualityChanged] 通知控制器（落库 + UI 提示）。
                  */
-                if (!downgraded && shouldDowngradeTo30(fps, qlr.toString())) {
+                if (!downgraded && shareQuality == ShareQuality.V1080P60 &&
+                    shouldDowngradeTo30(fps, qlr.toString())
+                ) {
                     cpuStrike++
                     if (cpuStrike >= 2) {
                         downgraded = true
                         Log.w(
                             TAG,
-                            "共享帧率未达 60（实测 ${"%.1f".format(fps)}fps，受限原因=$qlr）→ 自动退回 ${SHARE_FALLBACK_FPS}fps"
+                            "共享帧率未达 60（实测 ${"%.1f".format(fps)}fps，受限原因=$qlr）→ 自动切换为 ${ShareQuality.V1080P30.id}"
                         )
-                        // 只改编码帧率上限，其他参数不动
-                        pcs.forEach { pc ->
-                            runCatching {
-                                pc.senders.firstOrNull { it.track()?.kind() == "video" }
-                            }.getOrNull()?.let { s ->
-                                applyShareSenderTuning(s, TAG, maxFps = SHARE_FALLBACK_FPS)
-                            }
-                        }
+                        shareQuality = ShareQuality.V1080P30
+                        applyShareQualityToSenders()
+                        listener?.onShareQualityChanged(ShareQuality.V1080P30)
                     }
                 } else if (fps >= 45.0) {
                     cpuStrike = 0
@@ -606,6 +664,8 @@ class VoiceSession(
     }
 
     fun stopScreenShare() {
+        // 先卸显示器监听（防回调打到下面即将释放的采集器上）
+        stopDisplayFollow()
         // 先停统计轮询，再摘观测 sink（顺序反了会读到已释放的 sender）
         shareStatsJob?.cancel()
         shareStatsJob = null
@@ -624,6 +684,77 @@ class VoiceSession(
         // 采集尺寸随共享一起失效：控制器用它填 share-start 的 width/height，
         // 留着旧值会让下一次共享先按上一次的分辨率排版
         localShareCaptureSize = null
+    }
+
+    /**
+     * 屏幕旋转跟随（2026-10-15，用户反馈"横屏游戏应用时投屏不会切到横屏"）。
+     *
+     * **成因**：按 [startScreenShare] 建虚拟显示器时尺寸就固定了 —— 之后屏幕旋转
+     * （比如切去横屏游戏），采集方向不会跟着变，观看端一直收到建采时的方向。
+     *
+     * **做法**：共享期间监听默认显示器，尺寸一变就把采集分辨率 `changeCaptureFormat`
+     * 成新方向（长边仍按 [MAX_CAPTURE_LONG_EDGE] 封顶，横竖屏是同一条换算）。
+     *
+     * **为什么安全（改动刻意收在采集器内部）**：
+     *  · 只改虚拟显示器/输出帧的尺寸 —— 轨道、PeerConnection、SDP 全都不动，无需重协商；
+     *  · 观看端本来就跟随帧尺寸：原生 `ShareRenderHolder.onFrameResolutionChanged`、
+     *    Web 端 track 的 `resize` 事件都是现成通路（编码器按带宽降分辨率就是同一机制）；
+     *  · 库实现（webrtc-sdk 144）：API 31+ 走 `VirtualDisplay.resize + setSurface`；
+     *    旧版本重建虚拟显示器但**复用同一个 MediaProjection** —— 不会再弹授权。
+     */
+    private fun startDisplayFollow() {
+        stopDisplayFollow()
+        val dm = appContext.getSystemService(DisplayManager::class.java) ?: return
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) = Unit
+            override fun onDisplayRemoved(displayId: Int) = Unit
+
+            override fun onDisplayChanged(displayId: Int) {
+                if (displayId == Display.DEFAULT_DISPLAY) applyDisplaySize(displayId)
+            }
+        }
+        // 主线程 Handler：采集器的 start/stop/change 都在主线程，串行访问天然无竞态
+        runCatching { dm.registerDisplayListener(listener, Handler(Looper.getMainLooper())) }
+            .onFailure { e -> Log.w(TAG, "屏幕共享：显示器监听注册失败（不影响共享）：${e.message}") }
+            .onSuccess {
+                displayManager = dm
+                displayListener = listener
+                // 立即对齐一次：注册那一刻屏幕可能已经是新方向（"先切进游戏再回来点共享"这类路径）
+                applyDisplaySize(Display.DEFAULT_DISPLAY)
+            }
+    }
+
+    /** 卸下显示器监听（停共享/退出时调用；防回调打到已释放的采集器上） */
+    private fun stopDisplayFollow() {
+        val l = displayListener ?: return
+        runCatching { displayManager?.unregisterDisplayListener(l) }
+        displayListener = null
+        displayManager = null
+    }
+
+    /**
+     * 把采集分辨率对齐到显示器当前方向；尺寸没变则不动
+     * （`onDisplayChanged` 也会因亮度等其它属性触发，尺寸比对是唯一的动作门槛）。
+     *
+     * 整个回调体套 runCatching：这是系统回调，异常抛出去会崩进程；
+     * 而这里的任何失败都只是"分辨率没跟上旋转"，绝不该影响正在进行的共享。
+     */
+    private fun applyDisplaySize(displayId: Int) {
+        runCatching {
+            val capturer = screenCapturer ?: return@runCatching
+            val display = displayManager?.getDisplay(displayId) ?: return@runCatching
+            val metrics = DisplayMetrics()
+            @Suppress("DEPRECATION") // getRealMetrics：要的就是整屏物理尺寸（旋转后宽高互换）
+            display.getRealMetrics(metrics)
+            val (w, h) = captureSizeFor(metrics.widthPixels, metrics.heightPixels)
+            val current = localShareCaptureSize
+            if (current != null && current.first == w && current.second == h) return@runCatching
+            capturer.changeCaptureFormat(w, h, SHARE_CAPTURE_FPS)
+            localShareCaptureSize = w to h
+            Log.i(TAG, "屏幕共享：跟随显示方向改为 ${w}x$h（屏幕 ${metrics.widthPixels}x${metrics.heightPixels}）")
+        }.onFailure { e ->
+            Log.w(TAG, "屏幕共享：跟随显示方向失败（保持原状）：${e.message}")
+        }
     }
 
     val isSharing: Boolean get() = localVideoTrack != null
@@ -1206,8 +1337,8 @@ class VoiceSession(
                         listOf(LOCAL_STREAM_ID),
                     )
                 )
-                // 与 startScreenShare 里同一套调优（码率上限 + 保分辨率降级 + 帧率上限）
-                applyShareSenderTuning(t.sender, TAG, maxFps = SHARE_CAPTURE_FPS)
+                // 与 startScreenShare 里同一套调优（按当前档位：码率上限 + 保分辨率降级 + 帧率上限）
+                applyShareSenderTuning(t.sender, TAG, shareQuality)
             }.onFailure { e ->
                 Log.e(TAG, "后进成员挂载共享轨失败：${e.message}")
             }

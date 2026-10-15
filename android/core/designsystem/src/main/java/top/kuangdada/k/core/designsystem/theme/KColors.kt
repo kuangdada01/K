@@ -59,6 +59,8 @@ data class KColors(
     // ---- 语义 ----
     val danger: Color,
     val dangerSoft: Color,
+    /** 危险按钮描边（退出登录这类"软底 + 描边"形态；角色同 [accentBorder]，深色为提亮红） */
+    val dangerBorder: Color,
     val success: Color,
 
     // ---- 描边 ----
@@ -176,6 +178,7 @@ val KLightColors: KColors = KColors(
 
     danger = Color(0xFFA84A40),
     dangerSoft = Color(0xFFE8DEDB),
+    dangerBorder = Color(0xFFA84A40),
     success = Color(0xFF325D51),
 
     borderSubtle = Color(0xFFEFEFEF),
@@ -211,6 +214,7 @@ val KDarkColors: KColors = KColors(
 
     danger = Color(0xFFE0586B),
     dangerSoft = Color(0xFF2E1A21),
+    dangerBorder = Color(0xFFE0586B), // 深底上的危险描边（同 danger 文字档）
     success = Color(0xFF7FB5A2),
 
     borderSubtle = Color(0xFF232323),

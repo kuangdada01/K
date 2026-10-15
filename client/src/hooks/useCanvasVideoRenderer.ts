@@ -18,17 +18,37 @@ import { isNative, setPipEnabled } from '../lib/native';
 export function useCanvasVideoRenderer({
   stream,
   live,
+  onFrameSize,
 }: {
   /** 共享画面流（null = 无共享，清理画布与小窗） */
   stream: MediaStream | null;
   /** 预览是否应显示（共享者全屏+整屏共享时隐藏本地预览，暂停绘制） */
   live: boolean;
+  /**
+   * 解码帧尺寸的回报（宽高像素，来自 `<video>.videoWidth/Height`）。
+   *
+   * **为什么不靠接收轨的 `resize` 事件 / `getSettings()`**：对**接收**的视频轨，
+   * 这两者在中途分辨率变化（共享者旋转屏幕、换共享源）时并不可靠 —— 事件可能不触发、
+   * `getSettings()` 可能停留在旧值。实测症状：手机转去横屏游戏后，观看端画面框停在
+   * 竖屏比例，横屏画面被 contain 进一个大竖框里，**只在中间显示一小条**（2026-10-15）。
+   * 这里的绘制循环**每帧同步读** `videoWidth/Height`，是解码结果的 ground truth。
+   */
+  onFrameSize?: (width: number, height: number) => void;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null); // 命令式创建（小窗模式会跨文档移动）
   const canvasSlotRef = useRef<HTMLDivElement>(null);
   const pipWinRef = useRef<Window | null>(null);
   const [pipActive, setPipActive] = useState(false);
+
+  /**
+   * 回调放进 ref：绘制循环的 effect 依赖只留 `[stream, live]`，
+   * 回调身份每次渲染都在变，直接进依赖会让循环每帧重启。
+   */
+  const onFrameSizeRef = useRef(onFrameSize);
+  useEffect(() => {
+    onFrameSizeRef.current = onFrameSize;
+  });
 
   // 画面流就绪后立即起播（autoplay + muted 满足自动播放策略；声音走独立 audio 元素）
   useEffect(() => {
@@ -84,6 +104,17 @@ export function useCanvasVideoRenderer({
     // 一旦在这里因为 pipActive 而 return，小窗里就只剩一帧冻住不动的画面（真机踩过）。
     // 判据用 `document.pictureInPictureElement`（浏览器版 PiP 才有），而不是 pipActive。
     if (!live || document.pictureInPictureElement) return;
+    /**
+     * 启动时先补报一次当前帧尺寸：
+     * 换流那一瞬间可能有一帧由**旧闭包**放掉了（它捕获的还是上一路 stream 的身份，
+     * 回报会被上层按"不属于本流"拒收）——而那帧已经把画布尺寸改成了新值，
+     * 循环里"尺寸变化才回报"的分支之后不会再有动静。这里补一发，保证每路流
+     * 至少有一次属于它自己的回报。
+     */
+    const boot = videoRef.current;
+    if (stream && boot && boot.videoWidth > 0) {
+      onFrameSizeRef.current?.(boot.videoWidth, boot.videoHeight);
+    }
     let stopped = false;
     let raf = 0;
     let timer = 0;
@@ -96,6 +127,8 @@ export function useCanvasVideoRenderer({
         if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
           canvas.width = video.videoWidth;
           canvas.height = video.videoHeight;
+          // 帧尺寸变了（首帧 / 中途分辨率变化）→ 回报：上层画面框的比例跟着它走
+          onFrameSizeRef.current?.(video.videoWidth, video.videoHeight);
         }
         if (video.currentTime !== lastTime) {
           lastTime = video.currentTime;

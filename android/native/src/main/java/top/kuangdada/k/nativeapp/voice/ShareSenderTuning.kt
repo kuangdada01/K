@@ -12,14 +12,14 @@ import org.webrtc.RtpSender
  * 屏幕上的文字/代码立刻糊成一团。用户实测反馈：「投屏接收的画面很糊，看看能不能提高」。
  *
  * Web 端一直有一套明确的调优（`SHARE_QUALITY_PRESETS` + `applyShareQualityToSender`），
- * 本文件是它在安卓侧的对应实现，取值与理由逐条对齐，但**按手机的实际场景调整**：
+ * 本文件是它在安卓侧的对应实现，档位键/码率/帧率逐条对齐，但**按手机的实际场景调整**：
  *
- *  · **降级策略用 `MAINTAIN_RESOLUTION`（关键的一条）**：全屏共享手机桌面/文档时，
- *    "文字看得清"远比"画面流畅"重要 —— 带宽不足时宁可掉到 10fps，也不要把它缩成 480p。
- *    Web 端的「清晰文字」模式用的正是这一档。
- *  · **码率上限 [SHARE_MAX_BITRATE_BPS]**：默认上限下 1080p+ 的屏幕内容严重不够用，
- *    编码器只能缩分辨率。Web 端 1080p30 给 10Mbps、720p30 给 6Mbps；
- *    手机这一侧取 6Mbps（手机共享以文字/UI 为主，且 mesh 上行要按观看人数翻倍）。
+ *  · **降级策略统一用 `MAINTAIN_RESOLUTION`（关键的一条，与 Web 档位的差异点）**：
+ *    全屏共享手机桌面/文档时，"文字看得清"远比"画面流畅"重要 —— 带宽不足时宁可掉帧，
+ *    也不要把它缩成 480p。Web 端的「清晰文字」模式用的正是这一档；手机侧没有那个开关。
+ *  · **三档可切换（[ShareQuality]，2026-10-15 用户要求"手机投屏要有画质帧率选择"）**：
+ *    极清 1080p60 / 流畅 1080p30 / 省流 720p30，码率 30M/10M/6M
+ *    （与 Web 端 `SHARE_QUALITY_PRESETS` 同值；mesh 上行 = 观看数 × 码率，人多建议降档）。
  *  · **采集分辨率封顶 [MAX_CAPTURE_LONG_EDGE]**：见 [captureSizeFor]。
  *
  * 做成纯函数（不依赖会话状态）是为了能被单测直接钉住 —— 与 Web 端把它从
@@ -27,38 +27,63 @@ import org.webrtc.RtpSender
  */
 
 /**
- * 共享视频的码率上限（bps）。
+ * 屏幕共享质量档位（画质 + 帧率三档，键与取值对齐 Web 端 `SHARE_QUALITY_PRESETS`）。
  *
- * **30M，与 Web 端 `SHARE_QUALITY_PRESETS['1080p60'].maxBitrate` 完全对齐**
- * （用户要求"带宽一样给 30mbps"）。此前的 6M 是按 720p30 档取的，配不上 1080p60 ——
- * 码率不够时编码器只能靠降分辨率糊过去，等于白提帧率。
+ * 用户需求（2026-10-15）："手机投屏没有选择画质帧率" —— 手机侧原来写死 1080p60，
+ * 网络差/观看人数多时无法降档；现在共享面板里可直接切换，选择会记忆（[ShareQualityStore]）。
  *
- * 这是**上限**而非固定值：实际发送码率由拥塞控制按可用带宽自适应（0 ~ 上限），
- * 所以给足上限不会浪费带宽，只是"带宽够时能到多少"的天花板。
- * mesh 拓扑下共享者上行 = 观看人数 × 实际码率，人多时拥塞控制会自动压低。
+ * @property id 持久化键（与 Web 的档位键同名，排查时两端能对上号）
+ * @property label 面板里的中文名（与 Web 端 QUALITY_LABELS 同一套：极清/流畅/省流）
+ * @property maxBitrateBps 编码码率上限；**上限而非固定值**，实际发送码率由拥塞控制自适应
+ * @property maxFps 编码帧率上限（采集固定 60，见 [SHARE_CAPTURE_FPS]）
+ * @property scale 编码器下采样倍率（省流档 1.5：长边 1920 → 1280）
  */
-const val SHARE_MAX_BITRATE_BPS = 30_000_000
+enum class ShareQuality(
+    val id: String,
+    val label: String,
+    val maxBitrateBps: Int,
+    val maxFps: Int,
+    val scale: Double,
+) {
+    /** 极清：1080p60（30M 上限对齐 Web —— 用户要求"带宽一样给 30mbps"） */
+    V1080P60("1080p60", "极清 1080p60", 30_000_000, 60, 1.0),
+
+    /** 流畅：1080p30（10M —— Web 实测高动态内容 8M 仍偏紧，提到 10M 的同款取值） */
+    V1080P30("1080p30", "流畅 1080p30", 10_000_000, 30, 1.0),
+
+    /** 省流：720p30（6M + 1.5 倍下采样；弱网/观看人数多时用） */
+    V720P30("720p30", "省流 720p30", 6_000_000, 30, 1.5),
+    ;
+
+    companion object {
+        /** 默认档：1080p60（手机侧一直以来的默认，用户此前明确要求过 1080p60） */
+        val DEFAULT = V1080P60
+
+        /**
+         * 从持久化键读回；非法/缺失回落 [DEFAULT]。
+         * 与 Web 端 `setShareQuality` 的"非法档位忽略"同一口径（那边保留旧值，这里回落默认）。
+         */
+        fun fromId(id: String?): ShareQuality = entries.firstOrNull { it.id == id } ?: DEFAULT
+    }
+}
 
 /**
  * 采集分辨率的长边上限（px）。
  *
- * 1920 = 1080p 的长边（配合 [SHARE_CAPTURE_FPS] 的 60fps，即 1080p60）。
- * 手机屏幕的长边（竖屏时是高）超过 1920 时按比例压到这个值。
+ * 1920 = 1080p 的长边。档位里的"720p"是**编码侧**下采样（[ShareQuality.scale] = 1.5），
+ * 采集仍按 1920 长边走 —— 屏幕采集器不支持共享中途改格式，编码侧下采样是三档
+ * **共用同一路采集、随时可切换**的原因。
  */
 const val MAX_CAPTURE_LONG_EDGE = 1920
 
 /**
- * 屏幕采集帧率（首选值）。
+ * 屏幕采集帧率（**固定** 60；编码帧率上限由档位决定，见 [ShareQuality.maxFps]）。
  *
- * 60 = 用户明确要求（1080p60）。**但 60fps 是"尽力而为"**：
- * 手机编码器吞吐不够时（尤其屏幕内容变化剧烈时）实际只有 30 上下，
- * 那种情况下会由 [shouldDowngradeTo30] 判定并**自动退到 30**，
- * 而不是硬撑着掉帧 —— 与 Web 端 `shareStatsMonitor` 的自动纠偏同一套规则。
+ * 为什么采集不跟档位联动：`ScreenCapturerAndroid` 不支持共享中途改采集格式
+ * （`changeCaptureFormat` 是基类空实现），编码侧的 `maxFramerate` 才是随时可控的旋钮；
+ * 多采的帧在编码入口被丢掉，代价只是少量 CPU（换来"切档即时生效"）。
  */
 const val SHARE_CAPTURE_FPS = 60
-
-/** 自动纠偏后的帧率：60 达不到时退到这一档（仍是流畅的观感） */
-const val SHARE_FALLBACK_FPS = 30
 
 /**
  * 自动纠偏判据（对齐 Web 端 `shareStatsMonitor`）：
@@ -69,7 +94,7 @@ const val SHARE_FALLBACK_FPS = 30
  * 45 是"明显没到 60"的分界，也是 Web 端用的值。
  *
  * 为什么要求 "cpu/other"：若受限原因是 `bandwidth`，降帧率并不能提高清晰度，
- * 该做的是让码率自适应（见 [SHARE_MAX_BITRATE_BPS]），不该动帧率。
+ * 该做的是让码率自适应（见 [ShareQuality] 的码率上限），不该动帧率。
  */
 internal fun shouldDowngradeTo30(fps: Double, limitationReason: String?): Boolean {
     if (fps <= 0.0 || fps >= 45.0) return false
@@ -103,12 +128,15 @@ internal fun captureSizeFor(
 }
 
 /**
- * 把共享画面的编码参数应用到某个发送器上。
+ * 把**某一档位**的编码参数应用到某个发送器上。
  *
- * 三个参数各自的理由：
- *  1. `maxBitrateBps` —— 见 [SHARE_MAX_BITRATE_BPS]；
- *  2. `degradationPreference = MAINTAIN_RESOLUTION` —— **这是"变清晰"的主要一步**；
- *  3. `scaleResolutionDownBy = 1.0` —— 显式声明"按采集分辨率编"，不额外下采样。
+ * 四个参数各自的理由：
+ *  1. `maxBitrateBps` —— 档位码率上限（见 [ShareQuality]）；
+ *  2. `maxFramerate` —— 档位帧率上限；不设的话编码器不一定会按采集帧率编
+ *     （默认可能被压到 30 以下）。切档时改的就是它（采集固定 60，见 [SHARE_CAPTURE_FPS]）；
+ *  3. `scaleResolutionDownBy` —— 档位下采样倍率；
+ *  4. `degradationPreference = MAINTAIN_RESOLUTION` —— **这是"变清晰"的主要一步**
+ *     （三档统一取它，理由见文件头）。
  *
  * 失败一律 `runCatching` 忽略：这些是**优化参数**，某个机型/编码器不支持时应当退回
  * WebRTC 默认继续共享，而不是把共享整个搞挂。
@@ -117,17 +145,19 @@ internal fun captureSizeFor(
  * 光看"我调了 setParameters"说明不了问题 —— 有的机型/编码器会拒绝或改写这些值，
  * 而拒绝是**静默**的。回读是唯一能区分"没设上"与"设上了但没效果"的证据。
  */
-internal fun applyShareSenderTuning(sender: RtpSender, logTag: String? = null, maxFps: Int? = null): Boolean {
+internal fun applyShareSenderTuning(
+    sender: RtpSender,
+    logTag: String? = null,
+    quality: ShareQuality = ShareQuality.DEFAULT,
+): Boolean {
     return runCatching {
         val params = sender.parameters ?: return false
         val encodings = params.encodings
         if (encodings.isNullOrEmpty()) return false
         encodings.forEach { enc ->
-            enc.maxBitrateBps = SHARE_MAX_BITRATE_BPS
-            enc.scaleResolutionDownBy = 1.0
-            // 帧率上限：不设的话编码器不一定会按采集帧率编（默认可能被压到 30 以下）。
-            // 自动纠偏时用 [SHARE_FALLBACK_FPS] 再调一次即可改小。
-            if (maxFps != null) enc.maxFramerate = maxFps
+            enc.maxBitrateBps = quality.maxBitrateBps
+            enc.scaleResolutionDownBy = quality.scale
+            enc.maxFramerate = quality.maxFps
         }
         params.degradationPreference = RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION
         val ok = sender.setParameters(params)
@@ -137,7 +167,7 @@ internal fun applyShareSenderTuning(sender: RtpSender, logTag: String? = null, m
             val e0 = back?.encodings?.firstOrNull()
             android.util.Log.i(
                 logTag,
-                "共享发送参数 setParameters=$ok 回读：maxBitrate=${e0?.maxBitrateBps} " +
+                "共享发送参数[${quality.id}] setParameters=$ok 回读：maxBitrate=${e0?.maxBitrateBps} " +
                     "maxFps=${e0?.maxFramerate} scale=${e0?.scaleResolutionDownBy} " +
                     "degradation=${back?.degradationPreference}"
             )

@@ -59,22 +59,12 @@ import top.kuangdada.k.nativeapp.download.UpdateSkipStore
 fun UpdatePromptHost(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val c = KTheme.colors
 
     val updater = remember { AppUpdater(context) }
     val skipStore = remember { UpdateSkipStore(context) }
     val gate = remember { CheckGate() }
 
     var pending by remember { mutableStateOf<AppUpdater.UpdateCheck?>(null) }
-
-    /**
-     * 本次运行里**已经做过选择**的版本（点过「立即更新」或「以后再说」）。
-     *
-     * 「以后再说」另外会落盘（跨进程有效）；这个集合管的是"同一次运行里别又问一遍" ——
-     * 最要紧的是**点了更新、正在下载**的那几十秒：回到前台再查时版本还没变，
-     * 不挡一下就会在下载过程中再弹一次。
-     */
-    val handled = remember { mutableSetOf<String>() }
 
     var foregroundTick by remember { mutableStateOf(0) }
 
@@ -94,8 +84,9 @@ fun UpdatePromptHost(modifier: Modifier = Modifier) {
                         val check = r.data
                         val latest = check.latestVersion?.trim().orEmpty()
                         when {
-                            // 本次运行已经问过这一版（正在下载 / 刚点过以后再说）
-                            latest.isNotEmpty() && latest in handled -> Unit
+                            // 本次运行已经问过这一版（点过「立即更新」或「以后再说」，
+                            // 见 [UpdateHandledVersions]；手动「检查更新」也共记一份）
+                            latest.isNotEmpty() && UpdateHandledVersions.contains(latest) -> Unit
                             UpdatePromptPolicy.shouldPrompt(check, skipStore.skippedVersion()) ->
                                 pending = check
                             // 配了版本号却没配下载地址：这是服务端的配置缺口，留日志不打扰用户
@@ -137,70 +128,106 @@ fun UpdatePromptHost(modifier: Modifier = Modifier) {
     LaunchedEffect(Unit) { checkNow() }
     LaunchedEffect(foregroundTick) { if (foregroundTick > 0) checkNow() }
 
+    // 发现新版本 → 统一走 [UpdatePromptDialog]（弹窗与"跳过/已处理"侧效应只此一份；
+    // 设置里的手动「检查更新」用的也是它）
+    pending?.let { check ->
+        UpdatePromptDialog(check = check, onClosed = { pending = null }, modifier = modifier)
+    }
+}
+
+/**
+ * 「发现新版本」确认弹窗（**自动检测 [UpdatePromptHost] 与设置里的手动「检查更新」共用**）。
+ *
+ * 三条侧效应都收在弹窗里（两处各写一遍迟早分叉）：
+ *  · 「以后再说」/点遮罩/按返回：记**跳过版本**（[UpdateSkipStore]，跨进程有效 ——
+ *    下次只在服务端出了**更新**的版本时才再问）；三条路径对用户是同一件事；
+ *  · 「立即更新」：只把 APK 直链交给系统浏览器（v0.1.11 起不再自己下载/安装，见 [UpdateLaunch]）；
+ *  · 两条路径都记入 [UpdateHandledVersions]：本次运行不再为同一版本提示
+ *    （最要紧的是"点了更新、正在下载"的那几十秒 —— 回到前台再查时版本还没变）。
+ *
+ * @param onClosed 处理完（无论哪条路径）—— 调用方清掉自己的 pending 状态
+ */
+@Composable
+fun UpdatePromptDialog(
+    check: AppUpdater.UpdateCheck,
+    onClosed: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val c = KTheme.colors
     // 提示统一走全局主题化 Toast（不再是"下载完成/失败"的广播回调 —— 下载已交给浏览器，
     // 本 App 不再知道下载进度，也就不该对进度发表意见）
     val toast = LocalToast.current
 
-    /**
-     * 取消：记下这一版，下次只在服务端出了**新**版本时才再问。
-     * 「以后再说」、点遮罩、按返回键三条路径都走这里 —— 它们的语义对用户是同一件事。
-     */
-    fun cancelPrompt(check: AppUpdater.UpdateCheck) {
-        val v = check.latestVersion?.trim().orEmpty()
-        if (v.isNotEmpty()) {
-            skipStore.markSkipped(v)
-            handled.add(v)
-        }
-        pending = null
-    }
-
-    // 发现新版本 → 明确征得用户同意再下载（不静默开始下十几 MB）
-    pending?.let { check ->
-        KAlertDialog(
-            title = "发现新版本 ${check.latestVersion.orEmpty()}",
-            textContent = {
-                // 整段居中：弹窗是「居中标题 + 并排按钮」的排版，说明文字左对齐会跟标题错开一条边
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(KSpacing.xs),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
+    KAlertDialog(
+        title = "发现新版本 ${check.latestVersion.orEmpty()}",
+        textContent = {
+            // 整段居中：弹窗是「居中标题 + 并排按钮」的排版，说明文字左对齐会跟标题错开一条边
+            Column(
+                verticalArrangement = Arrangement.spacedBy(KSpacing.xs),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    "当前版本 ${check.currentVersion}",
+                    style = KType.caption,
+                    color = c.textSecondary,
+                    textAlign = TextAlign.Center,
+                )
+                check.notes?.takeIf { it.isNotBlank() }?.let {
                     Text(
-                        "当前版本 ${check.currentVersion}",
-                        style = KType.caption,
-                        color = c.textSecondary,
+                        it,
+                        style = KType.body,
+                        color = c.textPrimary,
                         textAlign = TextAlign.Center,
                     )
-                    check.notes?.takeIf { it.isNotBlank() }?.let {
-                        Text(
-                            it,
-                            style = KType.body,
-                            color = c.textPrimary,
-                            textAlign = TextAlign.Center,
-                        )
-                    }
                 }
-            },
-            confirmText = "立即更新",
-            dismissText = "以后再说",
-            onDismissRequest = { cancelPrompt(check) },
-            onConfirm = {
-                val url = check.apkUrl?.trim().orEmpty()
-                pending = null
-                check.latestVersion?.trim()?.takeIf { it.isNotEmpty() }?.let { handled.add(it) }
-                when {
-                    // 服务端配了版本号却没配下载地址：这是配置缺口，说清楚比静默好
-                    !UpdateLaunch.isOpenableUrl(url) ->
-                        toast.show("下载地址缺失，请稍后再试")
-                    // 极简 ROM 上可能一个浏览器都没有 —— 必须提示，否则就是"点了没反应"
-                    !UpdateLaunch.openInBrowser(context, url) ->
-                        toast.show("没有可用的浏览器，请手动访问 $url")
-                    else ->
-                        toast.show("已在浏览器打开，下载完成后点安装包即可安装")
-                }
-            },
-            modifier = modifier,
-        )
+            }
+        },
+        confirmText = "立即更新",
+        dismissText = "以后再说",
+        onDismissRequest = {
+            val v = check.latestVersion?.trim().orEmpty()
+            if (v.isNotEmpty()) {
+                UpdateSkipStore(context).markSkipped(v)
+                UpdateHandledVersions.mark(v)
+            }
+            onClosed()
+        },
+        onConfirm = {
+            UpdateHandledVersions.mark(check.latestVersion)
+            val url = check.apkUrl?.trim().orEmpty()
+            when {
+                // 服务端配了版本号却没配下载地址：这是配置缺口，说清楚比静默好
+                !UpdateLaunch.isOpenableUrl(url) ->
+                    toast.show("下载地址缺失，请稍后再试")
+                // 极简 ROM 上可能一个浏览器都没有 —— 必须提示，否则就是"点了没反应"
+                !UpdateLaunch.openInBrowser(context, url) ->
+                    toast.show("没有可用的浏览器，请手动访问 $url")
+                else ->
+                    toast.show("已在浏览器打开，下载完成后点安装包即可安装")
+            }
+            onClosed()
+        },
+        modifier = modifier,
+    )
+}
+
+/**
+ * 本次运行里**已经做过选择**的版本（点过「立即更新」或「以后再说」）。
+ *
+ * 进程级一份、而不是每个提示入口各一份：自动检测（[UpdatePromptHost]）与设置里的
+ * 手动「检查更新」共用 —— 手动点了更新后切走再回来，自动检测不该在下载中再弹一次。
+ * 「以后再说」另外会落盘（[UpdateSkipStore]），那是跨进程的语义；这个集合只管"本次运行"。
+ */
+internal object UpdateHandledVersions {
+    private val versions = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+
+    fun mark(version: String?) {
+        version?.trim()?.takeIf { it.isNotEmpty() }?.let { versions.add(it) }
     }
+
+    fun contains(version: String?): Boolean =
+        !version.isNullOrBlank() && versions.contains(version.trim())
 }
 
 /** 两次检测之间的最小间隔：来回切前后台不该反复打接口 */

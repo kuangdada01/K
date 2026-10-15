@@ -56,8 +56,18 @@ enum class KButtonVariant {
     /** 幽灵按钮：accentSoft 底 + accentBorder 描边 + accent 字 */
     Ghost,
 
-    /** 危险按钮：dangerSoft 底 + danger 字 */
+    /** 危险按钮：dangerSoft 底 + danger 字（无描边） */
     Danger,
+
+    /**
+     * 危险的描边形态：dangerSoft 底 + danger 字 + dangerBorder 描边（2026-10-15 用户要求）。
+     *
+     * 与 [Ghost] 的关系 = 同一形态的危险配色：**当危险按钮和 Ghost 按钮出现在同一个面板里**
+     * （设置弹层：检查更新是 Ghost 描边行），裸的 [Danger]（无描边）会显得少一条线、
+     * 两行不在同一套"语言"里 —— 退出登录用它。
+     * 不直接改 [Danger]：弹窗里的危险确认键（删除/清空/认输）是通栏实底形态，加描边是另一回事。
+     */
+    DangerOutline,
 }
 
 /**
@@ -120,6 +130,11 @@ fun KButton(
                 bg = c.dangerSoft
                 fg = c.danger
                 border = null
+            }
+            KButtonVariant.DangerOutline -> {
+                bg = c.dangerSoft
+                fg = c.danger
+                border = c.dangerBorder
             }
         }
     }

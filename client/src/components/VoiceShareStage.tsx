@@ -58,37 +58,33 @@ export default function VoiceShareStage() {
   const previewHidden = isPresenter && isFullscreen && surface === 'monitor';
   /** 共享者隐藏预览时舞台不渲染直播画面（观众端不受影响） */
   const previewLive = !(isPresenter && previewHidden);
-  const { videoRef, canvasSlotRef, pipActive, setPipActive } = useCanvasVideoRenderer({
-    stream: share?.stream ?? null,
-    live: previewLive,
-  });
 
   /**
-   * 画框比例：跟随**传入视频轨的真实尺寸**。
+   * 画框比例：跟随**解码出来的真实帧尺寸**（由下面的 canvas 绘制循环逐帧回报）。
    *
    * 为什么需要：画框原来写死 16:9，而手机屏幕共享是竖屏（9:19.5）——
    * 塞进 16:9 后画面被压成中间窄条、两边大片留黑（用户实测反馈）。
    * 取 0 表示还没拿到尺寸，此时不写变量、CSS 回落到 16:9（行为与改动前一致）。
    *
-   * 用 track 的 `resize` 事件而不是读一次：共享中途分辨率会变
-   * （例如编码器按带宽降分辨率、或共享者换了窗口尺寸），比例要跟着走。
+   * 为什么不用 track 的 `resize` 事件 / `getSettings()`（原实现，2026-10-15 撤掉）：
+   * 对**接收**的视频轨，这两者在中途分辨率变化时不可靠 —— 共享者把手机转去横屏游戏后，
+   * 比例停在竖屏，横屏画面被 contain 进一个大竖框里、**只在中间显示一小条**（用户实测）。
+   * 绘制循环里每帧读到的 `videoWidth/Height` 才是解码结果的 ground truth，
+   * 首帧与任何中途变化（旋转、编码器降分辨率、共享者换共享源）都覆盖得到。
    */
   const stream = share?.stream ?? null;
   const [measured, setMeasured] = useState<{ stream: MediaStream | null; ratio: number }>({
     stream: null,
     ratio: 0,
   });
-  useEffect(() => {
-    const track = stream?.getVideoTracks?.()[0];
-    if (!track) return;
-    const read = () => {
-      const s = track.getSettings();
-      if (s.width && s.height && s.height > 0) setMeasured({ stream, ratio: s.width / s.height });
-    };
-    read();
-    track.addEventListener('resize', read);
-    return () => track.removeEventListener('resize', read);
-  }, [stream]);
+  const { videoRef, canvasSlotRef, pipActive, setPipActive } = useCanvasVideoRenderer({
+    stream,
+    live: previewLive,
+    onFrameSize: (width, height) => {
+      const ratio = width / height;
+      setMeasured((prev) => (prev.stream === stream && prev.ratio === ratio ? prev : { stream, ratio }));
+    },
+  });
   /**
    * 换了一路共享（或共享结束）就把上一次的测量值当作**未知**（0）。
    *
@@ -102,9 +98,9 @@ export default function VoiceShareStage() {
   /**
    * 共享者**声明的采集比例**（`share-start` 上行、服务端放进房间成员信息的 width/height）。
    *
-   * 为什么要它：接收轨的 `getSettings()` 在**首帧到达之前是没有宽高的**（Chrome 要等收到帧才填），
-   * 所以 `shareRatio` 一开始是 0、画框按 CSS 的 16:9 撑开，首帧那一刻才收成真实比例
-   * （16:10 会左右留黑）—— 用户看到的就是"画面跳一下"。有了声明值，从第一帧起比例就是对的。
+   * 为什么要它：帧尺寸要**收到第一帧**才有（绘制循环回报之前，`shareRatio` 是 0），
+   * 那时画框按 CSS 的 16:9 撑开，首帧那一刻才收成真实比例（16:10 会左右留黑）——
+   * 用户看到的就是"画面跳一下"。有了声明值，从第一帧起比例就是对的。
    * 语义与缺省行为见 shared/src/types.ts 的 `VoiceParticipant.width`：没带就回落到上面的轨道尺寸，
    * 与改动前逐字一致（老客户端/老服务端）。
    */
@@ -112,7 +108,7 @@ export default function VoiceShareStage() {
   const declaredWidth = declaredSharer?.width ?? 0;
   const declaredHeight = declaredSharer?.height ?? 0;
   const declaredAspect = declaredWidth > 0 && declaredHeight > 0 ? declaredWidth / declaredHeight : 0;
-  /** 画框实际用的比例：轨道尺寸（真实解码尺寸）优先，其次声明值；0 = 都未知（CSS 回落 16:9） */
+  /** 画框实际用的比例：解码帧尺寸（真实画面）优先，其次声明值；0 = 都未知（CSS 回落 16:9） */
   const stageAspect = shareRatio > 0 ? shareRatio : declaredAspect;
 
   // 原生系统画中画：进/出小窗由系统回调驱动（网页版 PiP 的 leavepictureinpicture 事件在

@@ -38,7 +38,7 @@ enum class GlyphKind {
     Home, Chat, Book, Voice, User, Image, Bookmark, Repost, Share, Search, Mail,
     ChevronLeft, Menu, Sun, More, Plus, Close,
     Mic, Volume, Monitor, LogOut, Dot, Sliders, Megaphone,
-    Shield, ChevronRight, Maximize, PictureInPicture, Check,
+    Shield, ChevronRight, Maximize, PictureInPicture, Photo, Check,
 }
 
 /**
@@ -473,6 +473,16 @@ fun Glyph(
              * `VoiceShareStage` 的 `PictureInPicture2` 同款；此前是手绘的显示器形状）。
              */
             GlyphKind.PictureInPicture -> drawLucide(LUCIDE_PICTURE_IN_PICTURE_2, tint, s)
+
+            /**
+             * Tabler Icons `photo`（照片）：消息页输入栏「发图」按钮（M6.24，**非 lucide**）。
+             *
+             * 选型经过：lucide 的 `image` 系带 r=2 空心小圆、24dp 下糊团（"锯齿"）→
+             * 相机被否 → Tabler `album` 也被"换一个" → 最终 `photo`（经典照片造型：
+             * 相框 + 山坡 + **实心**太阳点；数据与出处见 [TABLER_PHOTO] / `IconPathsExtra.kt`）。
+             * `image`（GlyphKind.Image）继续留给发布页"选封面"（尺寸更大、无此问题）。
+             */
+            GlyphKind.Photo -> drawLucide(TABLER_PHOTO, tint, s)
         }
     }
 }

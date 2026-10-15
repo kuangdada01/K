@@ -16,6 +16,9 @@ import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import top.kuangdada.k.nativeapp.MainActivity
 import top.kuangdada.k.nativeapp.R
 
@@ -109,13 +112,20 @@ class VoiceForegroundService : Service() {
                 val projection = intent?.getBooleanExtra(EXTRA_PROJECTION, usingProjection) ?: usingProjection
                 usingMic = mic
                 usingProjection = projection
+                // 类型 = Manifest 全集的**当前子集**（见类注释），这里先算好：
+                // 既传给 startForegroundSafely，也在成功后记为"已确认生效"的子集
+                val type = foregroundType(mic = mic, projection = projection)
                 val ok = startForegroundSafely(
                     title = intent?.getStringExtra(EXTRA_TITLE) ?: "语音房",
                     text = intent?.getStringExtra(EXTRA_TEXT) ?: "正在语音通话",
-                    mic = mic,
-                    projection = projection,
+                    type = type,
                 )
-                if (ok) requestAudioFocus()
+                if (ok) {
+                    // 记录"这个会话的前台类型子集已真正生效"。
+                    // startShare 的时序（等确认再采集）依赖它，见 awaitProjectionReady。
+                    foregroundConfirmed.value = ConfirmedForeground(sessionId, type)
+                    requestAudioFocus()
+                }
             }
         }
         // 被系统杀掉后不自动重启：语音房没有"自动重连进房"的语义，
@@ -131,13 +141,18 @@ class VoiceForegroundService : Service() {
         audioRouter?.stop()
         audioRouter = null
         abandonAudioFocus()
+        // 服务退出 = 前台类型全部失效：清掉"已确认"标记，防止后续等待命中陈旧值
+        foregroundConfirmed.value = null
         super.onDestroy()
     }
 
-    private fun startForegroundSafely(title: String, text: String, mic: Boolean, projection: Boolean): Boolean {
-        val notification = buildNotification(title, text)
-        // 类型 = Manifest 全集的**当前子集**（见类注释）；类型必须被 Manifest 声明覆盖
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+    /**
+     * 按当前实际能力算前台服务类型子集：`mediaPlayback` 恒有，
+     * `microphone`/`mediaProjection` 仅在本轮确实使用且前置条件满足时加入
+     * （类型必须是 Manifest 声明集合的子集，Android 官方明确允许子集使用）。
+     */
+    private fun foregroundType(mic: Boolean, projection: Boolean): Int =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             var t = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
             if (mic) t = t or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
             if (projection) t = t or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
@@ -145,13 +160,16 @@ class VoiceForegroundService : Service() {
         } else {
             0
         }
+
+    private fun startForegroundSafely(title: String, text: String, type: Int): Boolean {
+        val notification = buildNotification(title, text)
         // 用 ServiceCompat：Android 14+ 要求显式给类型，老版本忽略该参数。
         // 失败不能吞：回传控制器（停资源 + 可重试错误），未被路由时至少收掉自己。
         return try {
             ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, type)
             true
         } catch (t: Throwable) {
-            Log.e(TAG, "startForeground 失败 mic=$mic projection=$projection", t)
+            Log.e(TAG, "startForeground 失败 type=$type", t)
             val sid = sessionId
             val routed = sid != null &&
                 VoiceRoomSessionHub.get().onForegroundServiceError(
@@ -328,6 +346,10 @@ class VoiceForegroundService : Service() {
         /**
          * 更新通知文案（如"3 人在房"）或能力子集（如开始/停止共享增删 mediaProjection）。
          * 与 [start] 同一入口：服务在 onStartCommand 默认分支按新子集重新 startForeground。
+         *
+         * ⚠️ 返回 true 只代表**意图提交成功**——类型真正生效是异步的（服务的
+         * onStartCommand）。需要"确认已生效"的场景（屏幕共享的 mediaProjection）
+         * 必须再用 [awaitProjectionReady] 等待（见它的注释）。
          */
         fun update(
             context: Context,
@@ -341,6 +363,54 @@ class VoiceForegroundService : Service() {
 
         fun stop(context: Context) {
             runCatching { context.stopService(Intent(context, VoiceForegroundService::class.java)) }
+        }
+
+        // ---------------------------------------------------------------
+        // "已确认生效"的前台类型（屏幕共享时序依赖它）
+        // ---------------------------------------------------------------
+
+        /**
+         * 最近一次**成功** startForeground 的结果。
+         *
+         * [sessionId] 可能为 null（不带会话标识的旧版意图）；用会话 id 做匹配，
+         * 旧会话的陈旧值不会让新会话的等待误判为成功。
+         */
+        private data class ConfirmedForeground(val sessionId: String?, val type: Int)
+
+        /**
+         * 已确认生效的类型子集。StateFlow 会**重放最后值**——等待方即使晚一拍调用，
+         * 也能立刻读到已确认的结果，不存在"确认先到、等待后到"而错过的问题。
+         */
+        private val foregroundConfirmed = MutableStateFlow<ConfirmedForeground?>(null)
+
+        /**
+         * 等待**本会话**的前台服务确认带上 mediaProjection 类型。
+         *
+         * **为什么必须有它**（2026-10-15 真机事故）：
+         * `startForegroundService` 只是"提交意图"——类型升级真正发生在服务的
+         * `onStartCommand`（与调用方同在主线程、异步执行）；而系统对
+         * `getMediaProjection()` 的检查是**即时**的（Android 10 / targetSdk 29+）：
+         * 提交后立刻启动采集，服务还没来得及挂上类型，系统直接拒绝，真机报错原文：
+         * "Media projections require a foreground service of type
+         *  ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION"
+         * （用户截图里的「屏幕共享启动失败」正是它）。
+         *
+         * 所以屏幕共享时序固定为：用户授权 → 服务升级 → **等到这里确认** → 启动采集
+         * （见 VoiceRoomController.startShare）。等待期间主线程会把服务的
+         * onStartCommand 跑完，状态一到即被唤醒 —— 同主线程的先后顺序由此保证。
+         *
+         * @return [timeoutMs] 内确认到包含 mediaProjection 的类型为 true；
+         *         API 28 及以下没有类型强制检查，直接放行。
+         */
+        suspend fun awaitProjectionReady(sessionId: String, timeoutMs: Long = 3000L): Boolean {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
+            val mask = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            return withTimeoutOrNull(timeoutMs) {
+                foregroundConfirmed.first { c ->
+                    c != null && c.sessionId == sessionId && (c.type and mask) == mask
+                }
+                true
+            } ?: false
         }
     }
 }

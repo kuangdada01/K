@@ -241,6 +241,10 @@ object ShareRenderHolder {
         }
         // 换轨：旧渲染器的 sink 绑在旧轨上，留着也画不出新画面
         currentTrack = track
+        // 轨道 id 可能被复用（本端共享轨 id 是固定常量；对端也可能沿用同一 msid）——
+        // 上一场共享量到的比例必须作废：解码尺寸现在排在取值链第一位
+        // （见 ShareFrameGeometry.shareContentAspect），留着旧值会让新共享在首帧之前先按旧比例排版
+        decodedAspect.remove(track.id())
         slot.reset()
         releaseRenderer()
         acquireEgl(eglContext)

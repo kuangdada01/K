@@ -121,6 +121,7 @@ fun StyleGuideScreen() {
                 KButton("禁用", onClick = {}, enabled = false)
                 KButton("幽灵", onClick = {}, variant = KButtonVariant.Ghost)
                 KButton("危险", onClick = {}, variant = KButtonVariant.Danger)
+                KButton("危险描边", onClick = {}, variant = KButtonVariant.DangerOutline)
             }
         }
 

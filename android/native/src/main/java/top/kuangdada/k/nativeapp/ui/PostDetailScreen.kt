@@ -807,14 +807,21 @@ fun PostDetailScreen(
                     .background(c.surface)
                     .padding(horizontal = KSpacing.md, vertical = KSpacing.xs),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(KSpacing.sm),
+                // 表情 / 输入框 / 发送三者**等距 8dp**（xs）——2026-10-15 用户两轮定稿：
+                // 先"间距调成一样的"（删了发送侧的 12dp 补偿），再"统一并加大一点"（4→8）。
+                horizontalArrangement = Arrangement.spacedBy(KSpacing.xs),
             ) {
-                // 表情开关（笑脸）：与聊天页同款 32dp 紧凑盒。开面板 = 收键盘 +
-                // 清焦点，面板瞬时占住键盘原来的位置（交换区 max() 顶住输入栏，
-                // 全程不动）；聚焦输入框时面板再向键盘等高交接。
+                // 表情开关（笑脸）：图标 24dp、盒子 **28dp**（左右各 2dp）。
+                // 收敛史（2026-10-15，用户连续四轮）：20 图标/32 盒（原版）→ 图标 24 + 盒 40
+                //（"图标大一点、高度跟输入框一样高"）→ 盒 32（"空白占位缩小一半"）→ 盒 24
+                //（"表情左右两边留白还是多"）→ **盒 28**（"表情左右加大一点"：两侧各回松 2dp）。
+                // 触控区小于 44dp 惯例——"紧凑"是用户明确的多轮选择。
+                // 开面板 = 收键盘 + 清焦点，面板瞬时占住键盘原来的位置（交换区 max()
+                // 顶住输入栏，全程不动）；聚焦输入框时面板再向键盘等高交接。
                 KEmojiButton(
                     active = emojiOpen,
-                    boxSize = 32.dp,
+                    boxSize = 28.dp,
+                    iconSize = 24.dp,
                     onClick = {
                         // 未登录与输入框同一条规则：点它就是"要评论"，先引导登录
                         if (!isLoggedIn) {

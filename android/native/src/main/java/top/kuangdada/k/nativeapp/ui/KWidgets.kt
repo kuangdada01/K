@@ -761,6 +761,11 @@ fun KSectionSpacer() {
  * 位置刻意抬到**导航胶囊之上**（`navScrollPadding`）—— 放在屏幕最底部会被悬浮胶囊盖住，
  * 用户看不到任何反馈。样式走主题令牌（`surfaceRaised` 底 + `borderSubtle` 描边 + 主题文字色），
  * 深浅主题自动翻转 —— 与系统 Toast（黑底白字的固定样式）刻意不同，那才是"不符合主题"的根源。
+ *
+ * **胶囊在本组件内永远水平居中**（`contentAlignment = BottomCenter`，2026-10-15 用户实测
+ * "提示不在中间在左边"）：调用方有两种传参 —— ① `align(BottomCenter)`（盒子包住内容，
+ * 宽=胶囊宽，对齐无感）；② 全局宿主（AppShell）传 `align(BottomCenter) + fillMaxWidth()`
+ * （盒子通栏）—— 没有这条对齐时，②的胶囊会落到 TopStart，表现为提示贴在左边。
  */
 @Composable
 fun KToast(
@@ -773,7 +778,10 @@ fun KToast(
         kotlinx.coroutines.delay(1800)
         onDismiss()
     }
-    Box(modifier = modifier.padding(bottom = KDimens.navScrollPadding + KSpacing.lg)) {
+    Box(
+        modifier = modifier.padding(bottom = KDimens.navScrollPadding + KSpacing.lg),
+        contentAlignment = Alignment.BottomCenter,
+    ) {
         Box(
             modifier = Modifier
                 .clip(RoundedCornerShape(KRadius.row))

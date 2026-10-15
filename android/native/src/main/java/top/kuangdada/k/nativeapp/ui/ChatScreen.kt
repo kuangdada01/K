@@ -636,7 +636,16 @@ fun ChatScreen(
                 // 玻璃源：栏的兄弟节点，且在栏之前绘制
                 .then(if (canBlur) Modifier.layerBackdrop(backdrop) else Modifier),
         ) {
-            Box(modifier = Modifier.weight(1f)) {
+            /**
+             * ★ **fillMaxWidth 必须有**（2026-10-15 用户实测："没有对话记录的提示在左边不是居中的"）。
+             *
+             * `weight(1f)` 在 Column 里只保证**主轴（高度）**占满，**宽度是包内容的** ——
+             * 而下面的空态/错误占位是 wrap-content + `align(Center)`：盒子不占满宽度，
+             * 水平方向就"无处可居中"，整块贴在左边（垂直方向因为盒子占了全高，是居中的 ——
+             * 这正是这个 bug 的隐蔽之处：一半对一半不对）。骨架/消息列表分支是 fillMaxSize，
+             * 宽度有没有都一样；补上之后对它们无感。
+             */
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     /**
                      * **有内容就先渲染**（缓存命中，或 SSE 已经刷过）：连加载失败也**不把已有消息
@@ -923,22 +932,30 @@ fun ChatScreen(
                 // （ime 全高含导航栏，叠加等于把导航栏让了两次）。
                 // 垂直留白收一档（sm → xs），配合输入框矮一档（40dp，见 KTextField 调用）：
                 // 用户反馈"输入框高度小一点、上下留白间隙也小一点"。
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = KSpacing.md, vertical = KSpacing.xs),
+                verticalAlignment = Alignment.CenterVertically,
+                // 表情排 / 输入框 / 发送三者**等距 8dp**（xs）——2026-10-15 用户两轮定稿：
+                // 先"间距调成一样的"（删了发送侧的 12dp 补偿），再"统一并加大一点"
+                //（4→8；同时与"表情↔发图"那 8dp 对齐）。
+                horizontalArrangement = Arrangement.spacedBy(KSpacing.xs),
+            ) {
+                // 表情 + 发图一排：两钮之间 **8dp**（M6.24 用户反馈"表情跟相册间距太小了"，
+                // 原来紧贴成 0dp）；图标同为 24dp（与详情页表情同一套）。
+                // 触控目标小于 44dp 指南值，是用户明确选的紧凑取舍。
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = KSpacing.md, vertical = KSpacing.xs),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(KSpacing.sm),
+                    horizontalArrangement = Arrangement.spacedBy(KSpacing.xs),
                 ) {
-                    // 表情 + 发图紧贴成一排（间距 0）：用户多轮反馈"继续缩小间距"，
-                    // 触控盒最终收成 32dp（图标 20dp，四周各留 6dp）——两颗钮的图标
-                    // 间隙只剩 12dp。触控目标远小于 44dp 指南值，是用户明确选的紧凑取舍。
-                    // 外层的 spacedBy 只管这一排与输入框/发送键的间隙。
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // 表情开关（笑脸）：点亮态 = 面板正开着
+                        // 表情开关（笑脸）：点亮态 = 面板正开着。
+                        // 盒 28dp（图标 24dp，左右各 2dp）——与详情页同步的第三轮收敛：
+                        // 24dp 盒太贴（"表情左右加大一点"），两侧各回松 2dp。
                         KEmojiButton(
                             active = emojiOpen,
-                            boxSize = 32.dp,
+                            boxSize = 28.dp,
+                            iconSize = 24.dp,
                             onClick = {
                                 emojiOpen = !emojiOpen
                                 if (emojiOpen) {
@@ -954,15 +971,17 @@ fun ChatScreen(
                             },
                         )
                         // 发图按钮（系统相册选一张、选完直接发出）：与表情钮同一套
-                        // 32dp 紧凑触控盒 + 按下反馈（accentSoft 底 / accent 前景），
-                        // 图标就地用 lucide image 几何（Glyph），不引外部资产。
+                        // 24dp 紧凑触控盒 + 按下反馈（accentSoft 底 / accent 前景），
+                        // 图标用 Tabler photo（见 IconPathsExtra.kt）。
                         val imageInteraction = remember { MutableInteractionSource() }
                         val imagePressed by imageInteraction.collectIsPressedAsState()
+                        // 尺寸与表情钮同步：24dp 盒 + 24dp 图标（2026-10-15）
                         Box(
                             modifier = Modifier
-                                .size(32.dp)
-                                .clip(RoundedCornerShape(KRadius.pill))
-                                .background(if (imagePressed) c.accentSoft else Color.Transparent)
+                                .size(24.dp)
+                                // 不垫按下底色（M6.24 用户要求"选中图标反色主题色……要遮罩干嘛"）：
+                                // 选中反馈统一走"**图标变主题色**"（见下面 Glyph 的 tint）。
+                                //（此前为圆形底色配了 clip(pill)，会把方形图标的四角切掉。）
                                 .clickable(
                                     interactionSource = imageInteraction,
                                     indication = null,
@@ -991,8 +1010,11 @@ fun ChatScreen(
                         ) {
                             Glyph(
                                 tint = if (imagePressed || sending) c.accentText else c.textSecondary,
-                                kind = GlyphKind.Image,
-                                size = KDimens.navIcon,
+                                // `photo`（Tabler，非 lucide）：lucide 的 image 系带 r=2 空心小圆、
+                                // 24dp 下糊团（"锯齿"）；相机与 album 相继被否——最终选经典照片
+                                // 造型（相框+山坡+实心太阳点，见 IconPathsExtra.kt / TABLER_PHOTO）
+                                kind = GlyphKind.Photo,
+                                size = 24.dp,
                             )
                         }
                     }

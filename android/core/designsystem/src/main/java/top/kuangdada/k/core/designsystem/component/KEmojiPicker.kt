@@ -125,7 +125,9 @@ fun KEmojiButton(
     val c = KTheme.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    // 面板开着或被按下都点亮：后者是即时触感，前者是"当前状态"
+    // 面板开着或被按下都"点亮"：**图标色切到主题色**（accentText）——这是唯一的选中反馈。
+    // M6.24 用户要求"选中图标反色主题色……要遮罩干嘛"：删掉了原来垫的 accentSoft 圆底
+    //（它还得配 clip(pill)，方形图标会被切四角——"照片四个角显示不全"的根因）。
     val fg = if (active || pressed) c.accentText else c.textSecondary
     Box(
         modifier = modifier
@@ -133,8 +135,6 @@ fun KEmojiButton(
             // 手指实际能点到的范围必须达标，否则输入栏这一排等于"半个按钮"；
             // 紧凑场景可经 [boxSize] 调小（代价是触控目标跟着变小）
             .size(boxSize)
-            .clip(RoundedCornerShape(KRadius.pill))
-            .background(if (active || pressed) c.accentSoft else Color.Transparent)
             .clickable(
                 interactionSource = interaction,
                 indication = null,

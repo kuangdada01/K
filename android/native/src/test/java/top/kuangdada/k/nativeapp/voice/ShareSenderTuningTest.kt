@@ -59,15 +59,51 @@ class ShareSenderTuningTest {
     }
 
     @Test
-    fun `首选帧率是 60，退档是 30`() {
-        assertEquals(60, SHARE_CAPTURE_FPS)
-        assertEquals(30, SHARE_FALLBACK_FPS)
+    fun `码率上限与 Web 端 1080p60 档一致（30M）`() {
+        // 与 client/src/voice/types.ts 的 SHARE_QUALITY_PRESETS['1080p60'].maxBitrate 对齐
+        assertEquals(30_000_000, ShareQuality.V1080P60.maxBitrateBps)
+    }
+
+    // ---------------------------------------------------------------
+    // 档位（2026-10-15 起三档可切换，取值与 Web 端 SHARE_QUALITY_PRESETS 对齐）
+    // ---------------------------------------------------------------
+
+    @Test
+    fun `三档取值与 Web 端 SHARE_QUALITY_PRESETS 一致`() {
+        // 对照 client/src/voice/types.ts：
+        //   '1080p60': { maxBitrate: 30_000_000, scale: 1 }   60fps
+        //   '1080p30': { maxBitrate: 10_000_000, scale: 1 }   30fps
+        //   '720p30' : { maxBitrate: 6_000_000,  scale: 1.5 } 30fps
+        assertEquals(30_000_000, ShareQuality.V1080P60.maxBitrateBps)
+        assertEquals(10_000_000, ShareQuality.V1080P30.maxBitrateBps)
+        assertEquals(6_000_000, ShareQuality.V720P30.maxBitrateBps)
+        assertEquals(60, ShareQuality.V1080P60.maxFps)
+        assertEquals(30, ShareQuality.V1080P30.maxFps)
+        assertEquals(30, ShareQuality.V720P30.maxFps)
+        assertEquals(1.0, ShareQuality.V1080P60.scale, 0.0)
+        assertEquals(1.0, ShareQuality.V1080P30.scale, 0.0)
+        assertEquals(1.5, ShareQuality.V720P30.scale, 0.0)
     }
 
     @Test
-    fun `码率上限与 Web 端 1080p60 档一致（30M）`() {
-        // 与 client/src/voice/types.ts 的 SHARE_QUALITY_PRESETS['1080p60'].maxBitrate 对齐
-        assertEquals(30_000_000, SHARE_MAX_BITRATE_BPS)
+    fun `档位键与 Web 端同名（持久化格式，两端对照用）`() {
+        assertEquals("1080p60", ShareQuality.V1080P60.id)
+        assertEquals("1080p30", ShareQuality.V1080P30.id)
+        assertEquals("720p30", ShareQuality.V720P30.id)
+    }
+
+    @Test
+    fun `档位解析：缺失或非法回落默认 1080p60`() {
+        assertEquals(ShareQuality.V1080P60, ShareQuality.DEFAULT)
+        assertEquals(ShareQuality.V1080P60, ShareQuality.fromId(null))
+        assertEquals(ShareQuality.V1080P60, ShareQuality.fromId(""))
+        assertEquals(ShareQuality.V1080P60, ShareQuality.fromId("4k60"))
+        assertEquals(ShareQuality.V720P30, ShareQuality.fromId("720p30"))
+    }
+
+    @Test
+    fun `采集帧率固定 60（编码帧率上限由档位给出）`() {
+        assertEquals(60, SHARE_CAPTURE_FPS)
     }
 
     // ---------------------------------------------------------------

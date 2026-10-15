@@ -99,6 +99,7 @@ import top.kuangdada.k.core.designsystem.theme.KType
 import top.kuangdada.k.core.designsystem.theme.LocalAnimationsEnabled
 import top.kuangdada.k.nativeapp.R
 import top.kuangdada.k.nativeapp.voice.ChatReader
+import top.kuangdada.k.nativeapp.voice.ShareQuality
 import top.kuangdada.k.nativeapp.voice.ShareRenderHolder
 import top.kuangdada.k.nativeapp.voice.VoiceRoomController
 import top.kuangdada.k.nativeapp.voice.rememberChatReader
@@ -671,9 +672,33 @@ fun VoiceRoomScreen(
                                 }
                             }
                         }
+                        /**
+                         * 档位选择（**仅共享者本人可见**，2026-10-15 用户要求"手机投屏要有画质帧率选择"）：
+                         * 极清 1080p60 / 流畅 1080p30 / 省流 720p30 —— 档位键/码率/标签与 Web 端
+                         * 「质量档位」同一套（见 ShareQuality）。
+                         *
+                         * 点选立即生效（会话侧重应用发送参数）并记忆（下次进房沿用）。
+                         * 另起一行而不是塞进标题行：三档全标签（画质 + 帧率）在竖屏宽度下放不下标题行。
+                         */
+                        if (state.selfSharing) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(KSpacing.xs)) {
+                                ShareQuality.entries.forEach { q ->
+                                    ShareQualityChip(
+                                        label = q.label,
+                                        selected = q == state.shareQuality,
+                                        onClick = { controller.setShareQuality(q) },
+                                    )
+                                }
+                            }
+                        }
                         Text(
-                            text = if (shareHasFrame) "$sharerName 正在共享屏幕"
-                            else "$sharerName 正在共享屏幕（等待画面…）",
+                            text = when {
+                                // 编码受限自动降档时把原因说清（否则用户会觉得"设置自己丢了"）
+                                state.selfSharing && state.shareQualityAuto ->
+                                    "我 正在共享屏幕（编码受限，已自动切为 ${state.shareQuality.label}）"
+                                shareHasFrame -> "$sharerName 正在共享屏幕"
+                                else -> "$sharerName 正在共享屏幕（等待画面…）"
+                            },
                             style = KType.caption,
                             color = c.accentText,
                             // 单行 + 省略号：首帧到达时这几个字会变短，一旦折行数变化，
@@ -1407,8 +1432,23 @@ private fun VoiceControlButton(
         if (breathing) {
             KBreathRing(
                 color = c.danger,
-                // 比按钮大一圈：环顺着按钮外沿向外扩散，不会压在图标或角标上
-                ringSize = KDimens.voiceControl + KSpacing.xs,
+                /**
+                 * ★ **环不许参与布局**（2026-10-15 用户实测："录音打开会触发跳动"）。
+                 *
+                 * 症状的成因：环比按钮大一圈（原来直接按 50dp + 8dp = 58dp 的实体尺寸
+                 * 去参与测量），录制开关一切换，这一格就从 50dp ⇄ 58dp 地变高 ——
+                 * 整条控制栏被顶起 8dp、上方内容列跟着收 8dp，整块界面跳一下。
+                 *
+                 * 解法：尺寸交给 `matchParentSize()`（= 按钮的 50dp 画布，不再撑大布局），
+                 * 环按半径比例**越过画布边界绘制**（绘制默认不裁剪，与涟漪/阴影同一机制）。
+                 * 半径换算照原视觉：原 58dp 画布下半径 0.86×29 ≈ 25dp（= 按钮边缘）→ 29dp；
+                 * 现在画布 25dp 半径，取 base 1.0（25dp 起）+ growth 0.16（扩到 29dp，
+                 * 仍是 58dp 直径的外扩量）。
+                 */
+                modifier = Modifier.matchParentSize(),
+                ringSize = KDimens.voiceControl,
+                baseRadiusRatio = 1.0f,
+                maxGrowth = 0.16f,
                 // 比默认（0.38）实一点 —— 它要在深色房间底上被看见
                 maxAlpha = 0.5f,
             )
@@ -1567,6 +1607,44 @@ private fun ShareOverlayButton(
         contentAlignment = Alignment.Center,
     ) {
         Glyph(tint = fg, kind = icon, size = 18.dp)
+    }
+}
+
+/**
+ * 共享档位小胶囊（仅共享者可见，见共享舞台里的档位行）。
+ *
+ * 选中态 = accent 底 + onAccent 字（与底栏"激活"按钮同一套语义色，深浅主题都过对比度）；
+ * 未选中 = 描边胶囊 + textPrimary 字。整颗胶囊都是点击区。
+ * 颜色规则与 [VoiceControlButton] 的 active 档一致 —— 换配色只改令牌，不改这里。
+ */
+@Composable
+private fun ShareQualityChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val c = KTheme.colors
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(KRadius.pill))
+            .then(
+                if (selected) {
+                    Modifier.background(c.accent)
+                } else {
+                    Modifier.border(1.dp, c.borderStrong, RoundedCornerShape(KRadius.pill))
+                }
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = KSpacing.sm, vertical = KSpacing.xs)
+            // 读屏能说出"哪一个当前选中"
+            .semantics { this.contentDescription = if (selected) "$label（当前）" else label },
+    ) {
+        Text(
+            text = label,
+            style = KType.footnote,
+            color = if (selected) c.onAccent else c.textPrimary,
+            maxLines = 1,
+        )
     }
 }
 

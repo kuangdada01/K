@@ -156,6 +156,19 @@ class VoiceRoomController(
         val shareHasAudio: Boolean = false,
         /** 观看端是否静音了共享声音（声音图标的状态） */
         val shareAudioMuted: Boolean = false,
+        /**
+         * 本端共享的**画质/帧率档位**（共享面板里的档位选择器，2026-10-15 起；只有共享者有意义）。
+         *
+         * 初值取持久化偏好（[ShareQualityStore]）——下次进房沿用上次的选择；
+         * [setShareQuality]（手动）与自动降档（编码受限）都会更新它。
+         */
+        val shareQuality: ShareQuality = ShareQuality.DEFAULT,
+        /**
+         * 最近一次档位变化是不是**自动降档**（编码受限：极清 1080p60 → 流畅 1080p30）。
+         *
+         * UI 用它解释"为什么档位自己变了"（否则用户会以为设置丢了）；用户手动切档即清掉。
+         */
+        val shareQualityAuto: Boolean = false,
         /** 全房间混音录制（M3 第 16 项） */
         val recording: Boolean = false,
         val recordStartedAt: Long? = null,
@@ -165,7 +178,13 @@ class VoiceRoomController(
         val recordFormatNote: String? = null,
     )
 
-    private val _state = MutableStateFlow(State(roomName = room.name))
+    private val _state = MutableStateFlow(
+        State(
+            roomName = room.name,
+            // 共享档位 = 持久化偏好（下次进房沿用上次的选择，与 Web 端 localStorage 同语义）
+            shareQuality = ShareQualityStore.read(context),
+        )
+    )
     val state: StateFlow<State> = _state.asStateFlow()
 
     /**
@@ -287,7 +306,11 @@ class VoiceRoomController(
                 return@launch
             }
 
-            val voiceSession = VoiceSession(context, VoiceSession.toIceServers(iceConfig))
+            val voiceSession = VoiceSession(
+                context,
+                VoiceSession.toIceServers(iceConfig),
+                initialShareQuality = _state.value.shareQuality,
+            )
             session = voiceSession
             voiceSession.setListener(object : VoiceSession.Listener {
                 override fun onSendSignal(targetUserId: Long, data: JsonObject) {
@@ -327,6 +350,13 @@ class VoiceRoomController(
                         if (speaking) st.copy(speakingUserIds = st.speakingUserIds + me)
                         else st.copy(speakingUserIds = st.speakingUserIds - me)
                     }
+                }
+
+                override fun onShareQualityChanged(quality: ShareQuality) {
+                    // 自动降档（极清 1080p60 被编码器吞吐卡住 → 流畅 1080p30）：
+                    // 落库 + 进 UI 状态，界面把高亮切到新档并提示"已自动切换"
+                    ShareQualityStore.write(context, quality)
+                    _state.update { it.copy(shareQuality = quality, shareQualityAuto = true) }
                 }
 
                 override fun onError(message: String) {
@@ -689,17 +719,35 @@ class VoiceRoomController(
     // ---------------------------------------------------------------
 
     /**
-     * 开始共享。固定时序：**用户授权 → 服务升级（加 mediaProjection 类型）并确认
-     * 成功 → 启动采集**。顺序反了会出现"采集已开始、服务类型还不含 mediaProjection"
-     * 的窗口，API 34+ 会被系统直接杀掉服务。
+     * 屏幕共享启动流程是否在途（提交升级 → 等待确认 → 采集）。
+     *
+     * 等待期间 `selfSharing` 还是 false，按钮看起来"还能再点"——快速连点会让两次
+     * 授权结果各自走一遍流程（重复升级/重复采集）。这个闸门只放行一次。
+     */
+    @Volatile
+    private var shareStarting = false
+
+    /**
+     * 开始共享。固定时序：**用户授权 → 服务升级（加 mediaProjection 类型）→
+     * 等到确认生效 → 启动采集**。三段顺序都不能换，尤其"等到确认"——
+     * `VoiceForegroundService.update()` 只是提交意图，类型升级在服务 onStartCommand 里
+     * 异步发生；提交完立刻采集的话，系统对 `getMediaProjection()` 的即时检查会拒绝：
+     * "Media projections require a foreground service of type
+     *  ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION"（2026-10-15 真机报错原文）。
+     * 详见 [VoiceForegroundService.awaitProjectionReady]。
      *
      * @param permissionData `MediaProjectionManager.createScreenCaptureIntent()` 的结果
      */
     fun startShare(permissionData: android.content.Intent) {
         val s = session ?: return
-        // 1) 用户刚完成系统授权（前置条件满足）→ 服务先升级到含 mediaProjection 的子集。
+        if (shareStarting) {
+            Log.i(TAG, "屏幕共享：启动流程已在途，忽略重复请求")
+            return
+        }
+        shareStarting = true
+        // 1) 用户刚完成系统授权（前置条件满足）→ 服务先提交升级到含 mediaProjection 的子集。
         //    提交失败（返回 false）时不得启动采集。
-        val upgraded = VoiceForegroundService.update(
+        val submitted = VoiceForegroundService.update(
             context = context,
             title = _state.value.roomName.ifBlank { "语音房" },
             text = "正在共享屏幕",
@@ -708,50 +756,71 @@ class VoiceRoomController(
             mic = serviceMicType,
             projection = true,
         )
-        if (!upgraded) {
+        if (!submitted) {
+            shareStarting = false
             // update() 已把失败经 hub 回传（onForegroundServiceFailed → abort）
             _state.update { it.copy(error = "无法开始共享：语音服务升级失败，请退出房间后重试") }
             return
         }
-        // 2) 采集
-        val started = s.startScreenShare(
-            permissionData = permissionData,
-            projectionCallback = object : android.media.projection.MediaProjection.Callback() {
-                // 用户在系统弹窗/通知里点"停止共享"时必须跟着停，
-                // 否则本端还在采集但对方已收不到画面（Android 14 起不注册这个回调会抛异常）
-                override fun onStop() {
-                    stopShare()
+        scope.launch {
+            try {
+                // 2) 等确认：服务真正带上 mediaProjection 类型后才能采集（见上面的时序说明）。
+                //    此刻同在主线程——挂起期间服务跑完 onStartCommand，确认一到即恢复。
+                val ready = VoiceForegroundService.awaitProjectionReady(sessionId)
+                if (!ready) {
+                    Log.w(TAG, "屏幕共享：前台服务未确认 mediaProjection 类型，放弃启动采集")
+                    _state.update { it.copy(error = "无法开始共享：前台服务未能切换到屏幕共享模式，请重试") }
+                    return@launch
                 }
-            },
-        )
-        if (!started) {
-            // 采集没起来：把服务能力状态同步回退（去掉 mediaProjection）
-            updateServiceCapabilities("${_state.value.peers.size + 1} 人在房")
-            return
-        }
-        // 3) 服务端负责互斥与抢占：share-start(audio=false) → 广播 share-changed。
-        // width/height = 本端采集像素尺寸（可选字段）：观看端（含之后进房的人）
-        // 在首帧到达之前就能把画面框按正确比例摆好 —— 语义见 VoiceParticipantDto.width
-        val capture = s.localShareCaptureSize
-        signaling?.send(
-            top.kuangdada.k.core.data.model.VoiceOutbound(
-                type = top.kuangdada.k.core.data.model.VoiceOutboundType.ShareStart,
-                audio = false,
-                width = capture?.first,
-                height = capture?.second,
-            )
-        )
-        _state.update {
-            it.copy(
-                selfSharing = true,
-                // **共享者自己也要能看到画面**（本端预览）。
-                // 之前只置了 selfSharing、没置 remoteVideoTrack，而 UI 的渲染条件是
-                // `remoteVideoTrack != null` —— 于是共享者看到的仍是麦位网格，
-                // 表现就是"屏幕共享是黑的/没反应"，其实流已经在发了。
-                // mesh 拓扑里不存在"自己发出去的流绕回来"，所以只能用本地轨。
-                sharingUserId = it.selfUserId,
-                remoteVideoTrack = s.localShareTrack,
-            )
+                // 等待期间可能已退房/会话已收尾（teardown 会取消本协程；这里是兜底）
+                if (session !== s) return@launch
+                Log.i(TAG, "屏幕共享：前台服务已确认 mediaProjection，开始采集")
+                // 3) 采集
+                val started = s.startScreenShare(
+                    permissionData = permissionData,
+                    projectionCallback = object : android.media.projection.MediaProjection.Callback() {
+                        // 用户在系统弹窗/通知里点"停止共享"时必须跟着停，
+                        // 否则本端还在采集但对方已收不到画面（Android 14 起不注册这个回调会抛异常）
+                        override fun onStop() {
+                            stopShare()
+                        }
+                    },
+                )
+                if (!started) {
+                    // 采集没起来：把服务能力状态同步回退（去掉 mediaProjection）
+                    updateServiceCapabilities("${_state.value.peers.size + 1} 人在房")
+                    return@launch
+                }
+                // 4) 服务端负责互斥与抢占：share-start(audio=false) → 广播 share-changed。
+                // width/height = 本端采集像素尺寸（可选字段）：观看端（含之后进房的人）
+                // 在首帧到达之前就能把画面框按正确比例摆好 —— 语义见 VoiceParticipantDto.width
+                val capture = s.localShareCaptureSize
+                signaling?.send(
+                    top.kuangdada.k.core.data.model.VoiceOutbound(
+                        type = top.kuangdada.k.core.data.model.VoiceOutboundType.ShareStart,
+                        audio = false,
+                        width = capture?.first,
+                        height = capture?.second,
+                    )
+                )
+                _state.update {
+                    it.copy(
+                        selfSharing = true,
+                        // **共享者自己也要能看到画面**（本端预览）。
+                        // 之前只置了 selfSharing、没置 remoteVideoTrack，而 UI 的渲染条件是
+                        // `remoteVideoTrack != null` —— 于是共享者看到的仍是麦位网格，
+                        // 表现就是"屏幕共享是黑的/没反应"，其实流已经在发了。
+                        // mesh 拓扑里不存在"自己发出去的流绕回来"，所以只能用本地轨。
+                        sharingUserId = it.selfUserId,
+                        remoteVideoTrack = s.localShareTrack,
+                        // 档位回读会话侧（可能被上次自动降档改过）+ 清掉"自动降档"提示标记
+                        shareQuality = s.shareQuality,
+                        shareQualityAuto = false,
+                    )
+                }
+            } finally {
+                shareStarting = false
+            }
         }
     }
 
@@ -785,6 +854,19 @@ class VoiceRoomController(
         session?.setReceiveAudioEnabled(!next)
     }
 
+    /**
+     * 共享者手动切换画质/帧率档位（共享面板里的「极清 / 流畅 / 省流」，2026-10-15 用户要求）。
+     *
+     * 共享中**立即生效**（会话侧重应用发送参数：码率上限/帧率上限/下采样）；
+     * 未共享时先记住 —— 下次开始共享时按它初始化。选择会持久化（[ShareQualityStore]），
+     * 与 Web 端 localStorage 的 `voice:shareQuality` 同语义。
+     */
+    fun setShareQuality(quality: ShareQuality) {
+        session?.setShareQuality(quality)
+        ShareQualityStore.write(context, quality)
+        _state.update { it.copy(shareQuality = quality, shareQualityAuto = false) }
+    }
+
     fun stopShare() {
         session?.stopScreenShare()
         signaling?.send(
@@ -797,6 +879,8 @@ class VoiceRoomController(
         _state.update {
             it.copy(
                 selfSharing = false,
+                // "自动降档"提示只在这一次共享的会话里有效，停共享即清
+                shareQualityAuto = false,
                 // 清掉本端预览；若此时别人在共享，服务端会另发 share-changed 把轨道重新填上
                 sharingUserId = if (it.sharingUserId == it.selfUserId) 0 else it.sharingUserId,
                 remoteVideoTrack = if (it.sharingUserId == it.selfUserId) null else it.remoteVideoTrack,
@@ -990,6 +1074,7 @@ class VoiceRoomController(
                 sharingUserId = 0,
                 remoteVideoTrack = null,
                 selfSharing = false,
+                shareQualityAuto = false,
                 recording = false,
                 recordStartedAt = null,
             )

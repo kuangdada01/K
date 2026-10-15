@@ -64,6 +64,8 @@ import top.kuangdada.k.core.designsystem.theme.KRadius
 import top.kuangdada.k.core.designsystem.theme.KSpacing
 import top.kuangdada.k.core.designsystem.theme.KTheme
 import top.kuangdada.k.core.designsystem.theme.KType
+import top.kuangdada.k.nativeapp.BuildConfig
+import top.kuangdada.k.nativeapp.download.AppUpdater
 import top.kuangdada.k.nativeapp.notify.KPush
 
 /**
@@ -569,6 +571,15 @@ fun ProfileSettingsOverlay(
 ) {
     val c = KTheme.colors
     val context = LocalContext.current
+    val toast = LocalToast.current
+    val scope = rememberCoroutineScope()
+    val updater = remember { AppUpdater(context) }
+
+    /** 手动「检查更新」在途（按钮转"检查中…"并禁用，防连点） */
+    var updateChecking by remember { mutableStateOf(false) }
+
+    /** 手动检查发现的新版本（非空 → 弹统一更新弹窗 [UpdatePromptDialog]） */
+    var updatePending by remember { mutableStateOf<AppUpdater.UpdateCheck?>(null) }
 
     Box(
         modifier = Modifier
@@ -603,17 +614,62 @@ fun ProfileSettingsOverlay(
             ThemeModeRow(current = themeMode, onChange = onThemeChange)
 
             /**
-             * 这里**只有主题与退出登录**（09-18/2026-10 用户定；2026-10-09 起「离线推送」
-             * 开关与「通知诊断」也移出设置 —— 推送全自动：注册与上报由登录态驱动、
-             * 退登自动解绑，用户侧不需要任何开关）：
+             * 「当前版本」（2026-10-15 用户要求）：值取 [BuildConfig.VERSION_NAME] ——
+             * 版本号单一来源 android/version.properties（debug 包带 `-debug` 后缀，
+             * 更新检测比对的正是这个值，所以**原样显示**、不做美化）。
+             */
+            SettingsInfoRow(label = "当前版本", value = BuildConfig.VERSION_NAME)
+
+            /**
+             * 这里**只有主题 / 当前版本 / 检查更新 / 退出登录**（09-18/2026-10 用户定；
+             * 2026-10-09 起「离线推送」开关与「通知诊断」也移出设置 —— 推送全自动：
+             * 注册与上报由登录态驱动、退登自动解绑，用户侧不需要任何开关）：
              *  · 「分享主页」不在这里 —— 主页上「编辑资料 / 分享主页」那一排已经有了，
              *    设置里再放一个是重复入口（而且那一排分享的是**当前正在看**的主页，
              *    比这里只能分享自己的更符合直觉）；
-             *  · 「私密文件夹」「检查更新」两个功能已删除（见 M7 的记录），不是隐藏。
+             *  · 「私密文件夹」已删除（见 M7 的记录），不是隐藏；
+             *  · 「检查更新」**2026-10-15 按用户要求回归**（放「退出登录」上面，
+             *    淡绿底 + 主题绿字 = Ghost 变体），与自动检测共用同一套弹窗与跳过语义。
              */
             // 管理后台入口**不在这里**：设计稿把它提到了页面上（编辑资料/分享主页那一排
             // 的下面），见 ProfileScreen 里的 AdminEntryRow。这里再放一次会出现两个入口，
             // 而用户从设计稿认的是页面上那一个。
+
+            /**
+             * 手动「检查更新」：与自动检测（[UpdatePromptHost]，冷启动 + 回前台）共用
+             * [UpdatePromptDialog]，两点差异（其余全同）：
+             *  · **失败不静默**：用户主动点的必须给反馈 —— "已是最新版本" / 失败原因 toast
+             *    （自动检测失败只记日志，不打扰）；
+             *  · **不看跳过记录**：用户主动来问，不能因为之前点过"以后再说"就装看不见
+             *    （弹窗里再点"以后再说"会照常落盘）。
+             */
+            KButton(
+                text = if (updateChecking) "检查中…" else "检查更新",
+                onClick = {
+                    // 连点由 enabled=!updateChecking 挡住；这里只管发起
+                    updateChecking = true
+                    scope.launch {
+                        try {
+                            when (val r = updater.checkForUpdate()) {
+                                is ApiResult.Success -> {
+                                    val check = r.data
+                                    if (check.hasUpdate) updatePending = check
+                                    else toast.show("已是最新版本")
+                                }
+                                is ApiResult.Failure ->
+                                    toast.show("检查更新失败：${r.error.displayMessage}")
+                            }
+                        } finally {
+                            updateChecking = false
+                        }
+                    }
+                },
+                variant = KButtonVariant.Ghost,
+                cornerRadius = KRadius.row,
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !updateChecking,
+            )
+
             KButton(
                 "退出登录",
                 onClick = {
@@ -625,13 +681,45 @@ fun ProfileSettingsOverlay(
                     session.logout()
                     onLoggedOut()
                 },
-                variant = KButtonVariant.Danger,
+                // 描边形态（2026-10-15 用户要求"加红色边框线跟检查更新一样"）：
+                // 与上面 Ghost 的「检查更新」同一套"软底 + 描边"语言，只是配色走 danger
+                variant = KButtonVariant.DangerOutline,
                 // 圆角与「外观」等设置行保持一致（此前的默认是全圆胶囊，在"一行一行"
                 // 的面板里观感突兀 —— 用户反馈）
                 cornerRadius = KRadius.row,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+
+        // 手动检查发现新版本 → 与自动检测（UpdatePromptHost）共用同一个更新弹窗
+        // （"以后再说"落盘、更新开浏览器、"本次运行已处理"都在弹窗里）
+        updatePending?.let { check ->
+            UpdatePromptDialog(check = check, onClosed = { updatePending = null })
+        }
+    }
+}
+
+/**
+ * 设置弹层里的"标签 + 右侧值"信息行（当前用于「当前版本」）。
+ *
+ * 外壳与 [ThemeModeRow] 逐字一致（surface 底 + borderSubtle 描边 + KRadius.row 圆角 +
+ * 左右两端分布）—— 同一面板里的行不允许两种形态。
+ */
+@Composable
+private fun SettingsInfoRow(label: String, value: String) {
+    val c = KTheme.colors
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(KRadius.row))
+            .background(c.surface)
+            .border(1.dp, c.borderSubtle, RoundedCornerShape(KRadius.row))
+            .padding(horizontal = KSpacing.md, vertical = KSpacing.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, style = KType.body, color = c.textPrimary)
+        Text(value, style = KType.caption, color = c.textSecondary)
     }
 }
 
