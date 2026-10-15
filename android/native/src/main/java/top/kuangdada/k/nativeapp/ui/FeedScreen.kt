@@ -69,6 +69,8 @@ fun FeedScreen(
     onOpenExplore: () -> Unit,
     /** 自增即触发重新拉取（发布成功后由 Shell 增加，让用户立刻看到自己的新帖） */
     refreshKey: Int = 0,
+    /** 自增即平滑滚回顶部（双击导航「首页」，由 Shell 计数下发） */
+    scrollToTopKey: Int = 0,
     myUserId: Long = 0,
     /** 是否已登录：未登录时点互动不发光标请求，直接拉起登录弹层 */
     isLoggedIn: Boolean = false,
@@ -119,6 +121,11 @@ fun FeedScreen(
         if (refreshKey > 0) list.refresh()
     }
 
+    // 双击导航「首页」→ 平滑滚回顶部（见 scrollToTopKey 注释）
+    LaunchedEffect(scrollToTopKey) {
+        if (scrollToTopKey > 0) listState.animateScrollToItem(0)
+    }
+
     // 滚到接近底部自动续拉
     LaunchedEffect(listState, list) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
@@ -133,7 +140,15 @@ fun FeedScreen(
         // 下拉刷新 —— 取代了原先页头上的「刷新」按钮（设计稿页头只有标题与搜索）
         PullToRefreshBox(
             isRefreshing = state.refreshing,
-            onRefresh = { scope.launch { list.refresh() } },
+            onRefresh = {
+                scope.launch {
+                    list.refresh()
+                    // 下拉刷新结果提示（2026-10-15 用户要求"刷新成功"）：
+                    // load 把错误吞进 state.error，没挂错误即成功；失败时保留旧内容静默
+                    // （列表还在/错误页本身就是反馈），不额外弹失败提示
+                    if (list.state.value.error == null) toast = "刷新成功"
+                }
+            },
             modifier = Modifier.fillMaxSize(),
         ) {
             LazyColumn(

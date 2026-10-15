@@ -1,5 +1,6 @@
 package top.kuangdada.k.nativeapp.ui
 
+import android.os.SystemClock
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -461,6 +462,15 @@ fun AppShell(
     var profileRefreshKey by remember { mutableIntStateOf(0) }
 
     /**
+     * 双击导航「首页」→ 信息流回到顶部（2026-10-15 用户要求）。
+     *
+     * 计数器模式（与 [profileRefreshKey] 同一套）：导航事件发生在 Shell 层，而首页在
+     * 切走时**离开了组合**，自己的 remember 状态不可靠；自增让 FeedScreen 的
+     * LaunchedEffect 逐次触发。只在首页生效，其他 tab 双击无动作。
+     */
+    var homeScrollToTopTick by remember { mutableIntStateOf(0) }
+
+    /**
      * 主页设置弹层开着没有。
      *
      * **状态必须在这里**（而不是 ProfileScreen 内部）：弹层要盖住悬浮导航胶囊，
@@ -740,6 +750,7 @@ fun AppShell(
                 // 页头右上角的搜索圆钮 → 搜索发现（设计稿映射表：搜索发现高亮「首页」）
                 onOpenExplore = { openExplore(null) },
                 refreshKey = contentVersion,
+                scrollToTopKey = homeScrollToTopTick,
                 myUserId = myUserId,
                 // 首页卡片上**不再有编辑入口**（用户要求）：编辑统一从「个人主页 → 我的作品」进。
                 // 详情页的「…」里的编辑保留 —— 那是帖子自己的动作菜单，不是列表上的杂物。
@@ -1604,6 +1615,8 @@ fun AppShell(
                 .drawWithContent { if (capsuleVisible) drawContent() }
                 .then(if (capsuleVisible) Modifier else Modifier.clearAndSetSemantics {}),
         ) {
+            // 各 tab 最近一次被点的时间（双击判定用，见 onSelect）
+            val lastNavTapAt = remember { mutableMapOf<String, Long>() }
             KNavCapsule(
                 // 参数与理由都写在上面 `capsuleGlass` 的定义处（效果链的坑也在那里）。
                 // ⚠️ 这个 modifier 是**记住**的（见上面 `capsuleGlass` 的定义）：
@@ -1613,6 +1626,14 @@ fun AppShell(
                 items = navItems(unread),
                 selectedKey = base.navKey ?: navigator.activeTabKey,
                 onSelect = { key ->
+                    // 双击**已选中**的 tab → 回到顶部（目前只接了首页，2026-10-15 用户要求）。
+                    // 判据：同一个 key 在 320ms 内点第二次；单击照常 switchTab（对已选中页幂等）。
+                    val now = SystemClock.elapsedRealtime()
+                    val selectedKey = base.navKey ?: navigator.activeTabKey
+                    val isReselect = key == selectedKey
+                    val isDoubleTap = isReselect && now - (lastNavTapAt[key] ?: 0L) < 320L
+                    lastNavTapAt[key] = now
+                    if (isDoubleTap && key == Tab.Home.key) homeScrollToTopTick++
                     val target = when (key) {
                         Tab.Messages.key -> AppDestination.Messages
                         Tab.Books.key -> AppDestination.Books
