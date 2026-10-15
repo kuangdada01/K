@@ -54,7 +54,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -483,7 +482,7 @@ fun VoiceRoomScreen(
             val keyboard = LocalSoftwareKeyboardController.current
 
             /*
-             * 键盘跟随滚动（M6.21）：让聊天输入行**始终贴在键盘上沿**。
+             * 键盘跟随滚动（M6.21；M6.22 起"逐帧跟随"是**唯一动源**）：让聊天输入行**始终贴在键盘上沿**。
              *
              * 为什么不能在"聚焦"那一刻只滚一次（第一版）：点输入框时键盘**还没弹出** ——
              * 那次 `scrollTo(maxValue)` 算的是"没有键盘时的底部"，输入行停在屏幕底缘；
@@ -503,12 +502,19 @@ fun VoiceRoomScreen(
              * 当时残余的间隙宽度；⚠️ **改动这三处留白时必须同步改下面这个表达式**，
              * 否则输入框又会离键盘多一条缝。
              *
-             * 第四版校准（用户实测"太过了"）：纯按 tail 扣净后输入框会**贴死/压过**键盘顶，
+             * 第四版校准：纯按 tail 扣净后输入框会**贴死/压过**键盘顶（用户实测"太过了"），
              * 用户要的是"**输入框的下边框露在键盘上方、之间留一点点**"。所以再返还
-             * [COMPOSER_LIFT_DP]：输入框底停在键盘顶上方约 6dp —— 下边框完整可见、
+             * [COMPOSER_LIFT_DP]（多轮实测收敛：6 → 12 → 18 → 20dp）——下边框完整可见、
              * 又几乎没有空白感。
              *
-             * 补偿公式 = max(0, 键盘高 − 滚动列底到窗口底的距离 − tail + 6dp)。
+             * 第五版（M6.22，用户检查"输入法动画是不是跟评论页不一样"）：评论页/消息页是
+             * "底部固定输入栏 + 键盘高度驱动平移"（见 ChatScreen / PostDetailScreen 的交换区），
+             * 房间页的输入框长在滚动内容里，只能靠滚动 —— 此前"聚焦先滚一次 + 键盘跟随"
+             * 两条动源叠加出两段动画，观感与评论页的"一段干净跟随"差得更远。
+             * 现在**去掉聚焦时那次主动滚动**（[RoomChatPanel] 里不再有 onInputFocused），
+             * 只保留这里的逐帧跟随。
+             *
+             * 补偿公式 = max(0, 键盘高 − 滚动列底到窗口底的距离 − tail + [COMPOSER_LIFT_DP])。
              * 键盘弹出不改变滚动列底到窗口底的距离（窗口不 resize），量一次即可。
              *
              * 跟随：键盘打开期间持续观察 `scrollState.maxValue`（底部补偿随键盘动画逐帧变化），
@@ -749,12 +755,6 @@ fun VoiceRoomScreen(
                     messages = state.chat,
                     input = input,
                     onInputChange = { input = it },
-                    // 输入框聚焦时先把输入行**带进视野**（平滑滚到底部）。
-                    // 这只是"第一下"：聚焦那一刻键盘还没弹出，滚到的是"没有键盘时的底部"，
-                    // 键盘真正弹出后的持续跟随由上面的 `imeVisible` 逻辑接管。
-                    onInputFocused = {
-                        scope.launch { scrollState.animateScrollTo(scrollState.maxValue) }
-                    },
                     onSend = {
                         controller.sendChat(input)
                         input = ""
@@ -1097,8 +1097,6 @@ private fun RoomChatPanel(
     input: String,
     onInputChange: (String) -> Unit,
     onSend: () -> Unit,
-    /** 输入框聚焦时回调（宿主滚到内容底部，让输入框露出键盘上方） */
-    onInputFocused: () -> Unit,
     reader: ChatReader,
     canClear: Boolean,
     onClear: () -> Unit,
@@ -1220,9 +1218,9 @@ private fun RoomChatPanel(
                     // "（服务端 400ms 节流）"是给开发者看的，用户看到只会莫名其妙）
                     placeholder = "说点什么…（500 字以内）",
                     shape = RoundedCornerShape(KRadius.control),
-                    // 聚焦时通知宿主滚到内容底部：否则键盘把聊天输入挡住，
-                    // 用户看不见自己打的字（用户实测"输入框固定、看不见打了什么"）
-                    modifier = Modifier.onFocusChanged { if (it.isFocused) onInputFocused() },
+                    // 聚焦时**不再**主动滚一次（M6.22）：那次"第一下"与键盘弹起后的逐帧跟随
+                    // 叠加会呈现出两段动画（用户实测"跟评论页的输入法动画不一样"）——
+                    // 现在跟随是唯一动源，见 VoiceRoomScreen 里 `keyboardOpen` 的长注释。
                 )
             }
             KButton(
@@ -1593,10 +1591,10 @@ private const val SEATS_PER_ROW = 5
  * 键盘弹出时，输入框（含下边框）停在键盘顶**上方**多少 dp。
  *
  * 不是 0 —— 纯按 tail 扣净后输入框会**贴死/压过**键盘顶（用户实测反馈"太过了"），
- * 用户要的是"**下边框露在键盘上方、之间留一点点**"。收敛轨迹（2026-10-14 实测）：
- * 6dp 仍嫌贴（"再退一点"）→ 12dp。如需再调，只动这一个数。
+ * 用户要的是"**下边框露在键盘上方、之间留一点点**"。收敛轨迹（实测）：
+ * 6dp → 12dp → 18dp → 20dp（用户指定）。如需再调，只动这一个数。
  */
-private const val COMPOSER_LIFT_DP = 12
+private const val COMPOSER_LIFT_DP = 20
 
 /**
  * **有画面在播时保持屏幕常亮**（`View.keepScreenOn`）。
