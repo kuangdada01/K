@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -384,7 +385,14 @@ fun KPlaceholder(
         KPlaceholderKind.Error -> "加载失败"
     }
     Column(
-        modifier = modifier.padding(KSpacing.xl),
+        modifier = modifier
+            // ★ fillMaxWidth（2026-10-15）：占位内容**永远水平居中**，不依赖调用方记得
+            // 把外层容器撑满 —— `weight(1f)` 这类修饰符在 Column 里只占满主轴（高度），
+            // 宽度是包内容的，调用方 `align(Center)` 在水平方向就会"无处可居中"
+            // （聊天页空态实测：提示整块贴左）。自身占满宽度 + 内部 CenterHorizontally
+            // 之后，无论外层怎么摆，内容都在中轴线上；对原本就居中的调用点是零变化。
+            .fillMaxWidth()
+            .padding(KSpacing.xl),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(KSpacing.sm),
     ) {
