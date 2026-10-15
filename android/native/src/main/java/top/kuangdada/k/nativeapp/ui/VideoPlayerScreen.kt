@@ -617,20 +617,23 @@ fun VideoPlayerScreen(
         )
 
         /**
-         * ③ 顶部提示：**只有一行小字**，不再有返回/更多两个悬浮钮（用户要求）。
+         * ③ 底部提示：**只有一行小字**，不再有返回/更多两个悬浮钮（用户要求）。
          *
          * 沉浸页最容易的抱怨是"不知道怎么退"，所以把出口写出来；
          * 长按保存也一并说了 —— 那个钮被去掉之后，用户不会自己发现长按有东西。
          * 不挂 `statusBarsPadding()` —— 这一页的状态栏已经被上面的 DisposableEffect 藏掉了，
          * 还按状态栏避让会平白多出一条空白。
+         *
+         * 位置：**底部**（2026-10-15 用户要求"提示词放底下"，原在顶部压着画面主体）；
+         * 这一页是沉浸式（系统栏已藏），`KSpacing.lg` 离屏幕下缘留出手势区余量即可。
          */
         Text(
             text = "双击退出 · 长按保存",
             style = KType.caption,
             color = Color.White.copy(alpha = 0.72f),
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = KSpacing.lg),
+                .align(Alignment.BottomCenter)
+                .padding(bottom = KSpacing.lg),
         )
     }
 }
