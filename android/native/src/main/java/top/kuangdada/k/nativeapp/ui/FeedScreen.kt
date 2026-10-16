@@ -98,6 +98,8 @@ fun FeedScreen(
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     val context = androidx.compose.ui.platform.LocalContext.current
+    // 滚顶动画的起步速度上限要按屏幕密度换算（见 ScrollToTopEase.kt）
+    val density = androidx.compose.ui.platform.LocalDensity.current
     var toast by remember { mutableStateOf<String?>(null) }
 
     /**
@@ -121,9 +123,24 @@ fun FeedScreen(
         if (refreshKey > 0) list.refresh()
     }
 
-    // 双击导航「首页」→ 平滑滚回顶部（见 scrollToTopKey 注释）
+    // 双击导航「首页」→ 平滑滚回顶部（见 scrollToTopKey 注释）。
+    // 2026-10-16：默认 animateScrollToItem 是高刚度弹簧、长距离近乎瞬移（用户嫌太快），
+    // 换成每帧闭环重规划的指数衰减动画（先快后慢），见 ScrollToTopEase.kt。
+    //
+    // ⚠️ 只响应「本页在组合期间收到的新自增」：homeScrollToTopTick 由 Shell 持有、跨 tab
+    // 存活，而本页切走会离开组合 —— 不加哨兵的话，从别的页面点「首页」回来时
+    // LaunchedEffect 会拿上一次的旧 tick 重跑，表现为"每次回首页都自动滚顶"
+    // （2026-10-16 用户报告的 bug；旧弹簧动画太快看不出来，动画放慢后才显形）。
+    // 哨兵用 rememberSaveable：与本页 listState 同一个保管箱（SaveableStateProvider 按
+    // dest 存取），跨 tab 切换记住已消费到哪次，重新进组合不会把旧 tick 当新事件。
+    var handledScrollTopTick by androidx.compose.runtime.saveable.rememberSaveable {
+        mutableStateOf(0)
+    }
     LaunchedEffect(scrollToTopKey) {
-        if (scrollToTopKey > 0) listState.animateScrollToItem(0)
+        if (scrollToTopKey > handledScrollTopTick) {
+            handledScrollTopTick = scrollToTopKey
+            listState.animateScrollToTopDecelerate(density)
+        }
     }
 
     // 滚到接近底部自动续拉

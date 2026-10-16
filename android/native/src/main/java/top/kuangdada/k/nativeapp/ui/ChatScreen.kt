@@ -119,6 +119,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import coil3.SingletonImageLoader
 import coil3.compose.AsyncImage
 import coil3.compose.SubcomposeAsyncImage
 import coil3.compose.SubcomposeAsyncImageContent
@@ -1573,6 +1574,24 @@ private fun buildChatEntries(items: List<MessageRepository.MessageUi>): List<Cha
 private const val CHAT_TIME_GAP_MS = 5 * 60 * 1000L
 
 /**
+ * 这张图是否已经在 Coil 的**磁盘缓存**里（进程重启后仍在，内存缓存不管）。
+ *
+ * 同步做一次 LRU 哈希查找 + 文件 stat（亚毫秒级），组合期调用安全；快照读完立刻
+ * close（开着快照会挡住后续写入/删除）。
+ *
+ * 键必须与 NetworkFetcher 的算法严格一致：磁盘键 = `options.diskCacheKey ?: url`
+ * （coil-network-core 的 NetworkFetcher.kt），聊天图片的请求没钉显式键，所以就是
+ * URL 本身 —— 这正是 fetcher 自己"磁盘快速路径"用的同一条 `openSnapshot(url)`。
+ * 有一天若给聊天图片钉了显式 diskCacheKey，这里要同步改。
+ */
+private fun isImageDiskCached(context: Context, url: String?): Boolean {
+    if (url.isNullOrBlank()) return false
+    val snapshot = SingletonImageLoader.get(context).diskCache?.openSnapshot(url) ?: return false
+    snapshot.close()
+    return true
+}
+
+/**
  * 消息气泡（样式对齐 web 移动端的 MessageBubble）：
  *  · **头像贴在消息外侧**：对方的在左、自己的在右，与消息间距 8dp。
  *  · 文本消息：圆角统一 `radiusRow(14)`、内边距 16dp、**不是**旧版那种"一角切平"的气泡尾巴。
@@ -1653,6 +1672,23 @@ private fun MessageBubble(
                         imageHeaders.forEach { (k, v) -> set(k, v) }
                     }.build()
                     /**
+                     * 这张图是否已经在 Coil 的**磁盘缓存**里（进程重启后仍在）。
+                     *
+                     * 2026-10-16 用户反馈："已经看到过的图片重启 app 进入还是会触发图片
+                     * 加载动画" —— 重启后内存缓存为空，磁盘命中也要**异步**取图/解码，
+                     * 而聊天图片的请求默认走 `ImageLoading.gated`（在转场动画结束后才
+                     * 开工，见 KApp.newImageLoader），于是 shimmer 从进页一直闪到动画结束。
+                     *
+                     * 磁盘里已有的图改走两条快速路：
+                     *  · 请求换 `ImageLoading.immediate`（不等动画闸门，一两帧内就位）；
+                     *  · 占位块**静置**（同底色、无 shimmer）—— 反正马上就是真图，
+                     *    动画只会成为闪一下的杂讯（用户要求的"直接显示"）。
+                     * 没缓存的图维持原样（shimmer + gated），不为新图牺牲转场帧率。
+                     */
+                    val imageDiskCached = remember(msg.imageUrl) {
+                        isImageDiskCached(context, msg.imageUrl)
+                    }
+                    /**
                      * 图片消息的两个手势（与文字气泡**刻意不同**）：
                      *  · **单击 → 全屏看图**（用户反馈"聊天里的图片点不开全屏"）；
                      *  · **长按 → 底部弹层**（保存图片 / 引用 / 撤回）。
@@ -1732,6 +1768,14 @@ private fun MessageBubble(
                             model = coil3.request.ImageRequest.Builder(context)
                                 .data(msg.imageUrl)
                                 .httpHeaders(headers)
+                                // 磁盘里已有的图不等动画闸门（见上面 imageDiskCached 的注释）：
+                                // 取图/解码直接在立即池跑，一两帧内就位，占位块只是闪现前的底色
+                                .apply {
+                                    if (imageDiskCached) {
+                                        fetcherCoroutineContext(ImageLoading.immediate)
+                                        decoderCoroutineContext(ImageLoading.immediate)
+                                    }
+                                }
                                 .build(),
                             contentDescription = null,
                             modifier = Modifier.clip(RoundedCornerShape(KRadius.control)),
@@ -1749,7 +1793,16 @@ private fun MessageBubble(
                                 Box(
                                     Modifier
                                         .size(180.dp)
-                                        .kShimmer(RoundedCornerShape(KRadius.control))
+                                        // 已看过（磁盘命中）：静置底色，不 shimmer —— shimmer 的
+                                        // 扫光就是用户说的"加载动画"（2026-10-16 反馈）
+                                        .clip(RoundedCornerShape(KRadius.control))
+                                        .then(
+                                            if (imageDiskCached) {
+                                                Modifier.background(c.surfaceSunken)
+                                            } else {
+                                                Modifier.kShimmer(RoundedCornerShape(KRadius.control))
+                                            },
+                                        )
                                 )
                             } else {
                                 SubcomposeAsyncImageContent(
