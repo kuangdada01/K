@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -214,11 +215,8 @@ fun KVideoPlayer(
      */
     val mediaOpener = rememberUpdatedState(LocalMediaSaveOpener.current)
 
-    // ---- 播放状态（进度条要的两个数 + 缓冲圈）----
-    var playing by remember(player) { mutableStateOf(false) }
-    var buffering by remember(player) { mutableStateOf(true) }
-    var positionMs by remember(player) { mutableLongStateOf(0L) }
-    var durationMs by remember(player) { mutableLongStateOf(0L) }
+    // ---- 播放状态（进度条 + 缓冲圈 + 暂停遮罩共用的几个数，见 [rememberVideoPlaybackState]）----
+    val playback = rememberVideoPlaybackState(player)
 
     // 监听器建在 DisposableEffect 里（只随 player 重建），所以回调要用 rememberUpdatedState
     // 兜住最新引用 —— 否则调用方换 lambda 之后，播放器还在调旧的。
@@ -226,18 +224,6 @@ fun KVideoPlayer(
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
-            override fun onPlaybackStateChanged(state: Int) {
-                buffering = state == Player.STATE_BUFFERING
-                if (state == Player.STATE_READY) {
-                    val d = player.duration
-                    if (d > 0) durationMs = d
-                }
-            }
-
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                playing = isPlaying
-            }
-
             /** 首帧真正画出来的时刻（见 [onFirstFrame] 的说明） */
             override fun onRenderedFirstFrame() {
                 currentOnFirstFrame()
@@ -245,18 +231,6 @@ fun KVideoPlayer(
         }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
-    }
-
-    // 位置/时长轮询：media3 没有"每秒回调一次"的监听（onEvents 只在事件发生时来），
-    // 进度条要动就得自己按播放间隔取。250ms 是"看起来连续"与"别太费"的折中。
-    LaunchedEffect(player) {
-        while (true) {
-            positionMs = player.currentPosition.coerceAtLeast(0L)
-            // 时长在 READY 之前是未知的（HLS/未转码完的 mp4 都可能后到）
-            val d = player.duration
-            if (d > 0) durationMs = d
-            delay(250)
-        }
     }
 
     /** 圆角（px）：给"进全屏飞行"的出发帧用（与调用方那行 `clip(...)` 必须一致） */
@@ -313,14 +287,14 @@ fun KVideoPlayer(
                 ),
         )
 
-        if (buffering) {
+        if (playback.isBuffering) {
             CircularProgressIndicator(
                 color = Color.White,
                 modifier = Modifier.align(Alignment.Center).padding(KSpacing.lg),
             )
         }
 
-        if (!playing && !buffering) {
+        if (!playback.isPlaying && !playback.isBuffering) {
             // 暂停遮罩：明确告诉用户"它停着，点一下继续"（不然静止画面像卡死了）
             Box(
                 modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)),
@@ -350,8 +324,8 @@ fun KVideoPlayer(
             // 只画绿色细线，不做拖动（用户要求"只显示主题色绿色条"）：
             // 位置直接来自播放器轮询，没有"拖动中的临时位置"这种中间态
             VideoProgressBar(
-                positionMs = positionMs,
-                durationMs = durationMs,
+                positionMs = playback.positionMs,
+                durationMs = playback.durationMs,
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
@@ -403,19 +377,6 @@ fun KVideoPlayer(
 fun KVideoSurface(
     player: Player,
     modifier: Modifier = Modifier,
-    /**
-     * 是否使用**官方控制器**（全屏页落位后打开；内联播放器关着 —— 进度条是我们自己画的）。
-     *
-     * ★ 必须做成**同一个 PlayerView 上开关**，不要另外叠一个带控制器的 PlayerView：
-     * 两个 PlayerView 挂在同一个 ExoPlayer 上会**互相抢 Surface**（后挂上的那个赢，
-     * 前一个的画面立刻失效），拆掉时前一个也**不会自动接回来** —— 真机表现就是
-     * "落位那一帧闪黑" + "退场一路黑着缩小"（这两条曾经同时存在于全屏页）。
-     */
-    useController: Boolean = false,
-    /**
-     * 是否显示官方缓冲圈。内联播放器传 false（它自己在 Compose 层画一个），全屏页传 true。
-     */
-    showBuffering: Boolean = false,
 ) {
     AndroidView(
         factory = { ctx ->
@@ -423,25 +384,28 @@ fun KVideoSurface(
             val themed = ContextThemeWrapper(ctx, R.style.KVideoSurface)
             PlayerView(themed).apply {
                 this.player = player
-                // 控制器默认关掉：内联播放器的进度条我们自己画（要"剩余时间"那种阅读器形态），
-                // 系统的 DefaultTimeBar 只给"已播/总长"，且会和我们的条叠成两条
-                this.useController = useController
-                // 缓冲转圈：内联那支由 Compose 侧画，避免两套；全屏那支交给官方
-                setShowBuffering(
-                    if (showBuffering) PlayerView.SHOW_BUFFERING_ALWAYS
-                    else PlayerView.SHOW_BUFFERING_NEVER,
-                )
+                /**
+                 * ★ 官方控制器**一律关掉**（2026-10-17 用户实测后的定论）。
+                 *
+                 * 三个原因，缺一个都还有理由留着，三个凑齐就只能关：
+                 *  1. 它自带一层**全屏 60% 黑**遮罩（`exo_controls_background` = `#98000000`）
+                 *     + 69% 黑的控制条，一显示就把整幅画面压暗 —— 用户的原话是
+                 *     "播放控件遮挡画面了"；
+                 *  2. 它一挂上就会在 `setPlayer` 时自动亮出来（`maybeShowController`），
+                 *     打开视频的头几秒正好压在"画面还没出来"的黑上，看起来就是
+                 *     "有时候打开不显示画面"；
+                 *  3. 全屏页的手势层是 Compose 的 `pointerInput`，而 `AndroidView` 的触摸
+                 *     要先过 Compose 判定 —— **按下会被 Compose 吃掉**，控制器按钮根本点不动
+                 *     （页面作者早就在注释里记过这个坑）。看得见、盖画面、点不动，没有保留价值。
+                 *
+                 * 进度条 / 暂停标记 / 缓冲圈都由 Compose 自己画（见 VideoPlayerScreen），
+                 * 与内联播放器同一套形态 —— 画在封面之上，盖不住、也点得动。
+                 */
+                useController = false
+                // 官方缓冲圈也关掉：两边各画一个会叠成两个圈（Compose 那个在封面之上，更可靠）
+                setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                 // 视频原始比例交给 PlayerView（FIT = 不拉伸，多出来的部分留黑边）
                 resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                // 首次就以"控制器开着"组合出来时（无飞行的直接进全屏）也亮一下
-                if (useController) showController()
-            }
-        },
-        update = { view ->
-            // 只在**真的切换**时改（每帧重设会让控制器反复自己弹出来）
-            if (view.useController != useController) {
-                view.useController = useController
-                if (useController) view.showController() else view.hideController()
             }
         },
         modifier = modifier,
@@ -465,13 +429,83 @@ fun KVideoSurface(
 val LocalInlineVideoSuppressed = staticCompositionLocalOf { false }
 
 /**
+ * 播放状态快照：进度条 / 缓冲圈 / 暂停标记要的那几个数。
+ *
+ * 为什么抽成一处：内联播放器与全屏页看的是**同一条视频的同一套语义** ——
+ * "什么时候算缓冲""时长什么时候才可信""暂停时该显示什么"两边各写一遍，
+ * 迟早会在这些细节上分叉（前一次就出现过"一个地方用 READY 判时长、另一个用轮询"）。
+ *
+ * 字段用 Compose 状态而不是普通字段：进度条每 250ms 变一次，只有读它的那一小块
+ * 需要重组，带着整个页面重组没有必要。
+ */
+@Stable
+class VideoPlaybackState internal constructor() {
+    /** 是否正在播放（`isPlaying`，暂停/缓冲时为 false） */
+    var isPlaying by mutableStateOf(false)
+        internal set
+
+    /** 是否正在缓冲（缓冲时不出"暂停遮罩"，否则会闪一下 ▶） */
+    var isBuffering by mutableStateOf(true)
+        internal set
+
+    /** 当前进度（ms） */
+    var positionMs by mutableLongStateOf(0L)
+        internal set
+
+    /** 总时长（ms）；READY 之前是 0 */
+    var durationMs by mutableLongStateOf(0L)
+        internal set
+}
+
+/**
+ * 订阅 [player] 的播放状态（内联播放器与全屏页共用）。
+ *
+ * 位置/时长**必须轮询**：media3 没有"每秒回调一次"的监听（`onEvents` 只在事件发生时来），
+ * 进度条要动只能自己按播放间隔取。250ms 是"看起来连续"与"别太费"的折中。
+ */
+@Composable
+fun rememberVideoPlaybackState(player: Player): VideoPlaybackState {
+    val state = remember(player) { VideoPlaybackState() }
+
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                state.isBuffering = playbackState == Player.STATE_BUFFERING
+                if (playbackState == Player.STATE_READY) {
+                    val d = player.duration
+                    if (d > 0) state.durationMs = d
+                }
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                state.isPlaying = isPlaying
+            }
+        }
+        player.addListener(listener)
+        onDispose { player.removeListener(listener) }
+    }
+
+    LaunchedEffect(player) {
+        while (true) {
+            state.positionMs = player.currentPosition.coerceAtLeast(0L)
+            // 时长在 READY 之前是未知的（HLS/未转码完的 mp4 都可能后到）
+            val d = player.duration
+            if (d > 0) state.durationMs = d
+            delay(250)
+        }
+    }
+
+    return state
+}
+
+/**
  * 视频进度条：只有一条**主题色（accent）的细线**贴在画面下边，无底槽、无时间文字。
  *
  * 形态对齐小红书那种短视频播放器 —— 用户明确要求："进度条只显示主题色绿色条在下边就行了，
  * 不需要剩余时间"。所以这里刻意**不做**底槽、不做 `0:05 / 剩余 0:14`、不做拖动：
  *  · 底槽（灰底）在亮画面上会被看成"两条线"，去掉后只剩绿线在走；
  *  · 时间文字与拖动会让"刷信息流/看短视频"变成"操作播放器"，不是这个场景要的。
- * 需要精确控制时用沉浸全屏播放器（`VideoPlayerScreen`，官方控制器带拖动与时间）。
+ * 需要精确控制时用沉浸全屏播放器（`VideoPlayerScreen`，同一根条 + 单击暂停）。
  *
  * 绿线用 `fillMaxWidth(progress)` 从左边长出来，圆角天然保持，不需要额外裁剪。
  */

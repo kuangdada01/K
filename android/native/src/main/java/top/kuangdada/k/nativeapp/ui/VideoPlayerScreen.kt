@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -83,9 +84,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  *    · **画面本体一起飞**：飞行块里装的就是 `KVideoSurface`（TextureView 参与布局与变换），
  *      不是替身。尺寸钉死在终态、只走 `graphicsLayer` 的缩放/平移（改尺寸会重分配 Surface，
  *      画面会卡住 —— 见 `videoFlightTransform` 的注释）；
- *    · **同一个 PlayerView 上开关控制器**：以前落位那一刻会**再组合一个**带控制器的
- *      PlayerView，两个 View 抢同一个 ExoPlayer 的 Surface —— 落位闪黑、退场一路黑着缩小。
- *      现在只有一个，控制器用 `useController` 开关（见 [KVideoSurface]）；
+ *    · **只有一个 PlayerView**：以前落位那一刻会**再组合一个**带控制器的 PlayerView，
+ *      两个 View 抢同一个 ExoPlayer 的 Surface —— 落位闪黑、退场一路黑着缩小；
  *    · **底页 + 黑幕**：**退场**时 Shell 把目标页画在本页**下面**，黑幕（`exitScrim`）
  *      真的淡出，视频才"落得回详情页那一块"。没有底页时黑幕恒不透明（防白屏）。
  *      进场不做底页：详情页刚离开组合、滚动状态还没存回去，底页会以"滚回顶部"
@@ -96,7 +96,12 @@ import kotlinx.coroutines.withTimeoutOrNull
  *
  * ③ **全屏就该全屏**：进这一页隐藏状态栏，并且**不画**返回/更多那两个悬浮钮
  *    （用户明确要求"全屏了就不要显示状态栏和顶部返回按钮那两个"）。
- *    出口改成**双击画面**与**系统返回键**两条，画面上只留一行"双击退出全屏"的小字提示。
+ *    出口改成**双击画面**与**系统返回键**两条，画面上只留一行小字提示。
+ *
+ *    ★ 播放控制也**不用官方控制器**（2026-10-17 用户实测"控件遮挡画面"）：
+ *    它自带全屏 60% 黑遮罩，按钮还点不动（Compose 手势层先吃事件）。
+ *    现在只有底部一条 3dp 进度线 + 暂停时的 ▶ 标记，单击暂停/继续。
+ *    完整原因见 [KVideoSurface] 的注释。
  *
  * 三个必须做的生命周期处理（不做就会在真机上出问题）：
  *  1. **`onDispose` 里 `player.release()`**：不释放就是泄漏一个解码器 + 音频焦点，
@@ -296,39 +301,55 @@ fun VideoPlayerScreen(
      * 的普通纹理（不像 `SurfaceView` 那样独立合成、在窗口上挖洞），
      * 所以它能被正常布局 —— 于是"位移视频窗口"这件事成立：
      * 播放器就住在那个飞行 Box 里，跟着矩形一起长大。
+     *
+     * ★ 这里**只建不 prepare**：起播放在下面那个 `DisposableEffect` 里，**先挂监听再 prepare**。
+     * 反过来的话（老写法）理论上存在"首帧在监听挂上之前就画出来"的窗口 —— 那一帧一旦错过，
+     * 盖在上面的封面就永远不会撤，看起来就是"打开了但没有画面"（偶发、极难复现）。
+     * 顺序换一下，这个窗口直接不存在。
      */
     val player = remember(url) {
         ExoPlayer.Builder(context).build().apply {
             setMediaItem(MediaItem.fromUri(url))
-            prepare()
             playWhenReady = true
-            // ★ 续播：内联播到哪就从哪继续（用户反馈"点全屏不能续播"）。
-            // 交接单是"读并清"的一次性便签：取到就 seek；取不到（深链直接进全屏页、
-            // 或从探索页视频封面进来）就从 0 开始，与从前一致。
-            handoff.positionMs?.let { seekTo(it) }
         }
     }
 
     /** 首帧是否已经画出来（决定"盖在上面的封面能不能撤掉"，避免黑帧闪一下） */
     var firstFrame by remember(url) { mutableStateOf(false) }
 
-    /** 官方控制器只在**落位**这一个相位打开（飞行期间跟着缩放会很怪，退场一开始就收） */
-    val playerVisible = phase == VideoFlightPhase.Ready
+    /**
+     * 加载失败（网络/编码器/文件问题）。
+     *
+     * 为什么要显式记这个：失败时播放器会停在 IDLE，画面永远是封面或黑 ——
+     * 也就是用户说的"打开了但不显示画面"。至少要把"是加载失败"说出来，
+     * 并给一个**点击重试**的出口，别让人对着一动不动的画面猜。
+     */
+    var loadError by remember(url) { mutableStateOf(false) }
+
+    /** 播放状态（进度线 / 暂停标记用；与内联播放器同一份实现，见 [rememberVideoPlaybackState]） */
+    val playback = rememberVideoPlaybackState(player)
 
     // 释放（必须）：不释放就是泄漏一个解码器 + 音频焦点
-    DisposableEffect(player) {
-        onDispose { player.release() }
-    }
-
-    // 首帧监听：画出来了就撤掉封面层
     DisposableEffect(player) {
         val listener = object : androidx.media3.common.Player.Listener {
             override fun onRenderedFirstFrame() {
                 firstFrame = true
             }
+
+            override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                loadError = true
+            }
         }
+        // 先挂监听，再 seek/prepare（顺序理由见上面 player 的注释）
         player.addListener(listener)
-        onDispose { player.removeListener(listener) }
+        // ★ 续播：内联播到哪就从哪继续（用户反馈"点全屏不能续播"）。seek 必须在 prepare 之前：
+        // 反过来的话会先把 0 位置解出来再跳走，观感是"回到开头闪一下"（与 KVideoPlayer 同）。
+        handoff.positionMs?.let { player.seekTo(it) }
+        player.prepare()
+        onDispose {
+            player.removeListener(listener)
+            player.release()
+        }
     }
 
     // 后台暂停 + 屏幕常亮
@@ -561,17 +582,13 @@ fun VideoPlayerScreen(
                  * （`surface_type = texture_view`）—— 与内联播放器同一个表面类型，
                  * 才不会出现"全屏能播、这里不能播"这种只在一种表面下发生的怪问题。
                  *
-                 * ★ 控制器在**这同一个 PlayerView 上开关**（`useController`），
-                 * 不要像 2026-10-13 那样再叠一个带控制器的 PlayerView：
-                 * 两个 PlayerView 共用一个 ExoPlayer 会互相抢 Surface，落位那一帧闪黑、
-                 * 退场时则是一路黑着缩小（见 [KVideoSurface] 的参数注释）。
+                 * ★ **整个页面只有这一个 PlayerView**，且它的官方控制器是关的
+                 * （原因见 [KVideoSurface]：60% 黑遮罩会压暗画面、按钮还被 Compose 手势层吃掉）。
+                 * 进度线与暂停标记由下面的 Compose 层画。
                  */
                 KVideoSurface(
                     player = player,
                     modifier = Modifier.fillMaxSize(),
-                    // 飞行期间关掉（跟着画面缩放会很怪），落位后打开 —— 用户要的暂停/拖动/时间
-                    useController = playerVisible,
-                    showBuffering = true,
                 )
 
                 /**
@@ -591,32 +608,117 @@ fun VideoPlayerScreen(
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
+
+                /**
+                 * ============================================================
+                 * 播放控制（**只在落位后出现**）
+                 * ============================================================
+                 * 只有两样东西：
+                 *  · 底部一条 3dp 的主题色进度线（与内联播放器同一根）；
+                 *  · 暂停时画面中央一个半透明 ▶ 标记。
+                 *
+                 * ★ 为什么不再用官方控制器（2026-10-17 用户实测："播放控件遮挡画面了"）：
+                 * 它自带一层**全屏 60% 黑**遮罩（`exo_controls_background` = `#98000000`）
+                 * 和 69% 黑的控制条，一显示就把整幅画面压暗；打开视频的头几秒它还会
+                 * 自动亮出来，正好盖在"画面还没出来"的黑上 —— 两条反馈其实是同一个原因。
+                 * 而且它的按钮在全屏页**点不动**（Compose 手势层先吃按下事件），
+                 * 留着只有副作用。详见 [KVideoSurface] 的注释。
+                 */
+                if (phase == VideoFlightPhase.Ready) {
+                    /**
+                     * 加载圈：**画在封面之上**（官方那个在 PlayerView 内部，会被封面盖住）。
+                     *
+                     * 网络慢的时候用户只看到一张静止的封面，很容易读成"打开了但没有画面"；
+                     * 这一圈是"我在加载"的明确信号。中途卡顿（播放中重新缓冲）也会出现。
+                     */
+                    if (playback.isBuffering && !loadError) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(KSpacing.lg),
+                        )
+                    }
+                    if (loadError) {
+                        // 失败要**说出来**（否则用户看到的就是"打开了没有画面"），
+                        // 并给一个点击重试的出口（手势层的 onTap 会接这个动作）
+                        Text(
+                            text = "视频加载失败 · 点击重试",
+                            style = KType.caption,
+                            color = Color.White.copy(alpha = 0.9f),
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .clip(RoundedCornerShape(50))
+                                .background(Color.Black.copy(alpha = 0.5f))
+                                .padding(horizontal = KSpacing.md, vertical = KSpacing.xs),
+                        )
+                    }
+                    VideoProgressBar(
+                        positionMs = playback.positionMs,
+                        durationMs = playback.durationMs,
+                        modifier = Modifier.align(Alignment.BottomCenter),
+                    )
+                    if (!playback.isPlaying && !playback.isBuffering && !loadError) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .size(64.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(Color.Black.copy(alpha = 0.35f)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text("▶", style = KType.title, color = Color.White)
+                        }
+                    }
+                }
             }
         }
 
 
         /**
-         * ② 双击 / 长按手势层（**画在播放器之上**，否则收不到事件）。
+         * ② 手势层（**画在播放器之上**，否则收不到事件）。
          *
-         * **双击 = 退出全屏**。为什么不做单击退出：单击要留给官方控制器
-         * （呼出/收起进度条），在它上面再叠一层单击检测器会把按下事件先吃掉，
-         * 官方控制条就再也不出来了（这个坑在 [KVideoPlayer] 的注释里记过一次）；
-         * 而且用户只是想呼出进度条时会误退，而退出是全屏页代价最大的动作。
-         * 双击与单击在 `detectTapGestures` 里可以共存（单击会等一个双击超时再派发，
-         * 代价是控制条"慢半拍"，比"点哪儿都没反应"好得多）。
+         * 三个动作，各占一档：
+         *  · **单击 = 暂停 / 继续**。与内联播放器同一套语义（那边点画面也是暂停），
+         *    全屏页只是把同一段视频放大，手势不该换一套。暂停时画面中央出现 ▶ 标记。
+         *  · **双击 = 退出全屏**。不做"单击退出"：用户想暂停时会误退，而退出是全屏页
+         *    代价最大的动作。单击与双击在 `detectTapGestures` 里可以共存 ——
+         *    单击会等一个双击超时（~300ms）再派发，这点延迟换"两种手势都成立"值。
+         *  · **长按 = 保存到相册**（用户要求"视频也要能长按存"）。
+         *    顶部那两个悬浮钮按用户要求去掉了，长按是这一页唯一不占画面的保存入口
+         *    （详情页的内联播放器与信息流的视频封面也是长按保存，全站手势保持一致）。
          *
-         * **长按 = 保存到相册**（用户要求"视频也要能长按存"）。
-         * 右上角那个「…」钮已经按用户要求去掉了（"全屏了就不要显示…顶部那两个"），
-         * 但保存能力不能跟着丢 —— 长按是这一页唯一不占画面的入口
-         * （详情页的内联播放器与信息流的视频封面也是长按保存，全站手势保持一致）。
+         * ★ 为什么这里不再给"官方控制器"让路（2026-10-17）：那一版把单击留给 PlayerView
+         * 的控制器，可 Compose 的 `pointerInput` 会先把按下事件吃掉 —— 控制器既点不动、
+         * 又会用它那层 60% 黑遮罩压暗整幅画面（用户实测"控件遮挡画面"）。现在控制条
+         * 由 Compose 自己画，手势层独占全部触摸，三条动作都确定可达。
          */
         val mediaOpener = LocalMediaSaveOpener.current
         val currentMediaOpener = rememberUpdatedState(mediaOpener)
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(Unit) {
+                .pointerInput(player) {
                     detectTapGestures(
+                        onTap = {
+                            when {
+                                // 失败态下单击 = 重试（对应画面中央那行"点击重试"）
+                                loadError -> {
+                                    loadError = false
+                                    player.prepare()
+                                }
+                                player.isPlaying -> player.pause()
+                                else -> {
+                                    // 播完之后再点 = 从头再来（ExoPlayer 在 ENDED 上 play() 不会重播）
+                                    if (player.playbackState ==
+                                        androidx.media3.common.Player.STATE_ENDED
+                                    ) {
+                                        player.seekTo(0)
+                                    }
+                                    player.play()
+                                }
+                            }
+                        },
                         onDoubleTap = { beginClose() },
                         onLongPress = {
                             currentMediaOpener.value?.invoke(
@@ -638,11 +740,11 @@ fun VideoPlayerScreen(
          * 位置：**底部**（2026-10-15 用户要求"提示词放底下"，原在顶部压着画面主体）；
          * 这一页是沉浸式（系统栏已藏），`KSpacing.lg` 离屏幕下缘留出手势区余量即可。
          *
-         * 透明度**跟着黑幕走**：进场时底页还亮着，这行白字如果一上来就满不透明，
-         * 会像"详情页上突然飘出一行提示"；跟着黑幕一起淡入才是同一件事的一部分。
+         * 透明度**跟着黑幕走**：退场时黑幕让开，这行字跟着一起退，不会停在刚缩回去的
+         * 详情页上；稳态下 `scrimAlpha` 恒为 1，它就是一整行白字。
          */
         Text(
-            text = "双击退出 · 长按保存",
+            text = "单击暂停 · 双击退出 · 长按保存",
             style = KType.caption,
             color = Color.White.copy(alpha = 0.72f * scrimAlpha),
             modifier = Modifier
@@ -669,21 +771,23 @@ fun VideoPlayerScreen(
  *    但用户**什么都看不到**（真机"根本没有位移到全屏的动画"，第二次事故）。
  *
  * 现在拆成显式相位，且播放器**全程在场**（TextureView 能被正常布局/变换，
- * 飞行时它就是画面本体）。相位只剩两个职责：
- *  · **控制器**：只有 [Ready] 才亮出来（飞行中跟着缩放会很怪）；
- *  · **黑幕**：只有 [Leaving] 才让开，[Entering] 才淡入（见 `scrimAlpha`）。
+ * 飞行时它就是画面本体）。相位只剩一个职责：
+ *  · **播放控制**（进度线 / 暂停标记 / 加载圈 / 失败提示）只在 [Ready] 出现 ——
+ *    飞行期间跟着缩放会很怪，退场时也不该还在。
+ *
+ * 黑幕不归它管：那是一条独立的 [exitScrim]（见 `scrimAlpha` 的注释）。
  *
  * 而 [Ready] 由 `withTimeoutOrNull` + `runCatching` **双重保证必然到达** ——
  * 白屏在结构上不可能再发生。
  */
 private enum class VideoFlightPhase {
-    /** 进场飞行中：画面/圆角/黑幕一起走，控制器关着 */
+    /** 进场飞行中：画面/圆角一起走，播放控制不出现 */
     Entering,
 
-    /** 到位（或本来就不飞）：控制器可开，正常播放 */
+    /** 到位（或本来就不飞）：播放控制出现，正常播放 */
     Ready,
 
-    /** 退场飞行中：控制器关掉，画面缩回详情页那一块，黑幕让开 */
+    /** 退场飞行中：播放控制收起，画面缩回详情页那一块，黑幕让开 */
     Leaving,
 }
 
