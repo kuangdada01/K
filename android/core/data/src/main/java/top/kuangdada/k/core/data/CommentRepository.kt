@@ -25,6 +25,39 @@ class CommentRepository(private val session: SessionRepository) {
 
     private val baseUrl: String get() = session.api.baseUrl
 
+    /**
+     * 评论的**会话内缓存**（postId → 已组好树的列表）。
+     *
+     * 为什么需要：详情页在"进全屏视频 / 退回来"这一跳里会**离开组合**，它的评论列表是
+     * 页面本地状态，跟着一起没了 —— 回来时只能重新拉一遍，屏幕上先空 1~2 秒
+     * （转一个加载圈）。用户实测的原话是"退出全屏中间还有一个绿圈转 1-2 秒"。
+     *
+     * 留一份上次的结果，回来先画它、**同时后台刷新**：观感与首页的帖子缓存一致，
+     * 也不会因为"这一秒里别人正好评论了"而显示旧数据（刷新回来会覆盖）。
+     *
+     * 容量 8 条帖子：详情页的评论是"看完就走"的，不需要按浏览历史无限攒。
+     */
+    private val cache = object : LinkedHashMap<Long, List<CommentUi>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, List<CommentUi>>?) =
+            size > COMMENT_CACHE_MAX
+    }
+
+    /** 上次拉到的评论（`null` = 这个帖子还没拉过）。UI 用它做首帧种子 */
+    @Synchronized
+    fun cached(postId: Long): List<CommentUi>? = cache[postId]
+
+    /** 记一份最新的评论（首屏拉到、增删改之后由详情页同步进来） */
+    @Synchronized
+    fun remember(postId: Long, list: List<CommentUi>) {
+        cache[postId] = list
+    }
+
+    /** 丢掉某个帖子的评论缓存（删帖时用） */
+    @Synchronized
+    fun forget(postId: Long) {
+        cache.remove(postId)
+    }
+
     /** 评论在 UI 侧的表示（含头像绝对地址、相对时间、是否本人、一层回复） */
     data class CommentUi(
         val raw: CommentDto,
@@ -48,7 +81,11 @@ class CommentRepository(private val session: SessionRepository) {
             // 续拉时不能只按本页组树：本页的回复可能挂在上一页的顶级评论下（服务端是扁平返回），
             // 这种情况它会被当作顶级评论显示 —— 可接受（回复内容与作者名都在），
             // 真正的修复是让服务端按父评论分页，属于接口演进。
-            buildCommentTree(r.comments, session.tokens.userId, baseUrl) to r.hasMore
+            val page = buildCommentTree(r.comments, session.tokens.userId, baseUrl) to r.hasMore
+            // 只有**第一页**才是"完整首屏"，才写缓存（续拉是往已有列表上追加，
+            // 直接覆盖会把用户已经看到的上一页也丢掉）
+            if (afterId == null) remember(postId, page.first)
+            page
         }
 
     /** 发表评论（[parentId] 非空 = 回复某条评论） */
@@ -89,6 +126,14 @@ class CommentRepository(private val session: SessionRepository) {
             }
         }
 }
+
+/**
+ * 评论缓存最多留几个帖子（见 `CommentRepository.cache`）。
+ *
+ * 8 是"来回翻几个帖子"的量级：再小会在连续跳转时失效，再大没有意义 ——
+ * 评论是详情页的附属内容，用户不会靠它回溯浏览历史。
+ */
+private const val COMMENT_CACHE_MAX = 8
 
 /**
  * 把服务端的**扁平**评论数组组成一层树（顶级 + 各自的回复）。

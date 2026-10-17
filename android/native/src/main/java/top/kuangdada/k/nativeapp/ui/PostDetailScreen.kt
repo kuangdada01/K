@@ -271,12 +271,34 @@ fun PostDetailScreen(
     var postError by remember(postId) { mutableStateOf<String?>(null) }
     var loadingPost by remember(postId) { mutableStateOf(post == null) }
 
-    var commentList by remember(postId) { mutableStateOf<List<CommentRepository.CommentUi>>(emptyList()) }
+    /*
+     * 评论列表：**先用仓库里的会话缓存起手**。
+     *
+     * 详情页在"进全屏视频 → 退回来"这一跳里会离开组合，本地状态跟着没了 ——
+     * 以前回来时评论是空的、要重新拉一遍，屏幕上先转 1~2 秒的加载圈
+     * （用户实测："退出全屏中间还有一个绿色的圈转 1-2 秒"）。
+     * 现在有缓存就先画出来，同时后台照常刷新（`loadComments`），观感与帖子本身一致。
+     */
+    val cachedComments = remember(postId) { comments.cached(postId) }
+    var commentList by remember(postId) {
+        mutableStateOf<List<CommentRepository.CommentUi>>(cachedComments.orEmpty())
+    }
     var commentTotal by remember(postId) { mutableStateOf(post?.commentCount ?: 0) }
     var commentHasMore by remember(postId) { mutableStateOf(false) }
-    var loadingComments by remember(postId) { mutableStateOf(true) }
+    // 有缓存 = 首屏不是空的，不需要转圈（刷新在后台进行）
+    var loadingComments by remember(postId) { mutableStateOf(cachedComments == null) }
     var loadingMore by remember(postId) { mutableStateOf(false) }
     var commentError by remember(postId) { mutableStateOf<String?>(null) }
+
+    /**
+     * 把评论列表同步进仓库缓存（首屏拉完、发/删评论之后都会走到这里）。
+     *
+     * `loadingComments` 为真时不写：那一刻列表还是"缓存或空"，不是服务端的结果 ——
+     * 提前写进去会让下次进来先画一份错的。
+     */
+    LaunchedEffect(postId, commentList, loadingComments) {
+        if (!loadingComments) comments.remember(postId, commentList)
+    }
 
     /**
      * **正在播删除动画**的评论 / 回复 id（删成功后先标记，动画播完才从列表摘掉）。
@@ -695,11 +717,18 @@ fun PostDetailScreen(
                     }
 
                     when {
-                        loadingComments && commentList.isEmpty() -> item(key = "loading") {
-                            Box(Modifier.fillMaxWidth().padding(KSpacing.xl), contentAlignment = Alignment.Center) {
-                                CircularProgressIndicator(color = c.accentText)
+                        /**
+                         * **有缓存就永远不再转这个圈**（`cachedComments == null` 才允许）：
+                         * 评论为空也可能是"这条帖子真的没有评论"，缓存里存的就是空列表 ——
+                         * 只看 `commentList.isEmpty()` 会把它当成"还在加载"，于是从全屏退回来
+                         * 又转 1~2 秒（用户实测过这个圈）。
+                         */
+                        loadingComments && commentList.isEmpty() && cachedComments == null ->
+                            item(key = "loading") {
+                                Box(Modifier.fillMaxWidth().padding(KSpacing.xl), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator(color = c.accentText)
+                                }
                             }
-                        }
 
                         commentError != null && commentList.isEmpty() -> item(key = "error") {
                             KPlaceholder(
