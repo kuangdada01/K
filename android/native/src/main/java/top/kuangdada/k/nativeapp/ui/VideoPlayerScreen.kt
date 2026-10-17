@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,15 +29,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -55,6 +59,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.math.roundToInt
 
 /**
  * ============================================================
@@ -152,6 +157,25 @@ fun VideoPlayerScreen(
     val lifecycleOwner = LocalLifecycleOwner.current
     val animationsEnabled = LocalAnimationsEnabled.current
     val density = LocalDensity.current
+
+    /**
+     * 屏幕尺寸（px）：容器还没量到时的**兜底矩形**。
+     *
+     * 为什么需要：`container` 初值是 `Rect.Zero`，而这一页第一次组合时就要算落位矩形 ——
+     * 没有兜底的话 `to` 会是 Zero，视频块被压成 **1px** 建出来（`TextureView` 也跟着
+     * 1×1 出生）。屏幕上这一页始终是全屏的，用屏幕尺寸兜底与稍后测到的容器几乎一致。
+     */
+    val configuration = LocalConfiguration.current
+    val screenBounds = remember(configuration, density) {
+        with(density) {
+            Rect(
+                0f,
+                0f,
+                configuration.screenWidthDp.dp.toPx(),
+                configuration.screenHeightDp.dp.toPx(),
+            )
+        }
+    }
 
     /**
      * 交接单：**一次取走**进度与飞行来源。
@@ -302,10 +326,16 @@ fun VideoPlayerScreen(
      * 所以它能被正常布局 —— 于是"位移视频窗口"这件事成立：
      * 播放器就住在那个飞行 Box 里，跟着矩形一起长大。
      *
-     * ★ 这里**只建不 prepare**：起播放在下面那个 `DisposableEffect` 里，**先挂监听再 prepare**。
-     * 反过来的话（老写法）理论上存在"首帧在监听挂上之前就画出来"的窗口 —— 那一帧一旦错过，
+     * ★ 这里**只建不 prepare**：起播放在下面那个 effect 里（先挂监听，再 seek/prepare）。
+     * 反过来的话理论上存在"首帧在监听挂上之前就画出来"的窗口 —— 那一帧一旦错过，
      * 盖在上面的封面就永远不会撤，看起来就是"打开了但没有画面"（偶发、极难复现）。
-     * 顺序换一下，这个窗口直接不存在。
+     *
+     * ★★ 还要**晚一帧再 prepare**（2026-10-17，针对"有时候打开不显示画面"）：
+     * 本页第一次组合时，**详情页的内联播放器还在组合里** —— 它要到同一帧的 apply 阶段
+     * 才会 `release()`。如果这里在组合期就 `prepare()`，两个 ExoPlayer 会**同时向系统要
+     * 解码器**：部分机型上新的那个拿不到（或拿到一个没真正接上输出的），
+     * 表现就是"声音有/缓冲有，但画面一直是黑的"，而且**时有时无**（取决于旧播放器有没有
+     * 来得及释放）。等到下一帧，旧播放器一定已经释放，这个竞争窗口就没了。
      */
     val player = remember(url) {
         ExoPlayer.Builder(context).build().apply {
@@ -329,6 +359,9 @@ fun VideoPlayerScreen(
     /** 播放状态（进度线 / 暂停标记用；与内联播放器同一份实现，见 [rememberVideoPlaybackState]） */
     val playback = rememberVideoPlaybackState(player)
 
+    /** 画面那张纹理（兜底重挂要用；`KVideoSurface` 建好时回传） */
+    var textureView by remember { mutableStateOf<android.view.TextureView?>(null) }
+
     // 释放（必须）：不释放就是泄漏一个解码器 + 音频焦点
     DisposableEffect(player) {
         val listener = object : androidx.media3.common.Player.Listener {
@@ -340,16 +373,40 @@ fun VideoPlayerScreen(
                 loadError = true
             }
         }
-        // 先挂监听，再 seek/prepare（顺序理由见上面 player 的注释）
         player.addListener(listener)
-        // ★ 续播：内联播到哪就从哪继续（用户反馈"点全屏不能续播"）。seek 必须在 prepare 之前：
-        // 反过来的话会先把 0 位置解出来再跳走，观感是"回到开头闪一下"（与 KVideoPlayer 同）。
-        handoff.positionMs?.let { player.seekTo(it) }
-        player.prepare()
         onDispose {
             player.removeListener(listener)
             player.release()
         }
+    }
+
+    /**
+     * 起播：**等一帧**再 seek + prepare（理由见上面 player 的注释 —— 让详情页那条播放器
+     * 先释放掉解码器）。
+     */
+    LaunchedEffect(player) {
+        withFrameNanos { }
+        // ★ 续播：内联播到哪就从哪继续（用户反馈"点全屏不能续播"）。seek 必须在 prepare 之前：
+        // 反过来的话会先把 0 位置解出来再跳走，观感是"回到开头闪一下"（与 KVideoPlayer 同）。
+        handoff.positionMs?.let { player.seekTo(it) }
+        player.prepare()
+    }
+
+    /**
+     * 兜底自愈：解码器已就绪（READY、不在缓冲）却 2.5s 还没出首帧时，把纹理**重新挂一次**。
+     *
+     * 这是给"表面挂丢了/生错了尺寸"这类只在个别机型上出现的状态用的最后一招：
+     * 重新 `setVideoTextureView` 会让 ExoPlayer 丢掉旧的输出面、按当前视图尺寸重新建一个。
+     * 只在"确实没画面"时触发（正常播放早就 firstFrame=true 了），不会打扰正常路径。
+     */
+    LaunchedEffect(player, phase, textureView) {
+        if (phase != VideoFlightPhase.Ready || firstFrame) return@LaunchedEffect
+        val target = textureView ?: return@LaunchedEffect
+        withTimeoutOrNull(2500L) {
+            snapshotFlow { firstFrame || playback.isBuffering }.first { it }
+        }
+        if (firstFrame || playback.isBuffering) return@LaunchedEffect
+        player.setVideoTextureView(target)
     }
 
     // 后台暂停 + 屏幕常亮
@@ -369,6 +426,16 @@ fun VideoPlayerScreen(
     }
 
     /**
+     * 退场要飞的那一帧**定格图**（起飞前从纹理抓一张）。
+     *
+     * 为什么退场不用"活的画面"缩小：退场飞行期间这一块必然带着缩放层（scale < 1），
+     * 而 `TextureView` 被画进 Compose 的绘制层后在个别机型上不出帧（这正是"全屏纯黑"
+     * 的同一个成因）。抓一张当前帧来飞，缩小的过程**与纹理在不在画无关** ——
+     * 观感是"当前这一帧被拎回详情页"，落地那一块再交给内联播放器，接得上。
+     */
+    var exitFrame by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+
+    /**
      * 退场：**先把进度交回内联播放器，再反向播一次飞行，最后才离开**。
      *
      * 进度必须在离开之前读：一旦 pop，本页就离开组合了，`player.currentPosition` 没了。
@@ -381,6 +448,17 @@ fun VideoPlayerScreen(
         // 续播的另一半：把现在的进度交回详情页那条内联播放器（必须在离开之前读）
         val position = player.currentPosition
         if (position > 0L) VideoHandoff.offer(postId, position, player.duration)
+        // 抓一帧给退场飞行用（必须在离开之前；拿不到就退回"缩小的视频块"）
+        exitFrame = runCatching {
+            val texture = textureView
+            if (texture != null && texture.isAvailable && texture.width > 1 && texture.height > 1) {
+                val w = minOf(texture.width, 1080)
+                val h = (w.toFloat() / texture.width * texture.height).roundToInt().coerceAtLeast(1)
+                texture.getBitmap(w, h)
+            } else {
+                null
+            }
+        }.getOrNull()
         // 第一步：请 Shell 把目标页亮到本页下面（**先不 pop**，见 [onBack] 的注释）
         currentOnBack()
     }
@@ -484,8 +562,26 @@ fun VideoPlayerScreen(
          * ★ 不能用容器本身：视频是 16:9、屏幕是 9:19.5，让画面去铺满竖屏容器
          * 会在飞行途中把它**拉成竖条**。详见 [videoFullscreenRect] 的注释。
          */
-        val to = videoFullscreenRect(container, origin?.aspect)
-        val flyRect = videoFlightRect(from, to, flight.value)
+        val measured = container.width > 1f && container.height > 1f
+        /**
+         * 容器还没量到时用**屏幕尺寸**兜底（而不是 `Rect.Zero`）。
+         *
+         * ★ 2026-10-17：`container` 初值是 `Rect.Zero`，`to` 会跟着算成 Zero，
+         * 视频块被压成 **1px** 建出来 —— `PlayerView` 里的 `TextureView`/`SurfaceTexture`
+         * 就带着 1×1 的尺寸出生。之后盒子虽然恢复成全屏，这个表面却不一定能恢复出帧。
+         * 用屏幕尺寸兜底，视频视图**从第一次组合就是全屏尺寸**。
+         */
+        val containerRect = if (measured) container else screenBounds
+        val to = videoFullscreenRect(containerRect, origin?.aspect)
+        /**
+         * 飞行矩形。
+         *
+         * ★ 没有来源时也要画（`?: to`）：以前整块画面是 `if (flyRect != null)` 才组合的 ——
+         * 从探索页进来（`openVideo` 不写交接单，`origin == null`）时 `flyRect` 恒为 null，
+         * 于是**整页只有一块黑**：视频、进度线、暂停标记全都不存在。
+         * 现在没有来源就直接落在全屏位，不飞，但一定画。
+         */
+        val flyRect = videoFlightRect(from, to, flight.value) ?: to
 
         /**
          * ============================================================
@@ -516,7 +612,7 @@ fun VideoPlayerScreen(
          * `RESIZE_MODE_FIT` 结果一致，所以"飞行结束"与"正常播放"之间没有跳变。
          */
         val cornerPx = videoFlightCorner(origin?.cornerRadiusPx ?: 0f, 0f, flight.value)
-        if (flyRect != null) {
+        if (flyRect.width > 0.5f && flyRect.height > 0.5f) {
             /**
              * 飞行块：**尺寸固定在全屏位，只做绘制期缩放/平移**。
              *
@@ -548,30 +644,55 @@ fun VideoPlayerScreen(
             val toH = to.height.coerceAtLeast(1f)
             // 当前帧相对终态的绘制期变换（纯函数，有单测钉住）
             val xf = videoFlightTransform(flyRect, to)
+            val offsetX = (to.left - container.left) + xf.dx
+            val offsetY = (to.top - container.top) + xf.dy
+            val cornerDp = with(density) { (cornerPx / xf.scale).toDp() }
 
             Box(
                 modifier = Modifier
-                    // 布局尺寸 = 终态（**恒定**，不随动画变）。位置也钉在终态上，
-                    // 再用 translation 把它挪到当前帧的位置。
-                    .graphicsLayer {
-                        translationX = (to.left - container.left) + xf.dx
-                        translationY = (to.top - container.top) + xf.dy
-                        scaleX = xf.scale
-                        scaleY = xf.scale
-                        // 绕自身中心缩放：与"矩形从中心插值"是同一个几何
-                        transformOrigin = TransformOrigin.Center
-                    }
+                    /**
+                     * ============================================================
+                     * ★★ 2026-10-17：**落位后不给画面加任何绘制层**（全屏纯黑的修复）
+                     * ============================================================
+                     * 之前是"位置 + 缩放都走 `graphicsLayer`"，圆角再套一层 `clip` —— 也就是
+                     * 视频（`TextureView`）永远被画进 Compose 建出来的**绘制层（RenderNode）**里。
+                     * 真机上（OPPO / Android 16）这会让画面**一帧都不出**：层里其余 Compose
+                     * 内容（封面、进度线）都正常，只有 `TextureView` 是黑的 ——
+                     * 用户看到的就是"全屏播放画面是黑的"。而详情页的内联播放器**没有这层壳**，
+                     * 所以同一个文件在那边播得好好的。0.1.22 之所以"看起来正常"，是因为
+                     * 落位那一刻会**再建一个** PlayerView 把画面接过去，把这里遮住了。
+                     *
+                     * 现在拆开：
+                     *  · **位置**走布局 `offset`（只改摆位、不改尺寸 → 不重分配 Surface）；
+                     *  · **缩放**只在飞行途中用 `graphicsLayer`（落位时 scale=1，**不加层**）；
+                     *  · **圆角**只在大于 0 时 `clip`（落位是直角，**不加层**）。
+                     * 稳态下这一块就是"一个普通布局 + 普通 AndroidView"，与内联播放器同构。
+                     */
+                    .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                    .then(
+                        if (xf.scale < 0.999f) {
+                            Modifier.graphicsLayer {
+                                scaleX = xf.scale
+                                scaleY = xf.scale
+                                // 绕自身中心缩放：与"矩形从中心插值"是同一个几何
+                                transformOrigin = TransformOrigin.Center
+                            }
+                        } else {
+                            Modifier
+                        },
+                    )
                     .size(
                         width = with(density) { toW.toDp() },
                         height = with(density) { toH.toDp() },
                     )
-                    // 圆角：**除以 scale 补偿**。graphicsLayer 的缩放会把圆角一起缩，
-                    // 不补偿的话视觉半径只有 cornerPx * scale（越缩越方），
-                    // 看起来就不像"从详情页那一块的圆角变到全屏的直角"
-                    .clip(
-                        RoundedCornerShape(
-                            with(density) { (cornerPx / xf.scale).toDp() },
-                        ),
+                    // 圆角：**除以 scale 补偿**（缩放会把圆角一起缩，不补偿的话视觉半径只有
+                    // cornerPx * scale，越缩越方）。0 时**不挂 clip** —— 见上面那段注释。
+                    .then(
+                        if (cornerDp > 0.25.dp) {
+                            Modifier.clip(RoundedCornerShape(cornerDp))
+                        } else {
+                            Modifier
+                        },
                     ),
             ) {
                 /**
@@ -589,16 +710,20 @@ fun VideoPlayerScreen(
                 KVideoSurface(
                     player = player,
                     modifier = Modifier.fillMaxSize(),
+                    onCreated = { playerView ->
+                        textureView = playerView.videoSurfaceView as? android.view.TextureView
+                    },
                 )
 
                 /**
                  * 首帧之前盖一层封面：避免"黑帧 → 视频"闪一下。
                  *
-                 * 只在**还没有画面**时盖（`!firstFrame`），有画面了立刻撤掉 ——
-                 * 这一层是"遮黑"用的，不是飞行内容本身。
+                 * **进场飞行期间一律盖着**（哪怕首帧已经出来）：这一块正在被缩放/裁切，
+                 * 里面是纹理还是黑都读不出来；封面是 Compose 画的，一定跟着飞。
+                 * 落位之后才开始按 `firstFrame` 撤掉，露出真正的画面。
                  */
                 val cover = origin?.coverUrl
-                if (cover != null && !firstFrame) {
+                if (cover != null && (!firstFrame || phase == VideoFlightPhase.Entering)) {
                     androidx.compose.foundation.Image(
                         painter = coil3.compose.rememberAsyncImagePainter(
                             model = rememberVideoCoverRequest(cover),
@@ -607,6 +732,24 @@ fun VideoPlayerScreen(
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
                     )
+                }
+
+                /**
+                 * 退场：飞的是**起飞前抓下的那一帧**（原因见 [exitFrame] 的注释）。
+                 * 它盖在视频块之上、控制层之下，与 `flyRect` 一起缩小，落地那一块正好交给
+                 * 详情页的内联播放器 —— 缩小的过程不依赖纹理在当前绘制层里能不能出帧。
+                 */
+                if (phase == VideoFlightPhase.Leaving) {
+                    // 包一层 remember：退场那十几帧不必每帧都新建一个 ImageBitmap 包装
+                    val exitImage = remember(exitFrame) { exitFrame?.asImageBitmap() }
+                    if (exitImage != null) {
+                        androidx.compose.foundation.Image(
+                            bitmap = exitImage,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
 
                 /**

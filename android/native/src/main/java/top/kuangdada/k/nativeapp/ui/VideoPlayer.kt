@@ -377,6 +377,8 @@ fun KVideoPlayer(
 fun KVideoSurface(
     player: Player,
     modifier: Modifier = Modifier,
+    /** 建好之后回调一次（目前只有全屏页用：拿 `videoSurfaceView` 做"挂丢了"的兜底重挂） */
+    onCreated: (PlayerView) -> Unit = {},
 ) {
     AndroidView(
         factory = { ctx ->
@@ -406,6 +408,7 @@ fun KVideoSurface(
                 setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
                 // 视频原始比例交给 PlayerView（FIT = 不拉伸，多出来的部分留黑边）
                 resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                onCreated(this)
             }
         },
         modifier = modifier,
