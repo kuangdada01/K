@@ -766,8 +766,15 @@ fun VideoPlayerScreen(
                  * 自动亮出来，正好盖在"画面还没出来"的黑上 —— 两条反馈其实是同一个原因。
                  * 而且它的按钮在全屏页**点不动**（Compose 手势层先吃按下事件），
                  * 留着只有副作用。详见 [KVideoSurface] 的注释。
+                 *
+                 * ★★ `&& !closing` 不能省（2026-10-17 用户实测："退出全屏的加载圈在详情页
+                 * 中间转圈"）：`beginClose()` 先置 `closing`、再请 Shell 把详情页亮到本页下面。
+                 * 那一帧的**重组**里详情页已经画出来了，但把 `phase` 改成 `Leaving` 要等这一帧
+                 * 的 effect 才生效 —— 于是加载圈会**多画整整一帧**（而这一帧正好在组合详情页，
+                 * 可能长到几十毫秒），位置就是全屏画面块的中心 = 屏幕正中。
+                 * 现在 `closing` 一置位，控制层立刻收掉，这一帧不会漏出去。
                  */
-                if (phase == VideoFlightPhase.Ready) {
+                if (phase == VideoFlightPhase.Ready && !closing) {
                     /**
                      * 加载圈：**画在封面之上**（官方那个在 PlayerView 内部，会被封面盖住）。
                      *

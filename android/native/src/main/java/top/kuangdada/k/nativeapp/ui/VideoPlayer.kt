@@ -158,6 +158,14 @@ fun KVideoPlayer(
      * READY 只代表缓冲好了，**画面还不一定画出来**，用它仍然会闪黑。
      */
     onFirstFrame: () -> Unit = {},
+    /**
+     * 缓冲状态变化（true = 正在缓冲）。
+     *
+     * 给"封面盖在播放器上面"的调用方用（详情页）：它自己的加载圈画在播放器**内部**，
+     * 会被封面挡住 —— 于是详情页需要这个信号，在**封面之上**再画一个加载圈，
+     * 用户才知道"视频在加载中"而不是"卡住了"。
+     */
+    onBufferingChange: (Boolean) -> Unit = {},
 ) {
     val context = LocalContext.current
     val view = LocalView.current
@@ -221,6 +229,7 @@ fun KVideoPlayer(
     // 监听器建在 DisposableEffect 里（只随 player 重建），所以回调要用 rememberUpdatedState
     // 兜住最新引用 —— 否则调用方换 lambda 之后，播放器还在调旧的。
     val currentOnFirstFrame by rememberUpdatedState(onFirstFrame)
+    val currentOnBufferingChange by rememberUpdatedState(onBufferingChange)
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -231,6 +240,12 @@ fun KVideoPlayer(
         }
         player.addListener(listener)
         onDispose { player.removeListener(listener) }
+    }
+
+    // 缓冲状态外传（见 [onBufferingChange]）；用状态驱动而不是在监听器里直接调，
+    // 这样"组合完成后的第一帧"也能拿到初始值（true）。
+    LaunchedEffect(playback.isBuffering) {
+        currentOnBufferingChange(playback.isBuffering)
     }
 
     /** 圆角（px）：给"进全屏飞行"的出发帧用（与调用方那行 `clip(...)` 必须一致） */

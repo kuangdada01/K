@@ -1323,6 +1323,15 @@ private fun PostDetailBody(
                     val playerVisible = !sharedFlying && !suppressedAsUnderlay
                     // 首帧是否已经画出来（决定"盖在上面的封面能不能淡掉"）
                     var firstFrame by remember(playerVisible) { mutableStateOf(false) }
+                    /**
+                     * 内联播放器的缓冲状态（`KVideoPlayer` 回调上来）。
+                     *
+                     * 为什么要外到这里：播放器自己的加载圈画在**播放器内部**，而封面
+                     * （`post.videoCoverUrl`）是画在它**上面**的 —— 从全屏退回来、视频还在
+                     * 重新缓冲时，用户只能看到一张静止封面，读成"卡住了"。下面按这个状态
+                     * 在**封面之上**再画一个圈，位置就是视频窗口本身。
+                     */
+                    var videoBuffering by remember(post.id) { mutableStateOf(false) }
                     // 封面透明度：播放器缺席时**立刻**回到不透明（不能淡回！
                     // 否则退出/回飞的那几帧会是一个透明的洞）；
                     // 只有"播放器在场且已出首帧"时才淡出，露出视频。
@@ -1386,6 +1395,7 @@ private fun PostDetailBody(
                                 onVideoClick(positionMs, durationMs)
                             },
                             onFirstFrame = { firstFrame = true },
+                            onBufferingChange = { videoBuffering = it },
                             modifier = Modifier.fillMaxSize(),
                         )
                     }
@@ -1430,6 +1440,22 @@ private fun PostDetailBody(
                                 // 把 Animatable 弹回 1）：`snapTo` 发生在组合之后的副作用里，
                                 // 而退出的第一帧就要画 —— 等它就等于第一帧是个透明的洞。
                                 .graphicsLayer { alpha = if (playerVisible) coverFade.value else 1f },
+                        )
+                    }
+
+                    /**
+                     * 加载圈**画在封面之上**（视频窗口的中心）。
+                     *
+                     * 播放器内部那个圈被封面挡着看不见，而"从全屏退回来、正在重新缓冲"
+                     * 恰恰是用户最需要反馈的时刻（用户实测："加载圈跑到详情页中间去了，
+                     * 不在视频窗口里"）。这里只在**还没出首帧**时显示 —— 出了画面就撤。
+                     */
+                    if (playerVisible && !firstFrame && videoBuffering) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(KSpacing.lg),
                         )
                     }
                 }
