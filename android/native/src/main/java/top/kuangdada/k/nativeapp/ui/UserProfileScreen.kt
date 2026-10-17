@@ -120,21 +120,20 @@ fun UserProfileScreen(
     val openViewer = top.kuangdada.k.nativeapp.ui.viewer.rememberImageViewerSimple()
 
     /**
-     * 两份列表（**本页自己建**，不是仓库里按 source 复用的那份）：
-     * `[0]` = 帖子（`GET /users/:id/posts`）、`[1]` = 转发（`GET /users/:id/reposts`）。
+     * 两份列表（走仓库里按 source 复用的那份）。
      *
-     * 与 [ProfileScreen] 的取舍不同：主页那三份列表要跨页面存活（返回主页不能重拉、
-     * 不能丢滚动位置），所以走 `posts.listFor(...)`；他人主页是**被推上来的二级页**，
-     * 离开就销毁、每次进来都该拿最新数据（别人刚发的帖子要看得见）。
-     * 用 `listFor` 反而会让"第二次进同一个人的主页"看到上一轮的旧列表。
+     * 早先这里是 `posts.newList(...)`，理由是"他人主页是二级页，每次进来都该拿最新数据"。
+     * 但那个代价是**每次进来都是空列表 + 一次请求 + 转圈**，而"最新"其实只需要
+     * 一个很短的窗口：现在改成复用同一份，并用 `refreshIfStale(60s)` ——
+     *  · 1 分钟内再进来：直接看缓存（不发请求、不转圈）；
+     *  · 超过 1 分钟：先画缓存、后台静默刷新（`refresh` 只在列表为空时才显示加载态）。
      *
-     * 为什么两份都建、却只 `loadIfEmpty()` **当前这一份**：建列表是纯内存操作，
-     * 不带数据；而预拉另一份会在每次进主页时多打一个请求（大多数人只看帖子）。
+     * 只 `refreshIfStale()` **当前这一份**：建列表是纯内存操作，预拉另一份只会多打请求。
      */
-    val lists = remember(userId) {
+    val lists = remember(userId, posts) {
         listOf(
-            posts.newList(PostRepository.Source.UserPosts(userId)),
-            posts.newList(PostRepository.Source.UserReposts(userId)),
+            posts.listFor(PostRepository.Source.UserPosts(userId)),
+            posts.listFor(PostRepository.Source.UserReposts(userId)),
         )
     }
 
@@ -205,18 +204,22 @@ fun UserProfileScreen(
         }
 
         // ---- 资料 ----
-        when (val r = users.profile(userId)) {
-            is ApiResult.Success -> {
-                profile = r.data
-                profileError = null
+        // 5 分钟内刚拉过就直接用缓存（资料不是帖子流，几秒内不可能变）
+        if (!users.profileFresh(userId)) {
+            when (val r = users.profile(userId)) {
+                is ApiResult.Success -> {
+                    profile = r.data
+                    profileError = null
+                }
+                // 已经有缓存资料时，刷新失败保持旧值（比把整页变成错误页好）
+                is ApiResult.Failure -> if (profile == null) profileError = r.error.displayMessage
             }
-            // 已经有缓存资料时，刷新失败保持旧值（比把整页变成错误页好）
-            is ApiResult.Failure -> if (profile == null) profileError = r.error.displayMessage
         }
         loadingProfile = false
 
-        // ---- 作品列表（只补"当前这一份"：建列表本身不发请求）----
-        lists[0].loadIfEmpty()
+        // ---- 作品列表（只处理当前这一份：建列表本身不发请求）----
+        // 1 分钟内刚拉过 → 直接用缓存；过期 → 先画缓存、后台静默刷新
+        lists[0].refreshIfStale()
     }
 
     // 内容变了（在这个人的主页里点进帖子→作者删了它 / 自己发帖）→ 重拉**当前这一份**
@@ -345,6 +348,9 @@ fun UserProfileScreen(
                                             // 粉丝数用服务端返回的最新值回填 ——
                                             // 不回填的话"点了关注，粉丝数还是旧的"
                                             profile = profile?.copy(followersCount = r.data.followersCount)
+                                            // 仓库里的资料缓存也作废：否则 5 分钟内再进来，
+                                            // 首帧画的是缓存里的旧粉丝数（那时会跳过请求）
+                                            users.forgetProfile(userId)
                                             toast = if (r.data.isFollowing) "已关注" else "已取消关注"
                                         }
                                         is ApiResult.Failure -> toast = r.error.displayMessage
@@ -392,8 +398,9 @@ fun UserProfileScreen(
                                         indication = null,
                                     ) {
                                         tabIndex = i
-                                        // 切过去时才拉那一份（见 lists 的注释：不预拉）
-                                        scope.launch { lists[i].loadIfEmpty() }
+                                        // 切过去时才处理那一份（见 lists 的注释：不预拉）。
+                                        // 用 refreshIfStale：1 分钟内刚拉过就直接看缓存。
+                                        scope.launch { lists[i].refreshIfStale() }
                                     }
                                     .padding(vertical = KSpacing.xs),
                             )

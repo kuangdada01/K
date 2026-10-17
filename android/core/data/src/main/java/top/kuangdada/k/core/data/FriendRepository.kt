@@ -92,6 +92,9 @@ class FriendRepository(private val session: SessionRepository) {
             // **以响应里的 is_following 为准**，不拿"请求成功"当结果：
             // POST 走 INSERT OR IGNORE（重复关注也是 200）、DELETE 对没关注过的也返回 200。
             putStatus(targetId, r.isFollowing)
+            // 关注关系变了：关注/粉丝列表的**首屏缓存**必须作废，
+            // 否则 2 分钟内再进那个列表，行尾按钮还是"关注/已关注"的旧状态。
+            followListCache.clear()
             FollowResult(isFollowing = r.isFollowing, followersCount = r.followersCount)
         }
     }
@@ -134,6 +137,52 @@ class FriendRepository(private val session: SessionRepository) {
     )
 
     /**
+     * **首屏缓存**（`目标用户 + 方向 + 搜索词` → 第一页）。
+     *
+     * 为什么需要：关注/粉丝列表的状态存在页面里（`FollowTabState`），页面离开组合就没了 ——
+     * 以前每次进来都是空列表 + 两次请求 + 整页转圈。列表内容在一两分钟内不会变，
+     * 放这里之后重进先画缓存，只有超过 [FOLLOW_LIST_TTL_MS] 才静默刷新。
+     *
+     * 只缓存**第一页**：翻页结果按用户滚动位置才有意义，缓存它反而会造成
+     * "第二次进来只有前 60 条"这种半截列表；搜索词为空时才缓存（搜索是即时行为）。
+     * 键里带 `viewer` 的 id 是必须的（同 [cache]）：换账号后关系字段全变了，
+     * 复用上一个人的列表会让按钮画错。
+     */
+    private data class FollowListKey(
+        val viewerId: Long,
+        val targetId: Long,
+        val kind: FollowListKind,
+        val query: String,
+    )
+
+    private val followListCache = SessionCache<FollowListKey, FollowListPage>(
+        maxEntries = 16,
+        ttlMs = FOLLOW_LIST_TTL_MS,
+    )
+
+    /** 缓存的列表内容（不管新不新）。UI 用它做首帧种子；null = 没拉过 */
+    fun cachedFollowList(
+        targetId: Long,
+        kind: FollowListKind,
+        query: String? = null,
+    ): FollowListPage? = followListCache.get(followListKey(targetId, kind, query))
+
+    /** 这份首屏还在新鲜期内吗 —— 页面据此决定要不要静默刷新 */
+    fun isFollowListFresh(
+        targetId: Long,
+        kind: FollowListKind,
+        query: String? = null,
+    ): Boolean = followListCache.isFresh(followListKey(targetId, kind, query))
+
+    private fun followListKey(targetId: Long, kind: FollowListKind, query: String?) =
+        FollowListKey(
+            viewerId = viewerId(),
+            targetId = targetId,
+            kind = kind,
+            query = query?.trim().orEmpty(),
+        )
+
+    /**
      * 拉某个用户的关注/粉丝列表的一页（分页形状，**必须带 page** —— 老形状没有关系字段）。
      *
      * 排序在**服务端**：共同关注优先（互关 → 我关注了 Ta → Ta 关注了我 → 用户名升序）。
@@ -159,7 +208,7 @@ class FriendRepository(private val session: SessionRepository) {
                     session.api.friends.followers(targetId, page, limit, q)
             }
             for (u in r.users) putStatus(u.id, u.isFollowing != 0)
-            FollowListPage(
+            val pageResult = FollowListPage(
                 users = r.users.map {
                     FollowUser(
                         id = it.id,
@@ -175,6 +224,9 @@ class FriendRepository(private val session: SessionRepository) {
                 page = r.page,
                 hasMore = r.hasMore,
             )
+            // 只缓存第一页（见 followListCache 的注释）；第二页起是"滚动出来的"，不留
+            if (page == 1) followListCache.put(followListKey(targetId, kind, q), pageResult)
+            pageResult
         }
     }
 
@@ -187,3 +239,11 @@ class FriendRepository(private val session: SessionRepository) {
             }
         }
 }
+
+/**
+ * 关注/粉丝列表首屏的新鲜期（2 分钟）。
+ *
+ * 比帖子列表长：这类列表的变化（谁关注了谁）是低频事件，而且真正的关注动作
+ * 会经 `putStatus` 就地改状态；2 分钟内反复进出不必重复打两个接口。
+ */
+private const val FOLLOW_LIST_TTL_MS = 2 * 60_000L

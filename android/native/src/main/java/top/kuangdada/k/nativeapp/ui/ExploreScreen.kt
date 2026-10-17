@@ -48,6 +48,14 @@ import top.kuangdada.k.core.designsystem.theme.KType
 import top.kuangdada.k.nativeapp.ui.viewer.rememberImageViewerSimple
 
 /**
+ * 搜索结果的新鲜期（2 分钟）。
+ *
+ * 比帖子流长：同一个关键词的搜索结果在短时间内基本稳定；而"带着话题从别处进来"
+ * 这类场景往往就是几秒内反复进出，重复请求纯属浪费。
+ */
+private const val SEARCH_FRESH_MS = 2 * 60_000L
+
+/**
  * ============================================================
  * 搜索发现（设计稿「搜索发现」——高亮首页 tab）
  * ============================================================
@@ -115,7 +123,16 @@ fun ExploreScreen(
         val text = raw.trim()
         if (text.isEmpty()) return
         val tag = text.removePrefix("#").trim().takeIf { text.startsWith("#") && it.isNotEmpty() }
-        val list = posts.newList(
+        /**
+         * 用 `listFor` 复用**同一个搜索词**的那一份列表（不是每次 `newList`）。
+         *
+         * 原来的写法每次搜索都新建一条空列表 —— 同一个词重搜、或带着同一个话题
+         * 重新进这一页，都要重新转圈拉一遍。复用之后：
+         *  · 上次结果立刻画出来（列表本身带着 posts）；
+         *  · 2 分钟内不重复请求（`refreshIfStale`），超过才静默刷新。
+         * 仓库对搜索列表有 LRU 上限（只留最近几个词），不会无限增长。
+         */
+        val list = posts.listFor(
             PostRepository.Source.Search(
                 keyword = if (tag == null) text else null,
                 tag = tag,
@@ -123,7 +140,7 @@ fun ExploreScreen(
         )
         lastQuery = text
         resultList = list
-        scope.launch { list.refresh() }
+        scope.launch { list.refreshIfStale(SEARCH_FRESH_MS) }
     }
 
     // 进页面：带话题 → 立刻出结果；否则等用户输入

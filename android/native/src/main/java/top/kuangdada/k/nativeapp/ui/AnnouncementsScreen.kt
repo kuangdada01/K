@@ -69,14 +69,21 @@ fun AnnouncementsScreen(
     val c = KTheme.colors
     val scope = rememberCoroutineScope()
 
-    var items by remember { mutableStateOf<List<AnnouncementDto>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    /**
+     * 首帧直接用仓库里的**会话缓存**（有就画、没有才转圈）。
+     *
+     * 这一页是二级页：每次进来都会重建组合，页面本地状态全没 ——
+     * 没有缓存时就是"整页转圈 + 一次请求"，进出几次就转几次。
+     */
+    val cached = remember { repo.cachedMyAnnouncements() }
+    var items by remember { mutableStateOf<List<AnnouncementDto>>(cached.orEmpty()) }
+    var loading by remember { mutableStateOf(cached == null) }
     var error by remember { mutableStateOf<String?>(null) }
     var toast by remember { mutableStateOf<String?>(null) }
-    var unread by remember { mutableIntStateOf(0) }
+    var unread by remember { mutableIntStateOf(cached?.count { !it.read } ?: 0) }
 
-    suspend fun load() {
-        loading = true
+    suspend fun load(silent: Boolean = false) {
+        if (!silent) loading = true
         error = null
         when (val r = repo.myAnnouncements()) {
             is ApiResult.Success -> {
@@ -88,7 +95,19 @@ fun AnnouncementsScreen(
         loading = false
     }
 
-    LaunchedEffect(isLoggedIn) { if (isLoggedIn) load() else loading = false }
+    LaunchedEffect(isLoggedIn) {
+        if (!isLoggedIn) {
+            loading = false
+            return@LaunchedEffect
+        }
+        // 60 秒内刚拉过：直接看缓存，不再请求（静默刷新也没有意义）
+        if (repo.myAnnouncementsFresh()) {
+            loading = false
+            return@LaunchedEffect
+        }
+        // 有缓存时用 silent：先画出来，不在顶部盖一层加载态
+        load(silent = items.isNotEmpty())
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(c.bgPage)) {
         if (!isLoggedIn) {

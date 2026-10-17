@@ -42,9 +42,31 @@ class CommentRepository(private val session: SessionRepository) {
             size > COMMENT_CACHE_MAX
     }
 
+    /**
+     * `postId -> 上次从服务端拉到第一页的时刻`。
+     *
+     * 只由 [list] 写入，[remember]（详情页把本地增删同步进来的那条路径）**不动它** ——
+     * 否则"进页面时把缓存回写一遍"会让时间戳永远刷新，新鲜期形同虚设。
+     * 用途只有一个：[isFresh]，让详情页在刚拉过评论的短时间内不再重复请求。
+     */
+    private val fetchedAt = HashMap<Long, Long>()
+
     /** 上次拉到的评论（`null` = 这个帖子还没拉过）。UI 用它做首帧种子 */
     @Synchronized
     fun cached(postId: Long): List<CommentUi>? = cache[postId]
+
+    /**
+     * 这份评论缓存还在新鲜期内吗（默认 60s）。
+     *
+     * 详情页据此决定"进来时还要不要再拉一遍"：缓存只是首帧种子，
+     * 新鲜期内重复请求毫无意义（而且用户来回进出时每次都在后台打接口）。
+     * 别人真的评论了会由 SSE 推 `notification` 事件触发静默刷新，不靠这里的轮询。
+     */
+    @Synchronized
+    fun isFresh(postId: Long, ttlMs: Long = COMMENT_TTL_MS): Boolean {
+        val at = fetchedAt[postId] ?: return false
+        return System.currentTimeMillis() - at < ttlMs
+    }
 
     /** 记一份最新的评论（首屏拉到、增删改之后由详情页同步进来） */
     @Synchronized
@@ -56,6 +78,7 @@ class CommentRepository(private val session: SessionRepository) {
     @Synchronized
     fun forget(postId: Long) {
         cache.remove(postId)
+        fetchedAt.remove(postId)
     }
 
     /** 评论在 UI 侧的表示（含头像绝对地址、相对时间、是否本人、一层回复） */
@@ -84,7 +107,12 @@ class CommentRepository(private val session: SessionRepository) {
             val page = buildCommentTree(r.comments, session.tokens.userId, baseUrl) to r.hasMore
             // 只有**第一页**才是"完整首屏"，才写缓存（续拉是往已有列表上追加，
             // 直接覆盖会把用户已经看到的上一页也丢掉）
-            if (afterId == null) remember(postId, page.first)
+            if (afterId == null) {
+                remember(postId, page.first)
+                synchronized(this@CommentRepository) {
+                    fetchedAt[postId] = System.currentTimeMillis()
+                }
+            }
             page
         }
 
@@ -134,6 +162,14 @@ class CommentRepository(private val session: SessionRepository) {
  * 评论是详情页的附属内容，用户不会靠它回溯浏览历史。
  */
 private const val COMMENT_CACHE_MAX = 8
+
+/**
+ * 评论新鲜期（ms）：详情页在 60 秒内重复进出不再打 `/comments`。
+ *
+ * 评论比帖子流"安静"得多，60 秒内的变化极小；真有新评论会经 SSE 的
+ * `notification` 事件触发静默刷新（见 PostDetailScreen 的 realtime effect）。
+ */
+private const val COMMENT_TTL_MS = 60_000L
 
 /**
  * 把服务端的**扁平**评论数组组成一层树（顶级 + 各自的回复）。

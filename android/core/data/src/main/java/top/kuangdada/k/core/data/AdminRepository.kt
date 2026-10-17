@@ -88,11 +88,46 @@ class AdminRepository(private val session: SessionRepository) {
 
     // ---- 公告（用户侧） ----
 
-    suspend fun myAnnouncements(): ApiResult<List<AnnouncementDto>> =
-        call { session.api.announcements.list().announcements }
+    /**
+     * 用户侧公告缓存（按登录用户 id，60s 新鲜期）。
+     *
+     * 公告页是**二级页**，每次进入都会离开/重建组合 —— 以前它是"整页 loading + 一次请求"，
+     * 于是每次点进来都先转一圈。公告一分钟内不会变，缓存足够；标记已读时就地改缓存，
+     * 不需要等下一次请求。
+     */
+    private val announcementsCache = SessionCache<Long, List<AnnouncementDto>>(
+        maxEntries = 4,
+        ttlMs = ANNOUNCEMENTS_TTL_MS,
+    )
 
-    suspend fun markAnnouncementRead(id: Long): ApiResult<Unit> =
-        call { session.api.announcements.markRead(id) }
+    /** 上次拉到的公告（null = 没拉过）。公告页用它做首帧种子 */
+    fun cachedMyAnnouncements(): List<AnnouncementDto>? =
+        announcementsCache.get(session.tokens.userId)
+
+    /** 公告缓存还在新鲜期内吗（页面据此跳过重复请求） */
+    fun myAnnouncementsFresh(): Boolean =
+        announcementsCache.isFresh(session.tokens.userId)
+
+    suspend fun myAnnouncements(): ApiResult<List<AnnouncementDto>> =
+        call { session.api.announcements.list().announcements }.also { r ->
+            if (r is ApiResult.Success) announcementsCache.put(session.tokens.userId, r.data)
+        }
+
+    suspend fun markAnnouncementRead(id: Long): ApiResult<Unit> {
+        // 响应体（SimpleSuccess）在这里丢掉：块尾的 `Unit` 把类型定成 ApiResult<Unit>
+        val result = call {
+            session.api.announcements.markRead(id)
+            Unit
+        }
+        if (result is ApiResult.Success) {
+            // 就地改缓存：否则回到公告页（60s 内命中缓存）还会看到那条未读
+            val uid = session.tokens.userId
+            announcementsCache.get(uid)?.let { list ->
+                announcementsCache.put(uid, list.map { if (it.id == id) it.copy(isRead = 1) else it })
+            }
+        }
+        return result
+    }
 
     /**
      * 帖子配图的绝对地址（服务端 `withImages` 给的是相对路径 + `images` 数组）。
@@ -115,3 +150,11 @@ class AdminRepository(private val session: SessionRepository) {
             }
         }
 }
+
+/**
+ * 用户侧公告的新鲜期（60 秒）。
+ *
+ * 公告是低频内容；一分钟内反复进出公告页不必重复请求。标记已读会就地改缓存，
+ * 所以"读完返回列表还是未读"这种不一致不会发生。
+ */
+private const val ANNOUNCEMENTS_TTL_MS = 60_000L

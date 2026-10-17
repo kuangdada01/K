@@ -219,19 +219,22 @@ fun ProfileScreen(
         profile?.role == "admin"
 
     // 登录后拉资料；未登录清空。
-    // refreshKey 变化 = 刚从编辑资料页保存回来，即使 profile 已经有值也要重拉（见参数注释）。
+    // refreshKey 变化 = 刚从编辑资料页保存回来（此时资料缓存已被仓库失效，见 updateProfile）。
+    // 其余情况按**新鲜期**判断：5 分钟内刚拉过就直接用缓存，不再打 `/users/:id`。
     LaunchedEffect(loggedInId, refreshKey) {
         if (loggedInId == null) {
             profile = null
             return@LaunchedEffect
         }
-        when (val r = users.profile(loggedInId)) {
-            is ApiResult.Success -> {
-                profile = r.data
-                profileError = null
+        if (!users.profileFresh(loggedInId)) {
+            when (val r = users.profile(loggedInId)) {
+                is ApiResult.Success -> {
+                    profile = r.data
+                    profileError = null
+                }
+                // 已经有资料时，刷新失败就保持旧值（比把页面变成错误页好）
+                is ApiResult.Failure -> if (profile == null) profileError = r.error.displayMessage
             }
-            // 已经有资料时，刷新失败就保持旧值（比把页面变成错误页好）
-            is ApiResult.Failure -> if (profile == null) profileError = r.error.displayMessage
         }
         // 只补"从没加载过"的那一份（空列表也算加载过，见 ListState.loaded）
         lists.getOrNull(tabIndex)?.loadIfEmpty()

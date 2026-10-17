@@ -73,6 +73,13 @@ class PostRepository(private val session: SessionRepository) {
          * 于是每次重新请求 + 转一次圈 —— 用户看到的就是"主页怎么每次点都转圈"。
          */
         val loaded: Boolean = false,
+        /**
+         * 上次**成功**加载第一页的时刻（0 = 从没成功过）。
+         *
+         * [isFresh] 用它判断"这一份还新不新"，页面据此跳过重复请求 ——
+         * 光有 [loaded] 只能回答"加载过没有"，回答不了"是不是刚才才加载的"。
+         */
+        val loadedAt: Long = 0L,
         val error: ApiError? = null,
         val endReached: Boolean = false,
     )
@@ -100,6 +107,27 @@ class PostRepository(private val session: SessionRepository) {
         /** 首次进入时调用（避免每次切换 tab 都重新拉）—— 判据是 [ListState.loaded]，不是"列表空不空" */
         suspend fun loadIfEmpty() {
             if (!_state.value.loaded && !_state.value.loading) refresh()
+        }
+
+        /**
+         * 这份列表还在新鲜期内吗（默认 60s）。
+         *
+         * 与 [loadIfEmpty] 的分工：
+         *  · [loadIfEmpty] 只回答"加载过没有" —— 一旦加载过就**永远**不再拉，
+         *    对"主页/收藏"这类自己会改动的内容足够，对"别人的主页"就会一直显示旧数据；
+         *  · 这里是"刚才加载的才算数" —— 页面每次进入调 [refreshIfStale]：
+         *    1 分钟内进来直接看缓存（不发请求、不转圈），超过 1 分钟才静默刷新。
+         */
+        fun isFresh(ttlMs: Long = DEFAULT_LIST_TTL_MS): Boolean {
+            val st = _state.value
+            // `posts.isEmpty()` 也算新鲜：空列表也是一个**真实的加载结果**（用户没发过帖子），
+            // 不能因为"空"就每次进来重拉（那正是"主页怎么每次点都转圈"的来源）
+            return st.loaded && st.loadedAt > 0L && System.currentTimeMillis() - st.loadedAt < ttlMs
+        }
+
+        /** 缓存过期（或从没加载过）才拉；新鲜期内的重复进入**不发请求** */
+        suspend fun refreshIfStale(ttlMs: Long = DEFAULT_LIST_TTL_MS) {
+            if (!isFresh(ttlMs)) refresh()
         }
 
         suspend fun loadMore() {
@@ -182,6 +210,7 @@ class PostRepository(private val session: SessionRepository) {
                     endReached = page.page >= page.totalPages,
                     // 成功加载过就打标：之后 `loadIfEmpty()` 不再重复请求（哪怕是空列表）
                     loaded = true,
+                    loadedAt = System.currentTimeMillis(),
                 )
             }
         }
@@ -237,6 +266,23 @@ class PostRepository(private val session: SessionRepository) {
      * 而且"这条帖子在哪个列表里"是个偶然事实（首页/搜索/主页都可能没加载过它）。
      */
     private val detailStates = LinkedHashMap<Long, MutableStateFlow<PostUi?>>()
+
+    /**
+     * `postId -> 上次成功拉详情的时刻`。
+     *
+     * 详情页每次进入都会调 `refreshDetail`（拿最新计数）—— 有种子时虽然不转圈，
+     * 但"秒级来回进出"仍然在重复打接口。有了时间戳，[detailFresh] 为真时直接跳过：
+     * 计数真的被别处改了，各列表的 `applyToAll` / SSE 已经就地同步过，
+     * 不依赖这一次重拉。
+     */
+    private val detailFetchedAt = HashMap<Long, Long>()
+
+    /** 这条帖子的详情还在新鲜期内吗（默认 60s） */
+    @Synchronized
+    fun detailFresh(postId: Long, ttlMs: Long = DETAIL_TTL_MS): Boolean {
+        val at = detailFetchedAt[postId] ?: return false
+        return System.currentTimeMillis() - at < ttlMs
+    }
 
     /** 取某条帖子的状态流（没有就建一个初始为空的）—— 详情页订阅它 */
     @Synchronized
@@ -313,12 +359,21 @@ class PostRepository(private val session: SessionRepository) {
     }
 
     /**
-     * 按 source 复用的列表（见 [listFor]）；搜索源只留最近几次，避免无限增长。
+     * 按 source 复用的列表（见 [listFor]）；搜索源与"他人主页"都会随浏览增长，所以整体有上限。
      *
      * key 里带上当前用户 id：收藏/转发这类 source 是**跨账号共用**的
      * （`Source.Bookmarks` 是个 object），不区分用户的话换个账号登录会先看到上一个人的收藏。
+     *
+     * `accessOrder = true` + [SOURCE_CACHE_MAX]：超过上限丢**最久没访问**的那一份。
+     * 这一点在接入 `UserPosts(userId)` 复用后尤其重要 —— 不强引用淘汰的话，
+     * 每看一个人的主页就会把整份帖子列表永久留在内存里。
+     * 被淘汰的列表如果还被某个页面持有，那个页面照常工作；只是下次进入会新建一条（重新拉取）。
      */
-    private val listsBySource = LinkedHashMap<Pair<Long, Source>, PostList>()
+    private val listsBySource = object : LinkedHashMap<Pair<Long, Source>, PostList>(16, 0.75f, true) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<Pair<Long, Source>, PostList>?,
+        ): Boolean = size > SOURCE_CACHE_MAX
+    }
 
     /**
      * 取**同一个 source 的那一份列表**（没有就建）。
@@ -496,6 +551,9 @@ class PostRepository(private val session: SessionRepository) {
             applyToAll(postId) { result.data }
             // 列表里没这条时上面那行是空转，这里直接落到单帖状态（详情页订阅的正是它）
             pushDetail(postId, result.data)
+            synchronized(this@PostRepository) {
+                detailFetchedAt[postId] = System.currentTimeMillis()
+            }
         }
         return result
     }
@@ -550,6 +608,7 @@ class PostRepository(private val session: SessionRepository) {
         }
         // 单帖状态也要清 —— 否则详情页还留着一条已经被删掉的帖子（点进来看得见、互动全失败）
         clearDetail(postId)
+        synchronized(this@PostRepository) { detailFetchedAt.remove(postId) }
     }
 
     /**
@@ -634,6 +693,14 @@ private fun Boolean.toIntFlag(): Int = if (this) 1 else 0
 private const val SEARCH_CACHE_MAX = 8
 
 /**
+ * `listsBySource` 的总上限（份）。
+ *
+ * 主页三份 + 最近几个搜索词 + 最近几个人的主页，24 份足够；
+ * 再多就按"最久未访问"淘汰（见 [PostRepository.listFor]）。
+ */
+private const val SOURCE_CACHE_MAX = 24
+
+/**
  * 单帖状态表上限。
  *
  * 详情页每看一条帖子就建一个状态流，而**订阅者离开时仓库收不到通知**
@@ -647,3 +714,15 @@ private const val SEARCH_CACHE_MAX = 8
  * 真被淘汰了的后果也只是"那个还开着的页面不再跟随互动更新"，不会崩。
  */
 private const val DETAIL_CACHE_MAX = 32
+
+/**
+ * 列表新鲜期（60s）：页面每次进入走 `refreshIfStale` —— 1 分钟内直接看缓存，
+ * 不发请求也不转圈；超过才静默刷新。帖子是"公开流"，太长的 TTL 会让人看不到新内容。
+ */
+private const val DEFAULT_LIST_TTL_MS = 60_000L
+
+/**
+ * 详情新鲜期（60s）：详情页秒级来回进出不重复拉 `/posts/:id`。
+ * 点赞/收藏/评论数由 `applyToAll` 与 SSE 就地同步，不靠这次重拉。
+ */
+private const val DETAIL_TTL_MS = 60_000L

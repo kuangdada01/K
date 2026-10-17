@@ -136,8 +136,9 @@ fun ReaderScreen(
 ) {
     val c = KTheme.colors
     var current by remember { mutableStateOf(chapter) }
-    var text by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(true) }
+    // 首帧直接用仓库里的章节缓存（翻回上一章 / 退出再进当前章都不再转圈）
+    var text by remember { mutableStateOf(books.cachedChapter(detail.id, chapter)?.text) }
+    var loading by remember { mutableStateOf(text == null) }
     var error by remember { mutableStateOf<String?>(null) }
     // 字号三档（17 / 20 / 23，默认 20）：2026-09-30 需求 —— 默认 15 太小，调大；
     // AA 点一下循环换档。行高仍是字号的 2.0 倍（readingStyle）
@@ -172,25 +173,47 @@ fun ReaderScreen(
     // 章边界虚拟页的数量：有上一章就在头部垫一页、有下一章就在尾部垫一页（见 HorizontalPager）
     val lead = if (hasPrev) 1 else 0
 
+    /**
+     * 正文到货后的统一收尾（缓存命中与网络两条路径共用）。
+     *
+     * 落页目标必须在 text 赋值**之前**定好：text 一到 pages 就会重算并消费
+     * pendingPage，同帧生效才不会先闪一帧第一页再跳走。显式导航（openChapter）
+     * 已经写过就尊重它；否则章内锚点命中当前章就用锚点（「继续阅读」），再不行回首页。
+     */
+    fun applyChapterText(content: String) {
+        if (pendingPage == null) {
+            val anchor = BookProgressAnchor[detail.id]
+            pendingPage = if (anchor != null && anchor.first == index) {
+                PendingPage.Position(anchor.second, anchor.third)
+            } else {
+                PendingPage.First
+            }
+        }
+        text = content
+    }
+
     LaunchedEffect(current, reloadTick) {
+        /**
+         * 缓存命中就直接用，**不转圈、不发请求**。
+         *
+         * 章节正文是静态内容（同一个文件的字节不会变），所以它没有"过期"这回事；
+         * 以前每次退出阅读器再进、或者翻回上一章，都要重新下载一遍并转整屏的圈。
+         *
+         * 失败重试（[reloadTick]）走下面正常路径：能走到重试说明那章本来就没拉到过，
+         * 也就不可能有缓存。
+         */
+        val cached = books.cachedChapter(detail.id, current)
+        if (cached != null) {
+            error = null
+            applyChapterText(cached.text)
+            loading = false
+            return@LaunchedEffect
+        }
         loading = true
         error = null
         text = null
         when (val r = books.chapter(detail.id, current)) {
-            is ApiResult.Success -> {
-                // 落页目标必须在 text 赋值**之前**定好：text 一到 pages 就会重算并消费
-                // pendingPage，同帧生效才不会先闪一帧第一页再跳走。显式导航（openChapter）
-                // 已经写过就尊重它；否则章内锚点命中当前章就用锚点（「继续阅读」），再不行回首页。
-                if (pendingPage == null) {
-                    val anchor = BookProgressAnchor[detail.id]
-                    pendingPage = if (anchor != null && anchor.first == index) {
-                        PendingPage.Position(anchor.second, anchor.third)
-                    } else {
-                        PendingPage.First
-                    }
-                }
-                text = r.data.text
-            }
+            is ApiResult.Success -> applyChapterText(r.data.text)
             is ApiResult.Failure -> error = r.error.displayMessage
         }
         loading = false

@@ -60,13 +60,62 @@ class BookRepository(private val session: SessionRepository) {
     var cachedList: List<BookSummary> = emptyList()
         private set
 
+    /** 上次成功拉到书目的时刻（0 = 从没拉到过） */
+    @Volatile
+    private var cachedListAt: Long = 0L
+
+    /** 书目是否还在新鲜期内（页面据此跳过重复请求；5 分钟内进出图书页不再打接口） */
+    fun isListFresh(ttlMs: Long = BOOK_LIST_TTL_MS): Boolean =
+        cachedListAt > 0L && System.currentTimeMillis() - cachedListAt < ttlMs
+
     suspend fun list(): ApiResult<List<BookSummary>> =
         call { session.api.books.list().books }.also { r ->
-            if (r is ApiResult.Success) cachedList = r.data
+            if (r is ApiResult.Success) {
+                cachedList = r.data
+                cachedListAt = System.currentTimeMillis()
+            }
         }
 
+    /**
+     * 书目详情缓存（含章节列表，按 bookId，10 分钟新鲜期）。
+     *
+     * 详情页与阅读器都会拉 `/books/:id`，而这个响应基本是静态的（章节列表）。
+     * 以前每次进详情页、每次从阅读器返回都要重拉一遍；缓存之后首帧就有章节，
+     * 10 分钟内也不再重复请求。
+     */
+    private val detailCache = SessionCache<String, BookDetail>(
+        maxEntries = 4,
+        ttlMs = BOOK_DETAIL_TTL_MS,
+    )
+
+    /** 上次拉到的书目详情（null = 没拉过）。详情页用它做首帧骨架 */
+    fun cachedDetail(bookId: String): BookDetail? = detailCache.get(bookId)
+
+    /** 详情缓存还在新鲜期内吗（页面据此跳过重复请求） */
+    fun isDetailFresh(bookId: String): Boolean = detailCache.isFresh(bookId)
+
     suspend fun detail(bookId: String): ApiResult<BookDetail> =
-        call { session.api.books.detail(bookId) }
+        call { session.api.books.detail(bookId) }.also { r ->
+            if (r is ApiResult.Success) detailCache.put(bookId, r.data)
+        }
+
+    /**
+     * 章节正文缓存（按 `bookId + 章节文件名`，**永不过期**）。
+     *
+     * 章节正文是静态内容 —— 同一个文件的字节不会变。以前每次进阅读器、每次翻回上一章
+     * 都要重新下载一遍（整屏转一次圈），而它本来是"读一次就该一直在"的东西。
+     *
+     * 只留最近 [CHAPTER_CACHE_MAX] 章：正文是几百 KB 的字符串，留太多会白占内存；
+     * 6 章足够覆盖"来回翻着看"与"退出再进当前章"这两种真实场景。
+     */
+    private val chapterCache = SessionCache<Pair<String, String>, ChapterContent>(
+        maxEntries = CHAPTER_CACHE_MAX,
+        ttlMs = SessionCache.NEVER,
+    )
+
+    /** 上次拉过的章节正文（没有就 null）。**不发请求**，阅读器用它做首帧 */
+    fun cachedChapter(bookId: String, chapter: BookChapter): ChapterContent? =
+        chapterCache.get(bookId to chapter.file)
 
     /**
      * 拉章节正文。
@@ -82,6 +131,8 @@ class BookRepository(private val session: SessionRepository) {
             val body = session.api.books.chapterText(bookId, chapter.file)
             val text = body.use { it.string() }
             ChapterContent(bookId = bookId, chapter = chapter, text = text)
+        }.also { r ->
+            if (r is ApiResult.Success) chapterCache.put(bookId to chapter.file, r.data)
         }
 
     /** 封面的绝对地址（服务端给的是 `/api/books/<id>/cover` 相对路径） */
@@ -170,27 +221,43 @@ class UserRepository(private val session: SessionRepository) {
     private val baseUrl: String get() = session.api.baseUrl
 
     /**
-     * 上次成功拉到的资料（**进程内缓存**，按用户 id）。
+     * 上次成功拉到的资料（**进程内缓存**，按用户 id，5 分钟新鲜期）。
      *
      * 为什么必须有：主页每次进入都会重新请求 `/users/:id`，而**首帧 `profile` 还是 null**
      * —— 头像位于是空的/null，要等接口回来才画上。表现出来就是"每次进主页头像都要重新加载一次"
-     * （用户实测反馈）。有了缓存，重进主页首帧直接就是上次的头像与昵称，随后静默刷新。
+     * （用户实测反馈）。有了缓存，重进主页首帧直接就是上次的头像与昵称。
      *
-     * 与 [BookRepository.cachedList] 同一个思路（页面离开组合后 `remember` 就没了，
-     * 仓库是进程级单例，把上次结果留在它这里）。
+     * 新鲜期内**不再请求**：资料不是帖子流，几秒钟内反复进出主页时它不可能变；
+     * 超过 5 分钟才静默刷新一次。自己改完资料/头像会 [forgetProfile]，
+     * 所以"刚改完回到主页还是旧头像"这种问题不会发生。
      */
-    @Volatile
-    private var cachedProfiles: Map<Long, UserProfile> = emptyMap()
+    private val profiles = SessionCache<Long, UserProfile>(
+        maxEntries = 64,
+        ttlMs = PROFILE_TTL_MS,
+    )
 
     /** 上次已知的资料（没有就 null）。**不发请求**，供页面首帧直接渲染 */
-    fun cachedProfile(userId: Long): UserProfile? = cachedProfiles[userId]
+    fun cachedProfile(userId: Long): UserProfile? = profiles.get(userId)
+
+    /**
+     * 这份资料还在新鲜期内吗？页面据此决定要不要再请求一次。
+     *
+     * 与 [cachedProfile] 分开是有意的：缓存可能"有值但已过期" —— 那种情况页面仍然
+     * 应该先画缓存（不闪空白），同时后台刷新。
+     */
+    fun profileFresh(userId: Long): Boolean = profiles.isFresh(userId)
+
+    /** 丢掉某个用户的资料缓存（改资料/换头像成功后调） */
+    fun forgetProfile(userId: Long) {
+        profiles.invalidate(userId)
+    }
 
     suspend fun profile(userId: Long): ApiResult<UserProfile> =
         withContext(Dispatchers.IO) {
             try {
                 val p = session.api.users.profile(userId)
-                // 只增不改：这里只是缓存，失败时保留旧值（页面拿到的是 ApiResult）
-                cachedProfiles = cachedProfiles + (userId to p)
+                // 失败时保留旧值（页面拿到的是 ApiResult，自己决定是显示旧值还是错误）
+                profiles.put(userId, p)
                 ApiResult.Success(p)
             } catch (t: Throwable) {
                 ApiResult.Failure(mapErrorFromThrowable(t))
@@ -216,6 +283,9 @@ class UserRepository(private val session: SessionRepository) {
                 bio = bio,
             )
         )
+    }.also { r ->
+        // 自己的资料缓存立刻失效：否则回主页的 5 分钟内还是旧昵称/简介
+        if (r is ApiResult.Success) forgetProfile(r.data.id)
     }
 
     /**
@@ -233,6 +303,9 @@ class UserRepository(private val session: SessionRepository) {
             file.asRequestBody(mimeType.toMediaType()),
         )
         session.api.users.uploadAvatar(part)
+    }.also { r ->
+        // 同上：换头像后主页要立刻看到新图
+        if (r is ApiResult.Success) forgetProfile(r.data.id)
     }
 
     fun avatarUrl(profile: UserProfile): String? = resolveUrl(profile.avatar, baseUrl)
@@ -270,6 +343,19 @@ class VoiceRepository(
     var cachedRooms: List<VoiceRoom> = emptyList()
         private set
 
+    /** 上次拉到房间列表的时刻（0 = 没拉过）；[isRoomsFresh] 用 */
+    @Volatile
+    private var cachedRoomsAt: Long = 0L
+
+    /**
+     * 房间列表是否还新鲜（默认 30s）。
+     *
+     * 房间变化比帖子快（有人建房/散场），所以新鲜期短；但"点进点出"这种秒级往返
+     * 仍然不该重复请求 —— 30 秒内直接看缓存，之后静默刷新。
+     */
+    fun isRoomsFresh(ttlMs: Long = ROOMS_TTL_MS): Boolean =
+        cachedRoomsAt > 0L && System.currentTimeMillis() - cachedRoomsAt < ttlMs
+
     /**
      * 访客建房的所有权令牌：建房响应下发一次，删除该房间时随头带回。
      * 登录用户建的房不需要令牌（服务端按会话鉴权）。
@@ -288,7 +374,12 @@ class VoiceRepository(
             } catch (t: Throwable) {
                 ApiResult.Failure(mapErrorFromThrowable(t))
             }
-        }.also { r -> if (r is ApiResult.Success) cachedRooms = r.data }
+        }.also { r ->
+            if (r is ApiResult.Success) {
+                cachedRooms = r.data
+                cachedRoomsAt = System.currentTimeMillis()
+            }
+        }
 
     suspend fun createRoom(
         name: String,
@@ -471,3 +562,22 @@ class VoiceRepository(
     /** 参与者头像的绝对地址（WS 下发的 avatar 是相对路径） */
     fun avatarUrl(path: String?): String? = resolveUrl(path, baseUrl)
 }
+
+// ---------------------------------------------------------------------------
+// 会话缓存参数（理由见各自的声明处）
+// ---------------------------------------------------------------------------
+
+/** 书目新鲜期：5 分钟内进出图书页不再重复请求 */
+private const val BOOK_LIST_TTL_MS = 5 * 60_000L
+
+/** 章节正文缓存上限（章）：正文是静态内容，留最近几章足够"来回翻" */
+private const val CHAPTER_CACHE_MAX = 6
+
+/** 书目详情新鲜期：10 分钟（章节列表基本不动，但书可能被补章） */
+private const val BOOK_DETAIL_TTL_MS = 10 * 60_000L
+
+/** 用户资料新鲜期：5 分钟；改自己的资料/头像会主动失效 */
+private const val PROFILE_TTL_MS = 5 * 60_000L
+
+/** 语音房列表新鲜期：30 秒（房间增减比帖子快，但秒级往返不该重复请求） */
+private const val ROOMS_TTL_MS = 30_000L

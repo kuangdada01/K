@@ -76,12 +76,21 @@ import top.kuangdada.k.core.designsystem.theme.KType
 private const val FOLLOW_PAGE_SIZE = 30
 
 /** 单个标签（关注 / 粉丝）的分页列表状态：两份独立，切标签互不干扰 */
-private class FollowTabState(val kind: FriendRepository.FollowListKind) {
-    var users by mutableStateOf<List<FriendRepository.FollowUser>>(emptyList())
-    var page by mutableIntStateOf(0)
-    var hasMore by mutableStateOf(false)
-    /** 至少成功拉过一次（决定能不能触发"加载更多"与错误占位） */
-    var loaded by mutableStateOf(false)
+private class FollowTabState(
+    val kind: FriendRepository.FollowListKind,
+    /**
+     * 仓库里的首屏缓存（有就**直接画出来**，不再等网络）。
+     *
+     * 这一页的状态原本全在页面本地，离开组合就没了 —— 每次进来都是空列表 + 转圈。
+     * 现在首帧就是上次的内容，只有超过新鲜期才后台静默刷新。
+     */
+    cached: FriendRepository.FollowListPage? = null,
+) {
+    var users by mutableStateOf<List<FriendRepository.FollowUser>>(cached?.users.orEmpty())
+    var page by mutableIntStateOf(if (cached != null) 1 else 0)
+    var hasMore by mutableStateOf(cached?.hasMore ?: false)
+    /** 至少成功拉过一次（决定能不能触发"加载更多"与错误占位）—— 有缓存也算 */
+    var loaded by mutableStateOf(cached != null)
     var loading by mutableStateOf(false)
     var loadingMore by mutableStateOf(false)
     var error by mutableStateOf<String?>(null)
@@ -97,8 +106,13 @@ private class FollowTabState(val kind: FriendRepository.FollowListKind) {
      * 失败时**保留旧列表**（只记 error）：整块闪空比"看着旧数据 + 一句错误"更糟。
      * @return 错误文案（null = 成功），调用方拿去弹 toast
      */
-    suspend fun reload(friends: FriendRepository, targetId: Long): String? {
-        loading = true
+    suspend fun reload(
+        friends: FriendRepository,
+        targetId: Long,
+        /** 后台刷新：不置 loading（首帧已经是缓存内容，别把列表换成转圈） */
+        silent: Boolean = false,
+    ): String? {
+        if (!silent) loading = true
         val r = friends.list(
             targetId = targetId,
             kind = kind,
@@ -163,10 +177,16 @@ fun FollowListScreen(
      * 两个标签的状态（[userId] 变了就是另一个人，全部重建）。
      * `[0]` = 关注（他关注了谁）、`[1]` = 粉丝（谁关注了他）。
      */
-    val tabs = remember(userId) {
+    val tabs = remember(userId, friends) {
         listOf(
-            FollowTabState(FriendRepository.FollowListKind.Following),
-            FollowTabState(FriendRepository.FollowListKind.Followers),
+            FollowTabState(
+                kind = FriendRepository.FollowListKind.Following,
+                cached = friends.cachedFollowList(userId, FriendRepository.FollowListKind.Following),
+            ),
+            FollowTabState(
+                kind = FriendRepository.FollowListKind.Followers,
+                cached = friends.cachedFollowList(userId, FriendRepository.FollowListKind.Followers),
+            ),
         )
     }
     var tabIndex by rememberSaveable(userId) { mutableIntStateOf(if (initialShowFollowers) 1 else 0) }
@@ -178,6 +198,8 @@ fun FollowListScreen(
      */
     var profile by remember(userId) { mutableStateOf<UserProfile?>(users.cachedProfile(userId)) }
     LaunchedEffect(userId) {
+        // 5 分钟内刚拉过（从主页点进来时一般都有）：直接用，不再多打一次 `/users/:id`
+        if (users.profileFresh(userId)) return@LaunchedEffect
         when (val r = users.profile(userId)) {
             is ApiResult.Success -> profile = r.data
             is ApiResult.Failure -> Unit // 没有缓存时标题退化为"个人主页"，不值得报错
@@ -190,11 +212,17 @@ fun FollowListScreen(
 
     // ---- 数据触发 ----
 
-    // 首次进入 / 切标签：只补"从没加载过"的那一份（切回来不重拉，保留滚动位置）
+    // 首次进入 / 切标签：有缓存且新鲜 → 什么都不做；缓存过期 → 静默对一次；
+    // 从没拉过 → 正常加载（这时才该出现加载圈）。
     LaunchedEffect(tabIndex, myUserId) {
         if (myUserId <= 0) return@LaunchedEffect
         val t = tabs[tabIndex]
-        if (!t.loaded) t.reload(friends, userId)
+        val query = t.committedQuery.takeIf { it.isNotBlank() }
+        when {
+            !t.loaded -> t.reload(friends, userId)
+            !friends.isFollowListFresh(userId, t.kind, query) ->
+                t.reload(friends, userId, silent = true)
+        }
     }
 
     // 搜索词变化：300ms 防抖后重查第一页（与 Web 弹窗同一节奏）。

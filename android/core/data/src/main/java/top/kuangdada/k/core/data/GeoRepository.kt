@@ -7,6 +7,7 @@ import kotlinx.serialization.json.Json
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToLong
 
 /**
  * ============================================================
@@ -30,12 +31,33 @@ class GeoRepository {
         .build()
 
     /**
+     * 逆地理结果的**会话内缓存**（坐标 → 地名，10 分钟）。
+     *
+     * 地图选点页每次打开都会对"当前位置"（或上次的中心点）先解析一次地名；
+     * 拖动停手 600ms 也会解析。同一个坐标反复解析没有意义 —— 而第三方接口有限流。
+     * 键按 **4 位小数（≈11 米）** 取整：再细的差别不会改变"南山区·xx园区"这种粒度。
+     */
+    private val reverseCache = SessionCache<Pair<Long, Long>, String>(
+        maxEntries = 32,
+        ttlMs = 10 * 60_000L,
+    )
+
+    /**
      * 逆地理编码：坐标 → 「区·地点」这种可读地名。
      *
      * 返回空串表示"这个点没有可用地名"（例如海面上），调用方按"未标注位置"处理，
      * **不算失败** —— 免得用户在海上只能看到一句报错。
      */
-    suspend fun reverse(lat: Double, lon: Double): ApiResult<String> = withContext(Dispatchers.IO) {
+    suspend fun reverse(lat: Double, lon: Double): ApiResult<String> {
+        // 缓存里空串也是**有效结果**（"这里没有地名"），所以判 null 而不是判断空
+        val key = (lat * 10_000).roundToLong() to (lon * 10_000).roundToLong()
+        reverseCache.get(key)?.let { return ApiResult.Success(it) }
+        val result = fetchReverse(lat, lon)
+        if (result is ApiResult.Success) reverseCache.put(key, result.data)
+        return result
+    }
+
+    private suspend fun fetchReverse(lat: Double, lon: Double): ApiResult<String> = withContext(Dispatchers.IO) {
         try {
             val url = "https://api.bigdatacloud.net/data/reverse-geocode-client" +
                 "?latitude=$lat&longitude=$lon&localityLanguage=zh"

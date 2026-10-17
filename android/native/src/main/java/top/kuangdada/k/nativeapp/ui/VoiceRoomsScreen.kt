@@ -163,7 +163,10 @@ fun VoiceRoomsScreen(
         loading = false
     }
 
-    LaunchedEffect(Unit) { load(silent = rooms.isNotEmpty()) }
+    LaunchedEffect(Unit) {
+        // 30 秒内刚拉过：直接看缓存（点进点出不该重复请求）；过期才静默对一次
+        if (voice.isRoomsFresh()) loading = false else load(silent = rooms.isNotEmpty())
+    }
 
     Box(
         modifier = Modifier

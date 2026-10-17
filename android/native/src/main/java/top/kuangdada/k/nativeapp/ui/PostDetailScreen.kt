@@ -412,25 +412,35 @@ fun PostDetailScreen(
     }
 
     LaunchedEffect(postId) {
-        // 评论列表
-        loadComments()
-        // 帖子详情（拿最新的点赞/收藏/评论总数）
+        /**
+         * 评论列表：**缓存新鲜就不拉**。
+         *
+         * 缓存只是首帧种子；如果 60 秒内刚拉过一次，这次进来再拉一遍纯属重复请求
+         * （用户来回进出详情页时每次都在后台打接口）。真有新评论会由 SSE 的
+         * `notification` 事件触发静默刷新（见下面那条 effect），不依赖这里。
+         */
+        if (cachedComments == null || !comments.isFresh(postId)) {
+            loadComments(silent = cachedComments != null)
+        }
+        // 帖子详情（拿最新的点赞/收藏/评论总数）—— 新鲜期内同样跳过
         // 拉到之后由 `PostRepository.refreshDetail` 自己推给单帖状态流，这里**不要再赋值** ——
         // 详情页的状态只有"仓库那一个来源"（见 `postFlow` 的注释）
-        when (val r = posts.refreshDetail(postId)) {
-            is ApiResult.Success -> {
-                if (r.data.commentCount > 0) commentTotal = r.data.commentCount
-            }
-            is ApiResult.Failure -> {
-                if (post == null) postError = r.error.displayMessage
-                /**
-                 * 404 = 这条帖子**不存在了**（被别人删了，或者就是自己刚删的）。
-                 * 不再把用户留在一个写着「帖子加载失败 HTTP 404」的死页面上，直接交回调用方。
-                 *
-                 * 只认 404：网络超时/500 不能当成"帖子没了" —— 那些情况用户重试一下就好了，
-                 * 页面被自动踢走反而更莫名其妙。
-                 */
-                if (r.error.isNotFound) onPostGone(postId)
+        if (postFlow.value == null || !posts.detailFresh(postId)) {
+            when (val r = posts.refreshDetail(postId)) {
+                is ApiResult.Success -> {
+                    if (r.data.commentCount > 0) commentTotal = r.data.commentCount
+                }
+                is ApiResult.Failure -> {
+                    if (post == null) postError = r.error.displayMessage
+                    /**
+                     * 404 = 这条帖子**不存在了**（被别人删了，或者就是自己刚删的）。
+                     * 不再把用户留在一个写着「帖子加载失败 HTTP 404」的死页面上，直接交回调用方。
+                     *
+                     * 只认 404：网络超时/500 不能当成"帖子没了" —— 那些情况用户重试一下就好了，
+                     * 页面被自动踢走反而更莫名其妙。
+                     */
+                    if (r.error.isNotFound) onPostGone(postId)
+                }
             }
         }
         loadingPost = false

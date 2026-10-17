@@ -207,7 +207,10 @@ fun BooksScreen(
         loading = false
     }
 
-    LaunchedEffect(Unit) { load(silent = all.isNotEmpty()) }
+    LaunchedEffect(Unit) {
+        // 5 分钟内刚拉过书目：直接看缓存，不再请求（缓存为空时 loading 也要收掉）
+        if (books.isListFresh()) loading = false else load(silent = all.isNotEmpty())
+    }
 
     // 云端记忆全量水合（**只在登录后的第一次**做，对应头部小指示器）：
     // 把所有书的云端进度一次拉回，列表上的「已读 N%」与继续阅读位置**不用进详情**就已就位。
@@ -511,7 +514,8 @@ fun BookDetailScreen(
     onRead: (BookDetail, BookChapter) -> Unit,
 ) {
     val c = KTheme.colors
-    var detail by remember { mutableStateOf<BookDetail?>(null) }
+    // 首帧直接用仓库缓存（10 分钟内再次打开这本书不再请求、也不闪）
+    var detail by remember(bookId) { mutableStateOf(books.cachedDetail(bookId)) }
     var error by remember { mutableStateOf<String?>(null) }
 
     /**
@@ -548,6 +552,8 @@ fun BookDetailScreen(
 
     LaunchedEffect(bookId) {
         error = null
+        // 10 分钟内刚拉过这本书：直接用缓存（章节列表基本不动）
+        if (books.isDetailFresh(bookId)) return@LaunchedEffect
         when (val r = books.detail(bookId)) {
             is ApiResult.Success -> detail = r.data
             is ApiResult.Failure -> error = r.error.displayMessage

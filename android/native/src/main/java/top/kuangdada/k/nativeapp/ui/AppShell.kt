@@ -2079,17 +2079,18 @@ private fun ReaderHost(
     themeMode: ThemePreference.Mode,
     onThemeChange: (ThemePreference.Mode) -> Unit,
 ) {
-    var detail by remember(bookId) { mutableStateOf<BookDetail?>(null) }
+    var detail by remember(bookId) { mutableStateOf(books.cachedDetail(bookId)) }
     var chapter by remember(bookId, chapterFile) { mutableStateOf<BookChapter?>(null) }
     var error by remember(bookId) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(bookId) {
         // 优先用详情页刚放进来的内存版（省一次请求）
         val cached = BookReaderEntries[bookId]
-        if (cached != null && cached.first.id == bookId) {
-            detail = cached.first
-        } else {
-            when (val r = books.detail(bookId)) {
+        when {
+            cached != null && cached.first.id == bookId -> detail = cached.first
+            // 仓库里有一份 10 分钟内拉过的详情（章节列表）：直接用，不再请求
+            books.isDetailFresh(bookId) -> detail = books.cachedDetail(bookId)
+            else -> when (val r = books.detail(bookId)) {
                 is ApiResult.Success -> detail = r.data
                 is ApiResult.Failure -> error = r.error.message
             }
