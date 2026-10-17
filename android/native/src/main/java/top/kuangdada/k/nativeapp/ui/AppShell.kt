@@ -402,6 +402,41 @@ fun AppShell(
     }
 
     /**
+     * ============================================================
+     * 全屏视频页的**退场底页**（`videoUnderlay`）
+     * ============================================================
+     * 解决的问题（用户实测）：进全屏有动画、**退出没有**。
+     *
+     * ## 为什么读不出动画
+     * `AppDestination.VideoDest` 是**重页面**（[AppDestination.isHeavyPage]），
+     * Shell 在两条渲染分支之间**瞬间切换** —— 也就是说全屏视频页活着的时候，
+     * **详情页整个不在组合里**。于是退场那几百毫秒里，视频在缩小、背后却是**纯黑**
+     * （"视频在黑洞里变小了一下"），读不出"缩回详情页那一块"。
+     * 图片查看器没有这个问题，因为它是浮在**活着的页面**之上的覆盖层。
+     *
+     * ## 修法
+     * 退场飞行这一段里，把目标页组合出来画在视频页**下面**，并且让视频页的黑幕
+     * 真的可以淡出（见 VideoPlayerScreen 的 `exitScrim`）。飞行结束再 `pop`，
+     * 视觉上就是"视频落回详情页那一块，然后那一页顶上来"。
+     *
+     * ## 为什么**进场**不做同样的底页（2026-10-17 试过、撤掉了）
+     * 进场那一帧，详情页才刚离开组合，它的 `rememberSaveable` 状态（滚动位置等）
+     * 是在**同一帧的 apply 阶段**才写回 [stateHolder] 的；而底页的
+     * `SaveableStateProvider` 在**组合阶段**就要读同一把 key —— 读到的是空状态，
+     * 底页会以"滚回顶部"的样子出现。那半秒里露出的是**错位的内容**，比干脆的黑场更糟。
+     * 想让进场也有底页，得先把滚动位置显式交接出来（不是换个写法就能绕过的时序）。
+     *
+     * ## 代价与安全边界（为什么不担心"两份独占资源"）
+     * 重页面之所以不做双份组合，是因为怕"同一份独占资源建两遍"（第二个 ExoPlayer /
+     * 第二条 WebSocket）。而这条路径上：
+     *  · 底页里的**内联播放器不组合**（只留封面，见 [LocalInlineVideoSuppressed]）——
+     *    不存在两个 ExoPlayer 同时解码，也不会有两路声音；
+     *  · 视频页的 ExoPlayer 在退场开始时已经把进度交回交接单，随后随页面销毁释放；
+     *  · 窗口只有一次飞行的时间，且**只有视频这一条导航路径**会用到它。
+     */
+    var videoUnderlay by remember { mutableStateOf<VideoUnderlay?>(null) }
+
+    /**
      * 打开一个二级页（统一入口）：**一律 Compose 压栈**。
      *
      * 这里曾是"层级首跳开窗"的分流点（同步 `originKeyOf` 判断 + 开
@@ -612,35 +647,8 @@ fun AppShell(
      */
     val baseSeq = if (dest is AppDestination.Login) navigator.previousSeq ?: 0L else navigator.currentSeq
 
-    /**
-     * ============================================================
-     * 全屏视频页的**退场交接**（`videoExit`）
-     * ============================================================
-     * 解决的问题（用户实测）：进全屏有动画、**退出没有**。
-     *
-     * ## 为什么退出读不出动画
-     * `AppDestination.VideoDest` 是**重页面**（[AppDestination.isHeavyPage]），
-     * Shell 在两条渲染分支之间**瞬间切换** —— 也就是说全屏视频页活着的时候，
-     * **详情页整个不在组合里**。于是退场那 250ms 里，视频在缩小、但背后是**纯黑**：
-     * 用户看到的是"视频在黑洞里变小了一下"，读不出"缩回详情页那一块"。
-     *
-     * 图片查看器没有这个问题，因为它是浮在**活着的页面**之上的覆盖层 ——
-     * 缩小时背后就是那张缩略图。
-     *
-     * ## 修法
-     * 退场飞行这 250ms 里，让 Shell 把**详情页也组合出来**（画在视频页**下面**），
-     * 于是视频缩小时背后就是它要落回去的那一页；飞行结束再真正 `pop`，
-     * 视觉上完全连续（视频落在详情页那一块上，然后那一页顶上来）。
-     *
-     * ## 代价与安全边界（为什么不担心"两份独占资源"）
-     * 重页面之所以不做双份组合，是因为怕"同一份独占资源建两遍"（第二个 ExoPlayer /
-     * 第二条 WebSocket）。而这条路径上：
-     *  · 视频页的 `ExoPlayer` 在**退场开始时就已经把进度交回交接单、随后随页面销毁释放**
-     *    （见 `VideoPlayerScreen.beginClose`）—— 不存在两个播放器同时解码；
-     *  · 详情页的内联播放器**复用同一段视频**，它起来时全屏那个已经在释放路上；
-     *  · 窗口只有 250ms（[VIDEO_FLIGHT_MS]），且**只有这一条导航路径**会用到它。
-     */
-    var videoExit by remember { mutableStateOf<VideoExitHandoff?>(null) }
+    // 转场底页 `videoUnderlay` 的声明在 [openVideo] 之前（进场写入要用它，
+    // 而 Kotlin 的局部变量必须先声明后使用）。
 
     /**
      * 每个目的地的 `rememberSaveable` 状态保管箱。
@@ -879,6 +887,8 @@ fun AppShell(
                         title = cached?.title,
                         // 续播交接单与飞行来源几何都按 postId 配对（见 VideoHandoff）
                         postId = page.postId,
+                        // 有底页时，退场黑幕才可以真的让开（见 VideoPlayerScreen 的 hasUnderlay）
+                        hasUnderlay = videoUnderlay != null,
                         onBack = {
                             /**
                              * 退场：**先把目标页亮出来，再 pop**。
@@ -888,28 +898,34 @@ fun AppShell(
                              * pop 之前详情页**整个不在组合里** —— 视频在纯黑背景上缩小，
                              * 读不出"缩回详情页那一块"。
                              *
-                             * 现在改成：先把详情页塞进 [videoExit]（Shell 会把它画在
+                             * 现在改成：先把详情页塞进 [videoUnderlay]（Shell 会把它画在
                              * 视频页**下面**），于是视频缩小时背后就是它要落回去的那一页；
                              * 缩完由 `onExitFinished` 真正 pop。
+                             *
+                             * 栈空时**不在这里 pop**：`closing` 已经置位，退场那条 effect
+                             * 无论如何都会走到 `onExitFinished` —— 两处都 pop 会连退两层。
                              */
-                            if (previous != null && previousSeq != null) {
-                                videoExit = VideoExitHandoff(previous, previousSeq)
+                            videoUnderlay = if (previous != null && previousSeq != null) {
+                                VideoUnderlay(previous, previousSeq)
                             } else {
-                                backOrFallback()
+                                null
                             }
                         },
                         /**
                          * 退场飞行播完（或判定不该飞）时调用 —— 真正离开这一页。
                          * 与 `onBack` 分成两步，就是为了让"露出目标页"和"切页"之间
-                         * 隔着那 250ms 的动画。
+                         * 隔着这一趟飞行。
                          */
                         onExitFinished = {
-                            videoExit = null
+                            videoUnderlay = null
                             backOrFallback()
                         },
                     )
                 } else {
-                    androidx.compose.runtime.LaunchedEffect(page.postId) { navigator.pop() }
+                    androidx.compose.runtime.LaunchedEffect(page.postId) {
+                        if (videoUnderlay != null) videoUnderlay = null
+                        navigator.pop()
+                    }
                 }
             }
 
@@ -1457,19 +1473,44 @@ fun AppShell(
              * 麦克风/解码器立刻释放（详见 MotionEnterOnce 的注释）。
              *
              * ------------------------------------------------------------
-             * ★ 唯一例外：全屏视频页**退场期间**要露出目标页（见 [videoExit]）
+             * ★ 唯一例外：全屏视频页的**退场飞行**需要目标页当背景（见 [videoUnderlay]）
              * ------------------------------------------------------------
-             * 退场那 250ms 里把详情页也画出来（在视频页**下面**），用户的视频才"缩得回去"。
-             * 只在 [videoExit] 非空时成立，也就是只有"全屏视频 → 返回"这一条路径，
-             * 窗口 250ms —— 不影响语音房/阅读器那两条重页面（它们没有这个需求）。
+             * 退场那一段里把目标页也画出来（在视频页**下面**），视频才"缩得回去"，
+             * 黑幕也才有真实参照可以淡开。只在 `videoUnderlay` 非空时成立，
+             * 也就是只有"全屏视频 → 返回"这一条路径 —— 语音房/阅读器没有这个需求，不受影响。
+             * 底页里的内联播放器不组合（见 [LocalInlineVideoSuppressed]），不会出现两份解码。
              */
             Box(modifier = Modifier.fillMaxSize()) {
-                // 退场目标页（详情页）画在**下面**：视频缩小时背后就是它
-                videoExit?.let { exit ->
-                    val exitKey = destStateKey(exit.dest, exit.seq)
-                    stateHolder.SaveableStateProvider(exitKey) { pageContent(exit.dest) }
+                /**
+                 * 退场底页（详情页 / 探索页）画在**下面**：视频缩回去的那一块就是它。
+                 *
+                 * ★ 底页里面**不许组合内联视频播放器**（[LocalInlineVideoSuppressed]）：
+                 * 底页只是为了给飞行一个真实参照，如果它也起一个 ExoPlayer，同一段视频
+                 * 会被解码两遍 —— 两路声音叠在一起（前后差几十毫秒就是明显的合唱），
+                 * 还要多占一个硬解实例，正好把飞行那几帧拖卡。底页留封面就够，
+                 * 而封面正是飞行块自己画的那张图。
+                 */
+                videoUnderlay?.let { underlay ->
+                    val underlayKey = destStateKey(underlay.dest, underlay.seq)
+                    CompositionLocalProvider(LocalInlineVideoSuppressed provides true) {
+                        stateHolder.SaveableStateProvider(underlayKey) {
+                            pageContent(underlay.dest)
+                        }
+                    }
                 }
-                MotionEnterOnce(modifier = Modifier.fillMaxSize()) {
+                MotionEnterOnce(
+                    modifier = Modifier.fillMaxSize(),
+                    /**
+                     * 视频页**不叠**这一层（整页"淡入 + 上滑 16dp"）：
+                     *  · 它有自己的飞行与黑幕编排，两套一起跑会互相打架；
+                     *  · 整页淡入的头几帧会露出 App 底色（浅灰）—— 真机观感就是
+                     *    "进全屏先闪一下白/灰"，正是"不自然"的来源之一。
+                     *
+                     * 其余重页面（阅读器 / 语音房）保持原样：它们没有飞行，
+                     * 一次性入场就是它们唯一的转场。
+                     */
+                    enabled = animationsEnabled && base !is AppDestination.VideoDest,
+                ) {
                     // key 里带实例号：重页面（阅读器/语音房/聊天）每次进来也是全新的一次访问
                     val pageStateKey = destStateKey(base, baseSeq)
                     if (baseSeq > 0L) savedPageKeys += pageStateKey
@@ -2000,13 +2041,15 @@ private val AppDestination.isHeavyPage: Boolean
     }
 
 /**
- * 全屏视频页退场时的**目标页交接**（见 AppShell 里 `videoExit` 的长注释）。
+ * 全屏视频页**退场底页**的交接（见 AppShell 里 `videoUnderlay` 的长注释）。
  *
- * 它只回答一件事：这 250ms 的退场飞行期间，视频页**背后**该画哪一页。
- * 存的是目的地 + 实例号（与 `destStateKey` 同一套），所以目标页的状态
- * （详情页的滚动位置等）能原样恢复。
+ * 它只回答一件事：视频页退场飞行的这段时间里，**背后**该画哪一页。
+ * 存的是目的地 + 实例号（与 `destStateKey` 同一套），所以底页的状态
+ * （详情页的滚动位置等）能原样恢复 —— 视频缩回那一块时落点才严丝合缝。
+ *
+ * 由视频页的 `onBack` 写入、`onExitFinished` 清掉；进场不用它（原因见上）。
  */
-private class VideoExitHandoff(
+private class VideoUnderlay(
     val dest: AppDestination,
     val seq: Long,
 )

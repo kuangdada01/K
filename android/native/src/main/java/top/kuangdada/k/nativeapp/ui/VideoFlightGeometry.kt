@@ -17,8 +17,14 @@ import kotlin.math.abs
  * 在真机上一眼可见却很难靠读代码发现。
  */
 
-/** 视频飞行时长（ms）。与查看器的 [VIEWER_FLIGHT_MS] **必须一致** ——
- *  全屏图与全屏视频对用户是同一类动作，两个时长不同会读成"视频那个快了一拍"。 */
+/**
+ * 视频飞行时长（ms，**名义值**）。与查看器的 [VIEWER_FLIGHT_MS] **保持同一档** ——
+ *  全屏图与全屏视频对用户是同一类动作，两个时长不同会读成"视频那个快了一拍"。
+ *
+ * 实际驱动它的是一条**无过冲弹簧**（[KMotion.spatialBounded]），收尾约 220ms；
+ * 这个常量只用于**超时兜底**（[VideoPlayerScreen] 里那两条 `withTimeoutOrNull`）
+ * 与文档口径，不参与动画本身。
+ */
 internal const val VIDEO_FLIGHT_MS = 250
 
 /**
@@ -46,29 +52,28 @@ internal fun videoFullscreenRect(container: Rect, aspect: Float?): Rect =
 /**
  * 视频飞行矩形：从 [from]（详情页那一块）插值到 [to]（全屏那条横带）。
  *
- * 缓动与查看器一致（[flightMaskAlphaOf] 的 smoothstep，查看器 `lerpRect` 用的就是它）。
- * 用同一曲线是为了让两条飞行"手感相同"；这不是新发明，是复用。
+ * ============================================================
+ * ★ 缓动**不在这里**（2026-10-17 改）
+ * ============================================================
+ * 这里曾经叠过一次 smoothstep，而动画本身又是一条线性 tween —— 等于把两条曲线叠在一起：
+ * 实际观感是"起步先顿一下、收尾再顿一下"，中间那段才是动的。
+ * 现在几何只做**纯插值**，缓动交给驱动 [VideoPlayerScreen.flight] 的**弹簧**：
+ *  · 弹簧以"当前进度 + 当前速度"为初值，**中途被打断（入场中按返回）不会回弹重来**；
+ *  · 曲线只有一条，读代码时不用在"这里缓了一次、那里又缓了一次"之间做心算。
  */
-internal fun videoFlightRect(from: Rect?, to: Rect?, t: Float): Rect? {
+internal fun videoFlightRect(from: Rect?, to: Rect?, progress: Float): Rect? {
     if (from == null || to == null) return null
-    return lerpRect(from, to, flightMaskAlphaOf(t))
+    return lerpRect(from, to, progress)
 }
 
 /**
- * 飞行期间的**遮罩透明度**：0 → 1（进场）/ 1 → 0（退场）。
- *
- * 与查看器 [flightMaskAlphaOf] 同一条曲线（smoothstep）：线性淡入在黑色底上
- * 会读成"先灰一下再黑"，smoothstep 才是"黑幕自然地合上"。
- */
-internal fun videoFlightAlpha(from: Float, to: Float, t: Float): Float =
-    from + (to - from) * flightMaskAlphaOf(t)
-
-/**
  * 圆角插值：来源块是圆角（`KRadius.row`）、全屏是直角，飞行途中要跟着一起变。
- * 与查看器的 `fromRadius + (toRadius - fromRadius) * t` 同一条规则。
+ *
+ * 与 [videoFlightRect] 同样**只做纯插值** —— 圆角必须与矩形**同一进度**，
+ * 各缓一次就会在途中出现"圆角已经方了、框还没到位"的错位。
  */
-internal fun videoFlightCorner(fromPx: Float, toPx: Float, t: Float): Float =
-    fromPx + (toPx - fromPx) * flightMaskAlphaOf(t)
+internal fun videoFlightCorner(fromPx: Float, toPx: Float, progress: Float): Float =
+    fromPx + (toPx - fromPx) * progress.coerceIn(0f, 1f)
 
 /**
  * 这条飞行**值不值得播**。

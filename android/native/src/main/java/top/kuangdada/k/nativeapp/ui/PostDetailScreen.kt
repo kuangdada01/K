@@ -1313,8 +1313,14 @@ private fun PostDetailBody(
                      * 三个信号任一为真都不组合播放器。
                      */
                     val sharedFlying = isSharedTransitionActive() || isPageLeaving() || isPageTransitioning()
-                    // 播放器是否在场 —— 只在这一处判断，封面透明度与它保持一致
-                    val playerVisible = !sharedFlying
+                    // 播放器是否在场 —— 只在这一处判断，封面透明度与它保持一致。
+                    //
+                    // ★ 再加上"本页只是转场底页"这一条（[LocalInlineVideoSuppressed]）：
+                    // 全屏视频页飞行时，Shell 会把本页画在它下面当参照。那一份**不许**起
+                    // ExoPlayer —— 否则同一段视频会被解码两遍（两路声音叠在一起 = 明显的合唱），
+                    // 还多占一个硬解实例。留封面就够：封面正是飞行块自己画的那张图。
+                    val suppressedAsUnderlay = LocalInlineVideoSuppressed.current
+                    val playerVisible = !sharedFlying && !suppressedAsUnderlay
                     // 首帧是否已经画出来（决定"盖在上面的封面能不能淡掉"）
                     var firstFrame by remember(playerVisible) { mutableStateOf(false) }
                     // 封面透明度：播放器缺席时**立刻**回到不透明（不能淡回！

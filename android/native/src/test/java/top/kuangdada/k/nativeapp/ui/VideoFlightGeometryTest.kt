@@ -10,11 +10,12 @@ import org.junit.Test
 /**
  * 沉浸视频播放器**进/退场飞行**几何的单测。
  *
- * 这套几何是**照搬图片查看器**的（同一套矩形插值 / 圆角插值 / 遮罩淡入 / 落位算法），
- * 所以这里的断言大多与 `ViewerFlightGeometryTest` 同源 —— 那正是"两处必须一致"的证明。
+ * 落位算法（`fitRectIn`）与图片查看器同源，所以这里有一批断言与
+ * `ViewerFlightGeometryTest` 一一对应 —— 那正是"两处必须一致"的证明。
+ * 矩形/圆角本身只做**纯插值**：缓动在驱动 `flight` 的弹簧里，不在几何里（见下）。
  *
  * 为什么值得单独钉：这套几何写错的表现全是"真机上一眼可见、读代码看不出来"的观感问题 ——
- *  **画面被拉变形**、起点与详情页那一块错位、落位时跳一下、关了动效还硬播 250ms。
+ *  **画面被拉变形**、起点与详情页那一块错位、落位时跳一下、关了动效还硬播。
  */
 class VideoFlightGeometryTest {
 
@@ -92,7 +93,7 @@ class VideoFlightGeometryTest {
     fun `t 等于 0 时落在来源块上`() {
         val target = videoFullscreenRect(fullscreen, 16f / 9f)
         val r = videoFlightRect(source, target, 0f)!!
-        // smoothstep(0) = 0，逐像素等于来源
+        // 进度 0 = 逐像素等于来源（缓动不改变端点）
         assertEquals(source.left, r.left, 0.01f)
         assertEquals(source.top, r.top, 0.01f)
         assertEquals(source.right, r.right, 0.01f)
@@ -132,14 +133,16 @@ class VideoFlightGeometryTest {
     }
 
     @Test
-    fun `缓动是 smoothstep 而不是线性`() {
+    fun `几何只做纯插值，缓动不在这里叠第二遍`() {
+        // ★ 2026-10-17 改：缓动从几何挪到了**驱动 flight 的弹簧**（KMotion.spatialBounded）。
+        //
+        // 这一条是"别再叠一次曲线"的回归钉：几何若再缓一次，实际曲线就是
+        // 弹簧 × smoothstep —— 起步先顿一下、收尾再顿一下，中间那段才是动的，
+        // 读起来就是用户说的"不跟手、不自然"。
         val target = videoFullscreenRect(fullscreen, 16f / 9f)
         val quarter = videoFlightRect(source, target, 0.25f)!!
         val linearQuarter = source.width + (target.width - source.width) * 0.25f
-        assertTrue(
-            "起步应当慢于线性（smoothstep）",
-            quarter.width < linearQuarter,
-        )
+        assertEquals("几何应当是线性插值（缓动交给动画本身）", linearQuarter, quarter.width, 0.5f)
     }
 
     @Test
@@ -156,23 +159,6 @@ class VideoFlightGeometryTest {
         val over = videoFlightRect(source, target, 1.5f)!!
         assertEquals(source.left, under.left, 0.01f)
         assertEquals(target.left, over.left, 0.01f)
-    }
-
-    // ------------------------------------------------------------------
-    // videoFlightAlpha
-    // ------------------------------------------------------------------
-
-    @Test
-    fun `进场黑幕从透明到不透明`() {
-        assertEquals(0f, videoFlightAlpha(0f, 1f, 0f), 0.001f)
-        assertEquals(0.5f, videoFlightAlpha(0f, 1f, 0.5f), 0.001f)
-        assertEquals(1f, videoFlightAlpha(0f, 1f, 1f), 0.001f)
-    }
-
-    @Test
-    fun `退场黑幕反向`() {
-        assertEquals(1f, videoFlightAlpha(1f, 0f, 0f), 0.001f)
-        assertEquals(0f, videoFlightAlpha(1f, 0f, 1f), 0.001f)
     }
 
     // ------------------------------------------------------------------

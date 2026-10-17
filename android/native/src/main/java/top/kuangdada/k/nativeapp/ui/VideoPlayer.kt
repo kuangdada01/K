@@ -29,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -399,26 +400,69 @@ fun KVideoPlayer(
  */
 @Composable
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
-fun KVideoSurface(player: Player, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
+fun KVideoSurface(
+    player: Player,
+    modifier: Modifier = Modifier,
+    /**
+     * 是否使用**官方控制器**（全屏页落位后打开；内联播放器关着 —— 进度条是我们自己画的）。
+     *
+     * ★ 必须做成**同一个 PlayerView 上开关**，不要另外叠一个带控制器的 PlayerView：
+     * 两个 PlayerView 挂在同一个 ExoPlayer 上会**互相抢 Surface**（后挂上的那个赢，
+     * 前一个的画面立刻失效），拆掉时前一个也**不会自动接回来** —— 真机表现就是
+     * "落位那一帧闪黑" + "退场一路黑着缩小"（这两条曾经同时存在于全屏页）。
+     */
+    useController: Boolean = false,
+    /**
+     * 是否显示官方缓冲圈。内联播放器传 false（它自己在 Compose 层画一个），全屏页传 true。
+     */
+    showBuffering: Boolean = false,
+) {
     AndroidView(
         factory = { ctx ->
             // 注意用传进来的 ctx（AndroidView 的组合上下文）包主题，继承它的 density/字号
             val themed = ContextThemeWrapper(ctx, R.style.KVideoSurface)
             PlayerView(themed).apply {
                 this.player = player
-                // 控制器关掉：进度条我们自己画（要"剩余时间"那种阅读器形态），
+                // 控制器默认关掉：内联播放器的进度条我们自己画（要"剩余时间"那种阅读器形态），
                 // 系统的 DefaultTimeBar 只给"已播/总长"，且会和我们的条叠成两条
-                useController = false
-                // 缓冲转圈也由 Compose 侧画，避免两套
-                setShowBuffering(PlayerView.SHOW_BUFFERING_NEVER)
+                this.useController = useController
+                // 缓冲转圈：内联那支由 Compose 侧画，避免两套；全屏那支交给官方
+                setShowBuffering(
+                    if (showBuffering) PlayerView.SHOW_BUFFERING_ALWAYS
+                    else PlayerView.SHOW_BUFFERING_NEVER,
+                )
                 // 视频原始比例交给 PlayerView（FIT = 不拉伸，多出来的部分留黑边）
                 resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                // 首次就以"控制器开着"组合出来时（无飞行的直接进全屏）也亮一下
+                if (useController) showController()
+            }
+        },
+        update = { view ->
+            // 只在**真的切换**时改（每帧重设会让控制器反复自己弹出来）
+            if (view.useController != useController) {
+                view.useController = useController
+                if (useController) view.showController() else view.hideController()
             }
         },
         modifier = modifier,
     )
 }
+
+/**
+ * ============================================================
+ * 「这一份页面只当转场底页」开关（LocalInlineVideoSuppressed）
+ * ============================================================
+ * 为 true 时，[KVideoPlayer] 所在的页面**不组合播放器**，只留封面/占位。
+ *
+ * 谁需要它：全屏视频页的**转场底页**（Shell 在 `videoUnderlay` 里画的那一页）。
+ * 那一页只是给飞行当参照 —— 视频从它那一块长出去 / 缩回来。如果底页也组合一个
+ * `ExoPlayer`，同一段视频在 250ms 里就会被**解码两遍**：
+ *  · 声音叠在一起（两个播放器各自出声，前后差几十毫秒 = 明显的合唱/回声）；
+ *  · 多占一个硬解实例，低端机上正好把飞行那几帧拖卡。
+ *
+ * 底页上留**封面**就够：封面正是飞行块自己画的那张图，起落两端严丝合缝。
+ */
+val LocalInlineVideoSuppressed = staticCompositionLocalOf { false }
 
 /**
  * 视频进度条：只有一条**主题色（accent）的细线**贴在画面下边，无底槽、无时间文字。

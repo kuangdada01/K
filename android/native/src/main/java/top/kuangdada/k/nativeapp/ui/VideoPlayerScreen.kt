@@ -2,18 +2,14 @@
 
 package top.kuangdada.k.nativeapp.ui
 
-import android.view.ContextThemeWrapper
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,7 +37,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -49,14 +45,14 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.AspectRatioFrameLayout
-import androidx.media3.ui.PlayerView
+import top.kuangdada.k.core.designsystem.theme.KMotion
 import top.kuangdada.k.core.designsystem.theme.KSpacing
 import top.kuangdada.k.core.designsystem.theme.KTheme
 import top.kuangdada.k.core.designsystem.theme.KType
 import top.kuangdada.k.core.designsystem.theme.LocalAnimationsEnabled
-import top.kuangdada.k.nativeapp.R
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
@@ -80,11 +76,23 @@ import kotlinx.coroutines.withTimeoutOrNull
  *    这里建播放器时取出来 `seekTo`；退出时反向交回去，来回切不会回到开头。
  *
  * ② **进/退场动画**：原来全屏是硬切的，没有看图那种"从那一块长到全屏、再缩回去"。
- *    这里按 [ImageViewer] 的飞行做法补一条：详情页把视频块的位置登记进 [VideoOrigins]，
- *    本页用 `矩形插值 + 圆角插值 + 黑幕淡入` 让画面从那一块长出来，退出反向播。
- *    画面本身是 `AndroidView`（**不参与 Compose 变换**，见 [KVideoPlayer] 的长注释），
- *    所以飞行阶段**不组合播放器**，改由一个纯 Compose 的占位块带着矩形/圆角飞 ——
- *    播放器在飞行落地那一刻才出现（那时它的位置正好等于落位框）。
+ *    这里按 [ImageViewer] 的飞行做法补一条：详情页把视频块的位置登记进 [VideoHandoff]，
+ *    本页用 `矩形插值 + 圆角插值 + 黑幕` 让画面从那一块长出来，退出反向播。
+ *
+ *    ★★ 2026-10-17 调优（三段，缺一段都还"差一点"）：
+ *    · **画面本体一起飞**：飞行块里装的就是 `KVideoSurface`（TextureView 参与布局与变换），
+ *      不是替身。尺寸钉死在终态、只走 `graphicsLayer` 的缩放/平移（改尺寸会重分配 Surface，
+ *      画面会卡住 —— 见 `videoFlightTransform` 的注释）；
+ *    · **同一个 PlayerView 上开关控制器**：以前落位那一刻会**再组合一个**带控制器的
+ *      PlayerView，两个 View 抢同一个 ExoPlayer 的 Surface —— 落位闪黑、退场一路黑着缩小。
+ *      现在只有一个，控制器用 `useController` 开关（见 [KVideoSurface]）；
+ *    · **底页 + 黑幕**：**退场**时 Shell 把目标页画在本页**下面**，黑幕（`exitScrim`）
+ *      真的淡出，视频才"落得回详情页那一块"。没有底页时黑幕恒不透明（防白屏）。
+ *      进场不做底页：详情页刚离开组合、滚动状态还没存回去，底页会以"滚回顶部"
+ *      的样子出现（时序原因见 AppShell 的 `videoUnderlay` 注释）。
+ *
+ *    曲线是一条**无过冲弹簧**（[KMotion.spatialBounded]）：比"固定 250ms + 线性"更跟手，
+ *    而且中途被打断（入场中点返回）会从当前速度接着往回走，不会弹一下重来。
  *
  * ③ **全屏就该全屏**：进这一页隐藏状态栏，并且**不画**返回/更多那两个悬浮钮
  *    （用户明确要求"全屏了就不要显示状态栏和顶部返回按钮那两个"）。
@@ -95,9 +103,6 @@ import kotlinx.coroutines.withTimeoutOrNull
  *     连续看几个视频后新视频会黑屏（编解码器被占满）。
  *  2. **退到后台要暂停**：`ON_STOP` 暂停。不停的话锁屏/切后台声音继续放。
  *  3. **播放期间保持屏幕常亮**（`keepScreenOn`），看完自动恢复 —— 否则长视频看一半息屏。
- *
- * 注：`PlayerView.SHOW_BUFFERING_*` 是 Java 侧定义的 `@RequiresOptIn` 常量，
- * Kotlin 的 `@file:OptIn` 满足不了 lint，必须显式写 `androidx.annotation.OptIn`（与 KVideoSurface 同）。
  */
 @Composable
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
@@ -106,6 +111,19 @@ fun VideoPlayerScreen(
     title: String? = null,
     /** 这条视频属于哪条帖子 —— 续播交接单与来源几何都按它配对（<= 0 时两条都自动降级） */
     postId: Long = 0L,
+    /**
+     * 本页背后**有没有目标页**（Shell 在退场时画在下面的那一页，见 AppShell 的 `videoUnderlay`）。
+     *
+     * 它只影响一件事：**退场黑幕能不能让开**。
+     *  · `true`：缩小的同时黑幕淡出，视频落回详情页那一块，落点有真实参照；
+     *  · `false`（深链直接进、进程回收恢复、返回栈空）：黑幕**恒不透明**，
+     *    这一页背后是窗口底色，任何时刻让它露出来都是白屏。
+     *
+     * ★ 进场**不靠它**：详情页刚离开组合，它的滚动状态还没存回 `SaveableStateHolder`
+     * （存在 apply 阶段），此刻用同一把 key 组合出来的底页会"滚回顶部"——闪错位的内容，
+     * 比干脆的黑场更糟。所以进场的黑幕恒为不透明，退场才有底页可让。
+     */
+    hasUnderlay: Boolean = false,
     /**
      * 请求退出：**先亮出目标页**（由 Shell 把返回栈顶那一页画到本页下面），
      * 但**还不要 pop** —— 本页要在这 250ms 里把画面缩回去。
@@ -144,16 +162,47 @@ fun VideoPlayerScreen(
     val origin = handoff.origin
 
     /**
+     * 「这一次进场要不要飞」：只看来源 + 动效开关，**首帧就能定**（不必等容器）。
+     *
+     * 与 [phase] 的初值同源；挑出来单独命名是为了让读代码的人一眼看到
+     * "飞不飞"与"相位怎么初始化"是同一个判断，不靠两处各写一遍。
+     */
+    val plannedEnterFlight = origin != null && animationsEnabled
+
+    /**
      * 飞行进度：0 = 完全在来源块上，1 = 全屏落位。
      *
-     * 它**只表达几何**，不再兼职"播放器在不在场"（那是 [phase] 的职责）。
+     * 它**只表达几何**，不兼职"播放器在不在场"（那是 [phase] 的职责）。
      * 初值 0：因为初值只在 `Entering` 相位才被画出来，而 `Entering` 只在
      * "有来源 + 动效开着"时成立 —— 那时从 0 起飞正是要的效果。
      */
     val flight = remember { Animatable(0f) }
 
+    /**
+     * **退场黑幕**的透明度：恒从 1 出发、随退场收敛到 0。
+     *
+     * 为什么不直接用 `flight` 反推：退场可能**打断进场**（飞了一半点返回），
+     * 那时 `flight` 还停在 0.4 之类的位置 —— 直接读它会让黑幕**一帧内从全黑掉到半透明**，
+     * 背后还没画稳的目标页"啪"地亮一下。用一条独立的、只属于退场的进度就没有这个窗口：
+     * 它总是从"全黑"开始让开。进场则始终读 1（全黑），见 `scrimAlpha`。
+     */
+    val exitScrim = remember { Animatable(1f) }
+
     /** 全屏容器的窗口矩形（`onGloballyPositioned` 每帧写；只在进场时 await 一次） */
     var container by remember { mutableStateOf(Rect.Zero) }
+
+    /**
+     * 退场是否已经开始（幂等闸）。
+     *
+     * 退场那 200 多毫秒里系统返回键与双击可能各来一次，不守的话第二趟会把
+     * `onBack()` 再调一次（连退两层）。
+     *
+     * ★ 必须声明在**两条飞行 effect 之前**：进场那条要在收尾时读它
+     * （入场中途按返回时，不能再把 `flight` 拽回全屏，见下面的注释）。
+     */
+    var closing by remember { mutableStateOf(false) }
+    val currentOnBack by rememberUpdatedState(onBack)
+    val currentOnExitFinished by rememberUpdatedState(onExitFinished)
 
     /**
      * ============================================================
@@ -179,10 +228,10 @@ fun VideoPlayerScreen(
      * 挤在同一个 `flight.value` 上是错的 —— 它们是两个独立的问题：
      *
      *   · **要不要飞**：只看 `origin` + 动效开关，**首帧就能定**（不必等容器）；
-     *   · **播放器在不在**：飞完了才在（`phase == Ready`）。
+     *   · **控制器在不在**：飞完了才在（`phase == Ready`，见 [VideoFlightPhase]）。
      *
-     * 所以引入显式的 [VideoFlightPhase]。初值用 `origin != null && animationsEnabled`
-     * 判断 —— 这个判断**不需要容器**，因此首帧就是对的，不存在"第一帧先落位、
+     * 所以引入显式的 [VideoFlightPhase]。初值用 [plannedEnterFlight]
+     * —— 这个判断**不需要容器**，因此首帧就是对的，不存在"第一帧先落位、
      * 第二帧才回来"的空窗（那正是动画被吞掉的原因）。
      *
      * ## 白屏为什么不会再回来
@@ -195,8 +244,7 @@ fun VideoPlayerScreen(
      */
     var phase by remember {
         mutableStateOf(
-            if (origin != null && animationsEnabled) VideoFlightPhase.Entering
-            else VideoFlightPhase.Ready,
+            if (plannedEnterFlight) VideoFlightPhase.Entering else VideoFlightPhase.Ready,
         )
     }
 
@@ -205,6 +253,10 @@ fun VideoPlayerScreen(
      *
      * **无论走哪条路，最后一定进 [VideoFlightPhase.Ready]**（超时兜底 + `runCatching`）：
      * 这是"播放器必然出现"的保证，也就是白屏不可能再回来的保证。
+     *
+     * 曲线是一条**无过冲弹簧**（[KMotion.spatialBounded]）：几何只做纯插值、缓动全交给它
+     * （见 [videoFlightRect] 的注释）。弹簧的另一个好处是**被打断也不回弹重来** ——
+     * 入场途中按返回，退场那条 effect 从"当前进度 + 当前速度"接着往回走。
      *
      * `container` 只在这里被 await、**不作为 effect 的 key** —— 它是布局期反复写入的状态，
      * 当 key 会让协程每帧被取消重启（上一个白屏 bug 的根因，见 [phase] 的注释）。
@@ -217,18 +269,23 @@ fun VideoPlayerScreen(
         }
         val containerNow = measured ?: container
         val usable = videoFlightUsable(origin?.rect, containerNow, animationsEnabled)
-        if (usable) {
+        if (usable && !closing) {
             flight.snapTo(0f)
-            // 超时 + 异常双兜底：**必须离开 Entering**，否则播放器永远不出现
+            // 超时 + 异常双兜底：**必须离开 Entering**，否则控制器永远不出现
             runCatching {
                 withTimeoutOrNull(VIDEO_FLIGHT_MS + 400L) {
-                    flight.animateTo(1f, tween(VIDEO_FLIGHT_MS, easing = LinearEasing))
+                    flight.animateTo(1f, KMotion.spatialBounded<Float>())
                 }
             }
         }
-        // 收尾：几何落到全屏位（即便上面超时了也只差最后一点），相位进 Ready
-        flight.snapTo(1f)
-        phase = VideoFlightPhase.Ready
+        // ★ 退场已经接管时**不要再写 flight / phase**：那两条（进场/退场）都以
+        // `flight` 为写入目标，这里补一个 `snapTo(1f)` 会把正在缩小的画面拽回全屏
+        // —— 表现就是"入场中途点返回，视频先弹成全屏再缩回去"。
+        if (!closing) {
+            // 收尾：几何落到全屏位（即便上面超时了也只差最后一点），相位进 Ready
+            flight.snapTo(1f)
+            phase = VideoFlightPhase.Ready
+        }
     }
 
     /**
@@ -255,7 +312,7 @@ fun VideoPlayerScreen(
     /** 首帧是否已经画出来（决定"盖在上面的封面能不能撤掉"，避免黑帧闪一下） */
     var firstFrame by remember(url) { mutableStateOf(false) }
 
-    /** 控制条只在这两个相位显示（飞行期间跟着缩放会很怪） */
+    /** 官方控制器只在**落位**这一个相位打开（飞行期间跟着缩放会很怪，退场一开始就收） */
     val playerVisible = phase == VideoFlightPhase.Ready
 
     // 释放（必须）：不释放就是泄漏一个解码器 + 音频焦点
@@ -295,13 +352,8 @@ fun VideoPlayerScreen(
      *
      * 进度必须在离开之前读：一旦 pop，本页就离开组合了，`player.currentPosition` 没了。
      *
-     * 用 [closing] 守幂等 —— 退场那 250ms 里系统返回键与双击可能各来一次，
-     * 不守的话第二趟会把 `onBack()` 再调一次（连退两层）。
+     * 幂等由 [closing] 守（声明在上面，进场那条 effect 也要读它）。
      */
-    var closing by remember { mutableStateOf(false) }
-    val currentOnBack by rememberUpdatedState(onBack)
-    val currentOnExitFinished by rememberUpdatedState(onExitFinished)
-
     fun beginClose() {
         if (closing) return
         closing = true
@@ -313,43 +365,39 @@ fun VideoPlayerScreen(
     }
 
     /**
-     * 退场飞行 + 收尾。
-     *
-     * 顺序：**反向播一次飞行 → 才 `onBack()`**。
-     *
-     * ★ 与进场那条 effect 的互斥：两者都以 `flight` 这个 `Animatable` 为写入目标，
-     * 而 `Animatable.animateTo` 会互相打断（后启动的赢）。真机上这两条不会同时有意义 ——
-     * `closing` 只可能发生在进场已结束之后（用户要先看到页面才能点返回），
-     * 但**不变量要写清楚**：进场那条只在 `closing == false` 时跑，见上面的 key。
-     *
-     * 播不动飞行（没来源 / 关了动效）时**直接退**，不白等 250ms —— 那时也没有动画可看。
-     * `onBack()` 一定要被调用（哪怕动画抛异常），否则用户会**卡在这一页出不去**。
-     */
-    /**
      * 退场飞行的收尾（`closing` 由 [beginClose] 置位）。
      *
      * `beginClose` 只负责"请 Shell 亮出目标页"，这里负责**等飞行播完再真正离开**
-     * （`onExitFinished`）。两步分开就是为了让"露出目标页"与"切页"之间隔着这 250ms。
+     * （`onExitFinished`）。两步分开就是为了让"露出目标页"与"切页"之间隔着这一趟飞行。
      *
      * ★ 无论哪条路径，**`onExitFinished` 一定会被调用** —— 少了它用户会卡在全屏页出不去。
      * 所以动画全程裹在 `runCatching` + `withTimeoutOrNull` 里。
      */
     LaunchedEffect(closing) {
         if (!closing) return@LaunchedEffect
-        // 退场期间播放器**不再画控制条**（跟着缩放会很怪）
+        // 退场期间控制器**不再画**（跟着缩放会很怪）
         phase = VideoFlightPhase.Leaving
+        // ★ 先等一帧：目标页是这一帧才被 Shell 塞进底层的。等它**画出来**再开始缩/让黑幕，
+        // 否则黑幕淡到一半时背后还是没画过的空白（一帧的代价，换"背后永远有东西"）。
+        withFrameNanos { }
         val canFly = videoFlightUsable(origin?.rect, container, animationsEnabled)
         if (canFly) {
-            // 反向播：1 → 0（缩回详情页那一块）。此刻目标页已经被 Shell 画在下面了，
+            // 反向播：1 → 0（缩回详情页那一块）。此刻目标页已经在下面了，
             // 所以这一趟"缩回去"落点是有真实参照的。
             //
-            // ★ 这里**只写 `flight`**（绘制期缩放的唯一输入）—— 不要在这 250ms 里
-            // 改任何布局尺寸：`AndroidView`/`TextureView` 一改尺寸就要重分配 Surface，
-            // 画面会卡在旧尺寸上（"退出没有动画"就是这么做出来的，详见
-            // `videoFlightTransform` 的注释）。
+            // ★ 这里**只写 `flight` / `exitScrim`**（绘制期缩放与黑幕的唯一输入）——
+            // 不要在这几百毫秒里改任何布局尺寸：`AndroidView`/`TextureView` 一改尺寸
+            // 就要重分配 Surface，画面会卡在旧尺寸上（"退出没有动画"就是这么做出来的，
+            // 详见 `videoFlightTransform` 的注释）。
+            //
+            // 两条一起跑：画布缩小与黑幕让开必须是同一段时间里的事，
+            // 先亮后缩（或先缩后亮）都会读成"卡了一下"。
             runCatching {
                 withTimeoutOrNull(VIDEO_FLIGHT_MS + 400L) {
-                    flight.animateTo(0f, tween(VIDEO_FLIGHT_MS, easing = LinearEasing))
+                    coroutineScope {
+                        launch { flight.animateTo(0f, KMotion.spatialBounded<Float>()) }
+                        launch { exitScrim.animateTo(0f, KMotion.spatialBounded<Float>()) }
+                    }
                 }
             }
         }
@@ -384,57 +432,30 @@ fun VideoPlayerScreen(
 
     /**
      * ============================================================
-     * 根容器：**平时不透明黑底，只在退场飞行期间淡出**。
+     * 根容器黑幕：**画在背景色上，不是 graphicsLayer**
      * ============================================================
-     * ★★ 2026-10-13 白屏第二次回归的根因就在这一行，改动前务必读完。
+     * 只有**退场、且背后真有底页**时它才让开（由 [exitScrim] 驱动 1 → 0）；
+     * 其余一切情况（进场、稳态、深链直接进）**恒为 1（不透明）**。
      *
-     * ## 上一版错在哪（我写的 `alpha = 1 - flight.value`）
-     * 那个表达式的意图是"落位时黑、回到来源块时透明"，但它对**进场也是这么算的**：
-     *   · 进场 `flight` 0 → 1 ⇒ alpha **1 → 0** —— 黑底在飞行途中**淡没了**，
-     *     于是落位那一刻背后是窗口底色（**白**）⇒ 用户看到整屏白；
-     *   · 退场 `flight` 1 → 0 ⇒ alpha 0 → 1 —— 又反了，缩小时反而又盖上一层黑。
+     * ★★ 2026-10-17 修掉的一处"看似有、其实没有"（改前务必读完）：
      *
-     * 一句话：**黑底该不该透明，取决于"现在是不是在退场"，不取决于 `flight.value`。**
-     * 因为进场与退场会走过同一个 `flight.value` 区间，光看数值根本分不出方向
-     * （这个教训在下面黑幕那一层已经记过一次，我又在同一处栽了第二遍）。
+     * 改前根容器是 `background(Color.Black)`（**恒不透明**），上面再叠一层
+     * `graphicsLayer { alpha = 1 - flight.value }` 的黑。黑色叠黑色，透明与否都看不出来 ——
+     * 于是退场时底页**一直被那层恒黑挡住**，用户看到的就是"视频在黑洞里缩小一下"。
+     * 而且那个 `1 - flight.value` 还是反的：退场从 flight=1 出发 ⇒ alpha 0（最透），
+     * 缩到底 ⇒ alpha 1（全黑），正是"越缩越黑、最后硬切回详情页"。
      *
-     * ## 现在的规则（两条，都不看 flight.value）
-     *  · **默认：完全不透明**。这是"全屏播放页不许露白"的硬要求 ——
-     *    这一页背后是窗口底色，任何时刻露出它都是错的；
-     *  · **只有退场飞行期间（[VideoFlightPhase.Leaving]）才淡出**：
-     *    Shell 那时已经把详情页画在本页下面（见 AppShell 的 `videoExit`），
-     *    淡出是为了让缩小的画面落到详情页那一块上时有真实参照。
-     *
-     * 退场淡出用 `1 - flight.value`：退场时 `flight` 1 → 0，正好把黑底从
-     * 不透明渐变为透明 —— **与进场无关**，因为进场根本不会进入 `Leaving` 相位。
+     * 现在只有**一层**黑、alpha 挂在**背景色**上（不能挂 `graphicsLayer`，那会把画面
+     * 一起淡掉 —— 2026-10-13 白屏事故），并且由**退场专用的** [exitScrim] 驱动：
+     * 不从 `flight` 反推，是为了"入场中途被返回打断"时黑幕也不会一帧掉到半透明。
      */
-    val rootScrimAlpha = if (phase == VideoFlightPhase.Leaving) {
-        // 退场：跟着缩小一起把黑底让开（flight 1→0 ⇒ alpha 1→0）
-        1f - flight.value.coerceIn(0f, 1f)
-    } else {
-        // 进场与稳态：**恒不透明**。这是防白屏的那一层，不要动它
-        1f
-    }
+    val scrimAlpha = if (hasUnderlay) exitScrim.value.coerceIn(0f, 1f) else 1f
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(Color.Black.copy(alpha = scrimAlpha))
             .onGloballyPositioned { container = it.boundsInWindow() },
     ) {
-        /**
-         * 会淡出的黑底：单独一层（**不能挂在根容器上**）。
-         *
-         * ★ 为什么必须单独一层：根容器的 `graphicsLayer { alpha }` 会作用到
-         * **它内部的一切**，包括那个放着播放器的飞行 Box —— 于是进场时把播放器
-         * 一起淡掉了（画面越飞越透明）。这里只让"黑底这一层"淡，
-         * 画面本体不受影响。
-         */
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer { alpha = rootScrimAlpha }
-                .background(Color.Black),
-        )
         val from = origin?.rect
         /**
          * 落位矩形 = 按**视频宽高比**在容器里 Fit 出来的那条横带（与查看器同一个 [fitRectIn]）。
@@ -539,10 +560,18 @@ fun VideoPlayerScreen(
                  * 用 `PlayerView` + 本工程既有的 `KVideoSurface` 主题
                  * （`surface_type = texture_view`）—— 与内联播放器同一个表面类型，
                  * 才不会出现"全屏能播、这里不能播"这种只在一种表面下发生的怪问题。
+                 *
+                 * ★ 控制器在**这同一个 PlayerView 上开关**（`useController`），
+                 * 不要像 2026-10-13 那样再叠一个带控制器的 PlayerView：
+                 * 两个 PlayerView 共用一个 ExoPlayer 会互相抢 Surface，落位那一帧闪黑、
+                 * 退场时则是一路黑着缩小（见 [KVideoSurface] 的参数注释）。
                  */
                 KVideoSurface(
                     player = player,
                     modifier = Modifier.fillMaxSize(),
+                    // 飞行期间关掉（跟着画面缩放会很怪），落位后打开 —— 用户要的暂停/拖动/时间
+                    useController = playerVisible,
+                    showBuffering = true,
                 )
 
                 /**
@@ -559,24 +588,6 @@ fun VideoPlayerScreen(
                         ),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                }
-
-                /**
-                 * 官方控制条：**飞行期间关掉**（跟着画面一起缩放会很怪），
-                 * 落地后再打开 —— 用户在全屏页要的就是暂停/拖动/时间。
-                 */
-                if (playerVisible) {
-                    AndroidView(
-                        factory = { ctx ->
-                            PlayerView(ContextThemeWrapper(ctx, R.style.KVideoSurface)).apply {
-                                this.player = player
-                                useController = true
-                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                                setShowBuffering(PlayerView.SHOW_BUFFERING_ALWAYS)
-                            }
-                        },
                         modifier = Modifier.fillMaxSize(),
                     )
                 }
@@ -626,11 +637,14 @@ fun VideoPlayerScreen(
          *
          * 位置：**底部**（2026-10-15 用户要求"提示词放底下"，原在顶部压着画面主体）；
          * 这一页是沉浸式（系统栏已藏），`KSpacing.lg` 离屏幕下缘留出手势区余量即可。
+         *
+         * 透明度**跟着黑幕走**：进场时底页还亮着，这行白字如果一上来就满不透明，
+         * 会像"详情页上突然飘出一行提示"；跟着黑幕一起淡入才是同一件事的一部分。
          */
         Text(
             text = "双击退出 · 长按保存",
             style = KType.caption,
-            color = Color.White.copy(alpha = 0.72f),
+            color = Color.White.copy(alpha = 0.72f * scrimAlpha),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = KSpacing.lg),
@@ -644,31 +658,32 @@ fun VideoPlayerScreen(
  * ============================================================
  * 为什么需要它（两次真机事故的共同教训）
  * ============================================================
- * 这一页有两件必须同时成立、但**互相拉扯**的事：
- *   ① 飞行期间**不能组合播放器**（AndroidView 不参与 Compose 绘制与变换，
- *      在场就会遮住飞行块、或退出时"画面钉在原地"）；
- *   ② 播放器**最终必须出现**（它是这一页唯一能出画面的东西，不出现就是白屏）。
+ * 这一页曾经有两件互相拉扯的事被挤进同一个判据：
+ *   · **要不要飞** —— 只看 `origin != null && animationsEnabled`，首帧就能定；
+ *   · **播放器/控制器在不在** —— 飞完了才在。
  *
- * 第一版把两者挤进同一个 `flight.value >= 1f` 判据，于是：
+ * 第一版把两者写成 `flight.value >= 1f`，于是：
  *  · 初次给 0 → 动画一旦没跑完，就**永远等不到播放器**（真机白屏，第一次事故）；
  *  · 改成初值 1 → 第一帧播放器就出现了，`snapTo(0f)` 要下一帧才生效，
  *    飞行块在播放器**下面**飞 —— 动画数据全对（日志：start→end 284ms），
  *    但用户**什么都看不到**（真机"根本没有位移到全屏的动画"，第二次事故）。
  *
- * 根因是"要不要飞"与"播放器在不在"被耦合了。拆成显式相位之后：
- *  · **要不要飞**只看 `origin != null && animationsEnabled`（首帧即可判定，不用等容器）；
- *  · **播放器在不在**只看 `phase != Entering/Leaving`；
- *  · 而 `Ready` 由 `withTimeoutOrNull` + `runCatching` **双重保证必然到达** ——
- *    白屏在结构上不可能再发生。
+ * 现在拆成显式相位，且播放器**全程在场**（TextureView 能被正常布局/变换，
+ * 飞行时它就是画面本体）。相位只剩两个职责：
+ *  · **控制器**：只有 [Ready] 才亮出来（飞行中跟着缩放会很怪）；
+ *  · **黑幕**：只有 [Leaving] 才让开，[Entering] 才淡入（见 `scrimAlpha`）。
+ *
+ * 而 [Ready] 由 `withTimeoutOrNull` + `runCatching` **双重保证必然到达** ——
+ * 白屏在结构上不可能再发生。
  */
 private enum class VideoFlightPhase {
-    /** 进场飞行中：只画飞行块与黑幕，**不组合播放器** */
+    /** 进场飞行中：画面/圆角/黑幕一起走，控制器关着 */
     Entering,
 
-    /** 到位（或本来就不飞）：播放器在场，正常播放 */
+    /** 到位（或本来就不飞）：控制器可开，正常播放 */
     Ready,
 
-    /** 退场飞行中：同样不组合播放器，让飞行块缩回详情页那一块 */
+    /** 退场飞行中：控制器关掉，画面缩回详情页那一块，黑幕让开 */
     Leaving,
 }
 
