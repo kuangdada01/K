@@ -944,19 +944,20 @@ fun ChatScreen(
                 horizontalArrangement = Arrangement.spacedBy(KSpacing.xs),
             ) {
                 // 表情 + 发图一排：两钮之间 **8dp**（M6.24 用户反馈"表情跟相册间距太小了"，
-                // 原来紧贴成 0dp）；图标同为 24dp（与详情页表情同一套）。
-                // 触控目标小于 44dp 指南值，是用户明确选的紧凑取舍。
+                // 原来紧贴成 0dp）。
+                // 2026-10-18 用户："表情和相册图标小了，要跟输入框一样高" ——
+                // 两钮的**盒子与图标都改成 40dp**（= 输入框/发送键高度），
+                // 覆盖了 2026-10-15 那轮"盒 28 紧凑化"的结论。别再自行缩回去。
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(KSpacing.xs),
                 ) {
                         // 表情开关（笑脸）：点亮态 = 面板正开着。
-                        // 盒 28dp（图标 24dp，左右各 2dp）——与详情页同步的第三轮收敛：
-                        // 24dp 盒太贴（"表情左右加大一点"），两侧各回松 2dp。
+                        // 盒 40dp / 图标 40dp —— 与输入框等高（2026-10-18 用户定稿）。
                         KEmojiButton(
                             active = emojiOpen,
-                            boxSize = 28.dp,
-                            iconSize = 24.dp,
+                            boxSize = 40.dp,
+                            iconSize = 40.dp,
                             onClick = {
                                 emojiOpen = !emojiOpen
                                 if (emojiOpen) {
@@ -972,14 +973,15 @@ fun ChatScreen(
                             },
                         )
                         // 发图按钮（系统相册选一张、选完直接发出）：与表情钮同一套
-                        // 24dp 紧凑触控盒 + 按下反馈（accentSoft 底 / accent 前景），
+                        // **40dp 盒 + 40dp 图标**（= 输入框高度，2026-10-18 定稿），
+                        // 按下/发送中只换图标色（accentText），不垫底色。
                         // 图标用 Tabler photo（见 IconPathsExtra.kt）。
                         val imageInteraction = remember { MutableInteractionSource() }
                         val imagePressed by imageInteraction.collectIsPressedAsState()
-                        // 尺寸与表情钮同步：24dp 盒 + 24dp 图标（2026-10-15）
+                        // 尺寸与表情钮、输入框三者一致：40dp
                         Box(
                             modifier = Modifier
-                                .size(24.dp)
+                                .size(40.dp)
                                 // 不垫按下底色（M6.24 用户要求"选中图标反色主题色……要遮罩干嘛"）：
                                 // 选中反馈统一走"**图标变主题色**"（见下面 Glyph 的 tint）。
                                 //（此前为圆形底色配了 clip(pill)，会把方形图标的四角切掉。）
@@ -1015,7 +1017,7 @@ fun ChatScreen(
                                 // 24dp 下糊团（"锯齿"）；相机与 album 相继被否——最终选经典照片
                                 // 造型（相框+山坡+实心太阳点，见 IconPathsExtra.kt / TABLER_PHOTO）
                                 kind = GlyphKind.Photo,
-                                size = 24.dp,
+                                size = 40.dp,
                             )
                         }
                     }
