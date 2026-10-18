@@ -2,7 +2,7 @@
 
 一个全栈社交媒体平台，支持 Web 端与 Android 客户端。
 
-功能覆盖：图文/视频帖子（可带位置）、嵌套评论、点赞收藏转发、私信聊天（图片/引用/已读）、关注关系、实时通知（SSE）、公告、管理后台、电子书阅读（**阅读进度云端同步**，重装/换设备登录后从上次位置续读）、音乐播放器、亮暗主题、**多人语音房间**（Mesh 音频/屏幕共享/全房间录制/房内聊天/共享统计/房间封面/**对战象棋**——双人对弈、终局留档复盘、中文记谱、跨房间战绩）。
+功能覆盖：图文/视频帖子（可带位置；**全屏视频**支持进/退场飞行、自绘控制与续播）、嵌套评论、点赞收藏转发、私信聊天（图片/引用/已读）、关注关系、实时通知（SSE）、公告、管理后台、电子书阅读（**阅读进度云端同步**，重装/换设备登录后从上次位置续读）、音乐播放器、亮暗主题、**多人语音房间**（Mesh 音频/屏幕共享/全房间录制/房内聊天/共享统计/房间封面/**对战象棋**——双人对弈、终局留档复盘、中文记谱、跨房间战绩）。
 
 维护与现代化改进：[2026-10-02 审计方案](docs/maintenance-modernization-plan.md)（待实施问题、修复方法、验收条件与分批计划）。P0/P1 全部与 P2 主体已实施（信息流游标分页、上传会话与转码任务持久化、SSE 判别联合契约、发布清单与部署闸门等），剩余收尾项见方案末尾的进度记录。
 
@@ -20,13 +20,15 @@
 - **Axios** — HTTP 请求（拦截器统一错误处理）
 - **CSS Modules + 设计令牌** — 组件级样式隔离，亮/暗双主题
 - **Lucide React** — 图标库
-- **Vitest + Testing Library** — 单元测试（`56 文件 575 用例`：语音域各子模块、房间对战象棋（hook 状态机/棋盘/对局面板/音效/复盘记谱）、hooks 乐观更新/回滚、SSE/WS 一次性票据连接、退避重连、单例分发、评论树、错误边界、聊天行/图片清洗纯函数、事件总线、共享收件箱 store（轮询合并/未读合并）、幂等读重试策略、测试基建（原型打桩还原）等）
+- **Vitest + Testing Library** — 单元测试（`57 文件 583 用例`：语音域各子模块、房间对战象棋（hook 状态机/棋盘/对局面板/音效/复盘记谱）、hooks 乐观更新/回滚、SSE/WS 一次性票据连接、退避重连、单例分发、评论树、错误边界、聊天行/图片清洗纯函数、事件总线、共享收件箱 store（轮询合并/未读合并）、幂等读重试策略、测试基建（原型打桩还原）等）
 
 ### Android App（android）
 
 - **Kotlin 2.4.20 + Jetpack Compose + Material3** — 独立原生界面；当前模块为 `:native`、`:core:data`、`:core:designsystem`
 - **构建配置** — JDK 25、Android SDK 37、Gradle Wrapper 9.7.0、AGP 9.1.0，以 `android/` 下实际配置为准
 - **图片查看器** — 全屏 Dialog + Compose 手势，单击展开/关闭、双击放大/还原、捏合、翻页、下拉关闭、长按保存；见[实现与验收文档](docs/native-image-viewer.md)
+- **全屏视频播放** — 进/退场“从详情页那一块长到全屏 / 缩回去”与图片查看器共用同一套矩形几何与无过冲弹簧；控制全部 Compose 自绘（底部 3dp 进度线、暂停 ▶、缓冲圈、失败重试），**不使用 media3 官方控制器**——它自带全屏 60% 黑遮罩会压暗画面，且 `AndroidView` 的触摸先被 Compose 判定吃掉、按钮点不动
+- **会话缓存** — `core/data/SessionCache`（LRU + 新鲜期）：公告、关注/粉丝、章节正文、搜索、他人主页、资料与详情评论等二次进入直接显示；页面只取首帧种子，是否刷新由仓库的新鲜期决定
 
 ### 后端（server）
 
@@ -41,7 +43,7 @@
 - **pino** — 结构化日志
 - **nodemailer** — 邮箱验证码
 - **优雅停机** — SIGTERM 后断开 WS/SSE、等存量请求收尾（10 秒兜底），PM2 reload 无断崖
-- **Vitest** — 单元测试（`server/test`，47 文件 394 用例；全部注入 `:memory:` 库并执行全部迁移，真实 k.db 零接触）
+- **Vitest** — 单元测试（`server/test`，54 文件 453 用例；全部注入 `:memory:` 库并执行全部迁移，真实 k.db 零接触）
 
 ### 共享（shared）
 
@@ -58,7 +60,7 @@
   **已克隆的旧工作区需一次性归一化**（工作区要干净）：`git rm --cached -r . && git reset --hard`
 - **GitHub Actions CI** — push 自动执行 `install → prettier → build → lint → vitest（双端）→ Playwright e2e`，另有并行 Docker job 验证镜像构建 + 容器健康检查冒烟；e2e 失败自动上传报告产物；同分支新推送自动取消在跑的旧 CI（省排队与额度）
 - **Dockerfile** — 一键容器化（非 root 运行 + 健康检查 + 数据目录预建，数据库文件走挂载或 DB_PATH；运行阶段按 workspace 装 shared/server 生产依赖（`npm ci --omit=dev -w shared -w server`），client 为纯静态产物不装依赖）
-- **Playwright** — E2E 测试（`e2e/`，10 个 spec / 17 条：smoke 只读公开流程 + b1b2 回归 + scroll 移动端滚动 + write-path 真实写路径——注册→登录→发帖→点赞→评论 + p0-regressions 的 P0 缺陷浏览器级回归（授权弹窗期间退房后麦克风必须关闭）+ admin-users / admin-posts / admin-announcements 管理端用户·帖子·公告列表的服务端搜索与分页 + followers 粉丝弹窗的服务端搜索与「加载更多」（目标记录都在第二页，本地过滤时代搜不到）+ voice-chess 语音房对战象棋双浏览器上下文全链路（访客建房→两访客进房→成员卡发起对弈→棋盘同步各走一步→认输→终局横幅），跑在 DB_PATH 指向的独立测试库上；**每轮重置测试库与上传目录**，选择器用 `data-testid`（不依赖 CSS Modules 哈希类名），等待均为有界轮询（无固定 sleep）；默认不复用外部 3200 服务，需要时显式 `E2E_REUSE=1`）
+- **Playwright** — E2E 测试（`e2e/`，11 个 spec / 16 条：smoke 只读公开流程 + b1b2 回归 + scroll 移动端滚动 + write-path 真实写路径——注册→登录→发帖→点赞→评论 + p0-regressions 的 P0 缺陷浏览器级回归（授权弹窗期间退房后麦克风必须关闭）+ admin-users / admin-posts / admin-announcements 管理端用户·帖子·公告列表的服务端搜索与分页 + followers 粉丝弹窗的服务端搜索与「加载更多」（目标记录都在第二页，本地过滤时代搜不到）+ voice-chess 语音房对战象棋双浏览器上下文全链路（访客建房→两访客进房→成员卡发起对弈→棋盘同步各走一步→认输→终局横幅）+ voice-share 共享画面中途变尺寸（旋转）后观看端画框比例跟随，跑在 DB_PATH 指向的独立测试库上；**每轮重置测试库与上传目录**，选择器用 `data-testid`（不依赖 CSS Modules 哈希类名），等待均为有界轮询（无固定 sleep）；默认不复用外部 3200 服务，需要时显式 `E2E_REUSE=1`）
 
 ---
 
@@ -115,11 +117,11 @@ k/
 │   ├── test/                    # Vitest 单元测试（:memory: SQLite；helpers/memdb 统一走迁移，每 worker 独立上传目录）
 │   ├── uploads/                 # 用户上传文件（temp 预览/avatars 头像/voice-covers 房间封面，不入库；私信图片在同级 uploads_private，走鉴权接口下发）
 │   └── package.json
-├── e2e/                         # Playwright 测试（smoke + b1b2 回归 + scroll + write-path + p0-regressions + admin-*/followers + voice-chess）
+├── e2e/                         # Playwright 测试（smoke + b1b2 回归 + scroll + write-path + p0-regressions + admin-*/followers + voice-chess + voice-share）
 ├── android/                     # 安卓原生工程（Kotlin + Jetpack Compose；见 docs/android-native-rewrite-plan.md）
 │   ├── native/src/main/          # 原生 App（:native，applicationId top.kuangdada.k.nativeapp）
 │   ├── core/designsystem/        # 设计令牌 + 组件层（:core:designsystem）
-│   ├── core/data/                # 网络 / 鉴权 / DTO / 仓库（:core:data）
+│   ├── core/data/                # 网络 / 鉴权 / DTO / 仓库 / SessionCache（:core:data）
 │   ├── scripts/build-apk.mjs     # 一键打包（debug / release）
 │   └── version.properties        # versionCode / versionName 单一来源
 ├── .github/workflows/ci.yml     # CI
@@ -205,12 +207,14 @@ client/src/music/MusicEngine.ts       # 音乐播放引擎（audio 元素生命�
 | 崩溃白屏                               | `client/src/components/ErrorBoundary.tsx`（+ `main.tsx` 的 `onUncaughtError`）                                                  |
 | 收不到通知栏提醒（私信/互动/公告）     | `native/.../notify/SocialNotifier.kt`（渠道 + 运行时权限）；事件接线在 `AppShell`（**只在不前台时发**）                         |
 | 点进私信会话没停在最新消息             | `native/.../ui/MessagesScreen.kt`（`ChatScreen` 进入时显式 `scrollToItem(0)`，别只靠 reverseLayout 的隐式锚定）                 |
+| 页面二次进入仍转圈/重复请求            | `core/data/SessionCache.kt` + 各仓库的 `cached*/isFresh`（公告/关注/章节/搜索/资料/详情评论等；TTL 见「原生能力」的缓存条目）   |
+| 全屏视频黑屏 / 控件压暗或点不动        | `ui/VideoPlayerScreen.kt` + `ui/VideoPlayer.kt`（官方控制器一律关；首帧监听先挂再 `prepare()`；落位后不要再套缩放层）           |
 
 网页端排查：现象归类 → 跑对应模块单测（`npx vitest run src/voice/<模块>`）→ 看注入回调边界（`ScreenShareSink`/`MeshManagerOptions`/`AudioGraphOptions`）。App 使用独立 Kotlin/Compose 实现，按 `android/native` 对应模块、Kotlin 测试和设备日志定位；看图问题见[图片查看器文档](docs/native-image-viewer.md)。
 
-### 单测覆盖（client 575 / server 394）
+### 单测覆盖（client 583 / server 453 / shared 30 / Android 533）
 
-语音域重点：screenShareController 37、useChatTTS 18、wsSignaling 17、meshManager 16、audioGraph 16、senderTuning 11、MusicEngine 10、useVoiceChatStore 8；房间对战象棋：shared 引擎 30 + useChessGame 23 + ChessGamePanel 14 + sounds 10 + ChessBoard 6，服务端对局裁决/留档 31（voice-chess 两个测试文件）。服务端 47 文件 394 用例（全部注入 `:memory:` 库并执行全部迁移）。客户端 56 文件 575 用例，另有 10 个 spec / 17 条 Playwright e2e。
+语音域重点：screenShareController 37、useChatTTS 18、wsSignaling 17、meshManager 16、audioGraph 16、senderTuning 11、MusicEngine 10、useVoiceChatStore 8；房间对战象棋：shared 引擎 30 + useChessGame 23 + ChessGamePanel 14 + sounds 10 + ChessBoard 6，服务端对局裁决/留档 31（voice-chess 两个测试文件）。服务端 54 文件 453 用例（全部注入 `:memory:` 库并执行全部迁移）。客户端 57 文件 583 用例；Android 49 个测试类 / 533 项（`:core:data` + `:native`）；另有 11 个 spec / 16 条 Playwright e2e。
 
 ---
 
@@ -295,7 +299,7 @@ npm run dev
 npm run lint         # ESLint（三个包）；客户端为 --max-warnings 0（0 告警基线，新增告警直接失败）
 npm test             # Vitest 单元测试（shared → 服务端 → 客户端串行执行）
 npm run test:client  # 客户端 Vitest 单元测试
-npm run e2e          # Playwright e2e（10 个 spec / 17 条；自动构建并在 3200 端口启动，测试库/上传目录每轮重置）
+npm run e2e          # Playwright e2e（11 个 spec / 16 条；自动构建并在 3200 端口启动，测试库/上传目录每轮重置）
 npm run format:check # Prettier 格式检查（CI 同款门禁；修复用 npm run format）
 npm run typecheck    # 三包 + e2e 的 TypeScript 检查（CI 门禁）
 ```
@@ -329,19 +333,25 @@ npm run android:device-check # 真机安装、启动、日志与截图等可脚�
 M4 第 19 项移除了旧的 `:app` 宿主模块与 `assets/web`。方案、决策与逐里程碑验收见
 `docs/android-native-rewrite-plan.md`；被移除的旧架构记录见 `docs/android-native-architecture.md`）：
 
-- 界面：Jetpack Compose + Material3，**全部原生页面**（首页/搜索/图书/阅读器/消息/语音/主页/管理后台）
+- 界面：Jetpack Compose + Material3，**全部原生页面**（首页/搜索/视频/图书/阅读器/消息/语音/主页/公告/管理后台）
 - 设计系统：18 个语义色彩令牌 × 双主题（浅色青瓷黛绿 / 深色玄夜鎏金），跟随系统或手动三态切换并持久化
 - 看图：单击缩略图展开，单击大图关闭（含放大态）；双击按图片比例放大，再次双击还原；
   支持捏合 1x–4x、边缘翻页、下拉关闭、长按保存。2026-10-02 重写说明见
   [图片查看器文档](docs/native-image-viewer.md)，[真机清单](docs/android-verify-runbook.md#3-图片查看器2026-10-02-重写待真机验收)待执行。
-  图片查看器单独修复时已通过完整 Kotlin/Compose 编译和 377 项测试（2 个模块、34 个测试类）；
-  该轮历史记录见文档，真机视觉与手势验收待完成。
+- 视频：详情页 / 探索页的视频可进全屏播放页——进/退场是“从详情页那一块长到全屏 / 缩回那一块”的飞行
+  （与看图同一套矩形几何 + 无过冲弹簧，可中途打断反向）；控制全部 Compose 自绘（底部 3dp 进度线、
+  暂停 ▶、缓冲圈、失败重试），单击暂停/继续、双击退出、长按保存；退场经 `VideoHandoff` 把进度交回
+  详情页内联播放器续播。**官方 `PlayerView` 控制器一律关**：全屏 60% 黑遮罩会压暗画面，且它的按钮
+  在 Compose 手势层下点不动（详见 `VideoPlayerScreen` / `KVideoSurface` 注释）
+- 缓存：`core/data/SessionCache`（LRU + 新鲜期）统一承接“离开组合后还要留在内存里”的数据——
+  公告（60s）、关注/粉丝首屏（2min）、章节正文（不过期，留 6 章）、书目（5min）、图书详情（10min）、
+  搜索结果（2min）、他人主页列表（60s）、详情帖子/评论（60s）、资料（5min）、语音房列表（30s）、
+  逆地理（10min）。页面首帧取缓存、过期才静默刷新，**二次进入不出现加载圈、不重复请求**
 - 文件：Photo Picker / 相机（FileProvider）、**选图原生压缩 + EXIF 校正**、下载与 APK 安装（DownloadManager）
 - 系统：系统分享面板、深链（站内链接 / 「分享到 K」）、通知点击跳回所在语音房
-- 语音房：WebRTC 网格音频（回声消除/降噪/增益走 WebRTC 内建链）、屏幕共享、全房间混音录制、
-  前台服务保活（`mediaPlayback|microphone|mediaProjection`）、成员网络质量指示；耳机优先的通信音频路由，
-  详见[蓝牙与耳机路由说明](docs/android-voice-audio-routing.md)。本次 debug 构建成功，402 项测试全部通过
-  （2 个模块、36 个测试类，含新增 25 项路由回归）；真实耳机输入/输出待真机验收。
+- 语音房：WebRTC 网格音频（回声消除/降噪/增益走 WebRTC 内建链）、屏幕共享（三档画质、共享中跟随屏幕旋转）、
+  全房间混音录制、前台服务保活（`mediaPlayback|microphone|mediaProjection`）、成员网络质量指示；
+  耳机优先的通信音频路由，详见[蓝牙与耳机路由说明](docs/android-voice-audio-routing.md)
 - 房间文字聊天朗读：标题行右侧「朗读」开关 + **音色下拉**（系统 TTS / 云端复刻音色「邓紫棋」）；
   云端走服务端 `/api/tts`（**Key 不出服务端**），点某一条消息可单独朗读（不受开关限制）
 - 阅读：图书阅读进度云端同步（章节下标 + 页首行的段/字符偏移锚点；重装 App / 换设备后登录即从上次位置续读，走 `/api/books` 的进度接口，Web 端同源共用）
@@ -353,25 +363,23 @@ M4 第 19 项移除了旧的 `:app` 宿主模块与 `assets/web`。方案、决�
 
 - 产物：`android/native/build/outputs/apk/release/native-release.apk`（脚本会打印体积与 sha256）
 - 只调试不打包发布：`npm run android:debug`（debug 包 `applicationIdSuffix .debug`，可与 release 并存安装）
-- Kotlin 单测：`npm run android:test`（`:core:data` + `:native` 两个模块，39 个测试类 / 429 项；含接口契约、令牌映射、
-  深链解析、信令负载格式、混音结算、版本比较、阅读进度锚点等纯逻辑）。**不要用 `gradlew test`** ——
+- Kotlin 单测：`npm run android:test`（`:core:data` + `:native` 两个模块，49 个测试类 / 533 项；含接口契约、令牌映射、
+  深链解析、信令负载格式、混音结算、版本比较、阅读进度锚点、视频飞行几何、会话缓存新鲜期/淘汰等纯逻辑）。**不要用 `gradlew test`** ——
   本工程路径含中文时 Gradle 的 `@argfile` 会被 java 启动器按 GBK 误读，测试类全部
   `ClassNotFoundException`；`run-kotlin-tests.mjs` 让 Gradle 只编译+导出 classpath，由 Node 直接起 JUnit
 - 环境：**JDK 25 + Android SDK 37**；在 `android/local.properties` 配置 `sdk.dir`（不入库），
   将 `JAVA_HOME` 指向实际安装的 JDK 25 或对应 JBR。脚本优先读取 `JAVA_HOME`，再检查预设的 Android Studio 等路径；
   路径存在不代表版本符合要求，换机时需核对。`jvmToolchain(25)` 是编译工具链要求，字节码目标为 Java 21。
   Gradle 9.7.0 由仓库 Wrapper 管理；只安装 Java 21 或只配置 PATH 不足以满足本工程脚本的构建条件。
-- 本机验证（2026-10-02）：Android Studio 位于 `D:\Android Studio`，使用 JBR 25.0.3；SDK 位于
-  `C:\Users\LiQi-MATX\AppData\Local\Android\Sdk`，已安装 API 37.0、Build Tools 36.0.0 和 adb 37.0.1，
-  Wrapper 9.7.0 已运行。最新语音路由修复的 `npm run android:debug` 成功（100 tasks），验证产物为
-  `android/native/build/outputs/apk/debug/native-debug.apk`（v0.1.20，30.27 MB）；校验值见[语音路由验证记录](docs/android-voice-audio-routing.md#3-文件与验证)。
-  此前图片查看器单独修复的 30.23 MB 产物保留为[历史记录](docs/native-image-viewer.md#5-构建与验证状态)。
-  返还源码不附 APK 与构建缓存，配置 SDK 后可重新构建。
+- 本机验证（2026-10-17）：JDK 用 Android Studio 自带 JBR（`D:\Android\Android Studio\jbr`），SDK 位于
+  `C:\Users\25359\AppData\Local\Android\Sdk`（API 37 / Build Tools 36.0.0）。`npm run android:apk` 成功构建
+  release **0.1.28**（15.05 MB，脚本会打印 sha256）；`npm run android:test` 533 项全部通过。
+  本机没有可用的硬件加速 AVD（AEHD 未安装），视觉与手势验收走真机。
 - 签名：`android/keystore.properties`（口令，不入库）+ **`android/k-release.keystore`**
   （**丢失即无法原地更新 App，务必备份**）。keystore 原先放在 `app/` 目录内，
   M4 移除该模块时**已迁到 `android/` 根下** —— 不迁的话删目录会永久丢失发布私钥
-- 版本：只改 `android/version.properties` 的 `versionCode`/`versionName`，
-  并同步 `.env` 的 `APP_VERSION`/`APP_APK_URL`/`APP_UPDATE_NOTES`
+- 版本：当前 **0.1.28 / versionCode 29**。发版只改 `android/version.properties` 的
+  `versionCode`/`versionName`，其余按下面「App 发版 SOP」执行
   （App 内更新提示以 `/api/app/version` 返回为准，服务器版本须高于已安装版本才会弹窗）
 - 发布：`deploy.ps1` 检测到新 APK 会自动上传到远端 `client/dist/apk/`（**sha256 核验**），并保留最近 5 个版本、清理更旧。
   本地会先算 APK 的 sha256 交给 `deploy-sftp.py`：**远端同名文件内容一致就直接打印 `[APK] SKIP`**，
@@ -425,6 +433,27 @@ docker run -p 3000:3000 \
 - 用法：打包 `cd client && tar -czf /tmp/k-client-only.tar.gz dist public`，然后 `python deploy-client-lite.py --server <IP> --package <tar.gz>`（认证同样密钥优先：默认 `~/.ssh/k_deploy_ed25519`，或设 `DEPLOY_KEY`）。
 - 远端自动将当前 `dist` 备份为 `dist.bak-时间戳`（保留最近 3 份）再解压覆盖，并校验首页/health 与产物落地。
 - 注意：Windows 下 Python 需用真实路径（不认 Git Bash 的 `/tmp` 虚拟路径）；脚本依赖 paramiko，建议用系统 Python 运行。
+
+#### App 发版 SOP（Android）
+
+1. 改 `android/version.properties` 的 `versionCode` / `versionName`（版本号唯一来源）。
+2. `npm run android:apk`：构建 release 并把产物投到 `client/public/apk/k-app-<versionName>-release.apk`
+   （debug 用 `npm run android:debug`，包名带 `.debug` 后缀，可与正式包并存）。
+3. 重建前端产物（旧 `client/dist` 先 `mv` 走，避免清理保护拦住构建器）：
+   ```bash
+   mv client/dist e2e/.tmp/client-dist-<version>-$(date +%Y%m%d-%H%M%S)
+   npm run build --prefix client
+   tar -czf <deploy.tar.gz> -C client dist public
+   ```
+4. 轻量部署：`python deploy-client-lite.py --server <IP> --package <deploy.tar.gz>`（远端自动备份 `dist`）。
+5. 更新远端 `.env` 的 `APP_VERSION` / `APP_APK_URL` / `APP_UPDATE_NOTES`，然后：
+   ```bash
+   cd /var/www/k && pm2 startOrReload server/ecosystem.config.js --update-env && pm2 save
+   ```
+   **不要用 `pm2 restart`**（不重读 `.env`），**也不要用 `pm2 delete && pm2 start`**
+   （会丢 env 快照，`JWT_SECRET` 等一起消失 → crash-loop → 全站 502）。
+6. 验证：`/api/app/version` 返回新版本；`/apk/k-app-<version>-release.apk` 为 `200`，
+   下载后的 sha256 与构建产物一致；首页与 `/api/health` 均为 `200`。
 
 ---
 
