@@ -414,7 +414,7 @@ fun ChatScreen(
     LaunchedEffect(voicePlayer.isPlaying, voicePlayer.currentId) {
         // 每帧刷新一次（60/120Hz）：进度竖线必须连续走，不能 100ms 跳一格
         while (voicePlayer.isPlaying) {
-            withFrameNanos { voicePlayer.refreshPosition() }
+            withFrameNanos { voicePlayer.refreshPosition(it) }
         }
     }
 
@@ -751,7 +751,20 @@ fun ChatScreen(
 
         /** 面板展开比例 0..1：0 = 收起，1 = 与键盘等高占满交换区 */
         val panelFraction = remember { Animatable(0f) }
-        LaunchedEffect(emojiOpen) {
+        LaunchedEffect(emojiOpen, voiceMode) {
+            /**
+             * 语音面板占着交换区时**不要动** panelFraction。
+             *
+             * 跳变根因（2026-10-19 用户反馈"点表情→点语音→再点表情会跳"）：
+             * 进语音模式时 `emojiOpen=false` 会把 panelFraction 动画到 0；再点表情时
+             * 高度由 panelFraction 驱动，于是从 0 重新长到 1 —— 看起来就是整条输入区
+             * 先塌下去再弹回来。冻结在 1 后，回表情是等高无缝切换。
+             */
+            if (voiceMode) {
+                // 冻结在"满高"：即使进语音前表情是关的，回表情时也不用从 0 长出来
+                panelFraction.snapTo(1f)
+                return@LaunchedEffect
+            }
             if (emojiOpen) {
                 if (!animationsEnabled) {
                     panelFraction.snapTo(1f)

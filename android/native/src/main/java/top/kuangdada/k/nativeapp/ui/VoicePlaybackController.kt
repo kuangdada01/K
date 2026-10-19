@@ -17,6 +17,7 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import kotlin.math.roundToLong
 
 /**
  * ============================================================
@@ -35,7 +36,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
  * `MODE_IN_COMMUNICATION` + `isSpeakerphoneOn=false`。暂停/释放时恢复 `MODE_NORMAL`，
  * 不能把这个模式留给后面的音乐/视频。
  *
- * 位置由 UI 以 100ms 轮询 [refreshPosition]（只有一个播放器，没必要再开协程）。
+ * 位置由 UI 每帧调用 [refreshPosition]（只有一个播放器，没必要再开协程）。
  */
 class VoicePlaybackController(
     private val context: Context,
@@ -116,6 +117,16 @@ class VoicePlaybackController(
     var speakerOn by mutableStateOf(true)
         private set
 
+    /**
+     * 平滑进度：以**帧时间**推进，而不是每帧读 `player.currentPosition`。
+     *
+     * 设备的音频位置更新并不保证逐帧（可能 50–250ms 一次），直接读会让进度线
+     * "一格一格扫"。这里只在开始/seek/暂停时与播放器对齐，中间按帧间隔累加，
+     * 声音本身是 1x，几十秒的累计误差可以忽略。
+     */
+    private var smoothPositionMs = 0.0
+    private var lastFrameNanos = 0L
+
     /** 播放失败回调（由页面弹 toast） */
     var onError: ((String) -> Unit)? = null
 
@@ -128,6 +139,8 @@ class VoicePlaybackController(
                 player.pause()
             } else {
                 if (player.playbackState == Player.STATE_ENDED) player.seekTo(0)
+                smoothPositionMs = player.currentPosition.coerceAtLeast(0L).toDouble()
+                lastFrameNanos = 0L
                 player.play()
             }
             return
@@ -135,6 +148,8 @@ class VoicePlaybackController(
 
         currentId = messageId
         positionMs = 0
+        smoothPositionMs = 0.0
+        lastFrameNanos = 0L
         durationMs = messageDurationMs.coerceAtLeast(0)
         player.setMediaItem(MediaItem.fromUri(url))
         player.prepare()
@@ -149,14 +164,37 @@ class VoicePlaybackController(
         val target = (fraction.coerceIn(0f, 1f) * total).toLong()
         player.seekTo(target)
         positionMs = target
+        smoothPositionMs = target.toDouble()
+        lastFrameNanos = 0L
     }
 
-    /** UI 每 100ms 调一次：同步进度（只在有活动播放时读，避免无谓的跨线程调用） */
-    fun refreshPosition() {
+    /**
+     * UI 每帧调一次（`withFrameNanos`）：用帧间隔推进平滑进度。
+     *
+     * @param frameNanos 当前帧的 `System.nanoTime` 时间戳
+     */
+    fun refreshPosition(frameNanos: Long) {
         if (currentId == null) return
         val total = player.duration
         if (total > 0 && total != C.TIME_UNSET) durationMs = total.toInt()
-        positionMs = player.currentPosition.coerceAtLeast(0L)
+
+        if (!player.isPlaying) {
+            smoothPositionMs = player.currentPosition.coerceAtLeast(0L).toDouble()
+            lastFrameNanos = 0L
+            positionMs = smoothPositionMs.roundToLong()
+            return
+        }
+
+        if (lastFrameNanos == 0L) {
+            // 起播/seek 后第一帧：以播放器位置为准
+            smoothPositionMs = player.currentPosition.coerceAtLeast(0L).toDouble()
+        } else {
+            smoothPositionMs += (frameNanos - lastFrameNanos) / 1_000_000.0
+        }
+        lastFrameNanos = frameNanos
+
+        if (durationMs > 0) smoothPositionMs = smoothPositionMs.coerceIn(0.0, durationMs.toDouble())
+        positionMs = smoothPositionMs.roundToLong()
     }
 
     /** 退到后台/离开页面时暂停（不释放，回来还能接着播） */
@@ -192,6 +230,8 @@ class VoicePlaybackController(
     /** 播完回到开头（listener 里不能直接写 private-set 属性） */
     private fun resetPosition() {
         positionMs = 0
+        smoothPositionMs = 0.0
+        lastFrameNanos = 0L
     }
 
     /** 播放失败：收起当前条目的活动态 */

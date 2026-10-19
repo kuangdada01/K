@@ -36,6 +36,9 @@ function formatDuration(ms: number): string {
 export default function VoiceMessage({ msg, isSent }: VoiceMessageProps) {
   const src = useAuthMediaUrl(msg.audio_url);
   const audioRef = useRef<HTMLAudioElement>(null);
+  /** 平滑进度：按帧时钟推进，避免 <audio>.currentTime 的量化跳格 */
+  const smoothMsRef = useRef(0);
+  const lastFrameTsRef = useRef(0);
 
   const [playing, setPlaying] = useState(false);
   const [positionMs, setPositionMs] = useState(0);
@@ -52,13 +55,27 @@ export default function VoiceMessage({ msg, isSent }: VoiceMessageProps) {
   useEffect(() => {
     if (!playing) return;
     let raf = 0;
-    const tick = () => {
+    const tick = (ts: number) => {
       const audio = audioRef.current;
-      if (audio) setPositionMs(audio.currentTime * 1000);
+      if (audio) {
+        if (lastFrameTsRef.current === 0) {
+          smoothMsRef.current = audio.currentTime * 1000;
+        } else {
+          smoothMsRef.current += ts - lastFrameTsRef.current;
+        }
+        lastFrameTsRef.current = ts;
+        const actual = audio.currentTime * 1000;
+        // 偏差过大 = seek/卡顿，直接对齐；正常播放则忽略量化抖动
+        if (Math.abs(smoothMsRef.current - actual) > 250) smoothMsRef.current = actual;
+        setPositionMs(Math.max(0, smoothMsRef.current));
+      }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      lastFrameTsRef.current = 0;
+    };
   }, [playing]);
 
   const toggle = useCallback(() => {
