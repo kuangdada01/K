@@ -926,34 +926,87 @@ fun ChatScreen(
                     .fillMaxWidth()
                     .background(c.surface),
             ) {
-                // 输入栏（设计稿「消息对话」）：凹陷底输入框 + 发送按钮。
+                // 输入栏（QQ 式两行）：第一行「输入框 + 发送」，第二行「表情 / 相册」功能排。
+                // 2026-10-19 用户要求「跟 QQ 一样，功能放输入框下面」——功能钮不再和输入框挤一行，
+                // 输入框因此能占满整行宽度。
                 // 圆角统一成**详情页那一档**（KRadius.control 小圆角），不再是胶囊 ——
                 // 两处输入条看起来要像同一个组件（用户要求）。
                 // 不再挂 imePadding：键盘高度已并入交换区，这里再挂会多让出一条导航栏
                 // （ime 全高含导航栏，叠加等于把导航栏让了两次）。
                 // 垂直留白收一档（sm → xs），配合输入框矮一档（36dp，见 KTextField 调用）：
                 // 用户反馈"输入框高度小一点、上下留白间隙也小一点"。
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = KSpacing.md, vertical = KSpacing.xs),
-                verticalAlignment = Alignment.CenterVertically,
-                // 表情排 / 输入框 / 发送三者**等距 8dp**（xs）——2026-10-15 用户两轮定稿：
-                // 先"间距调成一样的"（删了发送侧的 12dp 补偿），再"统一并加大一点"
-                //（4→8；同时与"表情↔发图"那 8dp 对齐）。
-                horizontalArrangement = Arrangement.spacedBy(KSpacing.xs),
-            ) {
-                // 表情 + 发图一排：两钮之间 **8dp**（M6.24 用户反馈"表情跟相册间距太小了"，
-                // 原来紧贴成 0dp）。
-                // 尺寸史：2026-10-15 盒 28 → 10-18"图标小了，要跟输入框一样高"→ 盒/图标 40
-                // → 10-19"图标太大了，改成微信输入框那种"→ **盒 36 / 图标 28**（当前定稿）。
-                // 微信的比例是"图标约占输入框高度的 3/4"，而不是图标铺满整个输入框。
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(KSpacing.xs),
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = KSpacing.md, vertical = KSpacing.xs),
+                    // 两行之间 4dp：QQ 式输入栏（输入在上、功能钮在下）
+                    verticalArrangement = Arrangement.spacedBy(KSpacing.xxs),
                 ) {
+                    // 第一行：输入框 + 发送（输入框独占剩余宽度）
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(KSpacing.xs),
+                    ) {
+                        Box(modifier = Modifier.weight(1f)) {
+                            ChatInputField(
+                                input = input,
+                                placeholder = "说点什么…",
+                                // 点「引用」时把焦点交给它（见 quoteMessage），IME 随之弹起
+                                focusRequester = inputFocusRequester,
+                                // 聚焦态同时喂给上面的 inputFocused（聚焦 = 面板向键盘交接让位）
+                                interactionSource = inputInteraction,
+                            )
+                        }
+                        KButton(
+                            text = if (sending) "…" else "发送",
+                            // 与输入框同一档圆角（详情页评论输入条同款）
+                            cornerRadius = KRadius.control,
+                            // **等高**（2026-09-25 反馈：发送按钮比文字框高）：与输入框的
+                            // minHeight 一致（2026-10-19 紧凑化后为 36dp）；compact 的内边距
+                            // 保证文字内容塞得进 36dp —— 不配它按钮会被内容撑回 44dp
+                            compact = true,
+                            minHeight = 36.dp,
+                            onClick = {
+                                if (input.value.isBlank()) {
+                                    toast = "不能发空消息"
+                                    return@KButton
+                                }
+                                scope.launch {
+                                    sending = true
+                                    val quoted = replyTo?.raw?.id
+                                    when (val r = messages.send(partnerId, input.value.trim(), quotedMessageId = quoted)) {
+                                        is ApiResult.Success -> {
+                                            items = items + r.data
+                                            input.value = ""
+                                            replyTo = null
+                                            // 发出去的消息在 reverseLayout 里是 index 0：
+                                            // 主动滚一次，避免用户翻了旧消息后看不到自己刚发的那条
+                                            listState.animateScrollToItem(0)
+                                        }
+                                        is ApiResult.Failure -> toast = r.error.displayMessage
+                                    }
+                                    sending = false
+                                }
+                            },
+                            // 设计稿里空输入时发送按钮也是实心 accent（不置灰）；
+                            // 空内容点它由上面的 input.value.isBlank() 分支给一句提示，不会发出空消息。
+                            enabled = !sending,
+                        )
+                    }
+
+                    // 功能排（QQ 式：放在输入框**下面**，不再和输入框抢横向空间）：
+                    // 表情 + 发图两钮之间 12dp（M6.24 反馈过"表情跟相册间距太小"，当时定的 8dp，
+                    // 下移成独立行后可以松一档）。
+                    // 尺寸史：2026-10-15 盒 28 → 10-18"图标小了，要跟输入框一样高"→ 盒/图标 40
+                    // → 10-19"图标太大了"→ **盒 36 / 图标 28**（当前定稿，图标约占框高 3/4）。
+                    // 10-19 再要求"功能放输入框下面"——尺寸不变，只改位置。
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(KSpacing.sm),
+                    ) {
                         // 表情开关（笑脸）：点亮态 = 面板正开着。
-                        // 盒 36dp / 图标 28dp —— 与输入框同高，图标留 4dp 呼吸位（微信式）。
+                        // 盒 36dp / 图标 28dp —— 与输入框同高，图标留 4dp 呼吸位。
                         KEmojiButton(
                             active = emojiOpen,
                             boxSize = 36.dp,
@@ -973,7 +1026,7 @@ fun ChatScreen(
                             },
                         )
                         // 发图按钮（系统相册选一张、选完直接发出）：与表情钮同一套
-                        // **盒 36dp + 图标 28dp**（微信式：图标略小于输入框，留呼吸位），
+                        // **盒 36dp + 图标 28dp**（图标略小于输入框，留呼吸位），
                         // 按下/发送中只换图标色（accentText），不垫底色。
                         // 图标用 Tabler photo（见 IconPathsExtra.kt）。
                         val imageInteraction = remember { MutableInteractionSource() }
@@ -1021,53 +1074,7 @@ fun ChatScreen(
                             )
                         }
                     }
-                    Box(modifier = Modifier.weight(1f)) {
-                        ChatInputField(
-                            input = input,
-                            placeholder = "说点什么…",
-                            // 点「引用」时把焦点交给它（见 quoteMessage），IME 随之弹起
-                            focusRequester = inputFocusRequester,
-                            // 聚焦态同时喂给上面的 inputFocused（聚焦 = 面板向键盘交接让位）
-                            interactionSource = inputInteraction,
-                        )
-                    }
-                    KButton(
-                        text = if (sending) "…" else "发送",
-                        // 与输入框同一档圆角（详情页评论输入条同款）
-                        cornerRadius = KRadius.control,
-                        // **等高**（2026-09-25 反馈：发送按钮比文字框高）：与输入框的
-                        // minHeight 一致（2026-10-19 紧凑化后为 36dp）；compact 的内边距
-                        // 保证文字内容塞得进 36dp —— 不配它按钮会被内容撑回 44dp
-                        compact = true,
-                        minHeight = 36.dp,
-                        onClick = {
-                            if (input.value.isBlank()) {
-                                toast = "不能发空消息"
-                                return@KButton
-                            }
-                            scope.launch {
-                                sending = true
-                                val quoted = replyTo?.raw?.id
-                                when (val r = messages.send(partnerId, input.value.trim(), quotedMessageId = quoted)) {
-                                    is ApiResult.Success -> {
-                                        items = items + r.data
-                                        input.value = ""
-                                        replyTo = null
-                                        // 发出去的消息在 reverseLayout 里是 index 0：
-                                        // 主动滚一次，避免用户翻了旧消息后看不到自己刚发的那条
-                                        listState.animateScrollToItem(0)
-                                    }
-                                    is ApiResult.Failure -> toast = r.error.displayMessage
-                                }
-                                sending = false
-                            }
-                        },
-                        // 设计稿里空输入时发送按钮也是实心 accent（不置灰）；
-                        // 空内容点它由上面的 input.value.isBlank() 分支给一句提示，不会发出空消息。
-                        enabled = !sending,
-                    )
                 }
-
                 /**
                  * 键盘 / 表情交换区（QQ/微信式原地换位，机制见上面总注释）：
                  * 输入栏贴在它顶上，高度 = max(IME, 面板×展开比例, 导航栏)。
@@ -1522,7 +1529,7 @@ private fun ChatInputField(
         placeholder = placeholder,
         shape = RoundedCornerShape(KRadius.control),
         variant = KTextFieldVariant.Inset,
-        // 微信那种紧凑输入框：36dp 高、左右 12dp、上下 6dp。
+        // QQ/微信那类紧凑输入框：36dp 高、左右 12dp、上下 6dp。
         // 2026-10-19 用户："打字内部的高度间隙太大" —— 原来是 40dp + 上下 8dp + 左右 16dp，
         // 15sp 文字在框里上下各空 ~9dp，看着像"字浮在框中间"。高度与内边距一起收，
         // 文字才贴住边（高度约束压不住组件内部的 defaultMinSize，必须从这里传）。
