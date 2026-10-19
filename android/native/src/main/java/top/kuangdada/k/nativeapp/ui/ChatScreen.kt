@@ -1130,41 +1130,39 @@ fun ChatScreen(
                                 interactionSource = inputInteraction,
                             )
                         }
-                        KButton(
-                            text = if (sending) "…" else "发送",
-                            // 与输入框同一档圆角（详情页评论输入条同款）
-                            cornerRadius = KRadius.control,
-                            // **等高**（2026-09-25 反馈：发送按钮比文字框高）：与输入框的
-                            // minHeight 一致（2026-10-19 紧凑化后为 36dp）；compact 的内边距
-                            // 保证文字内容塞得进 36dp —— 不配它按钮会被内容撑回 44dp
-                            compact = true,
-                            minHeight = 36.dp,
-                            onClick = {
-                                if (input.value.isBlank()) {
-                                    toast = "不能发空消息"
-                                    return@KButton
-                                }
-                                scope.launch {
-                                    sending = true
-                                    val quoted = replyTo?.raw?.id
-                                    when (val r = messages.send(partnerId, input.value.trim(), quotedMessageId = quoted)) {
-                                        is ApiResult.Success -> {
-                                            items = items + r.data
-                                            input.value = ""
-                                            replyTo = null
-                                            // 发出去的消息在 reverseLayout 里是 index 0：
-                                            // 主动滚一次，避免用户翻了旧消息后看不到自己刚发的那条
-                                            listState.animateScrollToItem(0)
-                                        }
-                                        is ApiResult.Failure -> toast = r.error.displayMessage
+                        // 参考图里空输入时发送键是**浅蓝禁用态**，有字才变实心；
+                        // 与 KButton 的灰禁用不同，这里单独画一个（高度仍 36dp，与输入框齐平）
+                        ChatSendButton(
+                            sending = sending,
+                            enabled = input.value.isNotBlank() && !sending,
+                        ) {
+                            if (input.value.isBlank()) {
+                                toast = "不能发空消息"
+                                return@ChatSendButton
+                            }
+                            scope.launch {
+                                sending = true
+                                val quoted = replyTo?.raw?.id
+                                when (
+                                    val r = messages.send(
+                                        partnerId,
+                                        input.value.trim(),
+                                        quotedMessageId = quoted,
+                                    )
+                                ) {
+                                    is ApiResult.Success -> {
+                                        items = items + r.data
+                                        input.value = ""
+                                        replyTo = null
+                                        // 发出去的消息在 reverseLayout 里是 index 0：
+                                        // 主动滚一次，避免用户翻了旧消息后看不到自己刚发的那条
+                                        listState.animateScrollToItem(0)
                                     }
-                                    sending = false
+                                    is ApiResult.Failure -> toast = r.error.displayMessage
                                 }
-                            },
-                            // 设计稿里空输入时发送按钮也是实心 accent（不置灰）；
-                            // 空内容点它由上面的 input.value.isBlank() 分支给一句提示，不会发出空消息。
-                            enabled = !sending,
-                        )
+                                sending = false
+                            }
+                        }
                     }
 
                     // 功能排（QQ 式通栏均分）：语音 / 表情 / 相册 各占 1/3，
@@ -2547,3 +2545,34 @@ private const val CANCEL_DISTANCE_DP = 80
 
 /** 长按判定（ms）：短于它算点击 */
 private const val LONG_PRESS_MS = 200L
+
+
+/**
+ * 发送键（QQ 参考图样式）：空输入 = 半透明主题色禁用，有字 = 实心主题色。
+ *
+ * 不复用 KButton 是因为它的禁用态是灰色（设计系统统一），而参考图要的是
+ * "同一主题色的浅色态"。高度 36dp，与输入框严格齐平。
+ */
+@Composable
+private fun ChatSendButton(
+    sending: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    val c = KTheme.colors
+    Box(
+        modifier = Modifier
+            .height(36.dp)
+            .clip(RoundedCornerShape(KRadius.control))
+            .background(if (enabled) c.accent else c.accent.copy(alpha = 0.42f))
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = KSpacing.md),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = if (sending) "…" else "发送",
+            style = KType.bodyStrong,
+            color = c.onAccent,
+        )
+    }
+}
