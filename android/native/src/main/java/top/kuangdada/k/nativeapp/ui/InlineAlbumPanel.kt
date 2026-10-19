@@ -12,20 +12,19 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
@@ -41,6 +40,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -59,7 +60,8 @@ import top.kuangdada.k.core.designsystem.theme.KType
  * 聊天内嵌相册（QQ 参考图，2026-10-19）
  * ============================================================
  * 点输入栏的相册图标不再直接弹系统全屏，而是在键盘交换区里显示**最近照片**：
- *  · 四列网格、点选多张（最多 9 张）、右下角发送；
+ *  · **整张照片 + 左右滑动**浏览（HorizontalPager，最新在最前）；
+ *  · 点照片选中，右上角圆圈打勾；最多选 9 张，右下角发送；
  *  · 左下角「相册」才打开系统全屏 Photo Picker；
  *  · 无权限时给「允许访问 / 打开系统相册」两个出口。
  *
@@ -149,51 +151,57 @@ fun InlineAlbumPanel(
                     modifier = Modifier.align(Alignment.Center),
                 )
 
-                else -> LazyVerticalGrid(
-                    columns = GridCells.Fixed(4),
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    items(photos, key = { it.toString() }) { uri ->
-                        val index = selected.indexOf(uri)
+                else -> {
+                    val pagerState = rememberPagerState(initialPage = 0) { photos.size }
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxSize(),
+                        beyondViewportPageCount = 1,
+                        pageSpacing = 2.dp,
+                    ) { page ->
+                        val uri = photos[page]
+                        val selectedIndex = selected.indexOf(uri)
+                        // 整张照片铺满浏览区：Fit 完整显示，黑底留边（相册浏览的通用样式）
                         Box(
                             modifier = Modifier
-                                .aspectRatio(1f)
-                                .clip(RoundedCornerShape(2.dp))
-                                .clickable {
-                                    if (index >= 0) selected.removeAt(index)
-                                    else if (selected.size < 9) selected.add(uri)
+                                .fillMaxSize()
+                                .background(Color.Black)
+                                .pointerInput(uri) {
+                                    // 回调里**实时**查 index：pointerInput 以 uri 为 key，
+                                    // 选中状态变化不会重启手势，捕获旧值会导致点按失灵
+                                    detectTapGestures {
+                                        val idx = selected.indexOf(uri)
+                                        if (idx >= 0) selected.removeAt(idx)
+                                        else if (selected.size < 9) selected.add(uri)
+                                    }
                                 },
                         ) {
                             AsyncImage(
                                 model = uri,
                                 contentDescription = null,
-                                contentScale = ContentScale.Crop,
+                                contentScale = ContentScale.Fit,
                                 modifier = Modifier.fillMaxSize(),
                             )
-                            if (index >= 0) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(c.accent.copy(alpha = 0.22f))
-                                        .border(2.dp, c.accent),
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.TopEnd)
-                                        .padding(4.dp)
-                                        .size(20.dp)
-                                        .clip(CircleShape)
-                                        .background(c.accent),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Text(
-                                        text = "${index + 1}",
-                                        style = KType.tiny,
-                                        color = c.onAccent,
-                                    )
+                            // 右上角圈：选中 = 主题色实心 + ✓；未选中 = 半透明圈
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(KSpacing.sm)
+                                    .size(26.dp)
+                                    .clip(CircleShape)
+                                    .then(
+                                        if (selectedIndex >= 0) {
+                                            Modifier.background(c.accent)
+                                        } else {
+                                            Modifier
+                                                .background(Color.Black.copy(alpha = 0.35f))
+                                                .border(2.dp, Color.White.copy(alpha = 0.92f), CircleShape)
+                                        },
+                                    ),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                if (selectedIndex >= 0) {
+                                    Glyph(tint = c.onAccent, kind = GlyphKind.Check, size = 16.dp)
                                 }
                             }
                         }
@@ -205,7 +213,6 @@ fun InlineAlbumPanel(
         // 底栏：左下角「相册」= 系统全屏；右侧发送（选中才亮）
         Row(
             modifier = Modifier
-                .fillMaxWidth()
                 .navigationBarsPadding()
                 .height(52.dp)
                 .padding(horizontal = KSpacing.md),

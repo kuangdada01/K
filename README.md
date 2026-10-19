@@ -346,8 +346,8 @@ M4 第 19 项移除了旧的 `:app` 宿主模块与 `assets/web`。方案、决�
   转写结果**另起一个文字气泡**（不塞进语音气泡）。转写走服务端 ASR（StepFun，同一个
   `STEP_API_KEY`），结果缓存进 `messages.audio_text`。
   录音是 `MediaRecorder`（AAC/m4a），波形由每 60ms 的 `maxAmplitude` 压成 32 根柱。
-- 内嵌相册（聊天）：点相册图标在键盘交换区展开 MediaStore 最近 60 张（四列网格、
-  多选 ≤9、右下角发送，发成多条图片消息）；左下角「相册」才打开系统全屏 Photo Picker。
+- 内嵌相册（聊天）：点相册图标在键盘交换区展开 MediaStore 最近 60 张——**整张照片 + 左右滑动**
+  浏览，点照片选中（右上角圆圈打勾，≤9）、右下角发送；左下角「相册」才打开系统全屏 Photo Picker。
   权限走 `READ_MEDIA_IMAGES`（14+ 支持"仅选中照片"），拒绝时全屏 Picker 是免权限兜底。
 - 缓存：`core/data/SessionCache`（LRU + 新鲜期）统一承接“离开组合后还要留在内存里”的数据——
   公告（60s）、关注/粉丝首屏（2min）、章节正文（不过期，留 6 章）、书目（5min）、图书详情（10min）、
