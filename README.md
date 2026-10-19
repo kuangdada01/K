@@ -341,9 +341,9 @@ M4 第 19 项移除了旧的 `:app` 宿主模块与 `assets/web`。方案、决�
   暂停 ▶、缓冲圈、失败重试），单击暂停/继续、双击退出、长按保存；退场经 `VideoHandoff` 把进度交回
   详情页内联播放器续播。**官方 `PlayerView` 控制器一律关**：全屏 60% 黑遮罩会压暗画面，且它的按钮
   在 Compose 手势层下点不动（详见 `VideoPlayerScreen` / `KVideoSurface` 注释）
-- 语音消息（私信）：长按录音、松开发送、上滑取消（60s 上限、<1s 丢弃）；消息气泡带波形，
-  点击播放/暂停、**拖动波形定位**、1x/1.5x/2x 倍速、扬声器/听筒切换；「转文字」走服务端
-  ASR（StepFun，同一个 `STEP_API_KEY`）并把结果缓存进 `messages.audio_text`。
+- 语音消息（私信）：长按录音、松开发送、上滑取消（60s 上限、<1s 丢弃）；消息气泡只保留
+  「播放/暂停 + 波形 + 秒数」，点击播放、**拖动波形定位**；听筒/扬声器与「转文字」收进长按菜单
+  （转写走服务端 ASR，StepFun，同一个 `STEP_API_KEY`，结果缓存进 `messages.audio_text`）。
   录音是 `MediaRecorder`（AAC/m4a），波形由每 60ms 的 `maxAmplitude` 压成 32 根柱。
 - 缓存：`core/data/SessionCache`（LRU + 新鲜期）统一承接“离开组合后还要留在内存里”的数据——
   公告（60s）、关注/粉丝首屏（2min）、章节正文（不过期，留 6 章）、书目（5min）、图书详情（10min）、

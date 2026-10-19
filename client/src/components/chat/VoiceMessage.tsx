@@ -26,8 +26,6 @@ interface VoiceMessageProps {
   isSent: boolean;
 }
 
-const SPEEDS = [1, 1.5, 2] as const;
-
 /** 0:07 / 1:23 */
 function formatDuration(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -41,7 +39,6 @@ export default function VoiceMessage({ msg, isSent }: VoiceMessageProps) {
   const [playing, setPlaying] = useState(false);
   const [positionMs, setPositionMs] = useState(0);
   const [durationMs, setDurationMs] = useState(msg.audio_duration_ms ?? 0);
-  const [speedIndex, setSpeedIndex] = useState(0);
   const [transcript, setTranscript] = useState<string | null>(msg.audio_text ?? null);
   const [showTranscript, setShowTranscript] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
@@ -92,12 +89,6 @@ export default function VoiceMessage({ msg, isSent }: VoiceMessageProps) {
     },
     [onWaveformPointer]
   );
-
-  const cycleSpeed = useCallback(() => {
-    const next = (speedIndex + 1) % SPEEDS.length;
-    setSpeedIndex(next);
-    if (audioRef.current) audioRef.current.playbackRate = SPEEDS[next] ?? 1;
-  }, [speedIndex]);
 
   const translate = useCallback(async () => {
     if (showTranscript) {
@@ -176,9 +167,6 @@ export default function VoiceMessage({ msg, isSent }: VoiceMessageProps) {
       </div>
 
       <div className={styles.voiceMeta}>
-        <button type="button" onClick={cycleSpeed} className={styles.voiceMetaBtn}>
-          {SPEEDS[speedIndex]}x
-        </button>
         <button type="button" onClick={translate} className={styles.voiceMetaBtn} disabled={transcribing}>
           {transcribing
             ? '转写中…'
@@ -210,7 +198,6 @@ export default function VoiceMessage({ msg, isSent }: VoiceMessageProps) {
           onLoadedMetadata={(e) => {
             const d = e.currentTarget.duration;
             if (Number.isFinite(d) && d > 0) setDurationMs(Math.round(d * 1000));
-            e.currentTarget.playbackRate = SPEEDS[speedIndex] ?? 1;
           }}
           hidden
         />

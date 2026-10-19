@@ -4,7 +4,6 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioManager
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -108,10 +107,6 @@ class VoicePlaybackController(
     var durationMs by mutableIntStateOf(0)
         private set
 
-    /** 倍速：1.0 / 1.5 / 2.0（QQ 的三档） */
-    var speed by mutableFloatStateOf(1f)
-        private set
-
     /** 是否从扬声器出声（false = 听筒） */
     var speakerOn by mutableStateOf(true)
         private set
@@ -137,7 +132,6 @@ class VoicePlaybackController(
         positionMs = 0
         durationMs = messageDurationMs.coerceAtLeast(0)
         player.setMediaItem(MediaItem.fromUri(url))
-        player.setPlaybackSpeed(speed)
         player.prepare()
         player.play()
     }
@@ -158,16 +152,6 @@ class VoicePlaybackController(
         val total = player.duration
         if (total > 0 && total != C.TIME_UNSET) durationMs = total.toInt()
         positionMs = player.currentPosition.coerceAtLeast(0L)
-    }
-
-    /** 1x → 1.5x → 2x → 1x */
-    fun cycleSpeed() {
-        speed = when (speed) {
-            1f -> 1.5f
-            1.5f -> 2f
-            else -> 1f
-        }
-        player.setPlaybackSpeed(speed)
     }
 
     /** 退到后台/离开页面时暂停（不释放，回来还能接着播） */

@@ -1883,6 +1883,13 @@ private fun MessageBubble(
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
 
+    // 语音转写：气泡本身只显示「播放键 + 波形 + 秒数」，转文字收进长按菜单
+    var voiceText by remember(msg.raw.id) {
+        mutableStateOf(msg.audioText?.takeIf { it.isNotBlank() })
+    }
+    var showVoiceText by remember(msg.raw.id) { mutableStateOf(false) }
+    var voiceTranscribing by remember(msg.raw.id) { mutableStateOf(false) }
+
     Row(
         modifier = modifier.fillMaxWidth(),
         horizontalArrangement = if (mine) Arrangement.End else Arrangement.Start,
@@ -2071,8 +2078,9 @@ private fun MessageBubble(
                         VoiceMessageBubble(
                             msg = msg,
                             controller = voice,
-                            onTranscribe = onTranscribe,
-                            onToast = onToast,
+                            transcript = voiceText,
+                            showTranscript = showVoiceText,
+                            transcribing = voiceTranscribing,
                             onLongPress = { menu = true },
                         )
                     }
@@ -2112,6 +2120,41 @@ private fun MessageBubble(
                     ChatContextMenu(
                         anchor = bubbleBounds!!,
                         actions = buildList {
+                            // 语音消息：参考图的气泡不放大控制条，转文字/听筒切换放这里
+                            if (msg.hasAudio) {
+                                add(
+                                    ChatMenuAction(if (showVoiceText) "收起文字" else "转文字") {
+                                        menu = false
+                                        if (showVoiceText) {
+                                            showVoiceText = false
+                                        } else {
+                                            val ready = voiceText
+                                            if (ready != null) {
+                                                showVoiceText = true
+                                            } else {
+                                                scope.launch {
+                                                    voiceTranscribing = true
+                                                    when (val r = onTranscribe(msg.raw.id)) {
+                                                        is ApiResult.Success -> {
+                                                            voiceText = r.data
+                                                            showVoiceText = r.data.isNotBlank()
+                                                            if (!showVoiceText) onToast("没有识别出文字")
+                                                        }
+                                                        is ApiResult.Failure -> onToast(r.error.displayMessage)
+                                                    }
+                                                    voiceTranscribing = false
+                                                }
+                                            }
+                                        }
+                                    }
+                                )
+                                add(
+                                    ChatMenuAction(if (voice.speakerOn) "听筒播放" else "扬声器播放") {
+                                        menu = false
+                                        voice.toggleSpeaker()
+                                    }
+                                )
+                            }
                             // 纯图片消息没有文字可复制，这一项就不出现（Web 版恒定显示，点了是空操作）
                             if (msg.raw.content.isNotBlank()) {
                                 add(

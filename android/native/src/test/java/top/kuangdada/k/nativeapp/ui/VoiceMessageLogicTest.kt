@@ -43,6 +43,13 @@ class VoiceMessageLogicTest {
     }
 
     @Test
+    fun `气泡秒数用双撇号`() {
+        assertEquals("2″", formatVoiceDurationShort(2_000))
+        assertEquals("1″", formatVoiceDurationShort(500))
+        assertEquals("60″", formatVoiceDurationShort(60_000))
+    }
+
+    @Test
     fun `时长格式为分冒号两位秒`() {
         assertEquals("0:00", formatVoiceDuration(0))
         assertEquals("0:07", formatVoiceDuration(7_000))
@@ -50,12 +57,5 @@ class VoiceMessageLogicTest {
         assertEquals("0:59", formatVoiceDuration(59_999))
         // 负数（异常输入）也按 0 处理，不出现 "-1:-1"
         assertEquals("0:00", formatVoiceDuration(-500))
-    }
-
-    @Test
-    fun `倍速文案去掉无意义的小数尾巴`() {
-        assertEquals("1", formatSpeed(1f))
-        assertEquals("1.5", formatSpeed(1.5f))
-        assertEquals("2", formatSpeed(2f))
     }
 }
