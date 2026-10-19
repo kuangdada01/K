@@ -2174,7 +2174,11 @@ private fun MessageBubble(
                             // 语音消息：参考图的气泡不放大控制条，转文字/听筒切换放这里
                             if (msg.hasAudio) {
                                 add(
-                                    ChatMenuAction(if (showVoiceText) "收起文字" else "转文字") {
+                                    ChatMenuAction(
+                                        if (showVoiceText) "收起文字"
+                                        else if (voiceText != null) "看文字"
+                                        else "转文字"
+                                    ) {
                                         menu = false
                                         if (showVoiceText) {
                                             showVoiceText = false
