@@ -225,6 +225,8 @@ fun ChatScreen(
     var hasMore by remember { mutableStateOf(cachedHistory?.second ?: false) }
     var loading by remember { mutableStateOf(cachedHistory == null) }
     var sending by remember { mutableStateOf(false) }
+    /** 内嵌相册面板：点相册图标在交换区展开最近照片，左下角「相册」才进系统全屏 */
+    var albumOpen by remember { mutableStateOf(false) }
     /**
      * 输入内容。**刻意用 MutableState 而不是 `var input by`**：组合期唯一读它的地方
      * 是 [ChatInputField] 内部的 `input.value`（KTextField 的 value）—— 读取被圈在
@@ -261,41 +263,82 @@ fun ChatScreen(
      * 选择器回调必须注册在组合作用域（它随页面存活，不会丢结果）。
      */
     val context = LocalContext.current
-    val pickChatImage = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
-    ) { uri: Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
+
+    /**
+     * 发一张图片（选图后的公共流水线）：拷进 cacheDir → 本地压缩 → multipart 上传。
+     *
+     * 内嵌相册多选与系统全屏 Picker 都走这里，避免两套压缩/失败处理。
+     */
+    suspend fun sendImageUri(uri: Uri, quotedMessageId: Long?): Boolean {
+        val file = withContext(Dispatchers.IO) {
+            copyUriToCache(context, uri)?.let { raw ->
+                ImageCompressor.compressFile(context, raw)?.also { raw.delete() } ?: raw
+            }
+        }
+        if (file == null) {
+            toast = "读取图片失败，请重试"
+            return false
+        }
+        return when (
+            val r = messages.send(
+                partnerId,
+                "",
+                image = file,
+                quotedMessageId = quotedMessageId,
+            )
+        ) {
+            is ApiResult.Success -> {
+                items = items + r.data
+                true
+            }
+            is ApiResult.Failure -> {
+                toast = r.error.displayMessage
+                false
+            }
+        }
+    }
+
+    /**
+     * 批量发图（内嵌相册最多 9 张；系统 Picker 也走这里）。
+     *
+     * 服务端一条消息只带一张图 → 逐张发成多条；引用只落在第一张上，
+     * 发完统一滚到最新、关掉相册面板。
+     */
+    fun sendImageUris(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        if (sending) {
+            toast = "正在发送，请稍候"
+            return
+        }
         scope.launch {
             sending = true
+            var quoted = replyTo?.raw?.id
+            var sent = 0
             try {
-                val file = withContext(Dispatchers.IO) {
-                    copyUriToCache(context, uri)?.let { raw ->
-                        ImageCompressor.compressFile(context, raw)?.also { raw.delete() } ?: raw
-                    }
+                for (uri in uris.take(9)) {
+                    if (!sendImageUri(uri, quoted)) break
+                    sent += 1
+                    quoted = null // 引用只跟第一张
                 }
-                when {
-                    file == null -> toast = "读取图片失败，请重试"
-                    else -> when (
-                        val r = messages.send(
-                            partnerId,
-                            "",
-                            image = file,
-                            quotedMessageId = replyTo?.raw?.id,
-                        )
-                    ) {
-                        is ApiResult.Success -> {
-                            items = items + r.data
-                            replyTo = null
-                            // reverseLayout 下新消息是 index 0：主动滚一次（与文字发送同）
-                            listState.animateScrollToItem(0)
-                        }
-                        is ApiResult.Failure -> toast = r.error.displayMessage
-                    }
+                if (sent > 0) {
+                    replyTo = null
+                    albumOpen = false
+                    listState.animateScrollToItem(0)
                 }
             } finally {
                 sending = false
             }
         }
+    }
+
+    /**
+     * 系统全屏 Photo Picker：只有内嵌相册左下角「相册」才走这里。
+     * 最多 9 张，不需要存储权限（拒绝相册权限时的兜底）。
+     */
+    val pickChatImage = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(9)
+    ) { uris: List<Uri> ->
+        sendImageUris(uris)
     }
 
     /**
@@ -751,7 +794,7 @@ fun ChatScreen(
 
         /** 面板展开比例 0..1：0 = 收起，1 = 与键盘等高占满交换区 */
         val panelFraction = remember { Animatable(0f) }
-        LaunchedEffect(emojiOpen, voiceMode) {
+        LaunchedEffect(emojiOpen, voiceMode, albumOpen) {
             /**
              * 语音面板占着交换区时**不要动** panelFraction。
              *
@@ -760,8 +803,8 @@ fun ChatScreen(
              * 高度由 panelFraction 驱动，于是从 0 重新长到 1 —— 看起来就是整条输入区
              * 先塌下去再弹回来。冻结在 1 后，回表情是等高无缝切换。
              */
-            if (voiceMode) {
-                // 冻结在"满高"：即使进语音前表情是关的，回表情时也不用从 0 长出来
+            if (voiceMode || albumOpen) {
+                // 冻结在"满高"：即使进语音/相册前表情是关的，回表情时也不用从 0 长出来
                 panelFraction.snapTo(1f)
                 return@LaunchedEffect
             }
@@ -792,11 +835,11 @@ fun ChatScreen(
          */
         LaunchedEffect(inputFocused) {
             if (!inputFocused) return@LaunchedEffect
-            if (voiceMode) {
+            if (voiceMode || albumOpen) {
                 withTimeoutOrNull(IME_HANDOFF_TIMEOUT_MS) {
                     snapshotFlow { imeBottomState }.first { it >= panelHeightPx }
                 }
-                closeVoiceMode()
+                if (voiceMode) closeVoiceMode() else albumOpen = false
                 return@LaunchedEffect
             }
             if (!emojiOpen) return@LaunchedEffect
@@ -1212,6 +1255,7 @@ fun ChatScreen(
                                     if (voiceMode) {
                                         closeVoiceMode()
                                     } else {
+                                        albumOpen = false
                                         emojiOpen = false
                                         keyboard?.hide()
                                         focusManager.clearFocus()
@@ -1232,6 +1276,7 @@ fun ChatScreen(
                                 iconSize = 28.dp,
                                 onClick = {
                                     voiceMode = false
+                                    albumOpen = false
                                     emojiOpen = !emojiOpen
                                     if (emojiOpen) {
                                         // 开面板 = 收起键盘，并**清掉输入框焦点**：
@@ -1267,31 +1312,24 @@ fun ChatScreen(
                                         interactionSource = imageInteraction,
                                         indication = null,
                                         onClick = {
-                                            voiceMode = false
-                                            // 收键盘 + **清掉焦点**再去选图（2026-09-25 第三轮
-                                            // 反馈的最终形态）：焦点不在了，从相册回来（无论选没
-                                            // 选）系统都不会自动把 IME 弹起来 —— 之前"保留焦点
-                                            // 让系统弹回"的版本，返回那一刻键盘重新升起，用户
-                                            // 反馈"太突兀"。要打字就再点一下输入框。
-                                            keyboard?.hide()
-                                            focusManager.clearFocus()
-                                            if (sending) {
-                                                // 上一张还在传：multipart 并发两条容易乱序且看不清进度
-                                                toast = "正在发送，请稍候"
+                                            if (albumOpen) {
+                                                albumOpen = false
                                             } else {
-                                                pickChatImage.launch(
-                                                    PickVisualMediaRequest(
-                                                        ActivityResultContracts.PickVisualMedia.ImageOnly,
-                                                    )
-                                                )
+                                                // 相册图标是**开关**：展开内嵌最近照片，不再直接弹全屏。
+                                                // 全屏入口在面板左下角的「相册」上。
+                                                closeVoiceMode()
+                                                emojiOpen = false
+                                                keyboard?.hide()
+                                                focusManager.clearFocus()
+                                                albumOpen = true
                                             }
                                         },
                                     )
-                                    .semantics { contentDescription = "发送图片" },
+                                    .semantics { contentDescription = "相册" },
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Glyph(
-                                    tint = if (imagePressed || sending) c.accentText else c.textSecondary,
+                                    tint = if (imagePressed || sending || albumOpen) c.accentText else c.textSecondary,
                                     // `photo`（Tabler，非 lucide）：lucide 的 image 系带 r=2 空心小圆、
                                     // 24dp 下糊团（"锯齿"）；相机与 album 相继被否——最终选经典照片
                                     // 造型（相框+山坡+实心太阳点，见 IconPathsExtra.kt / TABLER_PHOTO）
@@ -1319,7 +1357,7 @@ fun ChatScreen(
                         // 布局期读取交换区高度（max(IME, 面板×比例, 导航栏)，见 ExchangeZone.kt）
                         // —— 键盘/面板动画期间这里只重布局，不重组整页
                         .exchangeZoneHeight(density, ime, nav, panelHeightPx) {
-                            if (voiceMode) 1f else panelFraction.value
+                            if (voiceMode || albumOpen) 1f else panelFraction.value
                         }
                         .clipToBounds(),
                     contentAlignment = Alignment.BottomCenter,
@@ -1347,6 +1385,18 @@ fun ChatScreen(
                             onCancel = { cancelVoiceRecording() },
                             onCancelZoneChange = { recordCancelZone = it },
                             onTap = { toast = "长按说话" },
+                        )
+                    } else if (albumOpen) {
+                        InlineAlbumPanel(
+                            sending = sending,
+                            onSend = { uris -> sendImageUris(uris) },
+                            onOpenSystemGallery = {
+                                pickChatImage.launch(
+                                    PickVisualMediaRequest(
+                                        ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                    )
+                                )
+                            },
                         )
                     } else if (panelFraction.value > 0f) {
                         KEmojiPanel(
@@ -1428,7 +1478,7 @@ fun ChatScreen(
                     .align(Alignment.BottomCenter)
                     // 布局期让位（交换区高 + 96dp），与老 `.padding(bottom = …)` 视觉一致
                     .exchangeZoneBottomInset(density, ime, nav, panelHeightPx, {
-                        if (voiceMode) 1f else panelFraction.value
+                        if (voiceMode || albumOpen) 1f else panelFraction.value
                     }, 96.dp),
             ) {
                 KToastInline(text = toast!!, onDismiss = { toast = null })

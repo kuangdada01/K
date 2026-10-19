@@ -42,6 +42,14 @@
     -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <!--
+      聊天内嵌相册：读 MediaStore 最近照片。Android 13+ 用 READ_MEDIA_IMAGES；
+      14+ 允许"仅选中部分照片"（READ_MEDIA_VISUAL_USER_SELECTED）；12 及以下用存储权限。
+      系统全屏 Photo Picker 不需要这些权限，是拒绝后的兜底入口。
+    -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <!-- API 27–30 查询已连接的 HFP 耳机；新系统使用 AudioManager 通信设备接口。 -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
 
