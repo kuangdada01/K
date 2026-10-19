@@ -320,3 +320,18 @@
 .voiceMessage.sent .voiceTranscript {
   background: rgb(255 255 255 / 14%);
 }
+
+/* 转写结果：独立文字气泡（不塞在语音气泡里） */
+.voiceTranscriptBubble {
+  margin-top: 6px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.4;
+  max-width: 100%;
+  width: fit-content;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

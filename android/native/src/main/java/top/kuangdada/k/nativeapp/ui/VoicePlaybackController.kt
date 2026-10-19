@@ -57,6 +57,8 @@ class VoicePlaybackController(
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSource))
             .build()
             .apply {
+                // 单条语音永远不循环；播完停在开头（再点一次才重播）
+                repeatMode = Player.REPEAT_MODE_OFF
                 setAudioAttributes(
                     Media3AudioAttributes.Builder()
                         .setUsage(C.USAGE_MEDIA)
@@ -68,7 +70,10 @@ class VoicePlaybackController(
                     override fun onIsPlayingChanged(playing: Boolean) {
                         updatePlaying(playing)
                         if (!playing && playbackState == Player.STATE_ENDED) {
-                            // 播完回到开头（再点一次 = 重播），与 QQ 一致
+                            // ★ 必须先把 playWhenReady 置 false 再 seek：
+                            //   ExoPlayer 在 ENDED 时 playWhenReady 仍为 true，直接 seekTo(0)
+                            //   会重新进入 READY 并**自动续播**——用户听到的就是"循环播放"。
+                            player.pause()
                             seekTo(0)
                             resetPosition()
                         }

@@ -40,7 +40,7 @@ import top.kuangdada.k.core.designsystem.theme.KType
  * ============================================================
  * 参考图里没有倍速、没有第二行控制条 —— 气泡只有一条「圆钮 + 波形 + 2″」。
  * 倍速已按要求**删除**；听筒/扬声器与转文字收进长按菜单（聊天页的 ChatContextMenu），
- * 保持气泡本身干净。
+ * 保持气泡本身干净。转写结果**另起一个文字气泡**（不塞进语音气泡里），见 ChatScreen。
  *
  * 交互：
  *  · 点气泡 = 播放/暂停（同一时间只播一条，由 [VoicePlaybackController] 保证）；
@@ -54,11 +54,6 @@ import top.kuangdada.k.core.designsystem.theme.KType
 fun VoiceMessageBubble(
     msg: MessageRepository.MessageUi,
     controller: VoicePlaybackController,
-    /** 已转写的文本（null = 还没转过；空串 = 转过但没识别出内容） */
-    transcript: String?,
-    /** 长按菜单点了「转文字」后展开；文字跟着气泡一起长 */
-    showTranscript: Boolean,
-    transcribing: Boolean,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -111,19 +106,6 @@ fun VoiceMessageBubble(
                 text = formatVoiceDurationShort(totalMs),
                 style = KType.footnote,
                 color = fg.copy(alpha = 0.82f),
-            )
-        }
-
-        if (showTranscript) {
-            Text(
-                text = when {
-                    transcribing -> "转写中…"
-                    transcript.isNullOrBlank() -> "没有识别出文字"
-                    else -> transcript
-                },
-                style = KType.caption,
-                color = fg.copy(alpha = 0.9f),
-                modifier = Modifier.padding(top = KSpacing.xxs),
             )
         }
     }

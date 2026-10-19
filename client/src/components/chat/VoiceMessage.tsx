@@ -15,7 +15,7 @@
  *  · `1x / 1.5x / 2x` 倍速循环；
  *  · 「转文字」→ 服务端 ASR（结果落库缓存），展开在波形下面。
  */
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Message } from '../../types';
 import api from '../../api/http';
 import { useAuthMediaUrl } from '../../hooks/useAuthMediaUrl';
@@ -28,8 +28,9 @@ interface VoiceMessageProps {
 
 /** 0:07 / 1:23 */
 function formatDuration(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`;
+  // 与 App 参考图一致：2″，不是 0:02
+  const seconds = Math.min(60, Math.max(1, Math.round(ms / 1000)));
+  return `${seconds}″`;
 }
 
 export default function VoiceMessage({ msg, isSent }: VoiceMessageProps) {
@@ -46,6 +47,19 @@ export default function VoiceMessage({ msg, isSent }: VoiceMessageProps) {
 
   /** 波形：空数组画等高柱（老消息/异常值） */
   const bars = msg.audio_waveform?.length ? msg.audio_waveform : Array.from({ length: 32 }, () => 18);
+
+  // 进度线按帧走（<audio> 的 timeupdate 只有 ~4Hz，会一格一格跳）
+  useEffect(() => {
+    if (!playing) return;
+    let raf = 0;
+    const tick = () => {
+      const audio = audioRef.current;
+      if (audio) setPositionMs(audio.currentTime * 1000);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [playing]);
 
   const toggle = useCallback(() => {
     const audio = audioRef.current;
@@ -95,7 +109,7 @@ export default function VoiceMessage({ msg, isSent }: VoiceMessageProps) {
       setShowTranscript(false);
       return;
     }
-    if (transcript) {
+    if (transcript !== null) {
       setShowTranscript(true);
       return;
     }
@@ -104,7 +118,7 @@ export default function VoiceMessage({ msg, isSent }: VoiceMessageProps) {
     try {
       const { data } = await api.post<{ text: string }>(`/messages/${msg.id}/transcribe`);
       setTranscript(data.text || '');
-      setShowTranscript(!!data.text);
+      setShowTranscript(true);
     } catch {
       // 失败不弹窗：按钮变成「转文字失败」提示，再点一次即重试
       setTranscribeFailed(true);
@@ -114,94 +128,96 @@ export default function VoiceMessage({ msg, isSent }: VoiceMessageProps) {
   }, [msg.id, showTranscript, transcript]);
 
   const progress = durationMs > 0 ? Math.min(1, positionMs / durationMs) : 0;
-  const width = 110 + 110 * Math.min(1, (msg.audio_duration_ms ?? 0) / 60_000);
+  const width = 120 + 100 * Math.min(1, (msg.audio_duration_ms ?? 0) / 60_000);
 
   return (
-    <div
-      className={`${styles.voiceMessage} ${isSent ? styles.sent : styles.received}`}
-      style={{ width: `${width}px` }}
-    >
-      <div className={styles.voiceRow}>
-        <button
-          type="button"
-          className={styles.voicePlay}
-          onClick={toggle}
-          aria-label={playing ? '暂停语音' : '播放语音'}
-        >
-          {playing ? (
-            <span className={styles.voicePauseIcon} aria-hidden>
-              <i />
-              <i />
-            </span>
-          ) : (
-            <span className={styles.voicePlayIcon} aria-hidden />
-          )}
-        </button>
+    <>
+      <div
+        className={`${styles.voiceMessage} ${isSent ? styles.sent : styles.received}`}
+        style={{ width: `${width}px` }}
+      >
+        <div className={styles.voiceRow}>
+          <button
+            type="button"
+            className={styles.voicePlay}
+            onClick={toggle}
+            aria-label={playing ? '暂停语音' : '播放语音'}
+          >
+            {playing ? (
+              <span className={styles.voicePauseIcon} aria-hidden>
+                <i />
+                <i />
+              </span>
+            ) : (
+              <span className={styles.voicePlayIcon} aria-hidden />
+            )}
+          </button>
 
-        <div
-          className={styles.waveform}
-          onPointerDown={onWaveformDown}
-          onPointerMove={onWaveformMove}
-          // 父级用 touch 事件做长按菜单；波形拖动必须独占这一片区域
-          onTouchStart={(e) => e.stopPropagation()}
-          onTouchMove={(e) => e.stopPropagation()}
-          role="slider"
-          aria-label="语音进度"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(progress * 100)}
-        >
-          {bars.map((value, index) => {
-            const played = index < progress * bars.length;
-            return (
-              <span
-                key={index}
-                className={`${styles.waveBar} ${played ? styles.waveBarPlayed : ''}`}
-                style={{ height: `${Math.max(12, value)}%` }}
-              />
-            );
-          })}
+          <div
+            className={styles.waveform}
+            onPointerDown={onWaveformDown}
+            onPointerMove={onWaveformMove}
+            // 父级用 touch 事件做长按菜单；波形拖动必须独占这一片区域
+            onTouchStart={(e) => e.stopPropagation()}
+            onTouchMove={(e) => e.stopPropagation()}
+            role="slider"
+            aria-label="语音进度"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={Math.round(progress * 100)}
+          >
+            {bars.map((value, index) => {
+              const played = index < progress * bars.length;
+              return (
+                <span
+                  key={index}
+                  className={`${styles.waveBar} ${played ? styles.waveBarPlayed : ''}`}
+                  style={{ height: `${Math.max(12, value)}%` }}
+                />
+              );
+            })}
+          </div>
+
+          <span className={styles.voiceDuration}>{formatDuration(durationMs)}</span>
         </div>
 
-        <span className={styles.voiceDuration}>{formatDuration(durationMs)}</span>
+        <div className={styles.voiceMeta}>
+          <button type="button" onClick={translate} className={styles.voiceMetaBtn} disabled={transcribing}>
+            {transcribing
+              ? '转写中…'
+              : showTranscript
+                ? '收起'
+                : transcript !== null
+                  ? '看文字'
+                  : transcribeFailed
+                    ? '转写失败，重试'
+                    : '转文字'}
+          </button>
+        </div>
+
+        {src && (
+          <audio
+            ref={audioRef}
+            src={src}
+            preload="metadata"
+            loop={false}
+            onPlay={() => setPlaying(true)}
+            onPause={() => setPlaying(false)}
+            onEnded={() => {
+              setPlaying(false);
+              setPositionMs(0);
+              if (audioRef.current) audioRef.current.currentTime = 0;
+            }}
+            onTimeUpdate={(e) => setPositionMs(e.currentTarget.currentTime * 1000)}
+            onLoadedMetadata={(e) => {
+              const d = e.currentTarget.duration;
+              if (Number.isFinite(d) && d > 0) setDurationMs(Math.round(d * 1000));
+            }}
+            hidden
+          />
+        )}
       </div>
-
-      <div className={styles.voiceMeta}>
-        <button type="button" onClick={translate} className={styles.voiceMetaBtn} disabled={transcribing}>
-          {transcribing
-            ? '转写中…'
-            : showTranscript
-              ? '收起'
-              : transcript
-                ? '看文字'
-                : transcribeFailed
-                  ? '转写失败，重试'
-                  : '转文字'}
-        </button>
-      </div>
-
-      {showTranscript && transcript && <div className={styles.voiceTranscript}>{transcript}</div>}
-
-      {src && (
-        <audio
-          ref={audioRef}
-          src={src}
-          preload="metadata"
-          onPlay={() => setPlaying(true)}
-          onPause={() => setPlaying(false)}
-          onEnded={() => {
-            setPlaying(false);
-            setPositionMs(0);
-            if (audioRef.current) audioRef.current.currentTime = 0;
-          }}
-          onTimeUpdate={(e) => setPositionMs(e.currentTarget.currentTime * 1000)}
-          onLoadedMetadata={(e) => {
-            const d = e.currentTarget.duration;
-            if (Number.isFinite(d) && d > 0) setDurationMs(Math.round(d * 1000));
-          }}
-          hidden
-        />
-      )}
-    </div>
+      {showTranscript && <div className={styles.voiceTranscriptBubble}>{transcript || '[未识别到文字]'}</div>}
+    </>
   );
 }

@@ -16,6 +16,7 @@ import android.content.ClipData
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -83,6 +84,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -410,9 +412,9 @@ fun ChatScreen(
     DisposableEffect(voicePlayer) { onDispose { voicePlayer.release() } }
     LaunchedEffect(voicePlayer) { voicePlayer.onError = { toast = it } }
     LaunchedEffect(voicePlayer.isPlaying, voicePlayer.currentId) {
+        // 每帧刷新一次（60/120Hz）：进度竖线必须连续走，不能 100ms 跳一格
         while (voicePlayer.isPlaying) {
-            voicePlayer.refreshPosition()
-            delay(100)
+            withFrameNanos { voicePlayer.refreshPosition() }
         }
     }
 
@@ -449,11 +451,6 @@ fun ChatScreen(
      */
     val inputInteraction = remember { MutableInteractionSource() }
     val inputFocused by inputInteraction.collectIsFocusedAsState()
-
-    // 点输入框 = 要打字：语音面板让位（与表情面板同一条产品逻辑）
-    LaunchedEffect(inputFocused) {
-        if (inputFocused && voiceMode) closeVoiceMode()
-    }
 
     /**
      * @param silent 静默刷新：**不显示骨架**。有缓存时走这条 —— 内容已经在屏幕上了，
@@ -774,9 +771,22 @@ fun ChatScreen(
         // ExchangeZone.kt：消费它的两个节点（下面的交换区 Box 与 toast 让位）
         // 都改用布局期读取的 modifier，动画期间整页不再重组。
 
-        // 聚焦输入框而面板还开着 → 交接：等键盘升到面板等高再收面板（见上面总注释）
+        /**
+         * 聚焦输入框而面板还开着 → 交接：等键盘升到面板等高再收面板。
+         *
+         * 语音面板与表情面板用**同一条**规则：直接收会让交换区高度瞬间掉到导航栏
+         * 那一档、下一帧键盘又顶上来，用户看到的就是"点一下弹一下"。
+         */
         LaunchedEffect(inputFocused) {
-            if (!inputFocused || !emojiOpen) return@LaunchedEffect
+            if (!inputFocused) return@LaunchedEffect
+            if (voiceMode) {
+                withTimeoutOrNull(IME_HANDOFF_TIMEOUT_MS) {
+                    snapshotFlow { imeBottomState }.first { it >= panelHeightPx }
+                }
+                closeVoiceMode()
+                return@LaunchedEffect
+            }
+            if (!emojiOpen) return@LaunchedEffect
             withTimeoutOrNull(IME_HANDOFF_TIMEOUT_MS) {
                 snapshotFlow { imeBottomState }.first { it >= panelHeightPx }
             }
@@ -1553,6 +1563,30 @@ private fun ChatContextMenu(
         (cardSize.width - cornerPx - arrowWPx / 2f).coerceAtLeast(cornerPx + arrowWPx / 2f),
     )
 
+    // 非 focusable 弹层收不到 onDismissRequest —— 用一层透明遮罩接"点空白关闭"。
+    // 遮罩单独一个 Popup（不抢焦点 → 输入法不退出），菜单 Popup 在它之后创建、盖在它上面。
+    Popup(
+        popupPositionProvider = remember {
+            object : PopupPositionProvider {
+                override fun calculatePosition(
+                    anchorBounds: IntRect,
+                    windowSize: IntSize,
+                    layoutDirection: LayoutDirection,
+                    popupContentSize: IntSize,
+                ): IntOffset = IntOffset.Zero
+            }
+        },
+        properties = PopupProperties(focusable = false),
+    ) {
+        val scrimW = with(density) { windowSize.width.toDp() }
+        val scrimH = with(density) { windowSize.height.toDp() }
+        Box(
+            modifier = Modifier
+                .size(scrimW, scrimH)
+                .pointerInput(Unit) { detectTapGestures { onDismiss() } },
+        )
+    }
+
     Popup(
         /**
          * 定位**必须**走 PopupPositionProvider（与 M3 的 DropdownMenu 同一套约定）：
@@ -1585,20 +1619,16 @@ private fun ChatContextMenu(
             }
         },
         /**
-         * ★ `focusable = true` 是**必须**的：它负责"点菜单外面就关掉"
-         * （`onDismissRequest` 只有可聚焦弹层才会收到），也负责菜单能拿到点击。
+         * ★ `focusable = false`：长按菜单**不能抢输入框焦点**。
          *
-         * 代价与对策（用户反馈："**输入法在唤醒的时候长按消息引用会退出输入法**"）：
-         * 可聚焦弹层会把焦点从输入框抢走 → IME 随之收起。**这是系统行为，弹层里改不掉**，
-         * 所以对策放在"引用"这个动作上 —— 见 `quoteMessage`：它会把焦点交还输入框
-         * 并重新 `show()` 一次，用户看到的是"键盘闪了一下又回来了"。
+         * 用户反馈（2026-10-19）："长按触发弹窗不要退出输入法"。focusable=true 时
+         * 弹层会抢走焦点 → IME 收起；改成 false 后键盘保持不动。
          *
-         * 为什么不干脆改成 `focusable = false` 让弹层不抢焦点：那样 `onDismissRequest`
-         * 永远不会触发（点空白关不掉菜单），得自己加全屏透明遮罩层接管点击，
-         * 反而多一个"遮罩会不会挡住气泡长按"的新问题，得不偿失。
+         * 代价：`onDismissRequest` 不会触发、点空白关不掉。对策是前面那个
+         * **非 focusable 的透明遮罩 Popup**（点一下就 onDismiss）+ 这里的
+         * [BackHandler]（返回键关闭）。两者都不抢焦点。
          */
-        properties = PopupProperties(focusable = true),
-        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = false),
     ) {
         // 只有内容本身那么大（位置由 provider 定），点空白关闭交给 focusable + onDismissRequest
         /**
@@ -1608,6 +1638,9 @@ private fun ChatContextMenu(
          * 过冲用 [KMotion.pressSpec]（阻尼比 0.45）—— 与点赞同一个语义："手指施加了力"。
          * 首帧 `measured` 还是 false（卡片尺寸没量到，三角位置会闪），所以量到之后才开始弹。
          */
+        // 非 focusable 弹层收不到返回键，自己接一下
+        BackHandler { onDismiss() }
+
         val pop = remember { Animatable(0f) }
         LaunchedEffect(measured) {
             if (!measured) return@LaunchedEffect
@@ -2078,11 +2111,29 @@ private fun MessageBubble(
                         VoiceMessageBubble(
                             msg = msg,
                             controller = voice,
-                            transcript = voiceText,
-                            showTranscript = showVoiceText,
-                            transcribing = voiceTranscribing,
                             onLongPress = { menu = true },
                         )
+                    }
+                    // 转写结果**另起一个文字气泡**（参考图：语音气泡下面单独一条白底文字）
+                    if (showVoiceText) {
+                        Spacer(Modifier.height(KSpacing.xxs))
+                        Box(
+                            modifier = Modifier
+                                .widthIn(max = 260.dp)
+                                .clip(bubbleShape)
+                                .background(c.surface)
+                                .padding(horizontal = KSpacing.sm, vertical = KSpacing.xs),
+                        ) {
+                            Text(
+                                text = when {
+                                    voiceTranscribing -> "转写中…"
+                                    voiceText.isNullOrBlank() -> "[未识别到文字]"
+                                    else -> voiceText.orEmpty()
+                                },
+                                style = KType.body,
+                                color = c.textPrimary,
+                            )
+                        }
                     }
                 } else {
                     // ---- 文本消息：原气泡 ----
@@ -2132,15 +2183,16 @@ private fun MessageBubble(
                                             if (ready != null) {
                                                 showVoiceText = true
                                             } else {
+                                                // 先把气泡撑出来显示「转写中…」，结果到了再替换
+                                                showVoiceText = true
                                                 scope.launch {
                                                     voiceTranscribing = true
                                                     when (val r = onTranscribe(msg.raw.id)) {
-                                                        is ApiResult.Success -> {
-                                                            voiceText = r.data
-                                                            showVoiceText = r.data.isNotBlank()
-                                                            if (!showVoiceText) onToast("没有识别出文字")
+                                                        is ApiResult.Success -> voiceText = r.data
+                                                        is ApiResult.Failure -> {
+                                                            showVoiceText = false
+                                                            onToast(r.error.displayMessage)
                                                         }
-                                                        is ApiResult.Failure -> onToast(r.error.displayMessage)
                                                     }
                                                     voiceTranscribing = false
                                                 }
