@@ -17,6 +17,20 @@ export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 export const MAX_VIDEO_BYTES = 1024 * 1024 * 1024;
 
 /**
+ * 私信语音上限：5 MB。
+ *
+ * 60 秒 AAC(64kbps) 的 m4a 约 0.5 MB —— 5 MB 是给设备差异留的余量。
+ * 服务端按它做二次校验（不信任客户端的录音参数）。
+ */
+export const MAX_VOICE_BYTES = 5 * 1024 * 1024;
+
+/** 语音最长 60 秒（录音端到点自动停止；服务端按同一常量校验） */
+export const MAX_VOICE_MS = 60_000;
+
+/** 语音最短 1 秒（更短的按误触丢弃，不发请求） */
+export const MIN_VOICE_MS = 1_000;
+
+/**
  * 「大视频」阈值：150 MB
  * 达到后走分片上传提示（原生端）并跳过封面自动截帧
  * —— 4K/长视频在 WebView 里截帧容易 OOM。

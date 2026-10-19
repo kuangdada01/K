@@ -176,3 +176,147 @@
     padding: 2px 10px;
   }
 }
+
+/* ============================================================
+ * 语音消息（2026-10-19）
+ * ============================================================ */
+
+.voiceMessage {
+  padding: 8px 10px;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 100%;
+}
+
+.voiceMessage.sent {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.voiceMessage.received {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.voiceRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.voicePlay {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+/* 三角形播放键（纯 CSS，避免为一个图标引资源） */
+.voicePlayIcon {
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 7px 0 7px 11px;
+  border-color: transparent transparent transparent currentColor;
+  margin-left: 2px;
+}
+
+.voicePauseIcon {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.voicePauseIcon i {
+  display: block;
+  width: 4px;
+  height: 14px;
+  border-radius: 1.5px;
+  background: currentColor;
+}
+
+.waveform {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.waveBar {
+  flex: 1 1 0;
+  min-width: 2px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.35;
+}
+
+.voiceMessage.sent .waveBarPlayed {
+  opacity: 1;
+}
+
+.voiceMessage.received .waveBar {
+  background: var(--text-secondary);
+  opacity: 0.45;
+}
+
+.voiceMessage.received .waveBarPlayed {
+  background: var(--accent-text);
+  opacity: 1;
+}
+
+.voiceDuration {
+  flex: 0 0 auto;
+  font-size: 11px;
+  opacity: 0.78;
+  font-variant-numeric: tabular-nums;
+}
+
+.voiceMeta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-left: 32px;
+}
+
+.voiceMetaBtn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 11px;
+  opacity: 0.82;
+  cursor: pointer;
+}
+
+.voiceMetaBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.voiceTranscript {
+  margin-top: 4px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgb(0 0 0 / 6%);
+}
+
+.voiceMessage.sent .voiceTranscript {
+  background: rgb(255 255 255 / 14%);
+}

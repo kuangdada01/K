@@ -41,6 +41,14 @@ data class MessageDto(
     @SerialName("receiver_id") val receiverId: Long,
     val content: String = "",
     @SerialName("image_url") val imageUrl: String? = null,
+    /** 语音消息的鉴权媒体地址；与 [imageUrl] 互斥（2026-10-19） */
+    @SerialName("audio_url") val audioUrl: String? = null,
+    /** 语音时长（毫秒） */
+    @SerialName("audio_duration_ms") val audioDurationMs: Int = 0,
+    /** 波形振幅（0–100，约 32 根）；旧消息/异常值可能为空数组 */
+    @SerialName("audio_waveform") val audioWaveform: List<Int> = emptyList(),
+    /** 语音转写结果（点过「转文字」且成功后有值） */
+    @SerialName("audio_text") val audioText: String? = null,
     /** 0 = 未读，1 = 已读 */
     val read: Int = 0,
     @SerialName("created_at") val createdAt: String = "",
@@ -48,14 +56,20 @@ data class MessageDto(
     @SerialName("quoted_message_id") val quotedMessageId: Long? = null,
     @SerialName("quoted_content") val quotedContent: String? = null,
     @SerialName("quoted_image_url") val quotedImageUrl: String? = null,
+    @SerialName("quoted_audio_url") val quotedAudioUrl: String? = null,
     @SerialName("quoted_sender_username") val quotedSenderUsername: String? = null,
 ) {
     val hasImage: Boolean get() = !imageUrl.isNullOrBlank()
+    val hasAudio: Boolean get() = !audioUrl.isNullOrBlank()
     val isRead: Boolean get() = read == 1
-    /** 引用的内容摘要（纯图片引用也要有可显示的文本） */
+    /** 引用的内容摘要（纯图片/纯语音引用也要有可显示的文本） */
     val quotedPreview: String
         get() = quotedContent?.takeIf { it.isNotBlank() }
-            ?: if (!quotedImageUrl.isNullOrBlank()) "[图片]" else ""
+            ?: when {
+                !quotedAudioUrl.isNullOrBlank() -> "[语音]"
+                !quotedImageUrl.isNullOrBlank() -> "[图片]"
+                else -> ""
+            }
 }
 
 /**
@@ -80,4 +94,11 @@ data class SendMessageForm(
     @SerialName("receiverId") val receiverId: Long,
     val content: String = "",
     @SerialName("quotedMessageId") val quotedMessageId: Long? = null,
+)
+
+
+/** `POST /api/messages/:id/transcribe` 的响应 */
+@Serializable
+data class TranscribeResponse(
+    val text: String = "",
 )

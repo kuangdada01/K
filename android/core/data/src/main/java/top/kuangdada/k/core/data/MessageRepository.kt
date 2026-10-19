@@ -45,8 +45,18 @@ class MessageRepository(private val session: SessionRepository) {
         val raw: MessageDto,
         val isMine: Boolean,
         val imageUrl: String?,
+        /** 语音的鉴权媒体绝对地址（ExoPlayer 还要另带 [imageHeaders]）；非语音为 null */
+        val audioUrl: String?,
+        /** 语音时长（ms）：UI 显示 0:07、决定气泡宽度 */
+        val audioDurationMs: Int,
+        /** 波形（0–100，约 32 根）；空数组时 UI 画等高柱 */
+        val audioWaveform: List<Int>,
+        /** 转写文本（本地转写成功后回填，避免重进会话再点一次） */
+        val audioText: String?,
         val timeText: String,
-    )
+    ) {
+        val hasAudio: Boolean get() = !audioUrl.isNullOrBlank()
+    }
 
     data class NotificationUi(
         val raw: NotificationDto,
@@ -205,15 +215,7 @@ class MessageRepository(private val session: SessionRepository) {
         val myId = session.tokens.userId
         return call {
             val r = session.api.messages.history(partnerId, limit, beforeId)
-            val mapped = r.messages.map { m ->
-                MessageUi(
-                    raw = m,
-                    isMine = m.senderId == myId,
-                    imageUrl = resolveUrl(m.imageUrl, baseUrl),
-                    // 聊天页只显示「时:分」：日期由日期分隔条负责（见 PostUi.timeOfDay）
-                    timeText = timeOfDay(m.createdAt),
-                )
-            }
+            val mapped = r.messages.map { m -> m.toUi(myId) }
             mapped to r.hasMore
         }.also { r ->
             // 只缓存首屏那一页（见 cachedHistoryRaw 的注释）；向上翻出来的旧页不入缓存
@@ -225,14 +227,18 @@ class MessageRepository(private val session: SessionRepository) {
     }
 
     /**
-     * 发消息。`content` 与 `image` 至少要有一个（服务端 schema 校验）。
-     * 图片走 multipart 的 `image` 字段。
+     * 发消息。`content` / `image` / `audio` 至少有一个（服务端校验）。
+     *  · 图片走 multipart 的 `image` 字段；
+     *  · 语音走 `audio` + `durationMs` + `waveform`（波形是 JSON 数组字符串）。
      */
     suspend fun send(
         receiverId: Long,
         content: String,
         image: File? = null,
         quotedMessageId: Long? = null,
+        audio: File? = null,
+        audioDurationMs: Int = 0,
+        audioWaveform: List<Int> = emptyList(),
     ): ApiResult<MessageUi> {
         val myId = session.tokens.userId
         return call {
@@ -242,15 +248,30 @@ class MessageRepository(private val session: SessionRepository) {
             val imagePart = image?.let {
                 MultipartBody.Part.createFormData("image", it.name, it.asRequestBody(JPEG))
             }
-            val dto = session.api.messages.send(receiverPart, contentPart, quotedPart, imagePart)
-            MessageUi(
-                raw = dto,
-                isMine = dto.senderId == myId,
-                imageUrl = resolveUrl(dto.imageUrl, baseUrl),
-                timeText = timeOfDay(dto.createdAt),
+            val audioPart = audio?.let {
+                MultipartBody.Part.createFormData("audio", it.name, it.asRequestBody(AUDIO))
+            }
+            val durationPart = audio?.let { audioDurationMs.toString().toRequestBody(TEXT) }
+            val waveformPart = audio?.let {
+                // JSON 数组字符串；服务端会再做规范化（0–100，≤64 根）
+                audioWaveform.joinToString(prefix = "[", postfix = "]", separator = ",").toRequestBody(TEXT)
+            }
+            val dto = session.api.messages.send(
+                receiverPart,
+                contentPart,
+                quotedPart,
+                imagePart,
+                audioPart,
+                durationPart,
+                waveformPart,
             )
+            dto.toUi(myId)
         }
     }
+
+    /** 语音转文字（结果由服务端缓存；失败时返回 ApiResult.Failure） */
+    suspend fun transcribe(messageId: Long): ApiResult<String> =
+        call { session.api.messages.transcribe(messageId).text }
 
     suspend fun recall(messageId: Long): ApiResult<Unit> =
         call { session.api.messages.recall(messageId) }
@@ -270,6 +291,19 @@ class MessageRepository(private val session: SessionRepository) {
     fun imageHeaders(): Map<String, String> =
         session.tokens.token?.let { mapOf("Authorization" to "Bearer $it") } ?: emptyMap()
 
+    /** DTO → UI 模型（历史与发送两处共用，避免字段改了两边不同步） */
+    private fun MessageDto.toUi(myId: Long): MessageUi = MessageUi(
+        raw = this,
+        isMine = senderId == myId,
+        imageUrl = resolveUrl(imageUrl, baseUrl),
+        audioUrl = resolveUrl(audioUrl, baseUrl),
+        audioDurationMs = audioDurationMs,
+        audioWaveform = audioWaveform,
+        audioText = audioText,
+        // 聊天页只显示「时:分」：日期由日期分隔条负责（见 PostUi.timeOfDay）
+        timeText = timeOfDay(createdAt),
+    )
+
     private suspend fun <T> call(block: suspend () -> T): ApiResult<T> =
         withContext(Dispatchers.IO) {
             try {
@@ -282,6 +316,8 @@ class MessageRepository(private val session: SessionRepository) {
     private companion object {
         val TEXT = "text/plain".toMediaType()
         val JPEG = "image/jpeg".toMediaType()
+        /** 录音端固定 MPEG_4/AAC（.m4a）；服务端按扩展名与 mime 双白名单校验 */
+        val AUDIO = "audio/mp4".toMediaType()
     }
 }
 

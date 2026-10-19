@@ -140,6 +140,10 @@ export function createSchema(db: InstanceType<typeof Database>): void {
       receiver_id INTEGER NOT NULL,            -- 接收者ID
       content TEXT NOT NULL,                   -- 消息内容
       image_url TEXT DEFAULT NULL,             -- 消息图片URL
+      audio_url TEXT DEFAULT NULL,             -- 语音消息文件名（uploads_private，与 image_url 互斥）
+      audio_duration_ms INTEGER DEFAULT 0,     -- 语音时长（ms）
+      audio_waveform TEXT DEFAULT NULL,        -- 波形 JSON（0-100，约 32 根）
+      audio_text TEXT DEFAULT NULL,            -- 语音转写缓存（按需写入）
       read INTEGER DEFAULT 0,                  -- 已读状态: 0=未读, 1=已读
       quoted_message_id INTEGER DEFAULT NULL,  -- 被引用消息ID
       created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),

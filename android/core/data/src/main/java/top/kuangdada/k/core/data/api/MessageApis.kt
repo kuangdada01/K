@@ -20,6 +20,7 @@ import top.kuangdada.k.core.data.model.MessageDto
 import top.kuangdada.k.core.data.model.MessageHistoryResponse
 import top.kuangdada.k.core.data.model.Post
 import top.kuangdada.k.core.data.model.SimpleSuccess
+import top.kuangdada.k.core.data.model.TranscribeResponse
 
 /**
  * 私信接口（server/src/routes/messages.ts）
@@ -57,7 +58,17 @@ interface MessageApi {
         @Part("content") content: RequestBody,
         @Part("quotedMessageId") quotedMessageId: RequestBody?,
         @Part image: MultipartBody.Part?,
+        /** 语音文件（m4a/AAC；与 [image] 互斥） */
+        @Part audio: MultipartBody.Part?,
+        /** 语音时长（毫秒）；非语音消息传 null */
+        @Part("durationMs") durationMs: RequestBody?,
+        /** 波形 JSON 数组字符串（0–100） */
+        @Part("waveform") waveform: RequestBody?,
     ): MessageDto
+
+    /** 语音转文字（服务端缓存结果；非收发双方 403） */
+    @POST("api/messages/{id}/transcribe")
+    suspend fun transcribe(@Path("id") messageId: Long): TranscribeResponse
 
     /** 撤回单条（只有发送者可以） */
     @DELETE("api/messages/single/{id}")

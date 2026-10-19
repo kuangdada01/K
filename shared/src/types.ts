@@ -119,14 +119,23 @@ export interface Message {
   id: number;
   sender_id: number;
   receiver_id: number;
-  content: string; // 消息文字内容
+  content: string; // 消息文字内容（语音消息可为空）
   image_url?: string | null; // 消息图片URL
+  /** 语音消息的鉴权媒体地址（`/api/messages/:id/media`）；与 image_url 互斥 */
+  audio_url?: string | null;
+  /** 语音时长（毫秒） */
+  audio_duration_ms?: number;
+  /** 波形振幅（0–100，约 32 根），客户端画柱状图用 */
+  audio_waveform?: number[];
+  /** 转写文本（点过「转文字」且成功后有值） */
+  audio_text?: string | null;
   read: number; // 已读状态: 0=未读, 1=已读
   created_at: string;
   sender_username: string; // 发送者用户名
   quoted_message_id?: number | null; // 被引用消息ID
   quoted_content?: string | null; // 被引用消息内容
   quoted_image_url?: string | null; // 被引用消息图片URL
+  quoted_audio_url?: string | null; // 被引用消息是语音时非空
   quoted_sender_username?: string | null; // 被引用消息发送者用户名
 }
 

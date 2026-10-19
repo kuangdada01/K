@@ -2,7 +2,7 @@
 
 一个全栈社交媒体平台，支持 Web 端与 Android 客户端。
 
-功能覆盖：图文/视频帖子（可带位置；**全屏视频**支持进/退场飞行、自绘控制与续播）、嵌套评论、点赞收藏转发、私信聊天（图片/引用/已读）、关注关系、实时通知（SSE）、公告、管理后台、电子书阅读（**阅读进度云端同步**，重装/换设备登录后从上次位置续读）、音乐播放器、亮暗主题、**多人语音房间**（Mesh 音频/屏幕共享/全房间录制/房内聊天/共享统计/房间封面/**对战象棋**——双人对弈、终局留档复盘、中文记谱、跨房间战绩）。
+功能覆盖：图文/视频帖子（可带位置；**全屏视频**支持进/退场飞行、自绘控制与续播）、嵌套评论、点赞收藏转发、私信聊天（图片/**语音消息**/引用/已读）、关注关系、实时通知（SSE）、公告、管理后台、电子书阅读（**阅读进度云端同步**，重装/换设备登录后从上次位置续读）、音乐播放器、亮暗主题、**多人语音房间**（Mesh 音频/屏幕共享/全房间录制/房内聊天/共享统计/房间封面/**对战象棋**——双人对弈、终局留档复盘、中文记谱、跨房间战绩）。
 
 ---
 
@@ -41,7 +41,7 @@
 - **pino** — 结构化日志
 - **nodemailer** — 邮箱验证码
 - **优雅停机** — SIGTERM 后断开 WS/SSE、等存量请求收尾（10 秒兜底），PM2 reload 无断崖
-- **Vitest** — 单元测试（`server/test`，54 文件 453 用例；全部注入 `:memory:` 库并执行全部迁移，真实 k.db 零接触）
+- **Vitest** — 单元测试（`server/test`，55 文件 461 用例；全部注入 `:memory:` 库并执行全部迁移，真实 k.db 零接触）
 
 ### 共享（shared）
 
@@ -210,9 +210,9 @@ client/src/music/MusicEngine.ts       # 音乐播放引擎（audio 元素生命�
 
 网页端排查：现象归类 → 跑对应模块单测（`npx vitest run src/voice/<模块>`）→ 看注入回调边界（`ScreenShareSink`/`MeshManagerOptions`/`AudioGraphOptions`）。App 使用独立 Kotlin/Compose 实现，按 `android/native` 对应模块、Kotlin 测试和设备日志定位；看图问题见[图片查看器文档](docs/native-image-viewer.md)。
 
-### 单测覆盖（client 583 / server 453 / shared 30 / Android 533）
+### 单测覆盖（client 583 / server 461 / shared 30 / Android 539）
 
-语音域重点：screenShareController 37、useChatTTS 18、wsSignaling 17、meshManager 16、audioGraph 16、senderTuning 11、MusicEngine 10、useVoiceChatStore 8；房间对战象棋：shared 引擎 30 + useChessGame 23 + ChessGamePanel 14 + sounds 10 + ChessBoard 6，服务端对局裁决/留档 31（voice-chess 两个测试文件）。服务端 54 文件 453 用例（全部注入 `:memory:` 库并执行全部迁移）。客户端 57 文件 583 用例；Android 49 个测试类 / 533 项（`:core:data` + `:native`）；另有 11 个 spec / 16 条 Playwright e2e。
+语音域重点：screenShareController 37、useChatTTS 18、wsSignaling 17、meshManager 16、audioGraph 16、senderTuning 11、MusicEngine 10、useVoiceChatStore 8；房间对战象棋：shared 引擎 30 + useChessGame 23 + ChessGamePanel 14 + sounds 10 + ChessBoard 6，服务端对局裁决/留档 31（voice-chess 两个测试文件）。服务端 55 文件 461 用例（全部注入 `:memory:` 库并执行全部迁移）。客户端 57 文件 583 用例；Android 50 个测试类 / 539 项（`:core:data` + `:native`）；另有 11 个 spec / 16 条 Playwright e2e。
 
 ---
 
@@ -341,6 +341,10 @@ M4 第 19 项移除了旧的 `:app` 宿主模块与 `assets/web`。方案、决�
   暂停 ▶、缓冲圈、失败重试），单击暂停/继续、双击退出、长按保存；退场经 `VideoHandoff` 把进度交回
   详情页内联播放器续播。**官方 `PlayerView` 控制器一律关**：全屏 60% 黑遮罩会压暗画面，且它的按钮
   在 Compose 手势层下点不动（详见 `VideoPlayerScreen` / `KVideoSurface` 注释）
+- 语音消息（私信）：长按录音、松开发送、上滑取消（60s 上限、<1s 丢弃）；消息气泡带波形，
+  点击播放/暂停、**拖动波形定位**、1x/1.5x/2x 倍速、扬声器/听筒切换；「转文字」走服务端
+  ASR（StepFun，同一个 `STEP_API_KEY`）并把结果缓存进 `messages.audio_text`。
+  录音是 `MediaRecorder`（AAC/m4a），波形由每 60ms 的 `maxAmplitude` 压成 32 根柱。
 - 缓存：`core/data/SessionCache`（LRU + 新鲜期）统一承接“离开组合后还要留在内存里”的数据——
   公告（60s）、关注/粉丝首屏（2min）、章节正文（不过期，留 6 章）、书目（5min）、图书详情（10min）、
   搜索结果（2min）、他人主页列表（60s）、详情帖子/评论（60s）、资料（5min）、语音房列表（30s）、
@@ -361,7 +365,7 @@ M4 第 19 项移除了旧的 `:app` 宿主模块与 `assets/web`。方案、决�
 
 - 产物：`android/native/build/outputs/apk/release/native-release.apk`（脚本会打印体积与 sha256）
 - 只调试不打包发布：`npm run android:debug`（debug 包 `applicationIdSuffix .debug`，可与 release 并存安装）
-- Kotlin 单测：`npm run android:test`（`:core:data` + `:native` 两个模块，49 个测试类 / 533 项；含接口契约、令牌映射、
+- Kotlin 单测：`npm run android:test`（`:core:data` + `:native` 两个模块，50 个测试类 / 539 项；含接口契约、令牌映射、
   深链解析、信令负载格式、混音结算、版本比较、阅读进度锚点、视频飞行几何、会话缓存新鲜期/淘汰等纯逻辑）。**不要用 `gradlew test`** ——
   本工程路径含中文时 Gradle 的 `@argfile` 会被 java 启动器按 GBK 误读，测试类全部
   `ClassNotFoundException`；`run-kotlin-tests.mjs` 让 Gradle 只编译+导出 classpath，由 Node 直接起 JUnit
@@ -371,12 +375,12 @@ M4 第 19 项移除了旧的 `:app` 宿主模块与 `assets/web`。方案、决�
   Gradle 9.7.0 由仓库 Wrapper 管理；只安装 Java 21 或只配置 PATH 不足以满足本工程脚本的构建条件。
 - 本机验证（2026-10-17）：JDK 用 Android Studio 自带 JBR（`D:\Android\Android Studio\jbr`），SDK 位于
   `C:\Users\25359\AppData\Local\Android\Sdk`（API 37 / Build Tools 36.0.0）。`npm run android:apk` 成功构建
-  release **0.1.28**（15.05 MB，脚本会打印 sha256）；`npm run android:test` 533 项全部通过。
+  release **0.1.30**（15.06 MB，脚本会打印 sha256）；`npm run android:test` 539 项全部通过。
   本机没有可用的硬件加速 AVD（AEHD 未安装），视觉与手势验收走真机。
 - 签名：`android/keystore.properties`（口令，不入库）+ **`android/k-release.keystore`**
   （**丢失即无法原地更新 App，务必备份**）。keystore 原先放在 `app/` 目录内，
   M4 移除该模块时**已迁到 `android/` 根下** —— 不迁的话删目录会永久丢失发布私钥
-- 版本：当前 **0.1.28 / versionCode 29**。发版只改 `android/version.properties` 的
+- 版本：当前 **0.1.30 / versionCode 31**。发版只改 `android/version.properties` 的
   `versionCode`/`versionName`，其余按下面「App 发版 SOP」执行
   （App 内更新提示以 `/api/app/version` 返回为准，服务器版本须高于已安装版本才会弹窗）
 - 发布：`deploy.ps1` 检测到新 APK 会自动上传到远端 `client/dist/apk/`（**sha256 核验**），并保留最近 5 个版本、清理更旧。

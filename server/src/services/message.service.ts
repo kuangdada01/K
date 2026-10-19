@@ -20,6 +20,7 @@ import { PATHS } from '../config';
 import { AppError } from '../middleware/error';
 import { compressImage } from '../lib/image';
 import { safeDeleteFile, absoluteUploadPath } from '../lib/file';
+import { MAX_VOICE_BYTES, MAX_VOICE_MS, MIN_VOICE_MS } from '@k/shared';
 import { notifyUser } from '../sse';
 import { enqueueFileCleanup } from '../lib/video/queue';
 import * as messageRepo from '../repositories/message.repo';
@@ -43,8 +44,54 @@ export async function sendMessage(input: {
   content: string | undefined;
   quotedMessageId: number | undefined;
   imageFile: Express.Multer.File | undefined;
+  /** 语音文件（与 imageFile 互斥） */
+  audioFile?: Express.Multer.File | undefined;
+  /** 语音时长（ms，客户端 MediaRecorder 计时） */
+  audioDurationMs?: number | undefined;
+  /** 波形 JSON 字符串（0-100，≤64 根；非法值退化成空数组） */
+  audioWaveform?: string | undefined;
 }): Promise<messageRepo.MessageRow> {
   const { senderId, receiverId } = input;
+
+  /** 失败清理：图片与语音都可能已经落盘，两条路径都要收干净 */
+  const cleanupUploads = (imageName: string | null) => {
+    if (imageName) safeDeleteFile(`/uploads_private/${imageName}`, 'uploads_private');
+    if (input.audioFile) {
+      safeDeleteFile(`/uploads_private/${path.basename(input.audioFile.filename)}`, 'uploads_private');
+    }
+  };
+
+  // ---- 语音：先做参数校验（在压缩图片之前，省一次 CPU）----
+  const hasAudio = Boolean(input.audioFile);
+  if (hasAudio && input.imageFile) {
+    // 两个附件都落盘了：图片用原始文件名删（还没压缩）
+    cleanupUploads(path.basename(input.imageFile.filename));
+    throw new AppError(400, '一条消息只能带图片或语音');
+  }
+
+  let audioName: string | null = null;
+  let audioDurationMs = 0;
+  let audioWaveform: string | null = null;
+  if (hasAudio && input.audioFile) {
+    const audioSize = input.audioFile.size;
+    const duration = Number(input.audioDurationMs ?? 0);
+    if (!Number.isFinite(duration) || duration < MIN_VOICE_MS) {
+      cleanupUploads(null);
+      throw new AppError(400, '语音太短了');
+    }
+    if (duration > MAX_VOICE_MS) {
+      cleanupUploads(null);
+      throw new AppError(400, `语音最长 ${Math.round(MAX_VOICE_MS / 1000)} 秒`);
+    }
+    if (audioSize > MAX_VOICE_BYTES) {
+      cleanupUploads(null);
+      throw new AppError(400, '语音文件过大');
+    }
+    audioName = path.basename(input.audioFile.filename);
+    audioDurationMs = Math.round(duration);
+    audioWaveform = normalizeWaveform(input.audioWaveform);
+  }
+
   // image_url 只存文件名（uploads_private 不做静态暴露）
   // 上传后立即压缩；heic 会转成 jpg，后续清理/入库一律用压缩后的文件名
   const imageFile = input.imageFile
@@ -53,19 +100,19 @@ export async function sendMessage(input: {
       )
     : null;
 
-  if ((!input.content || !input.content.trim()) && !imageFile) {
+  if ((!input.content || !input.content.trim()) && !imageFile && !audioName) {
     throw new AppError(400, '请输入消息内容或发送图片');
   }
 
   if (receiverId === senderId) {
-    if (imageFile) safeDeleteFile(`/uploads_private/${imageFile}`, 'uploads_private');
+    cleanupUploads(imageFile);
     throw new AppError(400, '不能给自己发消息');
   }
 
   // 验证接收者存在
   const receiver = friendRepo.userExists(receiverId);
   if (!receiver) {
-    if (imageFile) safeDeleteFile(`/uploads_private/${imageFile}`, 'uploads_private');
+    cleanupUploads(imageFile);
     throw new AppError(404, '接收人不存在');
   }
 
@@ -80,8 +127,12 @@ export async function sendMessage(input: {
   const message = messageRepo.insertMessage({
     senderId,
     receiverId,
-    content: (input.content || '').trim(),
+    // 语音消息不带正文（客户端不提供输入框内容）；图片消息仍允许「图 + 文」
+    content: audioName ? '' : (input.content || '').trim(),
     imageUrl: imageFile,
+    audioUrl: audioName,
+    audioDurationMs,
+    audioWaveform,
     quotedMessageId: quotedId,
   });
 
@@ -118,10 +169,11 @@ export function recallMessage(userId: number, messageId: number): void {
 
   // 再回收附件（文件系统与 SQLite 之间只能补偿，不能假定回滚会恢复文件）；
   // 删除失败转清理任务重试，不留孤儿（P1-3.5）
-  if (message.image_url) {
-    if (!safeDeleteFile(`/uploads_private/${path.basename(message.image_url)}`, 'uploads_private')) {
+  for (const media of [message.image_url, message.audio_url]) {
+    if (!media) continue;
+    if (!safeDeleteFile(`/uploads_private/${path.basename(media)}`, 'uploads_private')) {
       try {
-        enqueueFileCleanup(absoluteUploadPath(`/uploads_private/${path.basename(message.image_url)}`));
+        enqueueFileCleanup(absoluteUploadPath(`/uploads_private/${path.basename(media)}`));
       } catch {
         // 清理补偿入队失败（队列满等）：文件留待后续清理，撤回本身已成功
       }
@@ -165,4 +217,25 @@ export function clearConversationMessages(currentUserId: number, otherUserId: nu
   const eventData = { type: 'message', from: currentUserId, to: otherUserId, cleared: true } as const;
   notifyUser(currentUserId, eventData);
   notifyUser(otherUserId, eventData);
+}
+
+/**
+ * 波形 JSON 规范化：只接受 0–100 的数字，最多 64 根；任何异常都退化成空数组。
+ *
+ * 波形是**装饰性数据**（画柱状图），不值得为它拒绝一整条语音 ——
+ * 服务端把脏值洗干净后入库，客户端对空数组会画等高柱。
+ */
+function normalizeWaveform(raw: string | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    const bars = parsed
+      .filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
+      .slice(0, 64)
+      .map((n) => Math.max(0, Math.min(100, Math.round(n))));
+    return bars.length > 0 ? JSON.stringify(bars) : null;
+  } catch {
+    return null;
+  }
 }

@@ -34,6 +34,8 @@ import * as messageRepo from '../repositories/message.repo';
 import { getSafeUser } from '../repositories/user.repo';
 import { toMessageJson } from '../serializers/message';
 import * as messageService from '../services/message.service';
+import { AsrFailedError, AsrNotConfiguredError, transcribeAudioFile } from '../lib/asr';
+import rateLimit from 'express-rate-limit';
 
 const router = Router();
 
@@ -42,11 +44,38 @@ const router = Router();
  * 存储在 uploads_private（不在静态服务范围，经 /api/messages/:id/media 鉴权下发）
  * DB 中 image_url 只存文件名
  */
+/** 语音扩展名/类型（录音端固定 m4a；其余是给将来 Web 录音留的口子） */
+const AUDIO_EXT_RE = /\.(m4a|mp4|aac|mp3|ogg|wav|3gp)$/i;
+const AUDIO_MIME_RE = /^audio\/(mp4|m4a|x-m4a|aac|mpeg|mp3|ogg|wav|3gpp)$/i;
+
+/**
+ * 消息附件过滤器：`image` 走原来的图片白名单，`audio` 走音频白名单。
+ * 超过上限（图片 10MB / 语音 5MB）由 multer 与服务端二次校验分别兜住。
+ */
+const messageFileFilter = (
+  req: Express.Request,
+  file: Express.Multer.File,
+  cb: (error: Error | null, acceptFile?: boolean) => void
+) => {
+  if (file.fieldname === 'audio') {
+    const extOk = AUDIO_EXT_RE.test(path.extname(file.originalname).toLowerCase());
+    const mimeOk = AUDIO_MIME_RE.test(file.mimetype);
+    if (extOk && mimeOk) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only audio files (m4a, aac, mp3, ogg, wav) are allowed'));
+    }
+    return;
+  }
+  imageFileFilter(req, file, cb);
+};
+
 const upload = createUploader({
   dir: PATHS.uploadsPrivate,
   filename: messageFilename,
+  // 上限取图片的 10MB；语音的 5MB 在 service 里按 MAX_VOICE_BYTES 再校验
   maxSize: MAX_IMAGE_BYTES,
-  fileFilter: imageFileFilter,
+  fileFilter: messageFileFilter,
 });
 
 // ============================================================
@@ -166,20 +195,78 @@ router.get(
     const messageId = parseInt(req.params.id as string);
     const media = messageRepo.getMessageMedia(messageId);
 
-    if (!media || !media.image_url) {
-      throw new AppError(404, '图片不存在');
+    // 图片与语音共用这一个鉴权端点（DB 里两条字段互斥，取有值的那个）
+    const name = media?.audio_url || media?.image_url;
+    if (!media || !name) {
+      throw new AppError(404, '媒体不存在');
     }
     if (media.sender_id !== req.user!.id && media.receiver_id !== req.user!.id) {
-      throw new AppError(403, '无权访问该图片');
+      throw new AppError(403, '无权访问该媒体');
     }
 
-    const filePath = path.join(PATHS.uploadsPrivate, path.basename(media.image_url));
+    const filePath = path.join(PATHS.uploadsPrivate, path.basename(name));
     if (!fs.existsSync(filePath)) {
-      throw new AppError(404, '图片不存在');
+      throw new AppError(404, '媒体不存在');
     }
 
     res.setHeader('Cache-Control', 'private, max-age=86400');
+    // 拖动语音进度要 Range（ExoPlayer / <audio> 都会发）；sendFile 原生支持，
+    // 这里显式声明接受范围，部分客户端据此决定是否启用按需加载。
+    res.setHeader('Accept-Ranges', 'bytes');
+    if (media.audio_url) {
+      // .m4a 在不同 mime 库里的映射不一致，显式钉成 audio/mp4（浏览器与 ExoPlayer 都认）
+      res.setHeader('Content-Type', 'audio/mp4');
+    }
     res.sendFile(filePath);
+  })
+);
+
+/**
+ * POST /api/messages/:id/transcribe - 语音转文字
+ *
+ * 认证: 必须（仅收发双方）；结果落库缓存，重复点击不再调用上游。
+ * 返回: { text }
+ * 错误: 404 不是语音消息 | 403 无权 | 503 服务端未配置 ASR | 502 上游失败
+ */
+const transcribeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 10,
+  keyGenerator: (req) => `u:${req.user?.id ?? 0}`,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '转文字太过频繁，请稍后再试' },
+});
+
+router.post(
+  '/:id/transcribe',
+  authMiddleware,
+  transcribeLimiter,
+  asyncHandler(async (req: Request, res: Response) => {
+    const messageId = parseInt(req.params.id as string);
+    if (!Number.isInteger(messageId)) throw new AppError(400, '参数错误');
+
+    const media = messageRepo.getMessageMedia(messageId);
+    if (!media || !media.audio_url) throw new AppError(404, '这条消息不是语音');
+    if (media.sender_id !== req.user!.id && media.receiver_id !== req.user!.id) {
+      throw new AppError(403, '无权访问该语音');
+    }
+    // 已经转写过：直接返回缓存（不重复花上游额度）
+    if (media.audio_text?.trim()) {
+      res.json({ text: media.audio_text });
+      return;
+    }
+
+    const filePath = path.join(PATHS.uploadsPrivate, path.basename(media.audio_url));
+    if (!fs.existsSync(filePath)) throw new AppError(404, '语音文件不存在');
+
+    try {
+      const text = await transcribeAudioFile(filePath);
+      messageRepo.setMessageAudioText(messageId, text);
+      res.json({ text });
+    } catch (e) {
+      if (e instanceof AsrNotConfiguredError) throw new AppError(503, e.message);
+      throw new AppError(502, e instanceof AsrFailedError ? e.message : '语音转写失败');
+    }
   })
 );
 
@@ -197,25 +284,35 @@ router.get(
  * - receiverId: 接收者ID
  * - content: 文字内容（可选）
  * - image: 图片文件（可选，10MB限制）
+ * - audio: 语音文件（可选，m4a/AAC，服务端按 5MB / 60s 校验；与 image 互斥）
+ * - durationMs: 语音时长（毫秒，带 audio 时必填且 ≥1000）
+ * - waveform: 波形 JSON 数组字符串（0–100，≤64 根；画柱状图用）
  * - quotedMessageId: 被引用消息ID（可选）
  *
- * 中间件顺序: authMiddleware → upload.single('image') → validateBody(sendMessageSchema)
+ * 中间件顺序: authMiddleware → upload.fields(image/audio) → validateBody(sendMessageSchema)
  * （multer → validateBody 顺序不可变：validateBody 失败时按已落盘文件清理）。
  * 编排（压缩/校验/清理/入库/SSE 推送）在 messageService.sendMessage。
  */
 router.post(
   '/',
   authMiddleware,
-  upload.single('image'),
+  upload.fields([
+    { name: 'image', maxCount: 1 },
+    { name: 'audio', maxCount: 1 },
+  ]),
   validateBody(sendMessageSchema),
   asyncHandler(async (req: Request, res: Response) => {
-    const { receiverId, content, quotedMessageId } = req.body;
+    const { receiverId, content, quotedMessageId, durationMs, waveform } = req.body;
+    const files = (req.files ?? {}) as Record<string, Express.Multer.File[] | undefined>;
     const message = await messageService.sendMessage({
       senderId: req.user!.id,
       receiverId,
       content,
       quotedMessageId,
-      imageFile: req.file,
+      imageFile: files.image?.[0],
+      audioFile: files.audio?.[0],
+      audioDurationMs: durationMs,
+      audioWaveform: waveform,
     });
     res.status(201).json(toMessageJson(message));
   })

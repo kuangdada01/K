@@ -11,13 +11,16 @@
 
 package top.kuangdada.k.nativeapp.ui
 
+import android.Manifest
 import android.content.ClipData
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -34,7 +37,10 @@ import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -84,6 +90,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
@@ -102,6 +109,9 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -126,7 +136,10 @@ import coil3.compose.SubcomposeAsyncImageContent
 import coil3.network.httpHeaders
 import java.io.File
 import kotlin.math.roundToInt
+import androidx.core.content.ContextCompat
+import kotlin.math.sqrt
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -280,6 +293,131 @@ fun ChatScreen(
                 sending = false
             }
         }
+    }
+
+    /**
+     * ============================================================
+     * 语音消息（2026-10-19，QQ 式）
+     * ============================================================
+     * 交互：长按麦克风开始 → 松开发送 / 上滑取消；录音时悬浮条显示实时波形与计时。
+     * 录音器见 [VoiceRecorder]（MediaRecorder + 每 60ms 采 maxAmplitude 生成波形）。
+     *
+     * 发送走与图片同一条流水线：multipart 上传 → 成功后把服务端返回的消息追加到列表
+     * （不做本地假气泡：60s 语音约 0.5MB，上传通常 1 秒内完成，失败用 toast 提示重录）。
+     */
+    val recorder = remember { VoiceRecorder(context) }
+    DisposableEffect(recorder) { onDispose { recorder.cancel() } }
+    var recordingVoice by remember { mutableStateOf(false) }
+    var recordCancelZone by remember { mutableStateOf(false) }
+    var sendingVoice by remember { mutableStateOf(false) }
+    /** 最近 24 个振幅采样（录音悬浮条的实时波形） */
+    var recordLevels by remember { mutableStateOf<List<Int>>(emptyList()) }
+
+    fun finishVoiceRecording() {
+        if (!recordingVoice) return
+        recordingVoice = false
+        recordCancelZone = false
+        val result = recorder.stop()
+        if (result == null) {
+            // <1 秒 / 编码失败：录音器已删除半截文件
+            toast = "说话时间太短"
+            return
+        }
+        sendingVoice = true
+        scope.launch {
+            val quoted = replyTo?.raw?.id
+            when (
+                val r = messages.send(
+                    receiverId = partnerId,
+                    content = "",
+                    quotedMessageId = quoted,
+                    audio = result.file,
+                    audioDurationMs = result.durationMs,
+                    audioWaveform = result.waveform,
+                )
+            ) {
+                is ApiResult.Success -> {
+                    items = items + r.data
+                    replyTo = null
+                    // reverseLayout：新消息在 index 0
+                    listState.animateScrollToItem(0)
+                }
+                is ApiResult.Failure -> toast = r.error.displayMessage
+            }
+            result.file.delete()
+            sendingVoice = false
+        }
+    }
+
+    fun cancelVoiceRecording() {
+        if (!recordingVoice) return
+        recordingVoice = false
+        recordCancelZone = false
+        recorder.cancel()
+        recordLevels = emptyList()
+    }
+
+    fun startVoiceRecording(): Boolean {
+        if (sendingVoice) {
+            toast = "正在发送语音，请稍候"
+            return false
+        }
+        if (!recorder.start(onMaxReached = { finishVoiceRecording() })) {
+            toast = "录音启动失败，请稍后再试"
+            return false
+        }
+        recordingVoice = true
+        recordCancelZone = false
+        recordLevels = emptyList()
+        return true
+    }
+
+    val recordPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted: Boolean ->
+        // 授权回调时手指通常已经抬起：这里**不自动开录**（否则没人松手，会一直录到 60s）。
+        // 只提示用户再按一次，交互闭环更清楚。
+        toast = if (granted) "麦克风已授权，请再按住说话" else "需要麦克风权限才能发送语音"
+    }
+    val hasRecordPermission = ContextCompat.checkSelfPermission(
+        context,
+        Manifest.permission.RECORD_AUDIO,
+    ) == PackageManager.PERMISSION_GRANTED
+
+    // 实时波形：录音期间每 60ms 取一次振幅（与录音器采样同频）
+    LaunchedEffect(recordingVoice) {
+        while (recordingVoice) {
+            recordLevels = (recordLevels + recorder.level).takeLast(24)
+            delay(60)
+        }
+    }
+
+    /**
+     * 语音播放：一个聊天页一个控制器 → 同一时间只播一条。
+     * 鉴权头随 token 变化重建（否则续期后旧 token 会让语音 403）。
+     */
+    val voiceHeaders = messages.imageHeaders()
+    val voicePlayer = remember(voiceHeaders) { VoicePlaybackController(context, voiceHeaders) }
+    DisposableEffect(voicePlayer) { onDispose { voicePlayer.release() } }
+    LaunchedEffect(voicePlayer) { voicePlayer.onError = { toast = it } }
+    LaunchedEffect(voicePlayer.isPlaying, voicePlayer.currentId) {
+        while (voicePlayer.isPlaying) {
+            voicePlayer.refreshPosition()
+            delay(100)
+        }
+    }
+
+    // 退到后台：语音暂停、录音取消（麦克风不能留在后台继续采）
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, voicePlayer) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                voicePlayer.pause()
+                cancelVoiceRecording()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     /**
@@ -710,6 +848,10 @@ fun ChatScreen(
                                     imageOriginKey = chatImageOriginKey(partnerId),
                                     imageOriginIndex = entry.msg.imageUrl
                                         ?.let { u -> chatImageUrls.indexOf(u) } ?: -1,
+                                    // 语音消息：单例播放器（同一时间只播一条）+ 转写
+                                    voice = voicePlayer,
+                                    onTranscribe = { messages.transcribe(it) },
+                                    onToast = { toast = it },
                                     /**
                                      * 点图片 → 全屏看图（用户反馈"聊天里的图点不开全屏"）。
                                      * 传**整段对话的图 + 这张的下标**：进去之后能左右滑着看完。
@@ -838,6 +980,16 @@ fun ChatScreen(
                         modifier = Modifier.align(Alignment.Center),
                     )
                 }
+                if (recordingVoice) {
+                    VoiceRecordingOverlay(
+                        elapsedMs = recorder.elapsedMs,
+                        levels = recordLevels,
+                        cancelZone = recordCancelZone,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = KSpacing.sm),
+                    )
+                }
             }
 
             /**
@@ -889,7 +1041,13 @@ fun ChatScreen(
                         Text(
                             // 「用户名：内容」—— 冒号而不是"回复 xxx："：这一条本身就在输入框上面，
                             // 不需要再解释一遍它在干嘛（参考图也是这个写法）
-                            text = "${target.raw.senderUsername}：${target.raw.content.ifBlank { "[图片]" }}",
+                            text = "${target.raw.senderUsername}：" + target.raw.content.ifBlank {
+                                when {
+                                    target.raw.hasAudio -> "[语音]"
+                                    target.raw.hasImage -> "[图片]"
+                                    else -> ""
+                                }
+                            },
                             style = KType.body,
                             color = c.textSecondary,
                             maxLines = 1,
@@ -1005,6 +1163,27 @@ fun ChatScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(KSpacing.sm),
                     ) {
+                        // 按住说话（QQ 式功能排第一位）：长按录音、松开发送、上滑取消。
+                        VoiceRecordButton(
+                            recording = recordingVoice,
+                            onStart = {
+                                when {
+                                    sendingVoice -> {
+                                        toast = "正在发送语音，请稍候"
+                                        false
+                                    }
+                                    !hasRecordPermission -> {
+                                        recordPermission.launch(Manifest.permission.RECORD_AUDIO)
+                                        false
+                                    }
+                                    else -> startVoiceRecording()
+                                }
+                            },
+                            onFinish = { finishVoiceRecording() },
+                            onCancel = { cancelVoiceRecording() },
+                            onCancelZoneChange = { recordCancelZone = it },
+                            onTap = { toast = "长按说话" },
+                        )
                         // 表情开关（笑脸）：点亮态 = 面板正开着。
                         // 盒 36dp / 图标 28dp —— 与输入框同高，图标留 4dp 呼吸位。
                         KEmojiButton(
@@ -1636,6 +1815,12 @@ private fun MessageBubble(
     onImageClick: () -> Unit,
     onQuote: () -> Unit,
     onRecall: () -> Unit,
+    /** 语音消息：聊天页共享的播放控制器（同一条互斥、切条自动换源） */
+    voice: VoicePlaybackController,
+    /** 语音转文字（返回 ApiResult；结果由服务端缓存） */
+    onTranscribe: suspend (Long) -> ApiResult<String>,
+    /** 页面级 toast（转写失败等） */
+    onToast: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val c = KTheme.colors
@@ -1827,6 +2012,21 @@ private fun MessageBubble(
                                 )
                             }
                         }
+                    }
+                } else if (msg.hasAudio) {
+                    // ---- 语音消息（QQ 式波形气泡）----
+                    Box(
+                        modifier = Modifier.onGloballyPositioned {
+                            bubbleBounds = it.boundsInWindow()
+                        },
+                    ) {
+                        VoiceMessageBubble(
+                            msg = msg,
+                            controller = voice,
+                            onTranscribe = onTranscribe,
+                            onToast = onToast,
+                            onLongPress = { menu = true },
+                        )
                     }
                 } else {
                     // ---- 文本消息：原气泡 ----
@@ -2047,3 +2247,134 @@ private fun <T : Any> rememberLastNonNull(value: T?): T? {
     return value ?: holder.value
 }
 
+
+
+/**
+ * 按住说话按钮（QQ 式功能排第一位）。
+ *
+ * 手势：按下 200ms 内抬起 = 普通点击（提示「长按说话」）；超过 200ms 进入录音，
+ * 此后跟踪手指位置 —— 手指移到按钮上方 [CANCEL_DISTANCE_DP] 以外进入「松开取消」态。
+ *
+ * 为什么不用 `detectDragGesturesAfterLongPress`：它在"长按后没移动就松手"这条
+ * 路径上不保证触发 `onDragEnd`，而这里**必须在松手时结束录音**（否则会一直录到 60s）。
+ * 自己用 `awaitEachGesture` 逐事件读，抬起一帧就能收尾。
+ */
+@Composable
+private fun VoiceRecordButton(
+    recording: Boolean,
+    onStart: () -> Boolean,
+    onFinish: () -> Unit,
+    onCancel: () -> Unit,
+    onCancelZoneChange: (Boolean) -> Unit,
+    onTap: () -> Unit,
+) {
+    val c = KTheme.colors
+    val cancelDistance = with(LocalDensity.current) { CANCEL_DISTANCE_DP.dp.toPx() }
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .semantics { contentDescription = "按住说话" }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    // 先吃掉按下：不让列表的滚动/长按抢走这次手势
+                    down.consume()
+                    val upBeforeLongPress = withTimeoutOrNull(LONG_PRESS_MS) {
+                        waitForUpOrCancellation()
+                    }
+                    if (upBeforeLongPress != null) {
+                        onTap()
+                        return@awaitEachGesture
+                    }
+                    if (!onStart()) return@awaitEachGesture
+
+                    var cancelled = false
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull() ?: break
+                        if (!change.pressed) {
+                            if (cancelled) onCancel() else onFinish()
+                            break
+                        }
+                        val inCancelZone = change.position.y < -cancelDistance
+                        if (inCancelZone != cancelled) {
+                            cancelled = inCancelZone
+                            onCancelZoneChange(inCancelZone)
+                        }
+                        change.consume()
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Glyph(
+            tint = if (recording) c.accentText else c.textSecondary,
+            kind = GlyphKind.Mic,
+            size = 28.dp,
+        )
+    }
+}
+
+/**
+ * 录音中的悬浮条：实时波形 + 计时 + 「松开发送 · 上滑取消」。
+ *
+ * 画在消息列表的底部（`align(BottomCenter)`），**不参与输入栏布局** ——
+ * 否则录音开始的瞬间整条输入栏会往上跳一格。
+ */
+@Composable
+private fun VoiceRecordingOverlay(
+    elapsedMs: Long,
+    levels: List<Int>,
+    cancelZone: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val c = KTheme.colors
+    val bg = if (cancelZone) Color(0xFF8E2A2A) else Color.Black.copy(alpha = 0.82f)
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(KRadius.row))
+            .background(bg)
+            .padding(horizontal = KSpacing.md, vertical = KSpacing.sm),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(KSpacing.xxs),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(KSpacing.sm),
+        ) {
+            Canvas(modifier = Modifier.width(150.dp).height(26.dp)) {
+                val bars = levels.takeLast(24).let { src ->
+                    if (src.isEmpty()) List(24) { 0 } else src
+                }
+                val slot = size.width / bars.size
+                val barW = (slot * 0.55f).coerceAtLeast(1f)
+                bars.forEachIndexed { i, amp ->
+                    val norm = sqrt((amp / 32_767f).coerceIn(0f, 1f))
+                    val h = (size.height * (0.12f + norm * 0.88f)).coerceAtLeast(2f)
+                    drawRoundRect(
+                        color = Color.White.copy(alpha = 0.92f),
+                        topLeft = Offset(i * slot + (slot - barW) / 2f, (size.height - h) / 2f),
+                        size = Size(barW, h),
+                        cornerRadius = CornerRadius(barW / 2f),
+                    )
+                }
+            }
+            Text(
+                text = formatVoiceDuration(elapsedMs.toInt()),
+                style = KType.body,
+                color = Color.White,
+            )
+        }
+        Text(
+            text = if (cancelZone) "松开取消" else "松开发送 · 上滑取消",
+            style = KType.caption,
+            color = if (cancelZone) Color.White else Color.White.copy(alpha = 0.85f),
+        )
+    }
+}
+
+/** 进入「取消区」的位移（dp）：手指从按钮往上的距离 */
+private const val CANCEL_DISTANCE_DP = 80
+
+/** 长按判定（ms）：短于它算点击 */
+private const val LONG_PRESS_MS = 200L

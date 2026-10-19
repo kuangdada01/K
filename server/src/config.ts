@@ -62,6 +62,9 @@ const envSchema = z.object({
   // 复刻音色 ID 覆盖（默认 voice-tone-UfTMTasMym，即「邓紫棋」）。音色换绑走这里，
   // 不需要改代码、也不需要动前端（前端只认共享包里的 key：dengziqi）
   TTS_VOICE_DENGZIQI: z.string().optional(),
+  // 语音转写（私信语音「转文字」）的上游端点覆盖。默认先走 Step Plan 命名空间、
+  // 404/405 时回退标准 /v1；换网关/区域时用这里覆盖即可（见 lib/asr.ts）。
+  STEP_ASR_ENDPOINT: z.string().url().optional(),
   // App 更新检测：配置后 /api/app/version 返回最新版本信息（未配置则视为无更新）
   APP_VERSION: z.string().optional(),
   APP_APK_URL: z.string().optional(),

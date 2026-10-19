@@ -25,12 +25,20 @@ export interface MessageRow {
   receiver_id: number;
   content: string;
   image_url: string | null;
+  /** 语音文件名（uploads_private），与 image_url 互斥 */
+  audio_url: string | null;
+  audio_duration_ms: number | null;
+  /** JSON 数组字符串（0-100），序列化层解析成数组 */
+  audio_waveform: string | null;
+  /** ASR 转写缓存（null = 还没转写过） */
+  audio_text: string | null;
   read: number;
   quoted_message_id: number | null;
   created_at: string;
   sender_username: string;
   quoted_content?: string | null;
   quoted_image_url?: string | null;
+  quoted_audio_url?: string | null;
   quoted_sender_username?: string | null;
 }
 
@@ -42,6 +50,7 @@ const CONVERSATION_SELECT = `
     u.username,
     u.avatar,
     CASE
+      WHEN m.audio_url IS NOT NULL AND m.audio_url != '' THEN '[语音]'
       WHEN m.image_url IS NOT NULL AND m.image_url != '' AND m.content = '' THEN '[图片]'
       ELSE m.content
     END as last_message,
@@ -158,17 +167,19 @@ export function listConversationsByCursor(
 export function latestReceivedMessage(
   senderId: number,
   receiverId: number
-): { name: string; content: string; image_url: string | null } | undefined {
+): { name: string; content: string; image_url: string | null; audio_url: string | null } | undefined {
   return stmt(
     `
-    SELECT u.username AS name, m.content AS content, m.image_url AS image_url
+    SELECT u.username AS name, m.content AS content, m.image_url AS image_url,
+           m.audio_url AS audio_url
     FROM messages m
     JOIN users u ON u.id = m.sender_id
     WHERE m.sender_id = ? AND m.receiver_id = ?
     ORDER BY m.id DESC
     LIMIT 1
   `
-  ).get(senderId, receiverId) as { name: string; content: string; image_url: string | null } | undefined;
+  ).get(senderId, receiverId) as
+    { name: string; content: string; image_url: string | null; audio_url: string | null } | undefined;
 }
 
 /** 某发送者发给某接收者的未读消息数（离线推送的「(N条新消息)」计数标题用） */
@@ -280,17 +291,33 @@ export function insertMessage(input: {
   receiverId: number;
   content: string;
   imageUrl: string | null;
+  /** 语音相关字段（与 imageUrl 互斥；普通文字/图片消息传 null/0） */
+  audioUrl?: string | null;
+  audioDurationMs?: number;
+  audioWaveform?: string | null;
   quotedMessageId: number | null;
 }): MessageRow {
   const result = stmt(
-    'INSERT INTO messages (sender_id, receiver_id, content, image_url, quoted_message_id) VALUES (?, ?, ?, ?, ?)'
-  ).run(input.senderId, input.receiverId, input.content, input.imageUrl, input.quotedMessageId);
+    `INSERT INTO messages
+       (sender_id, receiver_id, content, image_url, audio_url, audio_duration_ms, audio_waveform, quoted_message_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    input.senderId,
+    input.receiverId,
+    input.content,
+    input.imageUrl,
+    input.audioUrl ?? null,
+    input.audioDurationMs ?? 0,
+    input.audioWaveform ?? null,
+    input.quotedMessageId
+  );
 
   return stmt(
     `
     SELECT m.*, u.username as sender_username,
            qm.content as quoted_content,
            qm.image_url as quoted_image_url,
+           qm.audio_url as quoted_audio_url,
            qu.username as quoted_sender_username
     FROM messages m
     JOIN users u ON m.sender_id = u.id
@@ -301,12 +328,34 @@ export function insertMessage(input: {
   ).get(result.lastInsertRowid) as MessageRow;
 }
 
-/** 查询单条消息的图片与收发双方（媒体下发归属校验 + 撤回清理用） */
-export function getMessageMedia(
-  messageId: number
-): { id: number; sender_id: number; receiver_id: number; image_url: string | null } | undefined {
-  return stmt('SELECT id, sender_id, receiver_id, image_url FROM messages WHERE id = ?').get(messageId) as
-    { id: number; sender_id: number; receiver_id: number; image_url: string | null } | undefined;
+/** 查询单条消息的媒体与收发双方（媒体下发归属校验 + 撤回清理 + 转写用） */
+export function getMessageMedia(messageId: number):
+  | {
+      id: number;
+      sender_id: number;
+      receiver_id: number;
+      image_url: string | null;
+      audio_url: string | null;
+      audio_text: string | null;
+    }
+  | undefined {
+  return stmt(
+    'SELECT id, sender_id, receiver_id, image_url, audio_url, audio_text FROM messages WHERE id = ?'
+  ).get(messageId) as
+    | {
+        id: number;
+        sender_id: number;
+        receiver_id: number;
+        image_url: string | null;
+        audio_url: string | null;
+        audio_text: string | null;
+      }
+    | undefined;
+}
+
+/** 写入语音转写缓存（ASR 成功后调用；只存第一条结果，不重复烧上游额度） */
+export function setMessageAudioText(messageId: number, text: string): void {
+  stmt('UPDATE messages SET audio_text = ? WHERE id = ?').run(text, messageId);
 }
 
 /** 撤回（删除）单条消息 */
@@ -315,24 +364,34 @@ export function deleteMessage(messageId: number): void {
 }
 
 /**
- * 清除两人之间的所有消息（双向），返回被删消息引用的私密图片文件名（去重）。
+ * 清除两人之间的所有消息（双向），返回被删消息引用的**私密媒体文件名**（图片 + 语音，去重）。
  * 引用消息共享被引用行的物理文件，二者都随会话删除，因此删除全部行后
  * 这些文件必然成为孤儿——由路由层在事务提交后统一删磁盘文件。
  */
 export function clearConversation(currentUserId: number, otherUserId: number): string[] {
   const names: string[] = [];
   getDb().transaction(() => {
-    names.push(
-      ...(
-        stmt(
-          `
-      SELECT DISTINCT image_url FROM messages
+    const rows = stmt(
+      `
+      SELECT DISTINCT image_url AS name FROM messages
       WHERE image_url IS NOT NULL
         AND ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
+      UNION
+      SELECT DISTINCT audio_url AS name FROM messages
+      WHERE audio_url IS NOT NULL
+        AND ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
     `
-        ).all(currentUserId, otherUserId, otherUserId, currentUserId) as { image_url: string }[]
-      ).map((r) => r.image_url)
-    );
+    ).all(
+      currentUserId,
+      otherUserId,
+      otherUserId,
+      currentUserId,
+      currentUserId,
+      otherUserId,
+      otherUserId,
+      currentUserId
+    ) as { name: string }[];
+    names.push(...rows.map((r) => r.name));
     stmt(
       `
       DELETE FROM messages

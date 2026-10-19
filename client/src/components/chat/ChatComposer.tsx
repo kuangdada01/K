@@ -47,7 +47,7 @@ export default function ChatComposer({
           <div className={styles.quoteContent}>
             <span className={styles.quoteUser}>{quoteMsg.sender_username}</span>
             <span className={styles.quoteText}>
-              {quoteMsg.image_url ? '[图片]' : quoteMsg.content || '[消息]'}
+              {quoteMsg.audio_url ? '[语音]' : quoteMsg.image_url ? '[图片]' : quoteMsg.content || '[消息]'}
             </span>
           </div>
           <button className={styles.quoteClose} onClick={() => setQuoteMsg(null)} aria-label="取消引用">

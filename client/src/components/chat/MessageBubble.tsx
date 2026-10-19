@@ -12,6 +12,7 @@ import { Message } from '../../types';
 import { formatTimeSeparator } from '../../utils';
 import { useAuthMediaUrl } from '../../hooks/useAuthMediaUrl';
 import Avatar from '../ui/Avatar';
+import VoiceMessage from './VoiceMessage';
 import styles from './MessageBubble.module.css';
 
 interface MessageBubbleProps {
@@ -58,7 +59,9 @@ function MessageBubble({
           onTouchEnd={onTouchEnd}
           onTouchMove={onTouchMove}
         >
-          {msg.image_url ? (
+          {msg.audio_url ? (
+            <VoiceMessage key={msg.id} msg={msg} isSent={isSent} />
+          ) : msg.image_url ? (
             imageUrl ? (
               <img
                 src={imageUrl}
@@ -82,7 +85,8 @@ function MessageBubble({
                 </div>
               ) : (
                 <span>
-                  {msg.quoted_sender_username}: {msg.quoted_content || '[消息]'}
+                  {msg.quoted_sender_username}:{' '}
+                  {msg.quoted_content || (msg.quoted_audio_url ? '[语音]' : '[消息]')}
                 </span>
               )}
             </div>

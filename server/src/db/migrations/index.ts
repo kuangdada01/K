@@ -46,6 +46,7 @@ import migration033 from './033-posts-feed-cursor-index';
 import migration034 from './034-push-devices';
 import migration035 from './035-push-device-channel';
 import migration036 from './036-media-jobs-file-path-index';
+import migration037 from './037-messages-audio-voice';
 import type { Migration } from './helpers';
 
 export type { Migration };
@@ -89,6 +90,7 @@ export const migrations: Migration[] = [
   migration034,
   migration035,
   migration036,
+  migration037,
 ];
 
 /** 迁移记录表 */
