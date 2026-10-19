@@ -1191,14 +1191,19 @@ fun ChatScreen(
                     // 功能排（QQ 式通栏均分）：语音 / 表情 / 相册 各占 1/3，
                     // 图标在各自格子里居中 —— 参考图里 QQ 的 6 个功能是铺满整行的，
                     // 不是靠左挤成一串。这里只有 3 个真功能，就三等分。
+                    // 功能排**锁定 44dp 高**：以后再加语音/拍摄/更多等入口，
+                    // 只在等宽格子里多分一份，行高不会变（用户要求"等高，以后加功能也不跳"）。
+                    // 每个格子 fillMaxHeight + 图标居中，不靠内容撑高。
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // 语音开关：点亮（主题色）= 下方「按住说话」面板展开；
                         // 再点一次收起。录音手势在大按钮上，不在这个小图标上。
                         Box(
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
                             contentAlignment = Alignment.Center,
                         ) {
                             ToolbarMicButton(
@@ -1216,7 +1221,7 @@ fun ChatScreen(
                             )
                         }
                         Box(
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
                             contentAlignment = Alignment.Center,
                         ) {
                             // 表情开关（笑脸）：点亮态 = 面板正开着。
@@ -1242,7 +1247,7 @@ fun ChatScreen(
                             )
                         }
                         Box(
-                            modifier = Modifier.weight(1f),
+                            modifier = Modifier.weight(1f).fillMaxHeight(),
                             contentAlignment = Alignment.Center,
                         ) {
                             // 发图按钮（系统相册选一张、选完直接发出）：与表情钮同一套
