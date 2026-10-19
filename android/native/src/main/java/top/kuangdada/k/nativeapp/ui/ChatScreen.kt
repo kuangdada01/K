@@ -120,6 +120,7 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.Density
@@ -312,6 +313,8 @@ fun ChatScreen(
     var sendingVoice by remember { mutableStateOf(false) }
     /** 最近 24 个振幅采样（录音悬浮条的实时波形） */
     var recordLevels by remember { mutableStateOf<List<Int>>(emptyList()) }
+    /** QQ 式语音模式：功能排的麦克风是**开关**，打开后在下方显示「按住说话」大按钮 */
+    var voiceMode by remember { mutableStateOf(false) }
 
     fun finishVoiceRecording() {
         if (!recordingVoice) return
@@ -355,6 +358,12 @@ fun ChatScreen(
         recordCancelZone = false
         recorder.cancel()
         recordLevels = emptyList()
+    }
+
+    /** 关掉语音面板：正在录的话一并取消（面板都不在了，不该继续占麦克风） */
+    fun closeVoiceMode() {
+        if (recordingVoice) cancelVoiceRecording()
+        voiceMode = false
     }
 
     fun startVoiceRecording(): Boolean {
@@ -440,6 +449,11 @@ fun ChatScreen(
      */
     val inputInteraction = remember { MutableInteractionSource() }
     val inputFocused by inputInteraction.collectIsFocusedAsState()
+
+    // 点输入框 = 要打字：语音面板让位（与表情面板同一条产品逻辑）
+    LaunchedEffect(inputFocused) {
+        if (inputFocused && voiceMode) closeVoiceMode()
+    }
 
     /**
      * @param silent 静默刷新：**不显示骨架**。有缓存时走这条 —— 内容已经在屏幕上了，
@@ -980,7 +994,7 @@ fun ChatScreen(
                         modifier = Modifier.align(Alignment.Center),
                     )
                 }
-                if (recordingVoice) {
+                if (recordingVoice && !voiceMode) {
                     VoiceRecordingOverlay(
                         elapsedMs = recorder.elapsedMs,
                         levels = recordLevels,
@@ -1153,104 +1167,112 @@ fun ChatScreen(
                         )
                     }
 
-                    // 功能排（QQ 式：放在输入框**下面**，不再和输入框抢横向空间）：
-                    // 表情 + 发图两钮之间 12dp（M6.24 反馈过"表情跟相册间距太小"，当时定的 8dp，
-                    // 下移成独立行后可以松一档）。
-                    // 尺寸史：2026-10-15 盒 28 → 10-18"图标小了，要跟输入框一样高"→ 盒/图标 40
-                    // → 10-19"图标太大了"→ **盒 36 / 图标 28**（当前定稿，图标约占框高 3/4）。
-                    // 10-19 再要求"功能放输入框下面"——尺寸不变，只改位置。
+                    // 功能排（QQ 式通栏均分）：语音 / 表情 / 相册 各占 1/3，
+                    // 图标在各自格子里居中 —— 参考图里 QQ 的 6 个功能是铺满整行的，
+                    // 不是靠左挤成一串。这里只有 3 个真功能，就三等分。
                     Row(
+                        modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(KSpacing.sm),
                     ) {
-                        // 按住说话（QQ 式功能排第一位）：长按录音、松开发送、上滑取消。
-                        VoiceRecordButton(
-                            recording = recordingVoice,
-                            onStart = {
-                                when {
-                                    sendingVoice -> {
-                                        toast = "正在发送语音，请稍候"
-                                        false
-                                    }
-                                    !hasRecordPermission -> {
-                                        recordPermission.launch(Manifest.permission.RECORD_AUDIO)
-                                        false
-                                    }
-                                    else -> startVoiceRecording()
-                                }
-                            },
-                            onFinish = { finishVoiceRecording() },
-                            onCancel = { cancelVoiceRecording() },
-                            onCancelZoneChange = { recordCancelZone = it },
-                            onTap = { toast = "长按说话" },
-                        )
-                        // 表情开关（笑脸）：点亮态 = 面板正开着。
-                        // 盒 36dp / 图标 28dp —— 与输入框同高，图标留 4dp 呼吸位。
-                        KEmojiButton(
-                            active = emojiOpen,
-                            boxSize = 36.dp,
-                            iconSize = 28.dp,
-                            onClick = {
-                                emojiOpen = !emojiOpen
-                                if (emojiOpen) {
-                                    // 开面板 = 收起键盘，并**清掉输入框焦点**：
-                                    //  · 键盘此刻还没降，交换区的 max() 会取面板高顶住输入栏，
-                                    //    键盘滑走正好露出面板 —— 输入栏全程不动（见「交换区」总注释）；
-                                    //  · 不收键盘的话 IME 占着半屏，面板直接被顶到屏幕外；
-                                    //  · 不清焦点的话聚焦态的交接规则会把面板在下次焦点
-                                    //    变化时秒收，连点笑脸关闭时的退场动画也没了。
-                                    keyboard?.hide()
-                                    focusManager.clearFocus()
-                                }
-                            },
-                        )
-                        // 发图按钮（系统相册选一张、选完直接发出）：与表情钮同一套
-                        // **盒 36dp + 图标 28dp**（图标略小于输入框，留呼吸位），
-                        // 按下/发送中只换图标色（accentText），不垫底色。
-                        // 图标用 Tabler photo（见 IconPathsExtra.kt）。
-                        val imageInteraction = remember { MutableInteractionSource() }
-                        val imagePressed by imageInteraction.collectIsPressedAsState()
-                        // 尺寸与表情钮、输入框三者一致：盒 36dp
+                        // 语音开关：点亮（主题色）= 下方「按住说话」面板展开；
+                        // 再点一次收起。录音手势在大按钮上，不在这个小图标上。
                         Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                // 不垫按下底色（M6.24 用户要求"选中图标反色主题色……要遮罩干嘛"）：
-                                // 选中反馈统一走"**图标变主题色**"（见下面 Glyph 的 tint）。
-                                //（此前为圆形底色配了 clip(pill)，会把方形图标的四角切掉。）
-                                .clickable(
-                                    interactionSource = imageInteraction,
-                                    indication = null,
-                                    onClick = {
-                                        // 收键盘 + **清掉焦点**再去选图（2026-09-25 第三轮
-                                        // 反馈的最终形态）：焦点不在了，从相册回来（无论选没
-                                        // 选）系统都不会自动把 IME 弹起来 —— 之前"保留焦点
-                                        // 让系统弹回"的版本，返回那一刻键盘重新升起，用户
-                                        // 反馈"太突兀"。要打字就再点一下输入框。
-                                        keyboard?.hide()
-                                        focusManager.clearFocus()
-                                        if (sending) {
-                                            // 上一张还在传：multipart 并发两条容易乱序且看不清进度
-                                            toast = "正在发送，请稍候"
-                                        } else {
-                                            pickChatImage.launch(
-                                                PickVisualMediaRequest(
-                                                    ActivityResultContracts.PickVisualMedia.ImageOnly,
-                                                )
-                                            )
-                                        }
-                                    },
-                                )
-                                .semantics { contentDescription = "发送图片" },
+                            modifier = Modifier.weight(1f),
                             contentAlignment = Alignment.Center,
                         ) {
-                            Glyph(
-                                tint = if (imagePressed || sending) c.accentText else c.textSecondary,
-                                // `photo`（Tabler，非 lucide）：lucide 的 image 系带 r=2 空心小圆、
-                                // 24dp 下糊团（"锯齿"）；相机与 album 相继被否——最终选经典照片
-                                // 造型（相框+山坡+实心太阳点，见 IconPathsExtra.kt / TABLER_PHOTO）
-                                kind = GlyphKind.Photo,
-                                size = 28.dp,
+                            ToolbarMicButton(
+                                active = voiceMode,
+                                onClick = {
+                                    if (voiceMode) {
+                                        closeVoiceMode()
+                                    } else {
+                                        emojiOpen = false
+                                        keyboard?.hide()
+                                        focusManager.clearFocus()
+                                        voiceMode = true
+                                    }
+                                },
                             )
+                        }
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            // 表情开关（笑脸）：点亮态 = 面板正开着。
+                            // 盒 36dp / 图标 28dp —— 与输入框同高，图标留 4dp 呼吸位。
+                            KEmojiButton(
+                                active = emojiOpen,
+                                boxSize = 36.dp,
+                                iconSize = 28.dp,
+                                onClick = {
+                                    voiceMode = false
+                                    emojiOpen = !emojiOpen
+                                    if (emojiOpen) {
+                                        // 开面板 = 收起键盘，并**清掉输入框焦点**：
+                                        //  · 键盘此刻还没降，交换区的 max() 会取面板高顶住输入栏，
+                                        //    键盘滑走正好露出面板 —— 输入栏全程不动（见「交换区」总注释）；
+                                        //  · 不收键盘的话 IME 占着半屏，面板直接被顶到屏幕外；
+                                        //  · 不清焦点的话聚焦态的交接规则会把面板在下次焦点
+                                        //    变化时秒收，连点笑脸关闭时的退场动画也没了。
+                                        keyboard?.hide()
+                                        focusManager.clearFocus()
+                                    }
+                                },
+                            )
+                        }
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            // 发图按钮（系统相册选一张、选完直接发出）：与表情钮同一套
+                            // **盒 36dp + 图标 28dp**（图标略小于输入框，留呼吸位），
+                            // 按下/发送中只换图标色（accentText），不垫底色。
+                            // 图标用 Tabler photo（见 IconPathsExtra.kt）。
+                            val imageInteraction = remember { MutableInteractionSource() }
+                            val imagePressed by imageInteraction.collectIsPressedAsState()
+                            // 尺寸与表情钮、输入框三者一致：盒 36dp
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    // 不垫按下底色（M6.24 用户要求"选中图标反色主题色……要遮罩干嘛"）：
+                                    // 选中反馈统一走"**图标变主题色**"（见下面 Glyph 的 tint）。
+                                    //（此前为圆形底色配了 clip(pill)，会把方形图标的四角切掉。）
+                                    .clickable(
+                                        interactionSource = imageInteraction,
+                                        indication = null,
+                                        onClick = {
+                                            voiceMode = false
+                                            // 收键盘 + **清掉焦点**再去选图（2026-09-25 第三轮
+                                            // 反馈的最终形态）：焦点不在了，从相册回来（无论选没
+                                            // 选）系统都不会自动把 IME 弹起来 —— 之前"保留焦点
+                                            // 让系统弹回"的版本，返回那一刻键盘重新升起，用户
+                                            // 反馈"太突兀"。要打字就再点一下输入框。
+                                            keyboard?.hide()
+                                            focusManager.clearFocus()
+                                            if (sending) {
+                                                // 上一张还在传：multipart 并发两条容易乱序且看不清进度
+                                                toast = "正在发送，请稍候"
+                                            } else {
+                                                pickChatImage.launch(
+                                                    PickVisualMediaRequest(
+                                                        ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                                    )
+                                                )
+                                            }
+                                        },
+                                    )
+                                    .semantics { contentDescription = "发送图片" },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Glyph(
+                                    tint = if (imagePressed || sending) c.accentText else c.textSecondary,
+                                    // `photo`（Tabler，非 lucide）：lucide 的 image 系带 r=2 空心小圆、
+                                    // 24dp 下糊团（"锯齿"）；相机与 album 相继被否——最终选经典照片
+                                    // 造型（相框+山坡+实心太阳点，见 IconPathsExtra.kt / TABLER_PHOTO）
+                                    kind = GlyphKind.Photo,
+                                    size = 28.dp,
+                                )
+                            }
                         }
                     }
                 }
@@ -1270,11 +1292,37 @@ fun ChatScreen(
                         .fillMaxWidth()
                         // 布局期读取交换区高度（max(IME, 面板×比例, 导航栏)，见 ExchangeZone.kt）
                         // —— 键盘/面板动画期间这里只重布局，不重组整页
-                        .exchangeZoneHeight(density, ime, nav, panelHeightPx) { panelFraction.value }
+                        .exchangeZoneHeight(density, ime, nav, panelHeightPx) {
+                            if (voiceMode) 1f else panelFraction.value
+                        }
                         .clipToBounds(),
                     contentAlignment = Alignment.BottomCenter,
                 ) {
-                    if (panelFraction.value > 0f) {
+                    if (voiceMode) {
+                        VoiceInputPanel(
+                            recording = recordingVoice,
+                            elapsedMs = recorder.elapsedMs,
+                            levels = recordLevels,
+                            cancelZone = recordCancelZone,
+                            onStart = {
+                                when {
+                                    sendingVoice -> {
+                                        toast = "正在发送语音，请稍候"
+                                        false
+                                    }
+                                    !hasRecordPermission -> {
+                                        recordPermission.launch(Manifest.permission.RECORD_AUDIO)
+                                        false
+                                    }
+                                    else -> startVoiceRecording()
+                                }
+                            },
+                            onFinish = { finishVoiceRecording() },
+                            onCancel = { cancelVoiceRecording() },
+                            onCancelZoneChange = { recordCancelZone = it },
+                            onTap = { toast = "长按说话" },
+                        )
+                    } else if (panelFraction.value > 0f) {
                         KEmojiPanel(
                             onPick = { emoji ->
                                 // 追加到末尾（与 Web 端 onSelect 同语义）。面板**选完不关**：
@@ -1353,7 +1401,9 @@ fun ChatScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     // 布局期让位（交换区高 + 96dp），与老 `.padding(bottom = …)` 视觉一致
-                    .exchangeZoneBottomInset(density, ime, nav, panelHeightPx, { panelFraction.value }, 96.dp),
+                    .exchangeZoneBottomInset(density, ime, nav, panelHeightPx, {
+                        if (voiceMode) 1f else panelFraction.value
+                    }, 96.dp),
             ) {
                 KToastInline(text = toast!!, onDismiss = { toast = null })
             }
@@ -2260,24 +2310,54 @@ private fun <T : Any> rememberLastNonNull(value: T?): T? {
  * 自己用 `awaitEachGesture` 逐事件读，抬起一帧就能收尾。
  */
 @Composable
-private fun VoiceRecordButton(
+private fun ToolbarMicButton(
+    active: Boolean,
+    onClick: () -> Unit,
+) {
+    val c = KTheme.colors
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = if (active) "收起语音输入" else "语音输入" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Glyph(
+            tint = if (active) c.accentText else c.textSecondary,
+            kind = GlyphKind.Mic,
+            size = 28.dp,
+        )
+    }
+}
+
+/**
+ * 「按住说话」大按钮（QQ 语音面板里的蓝色圆形按钮）。
+ *
+ * 手势与之前小图标上的完全一致：按住 200ms 开录、松手发送、上滑 80dp 取消。
+ * 现在只有这一个入口在录，所以取消距离常量继续复用。
+ */
+@Composable
+private fun VoiceHoldButton(
     recording: Boolean,
     onStart: () -> Boolean,
     onFinish: () -> Unit,
     onCancel: () -> Unit,
     onCancelZoneChange: (Boolean) -> Unit,
     onTap: () -> Unit,
+    modifier: Modifier = Modifier,
+    diameter: Dp = 96.dp,
 ) {
     val c = KTheme.colors
     val cancelDistance = with(LocalDensity.current) { CANCEL_DISTANCE_DP.dp.toPx() }
     Box(
-        modifier = Modifier
-            .size(36.dp)
-            .semantics { contentDescription = "按住说话" }
+        modifier = modifier
+            .size(diameter)
+            .clip(CircleShape)
+            .background(if (recording) Color(0xFFD9534F) else c.accent)
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
-                    // 先吃掉按下：不让列表的滚动/长按抢走这次手势
                     down.consume()
                     val upBeforeLongPress = withTimeoutOrNull(LONG_PRESS_MS) {
                         waitForUpOrCancellation()
@@ -2304,14 +2384,103 @@ private fun VoiceRecordButton(
                         change.consume()
                     }
                 }
-            },
+            }
+            .semantics { contentDescription = "按住说话" },
         contentAlignment = Alignment.Center,
     ) {
         Glyph(
-            tint = if (recording) c.accentText else c.textSecondary,
+            tint = c.onAccent,
             kind = GlyphKind.Mic,
-            size = 28.dp,
+            size = diameter * 0.42f,
         )
+    }
+}
+
+/**
+ * QQ 式语音输入面板（占满键盘交换区）。
+ *
+ * 上方「按住说话」、中间大圆按钮、下方提示；录音中把提示换成实时波形 + 计时，
+ * 进入取消区整块变红提示「松开取消」。
+ */
+@Composable
+private fun VoiceInputPanel(
+    recording: Boolean,
+    elapsedMs: Long,
+    levels: List<Int>,
+    cancelZone: Boolean,
+    onStart: () -> Boolean,
+    onFinish: () -> Unit,
+    onCancel: () -> Unit,
+    onCancelZoneChange: (Boolean) -> Unit,
+    onTap: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = KTheme.colors
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(c.surface),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .navigationBarsPadding()
+                .padding(bottom = KSpacing.lg),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(KSpacing.sm),
+        ) {
+            Text(
+                text = if (recording) formatVoiceDuration(elapsedMs.toInt()) else "按住说话",
+                style = KType.subtitle,
+                color = if (recording) c.accentText else c.textSecondary,
+            )
+            VoiceHoldButton(
+                recording = recording,
+                onStart = onStart,
+                onFinish = onFinish,
+                onCancel = onCancel,
+                onCancelZoneChange = onCancelZoneChange,
+                onTap = onTap,
+            )
+            if (recording) {
+                LiveWaveform(
+                    levels = levels,
+                    modifier = Modifier.width(170.dp).height(26.dp),
+                )
+                Text(
+                    text = if (cancelZone) "松开取消" else "松开发送 · 上滑取消",
+                    style = KType.caption,
+                    color = if (cancelZone) Color(0xFFD9534F) else c.textMuted,
+                )
+            } else {
+                Text(
+                    text = "松开发送 · 上滑取消",
+                    style = KType.caption,
+                    color = c.textMuted,
+                )
+            }
+        }
+    }
+}
+
+/** 录音实时波形（0..32767 的振幅 → 26dp 高的柱） */
+@Composable
+private fun LiveWaveform(levels: List<Int>, modifier: Modifier = Modifier) {
+    val barColor = KTheme.colors.accentText
+    Canvas(modifier = modifier) {
+        val bars = levels.takeLast(24).let { src -> if (src.isEmpty()) List(24) { 0 } else src }
+        val slot = size.width / bars.size
+        val barW = (slot * 0.55f).coerceAtLeast(1f)
+        bars.forEachIndexed { i, amp ->
+            val norm = sqrt((amp / 32_767f).coerceIn(0f, 1f))
+            val h = (size.height * (0.12f + norm * 0.88f)).coerceAtLeast(2f)
+            drawRoundRect(
+                color = barColor,
+                topLeft = Offset(i * slot + (slot - barW) / 2f, (size.height - h) / 2f),
+                size = Size(barW, h),
+                cornerRadius = CornerRadius(barW / 2f),
+            )
+        }
     }
 }
 
