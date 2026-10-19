@@ -837,7 +837,7 @@ fun PostDetailScreen(
             // 输入条与正文之间用一条分隔线隔开（与聊天页同款交互）
             HorizontalDivider(color = c.borderSubtle)
             // 输入条（与聊天页同款：白/深卡片条 + 凹陷底药丸 + 药丸发送按钮；
-            // 高度也对齐聊天页 —— 输入框 40dp、上下留白 8dp、发送键等高 40dp）。
+            // 高度也对齐聊天页 —— 输入框 36dp、上下留白 6dp、发送键等高 36dp）。
             // 不再挂 navigationBarsPadding/imePadding：导航栏与键盘高度都并入
             // 下面的交换区（见上面交换区注释），两处重复挂会多让出一条。
             Row(
@@ -850,18 +850,18 @@ fun PostDetailScreen(
                 // 先"间距调成一样的"（删了发送侧的 12dp 补偿），再"统一并加大一点"（4→8）。
                 horizontalArrangement = Arrangement.spacedBy(KSpacing.xs),
             ) {
-                // 表情开关（笑脸）：**盒 40dp / 图标 40dp**，与输入框、发送键等高。
+                // 表情开关（笑脸）：**盒 36dp / 图标 28dp**，与输入框、发送键同高。
                 // 收敛史（2026-10-15，用户连续四轮）：20 图标/32 盒（原版）→ 图标 24 + 盒 40
                 //（"图标大一点、高度跟输入框一样高"）→ 盒 32（"空白占位缩小一半"）→ 盒 24
                 //（"表情左右两边留白还是多"）→ 盒 28（"表情左右加大一点"）。
-                // 2026-10-18 用户："表情和相册图标小了，要跟输入框一样高" →
-                // **盒与图标都回到 40dp**（聊天页同步）；这是当前定稿，别再自行缩小。
+                // 2026-10-18："图标小了"→ 盒/图标都放到 40；2026-10-19："图标太大了，改成微信
+                // 输入框那种" → **盒 36 / 图标 28**（微信比例：图标约输入框高度的 3/4）。
                 // 开面板 = 收键盘 + 清焦点，面板瞬时占住键盘原来的位置（交换区 max()
                 // 顶住输入栏，全程不动）；聚焦输入框时面板再向键盘等高交接。
                 KEmojiButton(
                     active = emojiOpen,
-                    boxSize = 40.dp,
-                    iconSize = 40.dp,
+                    boxSize = 36.dp,
+                    iconSize = 28.dp,
                     onClick = {
                         // 未登录与输入框同一条规则：点它就是"要评论"，先引导登录
                         if (!isLoggedIn) {
@@ -927,10 +927,10 @@ fun PostDetailScreen(
                     enabled = !sending,
                     // 圆角与输入框一致（小圆角），不再是胶囊
                     cornerRadius = KRadius.control,
-                    // 与输入框等高（40dp，2026-09-25 与聊天页对齐时加）；
-                    // compact 的紧凑内边距保证文字内容塞得进 40dp
+                    // 与输入框等高（2026-09-25 与聊天页对齐时加；2026-10-19 一起紧凑化到 36dp）；
+                    // compact 的紧凑内边距保证文字内容塞得进 36dp
                     compact = true,
-                    minHeight = 40.dp,
+                    minHeight = 36.dp,
                     onClick = {
                         if (!isLoggedIn) {
                             onRequireLogin()
@@ -1912,7 +1912,7 @@ private fun CommentRow(
  * 评论输入框：**把对 [input] 的读取圈进这个最小作用域**（与聊天页的
  * `ChatInputField` 同一套思路，见那边完整说明）。KTextField 的 `value` 在这里读
  * —— 打字时只有这一小块重组，评论 LazyColumn 与页面 body 不动。
- * 样式（shape/variant/minHeight 40dp）与聊天页输入框完全同款，收进 helper。
+ * 样式（shape/variant/36dp 高/12dp 左右内边距）与聊天页输入框完全同款，收进 helper。
  */
 @Composable
 private fun CommentInputField(
@@ -1932,8 +1932,11 @@ private fun CommentInputField(
         variant = KTextFieldVariant.Inset,
         focusRequester = focusRequester,
         interactionSource = interactionSource,
-        // 与聊天页同款 40dp 高（组件默认 44，外层高度约束压不住）
-        minHeight = 40.dp,
+        // 与聊天页同款「微信式」紧凑输入框：36dp 高、左右 12dp、上下 6dp
+        //（2026-10-19 用户："打字内部的高度间隙太大"——40dp + 上下 8dp 太松）
+        minHeight = 36.dp,
+        horizontalPadding = KSpacing.sm,
+        verticalPadding = 6.dp,
         leading = leading,
         trailing = trailing,
     )

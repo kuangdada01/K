@@ -931,7 +931,7 @@ fun ChatScreen(
                 // 两处输入条看起来要像同一个组件（用户要求）。
                 // 不再挂 imePadding：键盘高度已并入交换区，这里再挂会多让出一条导航栏
                 // （ime 全高含导航栏，叠加等于把导航栏让了两次）。
-                // 垂直留白收一档（sm → xs），配合输入框矮一档（40dp，见 KTextField 调用）：
+                // 垂直留白收一档（sm → xs），配合输入框矮一档（36dp，见 KTextField 调用）：
                 // 用户反馈"输入框高度小一点、上下留白间隙也小一点"。
             Row(
                 modifier = Modifier
@@ -945,19 +945,19 @@ fun ChatScreen(
             ) {
                 // 表情 + 发图一排：两钮之间 **8dp**（M6.24 用户反馈"表情跟相册间距太小了"，
                 // 原来紧贴成 0dp）。
-                // 2026-10-18 用户："表情和相册图标小了，要跟输入框一样高" ——
-                // 两钮的**盒子与图标都改成 40dp**（= 输入框/发送键高度），
-                // 覆盖了 2026-10-15 那轮"盒 28 紧凑化"的结论。别再自行缩回去。
+                // 尺寸史：2026-10-15 盒 28 → 10-18"图标小了，要跟输入框一样高"→ 盒/图标 40
+                // → 10-19"图标太大了，改成微信输入框那种"→ **盒 36 / 图标 28**（当前定稿）。
+                // 微信的比例是"图标约占输入框高度的 3/4"，而不是图标铺满整个输入框。
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(KSpacing.xs),
                 ) {
                         // 表情开关（笑脸）：点亮态 = 面板正开着。
-                        // 盒 40dp / 图标 40dp —— 与输入框等高（2026-10-18 用户定稿）。
+                        // 盒 36dp / 图标 28dp —— 与输入框同高，图标留 4dp 呼吸位（微信式）。
                         KEmojiButton(
                             active = emojiOpen,
-                            boxSize = 40.dp,
-                            iconSize = 40.dp,
+                            boxSize = 36.dp,
+                            iconSize = 28.dp,
                             onClick = {
                                 emojiOpen = !emojiOpen
                                 if (emojiOpen) {
@@ -973,15 +973,15 @@ fun ChatScreen(
                             },
                         )
                         // 发图按钮（系统相册选一张、选完直接发出）：与表情钮同一套
-                        // **40dp 盒 + 40dp 图标**（= 输入框高度，2026-10-18 定稿），
+                        // **盒 36dp + 图标 28dp**（微信式：图标略小于输入框，留呼吸位），
                         // 按下/发送中只换图标色（accentText），不垫底色。
                         // 图标用 Tabler photo（见 IconPathsExtra.kt）。
                         val imageInteraction = remember { MutableInteractionSource() }
                         val imagePressed by imageInteraction.collectIsPressedAsState()
-                        // 尺寸与表情钮、输入框三者一致：40dp
+                        // 尺寸与表情钮、输入框三者一致：盒 36dp
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
+                                .size(36.dp)
                                 // 不垫按下底色（M6.24 用户要求"选中图标反色主题色……要遮罩干嘛"）：
                                 // 选中反馈统一走"**图标变主题色**"（见下面 Glyph 的 tint）。
                                 //（此前为圆形底色配了 clip(pill)，会把方形图标的四角切掉。）
@@ -1017,7 +1017,7 @@ fun ChatScreen(
                                 // 24dp 下糊团（"锯齿"）；相机与 album 相继被否——最终选经典照片
                                 // 造型（相框+山坡+实心太阳点，见 IconPathsExtra.kt / TABLER_PHOTO）
                                 kind = GlyphKind.Photo,
-                                size = 40.dp,
+                                size = 28.dp,
                             )
                         }
                     }
@@ -1035,11 +1035,11 @@ fun ChatScreen(
                         text = if (sending) "…" else "发送",
                         // 与输入框同一档圆角（详情页评论输入条同款）
                         cornerRadius = KRadius.control,
-                        // **等高**（2026-09-25 反馈：发送按钮比文字框高）：40dp 与输入框
-                        // 的 minHeight 一致；compact 的紧凑内边距（垂直 8dp）保证文字
-                        // 内容塞得进 40dp —— 不配它按钮会被内容撑回 44dp
+                        // **等高**（2026-09-25 反馈：发送按钮比文字框高）：与输入框的
+                        // minHeight 一致（2026-10-19 紧凑化后为 36dp）；compact 的内边距
+                        // 保证文字内容塞得进 36dp —— 不配它按钮会被内容撑回 44dp
                         compact = true,
-                        minHeight = 40.dp,
+                        minHeight = 36.dp,
                         onClick = {
                             if (input.value.isBlank()) {
                                 toast = "不能发空消息"
@@ -1522,10 +1522,14 @@ private fun ChatInputField(
         placeholder = placeholder,
         shape = RoundedCornerShape(KRadius.control),
         variant = KTextFieldVariant.Inset,
-        // 矮一档（40dp，默认 44）：用户反馈"输入框高度小一点"，上下留白同步收窄
-        //（见输入条 Row 的 vertical = xs）。高度约束压不住组件内部的 defaultMinSize，
-        // 必须从这里传。
-        minHeight = 40.dp,
+        // 微信那种紧凑输入框：36dp 高、左右 12dp、上下 6dp。
+        // 2026-10-19 用户："打字内部的高度间隙太大" —— 原来是 40dp + 上下 8dp + 左右 16dp，
+        // 15sp 文字在框里上下各空 ~9dp，看着像"字浮在框中间"。高度与内边距一起收，
+        // 文字才贴住边（高度约束压不住组件内部的 defaultMinSize，必须从这里传）。
+        minHeight = 36.dp,
+        horizontalPadding = KSpacing.sm,
+        // 6dp 是刻意取在 xxs(4) 与 xs(8) 之间：微信输入框的上下留白大约就是这一档
+        verticalPadding = 6.dp,
         focusRequester = focusRequester,
         interactionSource = interactionSource,
     )

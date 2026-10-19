@@ -98,6 +98,15 @@ fun KTextField(
     interactionSource: MutableInteractionSource? = null,
     minLines: Int = 1,
     minHeight: Dp = KDimens.minTouchTarget,
+    /**
+     * 覆盖水平内边距（默认 [KSpacing.md] = 16dp）。
+     *
+     * 聊天/评论输入栏要更紧凑（微信那种），把左右压到 12dp，文字与圆角之间不空一条；
+     * 不传则完全保持各 variant 的原有观感。
+     */
+    horizontalPadding: Dp? = null,
+    /** 覆盖垂直内边距（Inset 默认 8dp）。调小让文字更贴上下边（配合更矮的 minHeight） */
+    verticalPadding: Dp? = null,
 ) {
     KTextFieldContainer(
         isEmpty = value.isEmpty(),
@@ -112,6 +121,8 @@ fun KTextField(
         trailing = trailing,
         sharedInteraction = interactionSource,
         minHeight = minHeight,
+        horizontalPadding = horizontalPadding,
+        verticalPadding = verticalPadding,
     ) { interaction ->
         BasicTextField(
             value = value,
@@ -159,6 +170,15 @@ fun KTextField(
     interactionSource: MutableInteractionSource? = null,
     minLines: Int = 1,
     minHeight: Dp = KDimens.minTouchTarget,
+    /**
+     * 覆盖水平内边距（默认 [KSpacing.md] = 16dp）。
+     *
+     * 聊天/评论输入栏要更紧凑（微信那种），把左右压到 12dp，文字与圆角之间不空一条；
+     * 不传则完全保持各 variant 的原有观感。
+     */
+    horizontalPadding: Dp? = null,
+    /** 覆盖垂直内边距（Inset 默认 8dp）。调小让文字更贴上下边（配合更矮的 minHeight） */
+    verticalPadding: Dp? = null,
 ) {
     KTextFieldContainer(
         isEmpty = value.text.isEmpty(),
@@ -173,6 +193,8 @@ fun KTextField(
         trailing = trailing,
         sharedInteraction = interactionSource,
         minHeight = minHeight,
+        horizontalPadding = horizontalPadding,
+        verticalPadding = verticalPadding,
     ) { interaction ->
         BasicTextField(
             value = value,
@@ -219,6 +241,9 @@ private fun KTextFieldContainer(
     sharedInteraction: MutableInteractionSource?,
     /** 容器最小高（见 `KTextField` 的 `minHeight` 参数） */
     minHeight: Dp,
+    /** 内边距覆盖（null = 按 variant 的默认值，见 [KTextField] 的同名参数） */
+    horizontalPadding: Dp?,
+    verticalPadding: Dp?,
     field: @Composable (MutableInteractionSource) -> Unit,
 ) {
     val c = KTheme.colors
@@ -268,10 +293,12 @@ private fun KTextFieldContainer(
                             )
                             .defaultMinSize(minHeight = minHeight)
                             .padding(
-                                horizontal = KSpacing.md,
+                                horizontal = horizontalPadding ?: KSpacing.md,
                                 // Inset 是细长药丸（设计稿实测 44dp 高），垂直内边距要收一档，
-                                // 否则会撑到 46dp、与右侧发送按钮不等高
-                                vertical = if (variant == KTextFieldVariant.Inset) KSpacing.xs else KSpacing.sm,
+                                // 否则会撑到 46dp、与右侧发送按钮不等高；
+                                // 聊天/评论输入栏会显式传更小的值做"微信那种"紧凑形态
+                                vertical = verticalPadding
+                                    ?: if (variant == KTextFieldVariant.Inset) KSpacing.xs else KSpacing.sm,
                             )
                     }
                 ),
