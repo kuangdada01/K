@@ -63,9 +63,9 @@ import top.kuangdada.k.core.designsystem.theme.KType
  * 聊天内嵌相册（QQ 参考图，2026-10-19 / 2026-10-20 改版）
  * ============================================================
  * 点输入栏的相册图标不再直接弹系统全屏，而是在键盘交换区里显示**最近照片**：
- *  · **两行缩略图墙、格子统一 9:16**：等宽等高、彼此零间距，横向滑动
- *    （2026-10-20 用户要求："相册是挨着无缝显示的，不是一张一张选择"）；
- *    横图（16:9）也 Crop 成 9:16 显示 —— 统一格子才排得严丝合缝；
+ *  · **单排大图**（2026-10-20 用户定稿）：一行、每格和面板等高（宽 = 高 × 9/16），
+ *    横向连续滑动、格与格挨着；
+ *  · 图片一律 `Fit`、**不改比例**：竖图完整显示，16:9 的横图上下留黑边；
  *  · 点照片选中，右上角圆圈打勾；最多选 9 张，右下角发送；
  *  · 左下角「相册」才打开系统全屏 Photo Picker；
  *  · 无权限时给「允许访问 / 打开系统相册」两个出口。
@@ -158,49 +158,36 @@ fun InlineAlbumPanel(
 
                 else -> BoxWithConstraints(Modifier.fillMaxSize()) {
                     /**
-                     * 两行缩略图墙（用户给的 QQ 参考图，2026-10-20 定稿）。
+                     * **单排大图**（用户参考图 + 明确要求，2026-10-20 定稿）。
                      *
-                     * 格子**统一 9:16 竖框**：不管原图是竖的 9:16 还是横的 16:9，
-                     * 一律 Crop 成 9:16（用户原话："放一张 9:16 的，16:9 也显示 9:16"）。
-                     * 这样每格等宽等高，整面墙严丝合缝 —— 按原图比例取宽的话，横图会把
-                     * 那一列撑宽、竖图旁边留缝，看起来就不"挨着"了。
+                     *  · 一行，每格都是**和面板一样高**的大图，宽 = 高 × 9/16；
+                     *  · 图片一律 `Fit`，**不裁不拉伸**：竖图完整显示，16:9 的横图
+                     *    上下留黑边（用户原话："16:9 就上下黑色，竖图就显示全，
+                     *    不要改变比例"）；
+                     *  · 格与格零间距，横向连续滑动（不是一页一张的分页）。
                      *
-                     * 行高 = 面板内容高的一半；格宽 = 行高 × 9/16。
-                     * 列 = 上下两格（`chunked(2)`），列内上下紧贴、列与列零间距。
+                     * 之前两版都错在"缩略图墙"：用户要的是能看清内容的大图，
+                     * 不是一眼扫过的小格子 —— 所以格子高度不再除以 2。
                      */
-                    val rowHeight = maxHeight / 2
-                    val thumbWidth = rowHeight * 9f / 16f
-                    val columns = photos.chunked(2)
+                    val cellHeight = maxHeight
+                    val cellWidth = cellHeight * 9f / 16f
                     LazyRow(
-                        // 不设 horizontalArrangement（默认零间距）= 无缝
+                        // 不设 horizontalArrangement（默认零间距）= 挨着
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        items(columns.size, key = { columns[it].first() }) { index ->
-                            Column {
-                                columns[index].forEach { uri ->
-                                    AlbumThumb(
-                                        uri = uri,
-                                        width = thumbWidth,
-                                        height = rowHeight,
-                                        selectedIndex = selected.indexOf(uri),
-                                        onToggle = {
-                                            val idx = selected.indexOf(uri)
-                                            if (idx >= 0) selected.removeAt(idx)
-                                            else if (selected.size < 9) selected.add(uri)
-                                        },
-                                    )
-                                }
-                                // 总共奇数张时最后一列只有一张：补一块同色占位，
-                                // 否则这一列的底部会露出页面底色、看起来像"墙缺了一角"
-                                if (columns[index].size == 1) {
-                                    Box(
-                                        modifier = Modifier
-                                            .width(thumbWidth)
-                                            .height(rowHeight)
-                                            .background(c.surface),
-                                    )
-                                }
-                            }
+                        items(photos.size, key = { photos[it] }) { index ->
+                            val uri = photos[index]
+                            AlbumThumb(
+                                uri = uri,
+                                width = cellWidth,
+                                height = cellHeight,
+                                selectedIndex = selected.indexOf(uri),
+                                onToggle = {
+                                    val idx = selected.indexOf(uri)
+                                    if (idx >= 0) selected.removeAt(idx)
+                                    else if (selected.size < 9) selected.add(uri)
+                                },
+                            )
                         }
                     }
                 }
@@ -260,11 +247,11 @@ fun InlineAlbumPanel(
 }
 
 /**
- * 缩略图墙里的一格。
+ * 相册条里的一格（单排大图）。
  *
- * **固定 9:16 竖框 + Crop**：原图是 9:16 的截图正好铺满，16:9 的横图裁成中间一段
- * 显示（用户要求"16:9 也显示 9:16"）。缩略图墙的用途是"一眼扫到、点选"，
- * 统一格子比保留原比例更重要 —— 后者会让横图把整列撑宽、竖图旁边留缝。
+ * **9:16 的框 + `Fit`，绝不改比例**：竖图完整显示；16:9 的横图按宽度铺满、
+ * 上下留黑边（用户要求"16:9 就上下黑色"）。框本身是黑底，所以留边和格子边界
+ * 是同一块黑，挨着看是连续的。
  *
  * [onToggle] 用 [rememberUpdatedState] 兜一层：手势的 `pointerInput(uri)` 只在 uri
  * 变化时重建，直接捕获 lambda 会一直是首次组合那个（`selected` 变了它还是旧视图），
@@ -284,14 +271,15 @@ private fun AlbumThumb(
         modifier = Modifier
             .width(width)
             .height(height)
-            // 图还没解码出来时铺主题底色，不闪白
-            .background(c.surfaceRaised)
+            // 黑底：横图上下留边、竖图两侧留边都落在这块黑上，不闪白
+            .background(Color.Black)
             .pointerInput(uri) { detectTapGestures { toggle() } },
     ) {
         AsyncImage(
             model = uri,
             contentDescription = null,
-            contentScale = ContentScale.Crop,
+            // Fit = 完整显示，不改比例（横图上下留黑边）
+            contentScale = ContentScale.Fit,
             modifier = Modifier.fillMaxSize(),
         )
         // 右上角圈：选中 = 主题色实心 + ✓；未选中 = 半透明圈
