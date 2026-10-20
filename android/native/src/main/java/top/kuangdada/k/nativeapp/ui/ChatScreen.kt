@@ -255,18 +255,36 @@ fun ChatScreen(
      *    相册面板把**那一格画成透明**（原位留空）；
      *    **是相册格子里那张已经解码好的位图**，不是 uri —— 浮层拿到什么画什么，
      *    不会再走一次取图/解码（用户："不需要重新加载一张"）；
-     *  · [albumDragDx] / [albumDragDy] **每帧都变** → 只在浮层的 `graphicsLayer { }`
+     *  · [albumDragDy] **每帧都变** → 只在浮层的 `graphicsLayer { }`
      *    里读，走绘制期读取、不进组合；否则拖着图每帧重组整个 ChatScreen
      *    （连消息 LazyColumn 的 item DSL 一起，帧率会直接塌）；
      *  · [albumDragReleased] 松手时为 true，浮层据此播"丢出去 / 落回相册"的退场。
      */
     var albumDragPainter by remember { mutableStateOf<Painter?>(null) }
-    var albumDragDx by remember { mutableFloatStateOf(0f) }
+    /** 只累计上下：上滑是"从原来那一格垂直往上"，横向不动（用户 2026-10-20 明确） */
     var albumDragDy by remember { mutableFloatStateOf(0f) }
     /** 松手了（或正在退场）：浮层播完"丢出去 / 落回相册"再回调清状态 */
     var albumDragReleased by remember { mutableStateOf(false) }
     /** 被按住那一格在屏幕上的矩形：浮图从**这里**被拎起来，而不是凭空出现在屏幕中央 */
     var albumDragBounds by remember { mutableStateOf(Rect.Zero) }
+    /**
+     * 一条真实消息进列表的**唯一入口**：同 id 只留一条。
+     *
+     * 服务端插库后会立刻广播 SSE，而客户端**在 POST 响应回来之前**就已经被那次广播
+     * 触发的 `messages.history()` 重拉合并过了（见实时收集器）——图/语音越大越慢，
+     * 几乎必中。以前三处发送回调都是 `items + r.data`，直接造出两条同 id 的消息，
+     * `LazyColumn` 的 key 撞车就抛 "Key msg-xxx was already used" **闪退**
+     * （2026-10-20 用户报的"发送图片触发闪退"）。
+     *
+     * 现在：已在列表里 → 原位替换（顺带让服务端版本覆盖本地那份），不在 → 追加。
+     */
+    fun mergeMessage(msg: MessageRepository.MessageUi) {
+        items = if (items.any { it.raw.id == msg.raw.id }) {
+            items.map { if (it.raw.id == msg.raw.id) msg else it }
+        } else {
+            items + msg
+        }
+    }
     /**
      * 输入内容。**刻意用 MutableState 而不是 `var input by`**：组合期唯一读它的地方
      * 是 [ChatInputField] 内部的 `input.value`（KTextField 的 value）—— 读取被圈在
@@ -328,7 +346,8 @@ fun ChatScreen(
             )
         ) {
             is ApiResult.Success -> {
-                items = items + r.data
+                // 走统一入口：SSE 大概率已经先把这条合进来了（见 mergeMessage）
+                mergeMessage(r.data)
                 true
             }
             is ApiResult.Failure -> {
@@ -425,7 +444,7 @@ fun ChatScreen(
                 )
             ) {
                 is ApiResult.Success -> {
-                    items = items + r.data
+                    mergeMessage(r.data)
                     replyTo = null
                     // reverseLayout：新消息在 index 0
                     listState.animateScrollToItem(0)
@@ -1110,7 +1129,9 @@ fun ChatScreen(
                                                 val oldest = items.firstOrNull()?.raw?.id
                                                 when (val r = messages.history(partnerId, beforeId = oldest)) {
                                                     is ApiResult.Success -> {
-                                                        items = r.data.first + items
+                                                        // 只补列表里没有的：与 SSE 合并并发时也不会插出重复 id
+                                                        val known = items.mapTo(HashSet()) { it.raw.id }
+                                                        items = r.data.first.filter { it.raw.id !in known } + items
                                                         hasMore = r.data.second
                                                     }
                                                     is ApiResult.Failure -> toast = r.error.displayMessage
@@ -1322,7 +1343,7 @@ fun ChatScreen(
                                     )
                                 ) {
                                     is ApiResult.Success -> {
-                                        items = items + r.data
+                                        mergeMessage(r.data)
                                         input.value = ""
                                         replyTo = null
                                         // 发出去的消息在 reverseLayout 里是 index 0：
@@ -1521,14 +1542,10 @@ fun ChatScreen(
                                 onDragPreviewStart = { painter, bounds ->
                                     albumDragPainter = painter
                                     albumDragBounds = bounds
-                                    albumDragDx = 0f
                                     albumDragDy = 0f
                                     albumDragReleased = false
                                 },
-                                onDragPreviewMove = { dx, dy ->
-                                    albumDragDx = dx
-                                    albumDragDy = dy
-                                },
+                                onDragPreviewMove = { dy -> albumDragDy = dy },
                                 // 松手后不立刻抹掉浮层：让它把"丢出去 / 落回相册"演完，
                                 // 演完（onExitFinished）才清状态、格子才重新出现
                                 onDragPreviewEnd = { albumDragReleased = true },
@@ -1607,19 +1624,15 @@ fun ChatScreen(
             }
         }
 
-        // 相册「上滑松手发送」浮层：盖在整页最上层（连顶栏一起）。
-        // 压层只盖到**相册条上沿**为止 —— 相册条与它下面那排按钮留在原地可见，
-        // 这样图看起来是"从相册里被拎出来的"，而不是整页先变白再凭空冒出一张
+        // 相册「拎起来丢出去」浮层：盖在整页最上层（连顶栏一起），整页压白
         AlbumDragOverlay(
             painter = albumDragPainter,
             bounds = albumDragBounds,
-            offsetX = { albumDragDx },
             offsetY = { albumDragDy },
             released = albumDragReleased,
             onExitFinished = {
                 albumDragPainter = null
                 albumDragReleased = false
-                albumDragDx = 0f
                 albumDragDy = 0f
             },
         )
@@ -2053,13 +2066,23 @@ private sealed interface ChatEntry {
  */
 private fun buildChatEntries(items: List<MessageRepository.MessageUi>): List<ChatEntry> {
     val out = mutableListOf<ChatEntry>()
-    items.forEachIndexed { index, msg ->
-        val prev = items.getOrNull(index - 1)
+    /**
+     * 已画过的 id：**兜底防重**。
+     *
+     * `LazyColumn(key = …)` 的 key 撞车会直接抛 "Key msg-xxx was already used" 把进程
+     * 带走，用户看到的就是"闪退"。上游（[mergeMessage] / 实时合并 / 翻页）已经保证不
+     * 产生重复 id，这里再兜一层 —— 宁可少画一条，也不能让整页崩掉。
+     */
+    val drawn = HashSet<Long>(items.size)
+    var prev: MessageRepository.MessageUi? = null
+    items.forEach { msg ->
+        if (!drawn.add(msg.raw.id)) return@forEach
         val gap = prev?.let { timeGapMillis(msg.raw.createdAt, it.raw.createdAt) }
         if (prev == null || (gap != null && gap > CHAT_TIME_GAP_MS)) {
             out += ChatEntry.Day("day-${msg.raw.id}", dayDividerText(msg.raw.createdAt))
         }
         out += ChatEntry.Bubble("msg-${msg.raw.id}", msg)
+        prev = msg
     }
     return out
 }
@@ -2898,28 +2921,28 @@ private fun ChatSendButton(
 }
 
 /**
- * 相册「拎起来发送」的浮层（2026-10-20，按用户 QQ 参考视频第三次改）。
+ * 相册「拎起来丢出去发送」的浮层（2026-10-20，用户 QQ 录屏 + 三次口头纠正后定稿）。
  *
  * 画在**整页层级**而不是相册面板里：面板被交换区的 `clipToBounds` 裁着，图抬不出去。
  *
- * 四条硬规则（改之前先读 —— 前三版都是踩在这上面被打回的）：
- *  1. **画的是同一张位图**。[painter] 来自相册格子（已经解码好、尺寸就是格子尺寸），
- *     这里只做位移/淡出。换成 `AsyncImage(model = uri)` 等于让 Coil 换个目标尺寸重新
- *     取图解码 —— 用户看到的就是"又重新加载了一张"，第一帧还是白的。
- *  2. **尺寸一点不变**。节点尺寸 = 格子尺寸，跟手期间不放大也不缩小
- *     （用户："上滑不用改变图片本身大小"）。唯一例外见 [fit]。
- *  3. **横竖都跟手**。位移直接用手指的累计位移，1:1，不加阻尼、不加轨道。
- *  4. **原位留空**。拎起来的那一格由相册面板自己画成透明（`InlineAlbumPanel` 的
- *     `draggedPainter`），所以这里看不到"后面还压着一张一样的图"；落回或发出去、
- *     退场动画播完把 painter 清空，格子才回来。
+ * 五条硬规则（每一条都是被打回过的，改之前先读）：
+ *  1. **画同一张位图**。[painter] 是相册格子里那个已经解码好的 painter；换成
+ *     `AsyncImage(model = uri)` 等于让 Coil 换个目标尺寸重新取图 + 解码 ——
+ *     用户看到的就是"又重新加载了一张"，第一帧还是白的。
+ *  2. **尺寸一点不变**：节点尺寸恒等于格子尺寸，全程不放大也不缩小。
+ *  3. **只走竖直**：从原来那一格的位置**垂直**往上，横向不动
+ *     （用户："上滑是在原来的位置垂直往上"）。
+ *  4. **原位留空**：被拎走的那一格由相册面板自己画成透明（`draggedPainter`），
+ *     所以后面不会还压着一张一样的图。
+ *  5. **背景是白的**：整页盖一层白 0.72，把聊天压下去，浮图才立得住
+ *     （用户："背景应该是白色才对"）。压层随拎起淡入、随落回/丢出淡出。
  *
- * 退场（松手）分两种：
- *  · 上滑够 [ALBUM_SEND_DISTANCE_DP] → **当丢出去**：继续向上飞 96dp 同时淡出（200ms）；
- *  · 没够 → **落回相册那一格**：位移与缩放都回到 0（180ms），落定才让格子重新出现。
- * 这两个动作是"丢出去"的手感来源 —— 上一版松手是直接消失，像图被删了。
+ * 松手两种退场：
+ *  · 上滑够 [ALBUM_SEND_DISTANCE_DP] → **丢出去**：继续向上飞 96dp 同时淡出（200ms）；
+ *  · 没够 → **落回相册那一格**：竖直位移收回去（180ms），落定之后格子才重新出现。
  *
- * [offsetX] / [offsetY] 传 lambda 不传值：它们每帧都在变，只在 `graphicsLayer { }`
- * （绘制期）里读，不把整个聊天页（含消息 LazyColumn 的 item DSL）拖进每帧重组。
+ * [offsetY] 传 lambda 不传值：它每帧都在变，只在 `graphicsLayer { }`（绘制期）里读，
+ * 不把整个聊天页（含消息 LazyColumn 的 item DSL）拖进每帧重组。
  *
  * 第一层那个透明 Box 顺便**吃掉所有触摸**：拖拽期间点别处不该穿透到底下的列表或按钮
  * （否则松手那一刻可能顺带走了一次"点空白收面板"）。
@@ -2928,7 +2951,6 @@ private fun ChatSendButton(
 private fun AlbumDragOverlay(
     painter: Painter?,
     bounds: Rect,
-    offsetX: () -> Float,
     offsetY: () -> Float,
     released: Boolean,
     onExitFinished: () -> Unit,
@@ -2945,17 +2967,10 @@ private fun AlbumDragOverlay(
     val cellHeight = if (hasBounds) bounds.height else screenHeightPx * 0.42f
     val cellLeft = if (hasBounds) bounds.left else (screenWidthPx - cellWidth) / 2f
     val cellTop = if (hasBounds) bounds.top else screenHeightPx * 0.58f
-    /**
-     * 「原尺寸」的唯一例外：格子在相册条里就比屏幕还宽/还高（横图很常见，格子宽 =
-     * 面板高 × 比例）。这种图原尺寸拎起来会挂出屏幕两侧，于是按比例收进屏幕。
-     * 收的动作跟着 150ms 的抬起动画一起做（不是"啪"地变小）；普通竖图/截图 fit = 1，
-     * 全程一个像素都不变。
-     */
-    val fit = minOf(1f, screenWidthPx / cellWidth, screenHeightPx * 0.94f / cellHeight)
 
-    /** 拎起来的程度：0 = 完全等同格子，1 = 完全浮起（只对 fit < 1 的图有可见差异） */
-    val lift = remember(painter) { Animatable(0f) }
-    /** 落回相册时把位移收回去：1 = 跟着手指，0 = 已回到格子原位 */
+    /** 拎起程度：只驱动压层淡入（图本身不做任何缩放） */
+    val liftIn = remember(painter) { Animatable(0f) }
+    /** 落回相册时把竖直位移收回去：1 = 跟着手指，0 = 已回到格子原位 */
     val settle = remember(painter) { Animatable(1f) }
     /** 丢出去的退场：1 = 已经飞走并淡出 */
     val exit = remember(painter) { Animatable(0f) }
@@ -2965,30 +2980,23 @@ private fun AlbumDragOverlay(
 
     LaunchedEffect(released, painter) {
         if (!released) {
-            // 拎起来：普通图 fit = 1，这里什么都不会变；横图才看得见那一下"收进屏幕"
-            lift.animateTo(1f, tween(durationMillis = 150, easing = FastOutSlowInEasing))
+            liftIn.animateTo(1f, tween(durationMillis = 110, easing = FastOutSlowInEasing))
             return@LaunchedEffect
         }
-        // 松手：先掐掉可能还在跑的抬起动画（同一个 Animatable 不能被两个动画抢）
-        lift.stop()
+        // 松手：先掐掉可能还在跑的淡入（同一个 Animatable 不能被两个动画抢）
+        liftIn.stop()
         if (offsetY() <= -sendPx) {
             // 丢出去：一边往上飞一边淡出
-            val flying = launch { lift.animateTo(1f, tween(durationMillis = 120)) }
+            val flying = launch { liftIn.animateTo(1f, tween(durationMillis = 90)) }
             val fading = launch { exit.animateTo(1f, tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
             flying.join()
             fading.join()
         } else {
             // 没滑够：落回相册那一格
-            val back = launch { settle.animateTo(0f, tween(durationMillis = 180, easing = FastOutSlowInEasing)) }
-            val down = launch { lift.animateTo(0f, tween(durationMillis = 180, easing = FastOutSlowInEasing)) }
-            back.join()
-            down.join()
+            settle.animateTo(0f, tween(durationMillis = 180, easing = FastOutSlowInEasing))
         }
         finishExit()
     }
-
-    /** 上滑多少 px 压层到满：比发送判定略长一点，滑到能松手时压层已经到底 */
-    val rampPx = with(density) { (ALBUM_SEND_DISTANCE_DP * 1.15f).dp.toPx() }
 
     Box(modifier = Modifier.fillMaxSize()) {
         // 吃掉所有触摸（透明，不做视觉）
@@ -3003,30 +3011,22 @@ private fun AlbumDragOverlay(
                     }
                 },
         )
-        /**
-         * 压层：只有相册条**以上**这一块（参考图是浅底）。
-         *
-         * 浓度跟着**上滑距离**涨（横向拖动不压层，参考视频里左右挪图时背景是不变的），
-         * 丢出去时跟着退场一起淡掉；落回相册时位移在收，压层也跟着退。
-         */
+        // 白色压层：**整页**（含相册条），随拎起淡入、随落回/丢出淡出
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .height(with(density) { cellTop.coerceAtLeast(0f).toDp() })
+                .fillMaxSize()
                 .graphicsLayer {
-                    val progress = (-offsetY() * settle.value / rampPx).coerceIn(0f, 1f)
-                    alpha = progress * (1f - exit.value)
+                    alpha = liftIn.value * settle.value * (1f - exit.value)
                 }
                 .background(Color.White.copy(alpha = 0.72f)),
         )
-        // 提示：纸飞机 + 松手发送（屏幕上方，和参考图一致；浅底上用深色才看得清）
+        // 提示：纸飞机 + 松手发送（屏幕上方，浅底上用深色才看得清）
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = (cfg.screenHeightDp * 0.2f).dp)
                 .graphicsLayer {
-                    val progress = (-offsetY() * settle.value / rampPx).coerceIn(0f, 1f)
-                    alpha = progress * (1f - exit.value)
+                    alpha = liftIn.value * settle.value * (1f - exit.value)
                 },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -3034,7 +3034,7 @@ private fun AlbumDragOverlay(
             Spacer(Modifier.height(KSpacing.xs))
             Text(text = "松手发送", style = KType.body, color = c.textPrimary)
         }
-        // 拎在手上的那张图：**原尺寸**，横竖都跟手，丢出去时向上飞 + 淡出
+        // 拎在手上的那张图：**原尺寸、原位出发、只走竖直**，丢出去时向上飞 + 淡出
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
             Image(
                 painter = painter,
@@ -3045,19 +3045,12 @@ private fun AlbumDragOverlay(
                         with(density) { cellWidth.toDp() },
                         with(density) { cellHeight.toDp() },
                     )
-                    // 缩放/位移挂在最外层：阴影跟着一起动
                     .graphicsLayer {
-                        transformOrigin = TransformOrigin.Center
-                        val s = lerp(1f, fit, lift.value)
-                        // 丢出去时略收一点（6%），像被抛走的手感；其余时刻恒为原尺寸
-                        val toss = 1f - 0.06f * exit.value
-                        scaleX = s * toss
-                        scaleY = s * toss
-                        translationX = cellLeft + offsetX() * settle.value
+                        translationX = cellLeft
                         translationY = cellTop + offsetY() * settle.value - flyUpPx * exit.value
                         alpha = 1f - exit.value
                     }
-                    // 直角 + 阴影：和格子里的那张一模一样，只是"离了地"
+                    // 直角 + 阴影：和格子里那张一模一样，只是"离了地"
                     .shadow(8.dp),
             )
         }

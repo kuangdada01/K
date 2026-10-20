@@ -1,11 +1,17 @@
 package top.kuangdada.k.nativeapp.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
@@ -13,8 +19,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import top.kuangdada.k.core.data.SessionRepository
@@ -22,6 +32,7 @@ import top.kuangdada.k.core.data.ThemePreference
 import top.kuangdada.k.core.designsystem.theme.KTheme
 import top.kuangdada.k.core.designsystem.theme.KType
 import top.kuangdada.k.nativeapp.AppGraph
+import top.kuangdada.k.nativeapp.CrashLog
 
 /**
  * ============================================================
@@ -86,6 +97,39 @@ private fun RootContent(
     val c = KTheme.colors
     val authState by graph.session.state.collectAsState()
     val navigator = rememberAppNavigator(initialDestination)
+
+    /**
+     * 上次崩溃的现场（见 [CrashLog]）：**只弹一次**，读完即删。
+     *
+     * 真机闪退以前只能靠"再复现一次 + 连 USB 抓 logcat"，用户手上没电脑时等于没法排查。
+     * 现在崩完再打开 App 会看到这段堆栈，点「复制」直接贴进聊天即可。
+     */
+    val context = LocalContext.current
+    var crashText by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) { crashText = CrashLog.take(context) }
+    crashText?.let { text ->
+        KAlertDialog(
+            title = "上次闪退了",
+            textContent = {
+                Text(
+                    text = text.take(4000),
+                    style = KType.footnote,
+                    color = c.textSecondary,
+                    modifier = Modifier
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(rememberScrollState()),
+                )
+            },
+            confirmText = "复制",
+            dismissText = "关闭",
+            onConfirm = {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("崩溃日志", text))
+                crashText = null
+            },
+            onDismissRequest = { crashText = null },
+        )
+    }
 
     /**
      * 首次鉴权恢复（幂等：**只有还停在 `Restoring` 才真正发起**）。

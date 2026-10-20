@@ -79,7 +79,7 @@ import top.kuangdada.k.core.designsystem.theme.KType
  *  · 比例不变、内容不裁：框本身就是这张图的比例（`aspectRatio` + `Crop`）；
  *  · 点照片选中，右上角圆圈打勾；最多选 9 张，右下角发送；
  *  · **按住一张往上拖** = 把这张图从相册里**拎出来**：同一张位图、**原尺寸**、
- *    横竖跟手，相册条里它那一格留空（不再有第二张一样的图）；松手够高就发出去
+ *    沿竖直方向跟手（横向不动），相册条里它那一格留空（不再有第二张一样的图）；松手够高就发出去
  *    （2026-10-20 用户按 QQ 参考视频两次纠正："上滑应该是选中相册的位置上滑出去，
  *    不需要重新加载一张" / "上滑不用改变图片本身大小……后面不应该还有图片"）；
  *  · 左下角「相册」才打开系统全屏 Photo Picker；
@@ -106,8 +106,13 @@ fun InlineAlbumPanel(
      * 位图，"抬起"那一下不会重新走一遍取图/解码 —— 用户反馈的"重新加载一张"就是
      * 浮层自己 new 了一个更大的请求、从空白开始加载造成的。
      */
+    /**
+     * 位移**只有上下**：图从原来那一格的位置垂直往上走（用户 2026-10-20 第三次说明：
+     * "上滑是在原来的位置垂直往上"）。横向位移一律忽略 —— 相册条里左右挪图既不像
+     * "发送"，还会把图推出屏幕边。
+     */
     onDragPreviewStart: (painter: Painter, bounds: Rect) -> Unit = { _, _ -> },
-    onDragPreviewMove: (offsetX: Float, offsetY: Float) -> Unit = { _, _ -> },
+    onDragPreviewMove: (offsetY: Float) -> Unit = {},
     onDragPreviewEnd: () -> Unit = {},
     /**
      * 正被"拎在手上"的那张图的 painter。
@@ -230,7 +235,7 @@ fun InlineAlbumPanel(
                                     onDragPreviewStart(painter, bounds)
                                 },
                                 onDragMove = onDragPreviewMove,
-                                onDragEnd = { _, offsetY ->
+                                onDragEnd = { offsetY ->
                                     onDragPreviewEnd()
                                     // 上滑够距离 = 直接发这一张；没够 = 取消（落回相册）
                                     if (offsetY <= -sendDistancePx && !sending) {
@@ -307,7 +312,7 @@ fun InlineAlbumPanel(
  * 手势（2026-10-20，用户参考 QQ）：
  *  · **短按** = 选中 / 取消选中；
  *  · **按住不放**（[ALBUM_LONG_PRESS_MS]）→ 把这一格的图**原地拎起来**（同一张位图、
- *    **尺寸一点不变**），横竖都跟着手指走，原位留空；松手时上滑超过
+ *    **尺寸一点不变**），从原位**垂直**跟着手指往上走，原位留空；松手时上滑超过
  *    [ALBUM_SEND_DISTANCE_DP] 就当"丢出去"发掉，没够就落回原位；
  *  · 没滑够就松手 = 取消（回到面板，不发送）—— 长按本来是"想看看大图"的常见动作，
  *    不设门槛会误发。
@@ -327,8 +332,8 @@ private fun AlbumThumb(
     selectedIndex: Int,
     onToggle: () -> Unit,
     onDragStart: (Painter, Rect) -> Unit,
-    onDragMove: (Float, Float) -> Unit,
-    onDragEnd: (dx: Float, dy: Float) -> Unit,
+    onDragMove: (Float) -> Unit,
+    onDragEnd: (Float) -> Unit,
     /** 页面层正在画的那张图（= 已被拎走）：实例相等就把这一格画成透明 */
     liftedPainter: Painter?,
 ) {
@@ -421,24 +426,20 @@ private fun AlbumThumb(
                     }
                     // 长按成立：把**这一格已经解码好的图 + 它现在的位置**交给浮层
                     // （浮图就是这张图本身，从这里被拎起来，不重新加载），
-                    // 之后每一帧把**累计位移（横竖都算）**交给调用方 —— 用户要的是
-                    // "跟手自然"，只跟上下走会像被轨道卡住。同时 consume 掉，
-                    // 把列表的横向滚动挡在门外。
+                    // 之后每一帧把**累计纵向位移**交给调用方（横向不跟手，见入参注释）。
+                    // 横竖两个轴的事件都要 consume：不吃掉的话相册条会跟着横向滚。
                     dragStart(currentPainter, boundsInRoot)
-                    var totalX = 0f
                     var totalY = 0f
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) {
-                            dragEnd(totalX, totalY)
+                            dragEnd(totalY)
                             break
                         }
-                        val delta = change.positionChange()
-                        totalX += delta.x
-                        totalY += delta.y
+                        totalY += change.positionChange().y
                         change.consume()
-                        dragMove(totalX, totalY)
+                        dragMove(totalY)
                     }
                 }
             },
@@ -520,32 +521,43 @@ private data class AlbumPhoto(val uri: Uri, val width: Int, val height: Int) {
 /** MediaStore 最近照片（按添加时间倒序，最多 [limit] 张） */
 private fun queryRecentImages(context: Context, limit: Int): List<AlbumPhoto> {
     val out = ArrayList<AlbumPhoto>(limit)
+    /** 已收过的 uri：`LazyRow` 的 `key = uri` 撞车会直接抛异常把进程带走，宁可少一张 */
+    val seen = HashSet<Uri>(limit)
     val projection = arrayOf(
         MediaStore.Images.Media._ID,
         MediaStore.Images.Media.WIDTH,
         MediaStore.Images.Media.HEIGHT,
     )
-    context.contentResolver.query(
-        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-        projection,
-        null,
-        null,
-        "${MediaStore.Images.Media.DATE_ADDED} DESC",
-    )?.use { cursor ->
-        val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
-        val widthColumn = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
-        val heightColumn = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
-        while (cursor.moveToNext() && out.size < limit) {
-            out.add(
-                AlbumPhoto(
-                    uri = ContentUris.withAppendedId(
-                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                        cursor.getLong(idColumn),
-                    ),
-                    width = if (widthColumn >= 0) cursor.getInt(widthColumn) else 0,
-                    height = if (heightColumn >= 0) cursor.getInt(heightColumn) else 0,
+    /**
+     * 读相册失败（权限被系统收回、MediaStore 正在重建索引、Android 14 "仅选中的照片"
+     * 模式变化…）一律当成"没有照片"处理 —— 这个函数跑在 `LaunchedEffect` 里，
+     * 抛出去就是**整个 App 闪退**，而不是面板显示一句提示。
+     */
+    runCatching {
+        context.contentResolver.query(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            projection,
+            null,
+            null,
+            "${MediaStore.Images.Media.DATE_ADDED} DESC",
+        )?.use { cursor ->
+            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
+            val widthColumn = cursor.getColumnIndex(MediaStore.Images.Media.WIDTH)
+            val heightColumn = cursor.getColumnIndex(MediaStore.Images.Media.HEIGHT)
+            while (cursor.moveToNext() && out.size < limit) {
+                val uri = ContentUris.withAppendedId(
+                    MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                    cursor.getLong(idColumn),
                 )
-            )
+                if (!seen.add(uri)) continue
+                out.add(
+                    AlbumPhoto(
+                        uri = uri,
+                        width = if (widthColumn >= 0) cursor.getInt(widthColumn) else 0,
+                        height = if (heightColumn >= 0) cursor.getInt(heightColumn) else 0,
+                    )
+                )
+            }
         }
     }
     return out

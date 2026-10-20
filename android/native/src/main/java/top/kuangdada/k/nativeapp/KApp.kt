@@ -55,6 +55,9 @@ class KApp : Application(), SingletonImageLoader.Factory {
         private set
 
     override fun onCreate() {
+        // ⚠️ 必须在最前面：装晚了会漏掉启动阶段的崩溃（见 CrashLog 的注释）。
+        // 只留一份现场文件，不改任何崩溃行为，下次启动由 AppRoot 弹出来。
+        CrashLog.install(this)
         super.onCreate()
         graph = AppGraph(this)
         /*
