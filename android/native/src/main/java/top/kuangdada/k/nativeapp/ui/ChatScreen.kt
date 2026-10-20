@@ -495,6 +495,22 @@ fun ChatScreen(
      */
     var emojiOpen by remember { mutableStateOf(false) }
     /**
+     * 收起**所有**输入辅助面板（语音 / 表情 / 内嵌相册）。
+     *
+     * 点消息列表空白、上下滑动消息列表都走这里。此前点空白只写了 `emojiOpen = false`，
+     * 语音/相册面板开着时点哪儿都收不掉 —— 就是用户反馈的「功能区不能点击其他地方收起」。
+     *
+     * **收起不是瞬间的**：三个开关关掉后，`panelFraction` 会 `animateTo(0f)` 把交换区
+     * 高度缩回导航栏那一档，面板内容按 `lastOpenPanel` 继续画到高度归零为止（见上面的
+     * 展开曲线）。所以调用方只管关开关，不用自己处理"闪一下就没"。
+     */
+    fun closeComposerPanels() {
+        // 录音中要连麦克风一起停：面板都不在屏幕上了，不该继续占着麦克风
+        closeVoiceMode()
+        emojiOpen = false
+        albumOpen = false
+    }
+    /**
      * 输入框的聚焦态。聚焦 = 要打字 → 面板给键盘让位，但**不是立刻撤** ——
      * 立刻撤的话面板先消失、输入栏先掉到屏幕底、再被升起的键盘顶回来，
      * 正是用户反馈的"点表情再点输入框，输入框从底下抬起，不自然"。
@@ -713,7 +729,8 @@ fun ChatScreen(
             }
         }
         /**
-         * 上下翻聊天记录时**也**收起键盘（用户反馈：只有"点一下"能收，翻记录时不收）。
+         * 上下翻聊天记录时**也**收起键盘与输入辅助面板（用户反馈：只有"点一下"能收，
+         * 翻记录时不收）。
          *
          * 判据是**用户手指拖拽的起点**（[DragInteraction.Start]），不是
          * `listState.isScrollInProgress` —— 后者把**程序化滚动**也算进去，而发完消息
@@ -721,8 +738,9 @@ fun ChatScreen(
          * 连发几条根本没法用。拖拽交互是 `scrollable` 里只有手指真的在拖才会发的事件，
          * 惯性甩动属于同一次拖拽（起点已经收过键盘，不需要重复收）。
          *
-         * 列表是 `reverseLayout`，键盘收起只改动输入栏那一块的高度，列表内容位置不动，
-         * 所以"收起键盘"本身不会让聊天记录跳 —— 这是敢在滚动里收键盘的前提。
+         * 面板收起走 `panelFraction.animateTo(0f)`（约 300ms 弹簧），和手指的拖动并行，
+         * 不是"一滑就啪一下没了"；列表是 `reverseLayout`，交换区变矮只是从底部让出空间，
+         * 已有内容不会跟着跳。
          */
         LaunchedEffect(listState) {
             listState.interactionSource.interactions.collect { interaction ->
@@ -730,6 +748,7 @@ fun ChatScreen(
                     // 用户动手了：从此不再自动贴底（判据见 ChatScreen 里 userDragged 的注释）
                     userDragged = true
                     keyboard?.hide()
+                    closeComposerPanels()
                 }
             }
         }
@@ -896,7 +915,29 @@ fun ChatScreen(
              * 这正是这个 bug 的隐蔽之处：一半对一半不对）。骨架/消息列表分支是 fillMaxSize，
              * 宽度有没有都一样；补上之后对它们无感。
              */
-            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    /**
+                     * 点消息区空白 → 收键盘 + 收起**所有**输入辅助面板（语音/表情/相册）。
+                     *
+                     * 手势挂在**外层 Box** 上而不是列表上：这样"还没有消息"的空态、
+                     * 加载骨架、加载失败三种分支也都能收（此前只有有消息的那条分支挂了
+                     * 手势，新会话里面板开着就点不掉了）。
+                     *
+                     * 气泡/按钮自己的点击会消费事件，不会冒泡到这里 —— 点菜单、点头像
+                     * 仍然走各自的行为，不会顺手把面板收掉。
+                     *
+                     * 收起有动画（`panelFraction` 弹簧回 0，约 300ms），不是瞬间消失。
+                     */
+                    .pointerInput(Unit) {
+                        detectTapGestures {
+                            keyboard?.hide()
+                            closeComposerPanels()
+                        }
+                    },
+            ) {
                 when {
                     /**
                      * **有内容就先渲染**（缓存命中，或 SSE 已经刷过）：连加载失败也**不把已有消息
@@ -905,15 +946,7 @@ fun ChatScreen(
                     items.isNotEmpty() -> LazyColumn(
                         state = listState,
                         modifier = Modifier
-                            .fillMaxSize()
-                            // 点列表空白处：收键盘**并收起表情面板** —— 两个都挡内容，
-                            // 用户点这里就是想说"我要看消息/我要打字了"
-                            .pointerInput(Unit) {
-                                detectTapGestures {
-                                    keyboard?.hide()
-                                    emojiOpen = false
-                                }
-                            },
+                            .fillMaxSize(),
                         /**
                          * **reverseLayout**：最新一条是列表的 index 0、天然贴在底部。
                          *
