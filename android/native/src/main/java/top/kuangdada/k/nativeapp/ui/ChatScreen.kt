@@ -83,7 +83,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
@@ -844,8 +843,19 @@ fun ChatScreen(
         val ime = WindowInsets.ime
         val nav = WindowInsets.navigationBars
         val navBottomPx = nav.getBottom(density)
-        /** 键盘最近一次的**全高**（升起动画取最大值即终值）；面板与其等高才能原地换位 */
-        var lastImeBottomPx by rememberSaveable { mutableIntStateOf(0) }
+        /**
+         * 键盘最近一次的**全高**（升起动画取最大值即终值）；面板与其等高才能原地换位。
+         *
+         * ⚠️ **普通数组，刻意不是 State**（2026-10-20 用户反馈"一唤醒/收起键盘，消息内容就
+         * 上下弹跳"）：它以前是 `rememberSaveable` 的 State，并且在 IME 动画的**每一帧**
+         * 写一次（`if (it > last) last = it`）—— 而它在组合期被读来算面板高，于是键盘升起的
+         * 三十多帧里整个 ChatScreen 要**重组三十多次**（连 LazyColumn 的 item DSL、每个气泡的
+         * `SubcomposeAsyncImage` 一起），列表在动画中间被反复测量/重排，看起来就是上下抖。
+         *
+         * 现在值照旧记，但组合期不订阅它：面板要用高度时在**开面板那一刻**取一次
+         * （见下面 `LaunchedEffect(openPanel)`）。键盘动画期间组合期完全不参与。
+         */
+        val imeMaxPx = remember { intArrayOf(0) }
         /**
          * IME 高度的**镜像状态**（面板↔键盘交接等待用，见下面 LaunchedEffect(inputFocused)）。
          * 老实现靠"每次重组回写"喂它，根作用域因此被迫订阅 IME；现在改由下面的
@@ -857,7 +867,7 @@ fun ChatScreen(
             // 不触发任何重组（捕获的 ime/nav 是 WindowInsetsHolder 里的稳定单例）
             snapshotFlow { ime.getBottom(density) }.collect {
                 imeBottomState = it
-                if (it > lastImeBottomPx) lastImeBottomPx = it
+                if (it > imeMaxPx[0]) imeMaxPx[0] = it
                 // 跨页共享：别的地方以后弹键盘，聊天页的面板也能按真实高度画
                 if (it > 0) KeyboardHeightMemory.lastDp = with(density) { it.toDp().value }
             }
@@ -872,12 +882,23 @@ fun ChatScreen(
          *  1. 本次会话量到过键盘 → 用它；
          *  2. 本次没量到、但进程里别处量到过 → 用那个（[KeyboardHeightMemory]）；
          *  3. 完全没量到过（刚装好就点相册）→ 按屏高 42% 估一个，量级和常见键盘一致。
+         *
+         * ★ **只在开面板那一刻取值**（`LaunchedEffect(openPanel)`，见下），不是每次重组
+         * 都从 IME 状态重算 —— 后者会让组合期订阅键盘高度，键盘动画每帧整页重组
+         * （2026-10-20 "消息内容上下弹跳"的根因之一）。初值取进程内记录/屏高估算，
+         * 不用 0：首帧就要按真实高度画，否则面板会先塌一下再长出来。
          */
-        val panelHeightPx = when {
-            lastImeBottomPx > 0 -> lastImeBottomPx
-            KeyboardHeightMemory.lastDp > 0f ->
-                with(density) { KeyboardHeightMemory.lastDp.dp.toPx() }.roundToInt()
-            else -> (LocalConfiguration.current.screenHeightDp * density.density * 0.42f).roundToInt()
+        // 初值在组合期算好（LocalConfiguration 是 @Composable getter，不能进 remember 的 lambda）
+        val estimatedPanelPx =
+            (LocalConfiguration.current.screenHeightDp * density.density * 0.42f).roundToInt()
+        var panelHeightPx by remember {
+            mutableIntStateOf(
+                if (KeyboardHeightMemory.lastDp > 0f) {
+                    with(density) { KeyboardHeightMemory.lastDp.dp.toPx() }.roundToInt()
+                } else {
+                    estimatedPanelPx
+                }
+            )
         }
         val panelGridHeightDp = with(density) { (panelHeightPx - navBottomPx).toDp() }
 
@@ -891,6 +912,13 @@ fun ChatScreen(
             albumOpen -> ChatPanel.Album
             emojiOpen -> ChatPanel.Emoji
             else -> ChatPanel.None
+        }
+        // 开面板那一刻才把"键盘真实全高"写进组合状态：键盘动画期间组合期不参与，
+        // 面板高度也不会在动画中途被改（改一次 = 整块面板重新测量 = 抖一下）
+        LaunchedEffect(openPanel) {
+            if (openPanel == ChatPanel.None) return@LaunchedEffect
+            val measured = imeMaxPx[0]
+            if (measured > 0 && measured != panelHeightPx) panelHeightPx = measured
         }
         /**
          * 关闭面板时布尔量先变 false，但高度还在 `panelFraction` 上做退场动画 ——
