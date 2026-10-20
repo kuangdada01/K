@@ -43,10 +43,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
@@ -91,7 +94,7 @@ fun InlineAlbumPanel(
      * （全屏、模糊背景 + 大图 + 提示）—— 那个浮层要盖住顶栏、还要能超出面板高度，
      * 画在面板里会被交换区的 `clipToBounds` 裁掉。
      */
-    onDragPreviewStart: (uri: Uri, aspect: Float) -> Unit = { _, _ -> },
+    onDragPreviewStart: (uri: Uri, aspect: Float, bounds: Rect) -> Unit = { _, _, _ -> },
     onDragPreviewMove: (offsetY: Float) -> Unit = {},
     onDragPreviewEnd: () -> Unit = {},
 ) {
@@ -203,7 +206,9 @@ fun InlineAlbumPanel(
                                     if (idx >= 0) selected.removeAt(idx)
                                     else if (selected.size < 9) selected.add(photo.uri)
                                 },
-                                onDragStart = { onDragPreviewStart(photo.uri, photo.aspect()) },
+                                onDragStart = { bounds ->
+                                    onDragPreviewStart(photo.uri, photo.aspect(), bounds)
+                                },
                                 onDragMove = onDragPreviewMove,
                                 onDragEnd = { offsetY ->
                                     onDragPreviewEnd()
@@ -299,7 +304,7 @@ private fun AlbumThumb(
     height: Dp,
     selectedIndex: Int,
     onToggle: () -> Unit,
-    onDragStart: () -> Unit,
+    onDragStart: (Rect) -> Unit,
     onDragMove: (Float) -> Unit,
     onDragEnd: (Float) -> Unit,
 ) {
@@ -308,12 +313,21 @@ private fun AlbumThumb(
     val dragStart by rememberUpdatedState(onDragStart)
     val dragMove by rememberUpdatedState(onDragMove)
     val dragEnd by rememberUpdatedState(onDragEnd)
+    /**
+     * 这一格在**根坐标系**里的位置与尺寸。
+     *
+     * 长按拖拽时浮图要从**这张图当前所在的位置**开始，而不是凭空在屏幕中央出现
+     * （用户反馈："不是重新来一张从中间发送"）。所以每次布局都记一下自己的矩形，
+     * 长按成立的那一刻把它交给页面层的浮层。
+     */
+    var boundsInRoot by remember { mutableStateOf(Rect.Zero) }
     Box(
         modifier = Modifier
             .height(height)
             // 宽度完全由原图比例决定（aspectRatio 会按已定的高度算出宽度）
             .aspectRatio(aspect.coerceIn(0.2f, 5f))
             .background(Color.Black)
+            .onGloballyPositioned { boundsInRoot = it.boundsInRoot() }
             .pointerInput(uri) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -350,7 +364,7 @@ private fun AlbumThumb(
                     }
                     // 长按成立：之后每一帧把**累计**位移交给调用方（浮层按它移动），
                     // 同时 consume 掉，把列表的横向滚动挡在门外
-                    dragStart()
+                    dragStart(boundsInRoot)
                     var totalY = 0f
                     while (true) {
                         val event = awaitPointerEvent()

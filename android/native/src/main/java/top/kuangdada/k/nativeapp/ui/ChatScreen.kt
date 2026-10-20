@@ -163,7 +163,6 @@ import top.kuangdada.k.core.designsystem.component.KButton
 import top.kuangdada.k.core.designsystem.component.KButtonVariant
 import top.kuangdada.k.core.designsystem.component.KEmojiButton
 import top.kuangdada.k.core.designsystem.component.KEmojiPanel
-import top.kuangdada.k.core.designsystem.component.KEmojiPanelHeight
 import top.kuangdada.k.core.designsystem.component.KPlaceholder
 import top.kuangdada.k.core.designsystem.component.KPlaceholderKind
 import top.kuangdada.k.core.designsystem.component.KTextField
@@ -254,6 +253,8 @@ fun ChatScreen(
     var albumDragUri by remember { mutableStateOf<Uri?>(null) }
     var albumDragAspect by remember { mutableFloatStateOf(1f) }
     var albumDragOffset by remember { mutableFloatStateOf(0f) }
+    /** 被按住那一格在屏幕上的矩形：浮图从**这里**开始，而不是凭空出现在屏幕中央 */
+    var albumDragBounds by remember { mutableStateOf(Rect.Zero) }
     /**
      * 输入内容。**刻意用 MutableState 而不是 `var input by`**：组合期唯一读它的地方
      * 是 [ChatInputField] 内部的 `input.value`（KTextField 的 value）—— 读取被圈在
@@ -827,14 +828,26 @@ fun ChatScreen(
             snapshotFlow { ime.getBottom(density) }.collect {
                 imeBottomState = it
                 if (it > lastImeBottomPx) lastImeBottomPx = it
+                // 跨页共享：别的地方以后弹键盘，聊天页的面板也能按真实高度画
+                if (it > 0) KeyboardHeightMemory.lastDp = with(density) { it.toDp().value }
             }
         }
 
-        // 面板全高与 IME 全高同口径（都含导航栏那一条），网格内容再自己避让导航栏
-        val panelHeightPx = if (lastImeBottomPx > 0) {
-            lastImeBottomPx
-        } else {
-            navBottomPx + with(density) { KEmojiPanelHeight.toPx() }.roundToInt()
+        /**
+         * 面板全高（与 IME 全高同口径，都含导航栏那一条）。
+         *
+         * **只认"键盘高度"这一种高度**（用户反馈："功能区有两种高度，只保留键盘唤起
+         * 在点功能区的高度"）——以前没弹过键盘时退回 `导航栏 + 240dp`，和真实键盘高度
+         * 差着一大截，同一个面板第一次点、弹过键盘后点会是两个高度。现在：
+         *  1. 本次会话量到过键盘 → 用它；
+         *  2. 本次没量到、但进程里别处量到过 → 用那个（[KeyboardHeightMemory]）；
+         *  3. 完全没量到过（刚装好就点相册）→ 按屏高 42% 估一个，量级和常见键盘一致。
+         */
+        val panelHeightPx = when {
+            lastImeBottomPx > 0 -> lastImeBottomPx
+            KeyboardHeightMemory.lastDp > 0f ->
+                with(density) { KeyboardHeightMemory.lastDp.dp.toPx() }.roundToInt()
+            else -> (LocalConfiguration.current.screenHeightDp * density.density * 0.42f).roundToInt()
         }
         val panelGridHeightDp = with(density) { (panelHeightPx - navBottomPx).toDp() }
 
@@ -1493,9 +1506,10 @@ fun ChatScreen(
                                 modifier = panelModifier,
                                 // 拖拽预览的浮层在整页层级画（见 AlbumDragOverlay）：
                                 // 面板自己会被交换区 clipToBounds 裁掉，图抬不出面板
-                                onDragPreviewStart = { uri, aspect ->
+                                onDragPreviewStart = { uri, aspect, bounds ->
                                     albumDragUri = uri
                                     albumDragAspect = aspect
+                                    albumDragBounds = bounds
                                     albumDragOffset = 0f
                                 },
                                 onDragPreviewMove = { albumDragOffset = it },
@@ -1577,9 +1591,10 @@ fun ChatScreen(
         }
 
         // 相册「上滑松手发送」浮层：盖在整页最上层（连顶栏一起），
-        // 拖拽期间底层压暗，把浮起的图衬出来
+        // 拖拽期间整页盖一层白（参考图就是浅色背景），把浮起的图衬出来
         AlbumDragOverlay(
             uri = albumDragUri,
+            bounds = albumDragBounds,
             aspect = albumDragAspect,
             offsetY = { albumDragOffset },
         )
@@ -2873,23 +2888,36 @@ private fun ChatSendButton(
 @Composable
 private fun AlbumDragOverlay(
     uri: Uri?,
+    bounds: Rect,
     aspect: Float,
     offsetY: () -> Float,
 ) {
     if (uri == null) return
+    val c = KTheme.colors
+    val density = LocalDensity.current
     val cfg = LocalConfiguration.current
-    // 浮图上限：宽 74% 屏宽、高 42% 屏高；比例不变，取更严的那一边
-    val maxWidth = (cfg.screenWidthDp * 0.74f).dp
-    val maxHeight = (cfg.screenHeightDp * 0.42f).dp
     val safeAspect = aspect.coerceIn(0.2f, 5f)
-    val previewWidth = minOf(maxWidth, maxHeight * safeAspect)
-    val previewHeight = previewWidth / safeAspect
+    val screenWidthPx = cfg.screenWidthDp * density.density
+    val screenHeightPx = cfg.screenHeightDp * density.density
+    /**
+     * 浮图 = **被按住的那一格**放大 1.55 倍，中心仍在格子原来的位置；
+     * 手指一滑，整张图跟着走（用户要求的"选中滑行图片跟手滑出"，不是凭空来一张新的）。
+     * 宽度封顶屏宽 72%，避免横图把屏撑爆。
+     */
+    val hasBounds = bounds.width > 0f && bounds.height > 0f
+    val baseWidth = if (hasBounds) bounds.width else screenWidthPx * 0.42f
+    val baseHeight = if (hasBounds) bounds.height else baseWidth / safeAspect
+    val previewWidth = (baseWidth * 1.55f).coerceAtMost(screenWidthPx * 0.72f)
+    val previewHeight = previewWidth * (baseHeight / baseWidth)
+    val centerX = if (hasBounds) bounds.center.x else screenWidthPx / 2f
+    val centerY = if (hasBounds) bounds.center.y else screenHeightPx / 2f
 
     Box(modifier = Modifier.fillMaxSize()) {
+        // 白色压层（参考图就是浅色背景，不是黑色）+ 吃掉所有触摸
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.55f))
+                .background(Color.White.copy(alpha = 0.72f))
                 .pointerInput(Unit) {
                     awaitPointerEventScope {
                         while (true) {
@@ -2898,28 +2926,35 @@ private fun AlbumDragOverlay(
                     }
                 },
         )
-        // 提示：纸飞机 + 松手发送（放在屏幕上方，和参考图一致）
+        // 提示：纸飞机 + 松手发送（屏幕上方，和参考图一致；白色背景上用深色才看得清）
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = (cfg.screenHeightDp * 0.22f).dp),
+                .padding(top = (cfg.screenHeightDp * 0.2f).dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Glyph(tint = Color.White, kind = GlyphKind.Send, size = 30.dp)
+            Glyph(tint = c.textPrimary, kind = GlyphKind.Send, size = 30.dp)
             Spacer(Modifier.height(KSpacing.xs))
-            Text(text = "松手发送", style = KType.body, color = Color.White)
+            Text(text = "松手发送", style = KType.body, color = c.textPrimary)
         }
-        // 浮起的图：跟着手指上下走
+        // 浮起的图：从原格子的位置出发，跟着手指上下走
         AsyncImage(
             model = uri,
             contentDescription = null,
-            contentScale = ContentScale.Fit,
+            contentScale = ContentScale.Crop,
             modifier = Modifier
-                .align(Alignment.Center)
-                .offset { IntOffset(0, offsetY().roundToInt()) }
-                .size(previewWidth, previewHeight)
-                .clip(RoundedCornerShape(KRadius.card))
-                .border(2.dp, Color.White.copy(alpha = 0.9f), RoundedCornerShape(KRadius.card)),
+                .offset {
+                    IntOffset(
+                        (centerX - previewWidth / 2f).roundToInt(),
+                        (centerY - previewHeight / 2f + offsetY()).roundToInt(),
+                    )
+                }
+                .size(
+                    with(density) { previewWidth.toDp() },
+                    with(density) { previewHeight.toDp() },
+                )
+                .shadow(6.dp, RoundedCornerShape(KRadius.control))
+                .clip(RoundedCornerShape(KRadius.control)),
         )
     }
 }
