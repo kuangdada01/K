@@ -215,7 +215,14 @@ fun InlineAlbumPanel(
                      * 解码完再一起重排 —— 打开相册那一下会明显抖一下。
                      */
                     val cellHeight = maxHeight
-                    LazyRow(
+                    /**
+                     * ⚠️ 高度还是 0 就**先不画**（2026-10-20 闪退的现场）：
+                     * 面板展开动画从 `panelFraction = 0` 起跑，内容会先被组合一帧，
+                     * 那一帧交换区高度是 0 → 每格 `height = 0` → Coil 收到 `size(0, 0)` →
+                     * `IllegalArgumentException: px must be > 0.` 崩在组合期（"点相册闪退"）。
+                     * 0 高本来就看不见东西，等它长起来再画；`AlbumThumb` 里还有一道 px 下限兜底。
+                     */
+                    if (cellHeight > 0.dp) LazyRow(
                         // 不设 horizontalArrangement（默认零间距）= 挨着
                         modifier = Modifier.fillMaxSize(),
                     ) {
@@ -361,15 +368,23 @@ private fun AlbumThumb(
      *  · 尺寸 = 格子的像素尺寸 → 和格子里画的**完全同一张位图**，浮层直接拿去放大，
      *    不需要第二次解码，用户说的"不要重新加载一张"就落在这里；
      *  · key 里带上 height/aspect：键盘高度变了、格子重排时请求跟着换，图不会被拉花。
+     *
+     * ⚠️ **解码尺寸必须 ≥ 1px**（2026-10-20 的闪退就是这么来的）：
+     * 面板刚展开的那一帧，交换区高度还是 0（`panelFraction` 从 0 起跑，内容先组合了一帧）
+     * → `maxHeight` = 0 → 直接算出来 `size(0, 0)` → Coil 的 `Dimension.Pixels` 在
+     * `require(px > 0)` 上抛 `IllegalArgumentException: px must be > 0.`，崩在组合期，
+     * 表现就是"点相册直接闪退"。这里夹到 [1, 上限]，顺便把非有限值（NaN/Infinity，
+     * `roundToPx()` 会直接抛）也挡掉。
      */
+    val requestWidth = with(density) { (height * cellAspect).roundToPx() }
+        .takeIf { height.value.isFinite() && it > 0 }?.coerceAtMost(4_096) ?: 1
+    val requestHeight = with(density) { height.roundToPx() }
+        .takeIf { height.value.isFinite() && it > 0 }?.coerceAtMost(4_096) ?: 1
     val painter = rememberAsyncImagePainter(
-        model = remember(uri, height, cellAspect, density) {
+        model = remember(uri, requestWidth, requestHeight) {
             ImageRequest.Builder(context)
                 .data(uri)
-                .size(
-                    with(density) { (height * cellAspect).roundToPx() },
-                    with(density) { height.roundToPx() },
-                )
+                .size(requestWidth, requestHeight)
                 .build()
         },
     )
