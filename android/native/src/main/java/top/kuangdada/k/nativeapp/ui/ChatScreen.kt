@@ -83,6 +83,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -177,6 +178,17 @@ import top.kuangdada.k.core.designsystem.theme.KType
 import top.kuangdada.k.core.designsystem.theme.LocalAnimationsEnabled
 import top.kuangdada.k.nativeapp.notify.SocialNotifier
 import top.kuangdada.k.nativeapp.ui.viewer.rememberImageViewer
+
+/**
+ * 输入栏下方交换区里当前**显示哪一个**面板。
+ *
+ * 三态互斥：语音（按住说话）/ 表情 / 内嵌相册。原先用三个布尔量各自 `if` 判断，
+ * 退场动画期间布尔量已经变 false、高度还在往回收，就会串台成另一个面板
+ * （关语音时闪一下表情键盘）—— 这里收成一个单选量，配合"记住最后一次打开的"
+ * 解决退场期间的渲染。
+ */
+private enum class ChatPanel { None, Voice, Emoji, Album }
+
 /**
  * ============================================================
  * 聊天（沉浸态：隐藏底部导航）
@@ -794,32 +806,52 @@ fun ChatScreen(
 
         /** 面板展开比例 0..1：0 = 收起，1 = 与键盘等高占满交换区 */
         val panelFraction = remember { Animatable(0f) }
+        /** 面板全高（dp）：语音/相册面板按这个高度画，由交换区的 clipToBounds 裁剪 */
+        val panelFullHeightDp = with(density) { panelHeightPx.toDp() }
+        /** 该显示哪个面板（三选一）。见下方 [shownPanel] 为什么要留一个 last。 */
+        val openPanel = when {
+            voiceMode -> ChatPanel.Voice
+            albumOpen -> ChatPanel.Album
+            emojiOpen -> ChatPanel.Emoji
+            else -> ChatPanel.None
+        }
+        /**
+         * 关闭面板时布尔量先变 false，但高度还在 `panelFraction` 上做退场动画 ——
+         * 这段时间必须继续画**刚才那个**面板。不留 last 的话，关语音的那一帧
+         * 会落进"否则画表情面板"的分支，用户看到的就是"关语音闪一下表情键盘"。
+         */
+        var lastOpenPanel by remember { mutableStateOf(ChatPanel.None) }
+        SideEffect { if (openPanel != ChatPanel.None) lastOpenPanel = openPanel }
+        val shownPanel = if (openPanel != ChatPanel.None) openPanel else lastOpenPanel
+
         LaunchedEffect(emojiOpen, voiceMode, albumOpen) {
             /**
-             * 语音面板占着交换区时**不要动** panelFraction。
+             * 三个面板共用**一条**展开曲线（2026-10-20）。
              *
-             * 跳变根因（2026-10-19 用户反馈"点表情→点语音→再点表情会跳"）：
-             * 进语音模式时 `emojiOpen=false` 会把 panelFraction 动画到 0；再点表情时
-             * 高度由 panelFraction 驱动，于是从 0 重新长到 1 —— 看起来就是整条输入区
-             * 先塌下去再弹回来。冻结在 1 后，回表情是等高无缝切换。
+             * 两次"跳"的根因：
+             *  1. 交换区高度原来写成 `if (voiceMode || albumOpen) 1f else panelFraction.value`：
+             *     开语音/相册是**一帧拉到满高**（输入栏瞬移上去），关的时候却有 animateTo(0)
+             *     的退场动画 —— 进硬跳、出慢收，点一下就是"弹一下"；
+             *  2. 语音模式下键盘是收着的（进语音时 hide + clearFocus），此时点表情，
+             *     emoji 分支里 `if (ime.getBottom() > 0) 1f else 0f` 判到 IME=0，把已经
+             *     满高的 panelFraction **写回 0** —— 于是「语音 → 表情」先塌到底再长回来。
+             *     bd8bbb2 只冻结了进语音时的 fraction，没堵住 emoji 分支这条回写。
+             *
+             * 现在：高度只认 panelFraction（见交换区 Box）；打开时**从当前值动画到 1**
+             * （已在 1 就原地不动，面板互切天然等高无缝）；只有"键盘正占着交换区"
+             * 这一种情况才瞬时占满，否则面板会从键盘底下顶出来、输入栏跟着跳。
              */
-            if (voiceMode || albumOpen) {
-                // 冻结在"满高"：即使进语音/相册前表情是关的，回表情时也不用从 0 长出来
-                panelFraction.snapTo(1f)
-                return@LaunchedEffect
-            }
-            if (emojiOpen) {
-                if (!animationsEnabled) {
-                    panelFraction.snapTo(1f)
-                } else {
-                    // 从键盘状态打开 → 瞬时占位（键盘滑走露出面板）；平时从底边长出。
-                    // 事件期读取（effect 只在 emojiOpen 变化时跑一次），不订阅 IME
-                    panelFraction.snapTo(if (ime.getBottom(density) > 0) 1f else 0f)
-                    panelFraction.animateTo(1f, KMotion.spatialBounded<Float>())
-                }
-            } else {
+            if (openPanel == ChatPanel.None) {
                 if (!animationsEnabled) panelFraction.snapTo(0f)
                 else panelFraction.animateTo(0f, KMotion.spatialBounded<Float>())
+                return@LaunchedEffect
+            }
+            // 事件期读取 IME 高度（effect 每次开关只跑一次，不订阅键盘动画）
+            val imeUp = ime.getBottom(density) > 0
+            if (!animationsEnabled || imeUp) {
+                panelFraction.snapTo(1f)
+            } else {
+                panelFraction.animateTo(1f, KMotion.spatialBounded<Float>())
             }
         }
 
@@ -1275,7 +1307,9 @@ fun ChatScreen(
                                 boxSize = 36.dp,
                                 iconSize = 28.dp,
                                 onClick = {
-                                    voiceMode = false
+                                    // 走 closeVoiceMode 而不是直接 `voiceMode = false`：
+                                    // 录到一半切面板时要先停掉麦克风（面板都没了，还在录就是 bug）
+                                    closeVoiceMode()
                                     albumOpen = false
                                     emojiOpen = !emojiOpen
                                     if (emojiOpen) {
@@ -1355,62 +1389,75 @@ fun ChatScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         // 布局期读取交换区高度（max(IME, 面板×比例, 导航栏)，见 ExchangeZone.kt）
-                        // —— 键盘/面板动画期间这里只重布局，不重组整页
-                        .exchangeZoneHeight(density, ime, nav, panelHeightPx) {
-                            if (voiceMode || albumOpen) 1f else panelFraction.value
-                        }
+                        // —— 键盘/面板动画期间这里只重布局，不重组整页。
+                        // 三个面板**一律**由 panelFraction 驱动：开是"从底边长出"、关是"缩回底边"，
+                        // 进出同一条曲线，不再有"开语音一帧拉满"的硬跳。
+                        .exchangeZoneHeight(density, ime, nav, panelHeightPx) { panelFraction.value }
                         .clipToBounds(),
                     contentAlignment = Alignment.BottomCenter,
                 ) {
-                    if (voiceMode) {
-                        VoiceInputPanel(
-                            recording = recordingVoice,
-                            elapsedMs = recorder.elapsedMs,
-                            levels = recordLevels,
-                            cancelZone = recordCancelZone,
-                            onStart = {
-                                when {
-                                    sendingVoice -> {
-                                        toast = "正在发送语音，请稍候"
-                                        false
+                    /**
+                     * 面板都用**展开前的定高**画（底边对齐 + 外层 clipToBounds 裁剪）：
+                     * 高度增长时整块从底边推上来，内容不跟着重排 —— 若用 fillMaxSize，
+                     * 每帧高度变化都会让内容重新居中，看起来像"面板里的东西自己在滑"。
+                     */
+                    val panelModifier = Modifier
+                        .fillMaxWidth()
+                        .height(panelFullHeightDp)
+                    // 三个开关都关了、且高度也收回到 0 → 才真正把内容移出组合
+                    val panelGone = openPanel == ChatPanel.None && panelFraction.value <= 0f
+                    if (!panelGone) {
+                        when (shownPanel) {
+                            ChatPanel.Voice -> VoiceInputPanel(
+                                recording = recordingVoice,
+                                elapsedMs = recorder.elapsedMs,
+                                levels = recordLevels,
+                                cancelZone = recordCancelZone,
+                                onStart = {
+                                    when {
+                                        sendingVoice -> {
+                                            toast = "正在发送语音，请稍候"
+                                            false
+                                        }
+                                        !hasRecordPermission -> {
+                                            recordPermission.launch(Manifest.permission.RECORD_AUDIO)
+                                            false
+                                        }
+                                        else -> startVoiceRecording()
                                     }
-                                    !hasRecordPermission -> {
-                                        recordPermission.launch(Manifest.permission.RECORD_AUDIO)
-                                        false
-                                    }
-                                    else -> startVoiceRecording()
-                                }
-                            },
-                            onFinish = { finishVoiceRecording() },
-                            onCancel = { cancelVoiceRecording() },
-                            onCancelZoneChange = { recordCancelZone = it },
-                            onTap = { toast = "长按说话" },
-                        )
-                    } else if (albumOpen) {
-                        InlineAlbumPanel(
-                            sending = sending,
-                            onSend = { uris -> sendImageUris(uris) },
-                            onOpenSystemGallery = {
-                                pickChatImage.launch(
-                                    PickVisualMediaRequest(
-                                        ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                },
+                                onFinish = { finishVoiceRecording() },
+                                onCancel = { cancelVoiceRecording() },
+                                onCancelZoneChange = { recordCancelZone = it },
+                                onTap = { toast = "长按说话" },
+                                modifier = panelModifier,
+                            )
+                            ChatPanel.Album -> InlineAlbumPanel(
+                                sending = sending,
+                                onSend = { uris -> sendImageUris(uris) },
+                                onOpenSystemGallery = {
+                                    pickChatImage.launch(
+                                        PickVisualMediaRequest(
+                                            ActivityResultContracts.PickVisualMedia.ImageOnly,
+                                        )
                                     )
-                                )
-                            },
-                        )
-                    } else if (panelFraction.value > 0f) {
-                        KEmojiPanel(
-                            onPick = { emoji ->
-                                // 追加到末尾（与 Web 端 onSelect 同语义）。面板**选完不关**：
-                                // 连发几个表情是常见操作，关掉每发一个都要重开一次
-                                // （Web 端选了即关是桌面端习惯，移动端不照搬）
-                                input.value += emoji
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .navigationBarsPadding(),
-                            height = panelGridHeightDp,
-                        )
+                                },
+                                modifier = panelModifier,
+                            )
+                            // 表情面板自带 navigationBarsPadding，高度只算网格那一段
+                            else -> KEmojiPanel(
+                                onPick = { emoji ->
+                                    // 追加到末尾（与 Web 端 onSelect 同语义）。面板**选完不关**：
+                                    // 连发几个表情是常见操作，关掉每发一个都要重开一次
+                                    // （Web 端选了即关是桌面端习惯，移动端不照搬）
+                                    input.value += emoji
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .navigationBarsPadding(),
+                                height = panelGridHeightDp,
+                            )
+                        }
                     }
                 }
             }
@@ -1477,9 +1524,7 @@ fun ChatScreen(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     // 布局期让位（交换区高 + 96dp），与老 `.padding(bottom = …)` 视觉一致
-                    .exchangeZoneBottomInset(density, ime, nav, panelHeightPx, {
-                        if (voiceMode || albumOpen) 1f else panelFraction.value
-                    }, 96.dp),
+                    .exchangeZoneBottomInset(density, ime, nav, panelHeightPx, { panelFraction.value }, 96.dp),
             ) {
                 KToastInline(text = toast!!, onDismiss = { toast = null })
             }
