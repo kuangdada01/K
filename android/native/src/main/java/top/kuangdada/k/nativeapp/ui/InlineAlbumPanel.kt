@@ -43,6 +43,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -77,9 +78,10 @@ import top.kuangdada.k.core.designsystem.theme.KType
  *    宽度按原图宽高比算 —— 横图铺得宽、竖图窄，和参考图一致；
  *  · 比例不变、内容不裁：框本身就是这张图的比例（`aspectRatio` + `Crop`）；
  *  · 点照片选中，右上角圆圈打勾；最多选 9 张，右下角发送；
- *  · **按住一张往上拖** = 抬起来发送：图从**它在相册条里的位置**就地长大、跟手走，
- *    相册条留在原地不消失（2026-10-20 用户按 QQ 参考视频纠正："上滑应该是选中相册
- *    的位置上滑出去，不需要重新加载一张"）；
+ *  · **按住一张往上拖** = 把这张图从相册里**拎出来**：同一张位图、**原尺寸**、
+ *    横竖跟手，相册条里它那一格留空（不再有第二张一样的图）；松手够高就发出去
+ *    （2026-10-20 用户按 QQ 参考视频两次纠正："上滑应该是选中相册的位置上滑出去，
+ *    不需要重新加载一张" / "上滑不用改变图片本身大小……后面不应该还有图片"）；
  *  · 左下角「相册」才打开系统全屏 Photo Picker；
  *  · 无权限时给「允许访问 / 打开系统相册」两个出口。
  *
@@ -105,8 +107,16 @@ fun InlineAlbumPanel(
      * 浮层自己 new 了一个更大的请求、从空白开始加载造成的。
      */
     onDragPreviewStart: (painter: Painter, bounds: Rect) -> Unit = { _, _ -> },
-    onDragPreviewMove: (offsetY: Float) -> Unit = {},
+    onDragPreviewMove: (offsetX: Float, offsetY: Float) -> Unit = { _, _ -> },
     onDragPreviewEnd: () -> Unit = {},
+    /**
+     * 正被"拎在手上"的那张图的 painter。
+     *
+     * 相册条里**这一格不画**（透明占位）：图已经被拎走了，原位不该还留一张一样的
+     * （用户 2026-10-20："上滑后面不应该还有图片啊"）。参数是 `Painter` 而不是 uri，
+     * 用**实例相等**判断，零查找；浮层退场动画播完、把 painter 清空那一刻，格子自动回来。
+     */
+    draggedPainter: Painter? = null,
 ) {
     val context = LocalContext.current
     val c = KTheme.colors
@@ -220,13 +230,14 @@ fun InlineAlbumPanel(
                                     onDragPreviewStart(painter, bounds)
                                 },
                                 onDragMove = onDragPreviewMove,
-                                onDragEnd = { offsetY ->
+                                onDragEnd = { _, offsetY ->
                                     onDragPreviewEnd()
-                                    // 上滑够距离 = 直接发这一张；没够 = 取消（回到面板）
+                                    // 上滑够距离 = 直接发这一张；没够 = 取消（落回相册）
                                     if (offsetY <= -sendDistancePx && !sending) {
                                         onSend(listOf(photo.uri))
                                     }
                                 },
+                                liftedPainter = draggedPainter,
                             )
                         }
                     }
@@ -295,9 +306,9 @@ fun InlineAlbumPanel(
  *
  * 手势（2026-10-20，用户参考 QQ）：
  *  · **短按** = 选中 / 取消选中；
- *  · **按住不放**（[ALBUM_LONG_PRESS_MS]）→ 进入「上滑松手发送」：**这一格的那张图
- *    原地长大**（同一张位图，不重新加载）然后跟着手指走，松手时上滑超过
- *    [ALBUM_SEND_DISTANCE_DP] 就直接发这张；
+ *  · **按住不放**（[ALBUM_LONG_PRESS_MS]）→ 把这一格的图**原地拎起来**（同一张位图、
+ *    **尺寸一点不变**），横竖都跟着手指走，原位留空；松手时上滑超过
+ *    [ALBUM_SEND_DISTANCE_DP] 就当"丢出去"发掉，没够就落回原位；
  *  · 没滑够就松手 = 取消（回到面板，不发送）—— 长按本来是"想看看大图"的常见动作，
  *    不设门槛会误发。
  *
@@ -316,8 +327,10 @@ private fun AlbumThumb(
     selectedIndex: Int,
     onToggle: () -> Unit,
     onDragStart: (Painter, Rect) -> Unit,
-    onDragMove: (Float) -> Unit,
-    onDragEnd: (Float) -> Unit,
+    onDragMove: (Float, Float) -> Unit,
+    onDragEnd: (dx: Float, dy: Float) -> Unit,
+    /** 页面层正在画的那张图（= 已被拎走）：实例相等就把这一格画成透明 */
+    liftedPainter: Painter?,
 ) {
     val c = KTheme.colors
     val context = LocalContext.current
@@ -361,12 +374,16 @@ private fun AlbumThumb(
      * 请求换了新 painter）之后长按交出去的还是那个已经没人画的旧实例。
      */
     val currentPainter by rememberUpdatedState(painter)
+    /** 这张图正被页面层拎在手上 → 这一格整体透明（占位还在，相册条不重排） */
+    val lifted = liftedPainter != null && liftedPainter === painter
     Box(
         modifier = Modifier
             .height(height)
             // 宽度完全由原图比例决定（aspectRatio 会按已定的高度算出宽度）
             .aspectRatio(cellAspect)
             .background(Color.Black)
+            // 图被拎走后原位留空：黑底、图、勾选圈一起隐掉，只剩占位宽度
+            .alpha(if (lifted) 0f else 1f)
             .onGloballyPositioned { boundsInRoot = it.boundsInRoot() }
             .pointerInput(uri) {
                 awaitEachGesture {
@@ -403,20 +420,25 @@ private fun AlbumThumb(
                         return@awaitEachGesture
                     }
                     // 长按成立：把**这一格已经解码好的图 + 它现在的位置**交给浮层
-                    // （浮图就是这张图本身，从这里长出来，不重新加载），
-                    // 之后每一帧把累计位移交给调用方，同时 consume 掉，把列表的横向滚动挡在门外
+                    // （浮图就是这张图本身，从这里被拎起来，不重新加载），
+                    // 之后每一帧把**累计位移（横竖都算）**交给调用方 —— 用户要的是
+                    // "跟手自然"，只跟上下走会像被轨道卡住。同时 consume 掉，
+                    // 把列表的横向滚动挡在门外。
                     dragStart(currentPainter, boundsInRoot)
+                    var totalX = 0f
                     var totalY = 0f
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break
                         if (!change.pressed) {
-                            dragEnd(totalY)
+                            dragEnd(totalX, totalY)
                             break
                         }
-                        totalY += change.positionChange().y
+                        val delta = change.positionChange()
+                        totalX += delta.x
+                        totalY += delta.y
                         change.consume()
-                        dragMove(totalY)
+                        dragMove(totalX, totalY)
                     }
                 }
             },

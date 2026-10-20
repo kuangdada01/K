@@ -88,6 +88,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -249,17 +250,22 @@ fun ChatScreen(
     /**
      * 相册「上滑松手发送」的拖拽预览（浮层画在整页层级，见 [AlbumDragOverlay]）。
      *
-     * 拆成三个状态而不是一个对象：
-     *  · [albumDragPainter] 只在按住/松手时变（低频）→ 用它决定浮层显隐；
+     * 拆成几个状态而不是一个对象：
+     *  · [albumDragPainter] 只在按住/清空时变（低频）→ 用它决定浮层显隐，同时也交给
+     *    相册面板把**那一格画成透明**（原位留空）；
      *    **是相册格子里那张已经解码好的位图**，不是 uri —— 浮层拿到什么画什么，
      *    不会再走一次取图/解码（用户："不需要重新加载一张"）；
-     *  · [albumDragOffset] **每帧都变** → 只在浮层的 `graphicsLayer { }` / `offset { }`
+     *  · [albumDragDx] / [albumDragDy] **每帧都变** → 只在浮层的 `graphicsLayer { }`
      *    里读，走绘制期读取、不进组合；否则拖着图每帧重组整个 ChatScreen
-     *    （连消息 LazyColumn 的 item DSL 一起，帧率会直接塌）。
+     *    （连消息 LazyColumn 的 item DSL 一起，帧率会直接塌）；
+     *  · [albumDragReleased] 松手时为 true，浮层据此播"丢出去 / 落回相册"的退场。
      */
     var albumDragPainter by remember { mutableStateOf<Painter?>(null) }
-    var albumDragOffset by remember { mutableFloatStateOf(0f) }
-    /** 被按住那一格在屏幕上的矩形：浮图从**这里**开始，而不是凭空出现在屏幕中央 */
+    var albumDragDx by remember { mutableFloatStateOf(0f) }
+    var albumDragDy by remember { mutableFloatStateOf(0f) }
+    /** 松手了（或正在退场）：浮层播完"丢出去 / 落回相册"再回调清状态 */
+    var albumDragReleased by remember { mutableStateOf(false) }
+    /** 被按住那一格在屏幕上的矩形：浮图从**这里**被拎起来，而不是凭空出现在屏幕中央 */
     var albumDragBounds by remember { mutableStateOf(Rect.Zero) }
     /**
      * 输入内容。**刻意用 MutableState 而不是 `var input by`**：组合期唯一读它的地方
@@ -1515,13 +1521,19 @@ fun ChatScreen(
                                 onDragPreviewStart = { painter, bounds ->
                                     albumDragPainter = painter
                                     albumDragBounds = bounds
-                                    albumDragOffset = 0f
+                                    albumDragDx = 0f
+                                    albumDragDy = 0f
+                                    albumDragReleased = false
                                 },
-                                onDragPreviewMove = { albumDragOffset = it },
-                                onDragPreviewEnd = {
-                                    albumDragPainter = null
-                                    albumDragOffset = 0f
+                                onDragPreviewMove = { dx, dy ->
+                                    albumDragDx = dx
+                                    albumDragDy = dy
                                 },
+                                // 松手后不立刻抹掉浮层：让它把"丢出去 / 落回相册"演完，
+                                // 演完（onExitFinished）才清状态、格子才重新出现
+                                onDragPreviewEnd = { albumDragReleased = true },
+                                // 被拎走的那张：相册条里那一格画成透明，原位留空
+                                draggedPainter = albumDragPainter,
                             )
                             // 表情面板自带 navigationBarsPadding，高度只算网格那一段
                             else -> KEmojiPanel(
@@ -1601,7 +1613,15 @@ fun ChatScreen(
         AlbumDragOverlay(
             painter = albumDragPainter,
             bounds = albumDragBounds,
-            offsetY = { albumDragOffset },
+            offsetX = { albumDragDx },
+            offsetY = { albumDragDy },
+            released = albumDragReleased,
+            onExitFinished = {
+                albumDragPainter = null
+                albumDragReleased = false
+                albumDragDx = 0f
+                albumDragDy = 0f
+            },
         )
 
         if (toast != null) {
@@ -2878,25 +2898,28 @@ private fun ChatSendButton(
 }
 
 /**
- * 相册「上滑松手发送」的浮层（2026-10-20，用户参考 QQ 视频改版）。
+ * 相册「拎起来发送」的浮层（2026-10-20，按用户 QQ 参考视频第三次改）。
  *
- * 画在**整页层级**而不是相册面板里：面板被交换区的 `clipToBounds` 裁着，图根本抬不出
- * 那块区域。
+ * 画在**整页层级**而不是相册面板里：面板被交换区的 `clipToBounds` 裁着，图抬不出去。
  *
- * 三条硬规则（改之前先读，前两版都是踩在这上面被打回的）：
- *  1. **画的是同一张位图**。[painter] 是相册格子里那个**已经解码好**的 painter，这里
- *     只做缩放与位移。换成 `AsyncImage(model = uri)`（上一版）等于让 Coil 拿一个新的
- *     目标尺寸重新取图/解码 —— 用户看到的就是"上滑以后又重新加载了一张"，第一帧还是白的。
- *  2. **从格子里长出来**。`lift` 0→1 把「格子矩形」插值到「卡片矩形」（位置和尺寸一起
- *     插值，170ms）：第一帧和相册里那一格严丝合缝，之后才慢慢浮起成卡片 ——
- *     这就是用户说的"从选中相册的位置上滑出去"。上一版是一上来就 1.55 倍盖在原格上，
- *     视觉上等于凭空出现一张更大的图。
- *  3. **压层只盖到相册条上沿**（[bounds].top）。整页盖白连相册条一起抹掉，图的来处
- *     就没了；相册条（以及它下面那排按钮）留着，才像"从这儿被拎出去的"。
- *     压层与提示的浓度都跟着上滑距离涨，不是一按住就满屏白。
+ * 四条硬规则（改之前先读 —— 前三版都是踩在这上面被打回的）：
+ *  1. **画的是同一张位图**。[painter] 来自相册格子（已经解码好、尺寸就是格子尺寸），
+ *     这里只做位移/淡出。换成 `AsyncImage(model = uri)` 等于让 Coil 换个目标尺寸重新
+ *     取图解码 —— 用户看到的就是"又重新加载了一张"，第一帧还是白的。
+ *  2. **尺寸一点不变**。节点尺寸 = 格子尺寸，跟手期间不放大也不缩小
+ *     （用户："上滑不用改变图片本身大小"）。唯一例外见 [fit]。
+ *  3. **横竖都跟手**。位移直接用手指的累计位移，1:1，不加阻尼、不加轨道。
+ *  4. **原位留空**。拎起来的那一格由相册面板自己画成透明（`InlineAlbumPanel` 的
+ *     `draggedPainter`），所以这里看不到"后面还压着一张一样的图"；落回或发出去、
+ *     退场动画播完把 painter 清空，格子才回来。
  *
- * [offsetY] 传 lambda 不传值：它每帧都在变，只在 `graphicsLayer { }`（绘制期）里读，
- * 不把整个聊天页（含消息 LazyColumn 的 item DSL）拖进每帧重组。
+ * 退场（松手）分两种：
+ *  · 上滑够 [ALBUM_SEND_DISTANCE_DP] → **当丢出去**：继续向上飞 96dp 同时淡出（200ms）；
+ *  · 没够 → **落回相册那一格**：位移与缩放都回到 0（180ms），落定才让格子重新出现。
+ * 这两个动作是"丢出去"的手感来源 —— 上一版松手是直接消失，像图被删了。
+ *
+ * [offsetX] / [offsetY] 传 lambda 不传值：它们每帧都在变，只在 `graphicsLayer { }`
+ * （绘制期）里读，不把整个聊天页（含消息 LazyColumn 的 item DSL）拖进每帧重组。
  *
  * 第一层那个透明 Box 顺便**吃掉所有触摸**：拖拽期间点别处不该穿透到底下的列表或按钮
  * （否则松手那一刻可能顺带走了一次"点空白收面板"）。
@@ -2905,7 +2928,10 @@ private fun ChatSendButton(
 private fun AlbumDragOverlay(
     painter: Painter?,
     bounds: Rect,
+    offsetX: () -> Float,
     offsetY: () -> Float,
+    released: Boolean,
+    onExitFinished: () -> Unit,
 ) {
     if (painter == null) return
     val c = KTheme.colors
@@ -2919,29 +2945,46 @@ private fun AlbumDragOverlay(
     val cellHeight = if (hasBounds) bounds.height else screenHeightPx * 0.42f
     val cellLeft = if (hasBounds) bounds.left else (screenWidthPx - cellWidth) / 2f
     val cellTop = if (hasBounds) bounds.top else screenHeightPx * 0.58f
-    val aspect = (cellWidth / cellHeight).takeIf { it.isFinite() && it > 0f } ?: 1f
     /**
-     * 卡片尺寸：**只长大、不放飞**。
-     *  · 1.25 倍封顶：格子本来就够大（高度 = 键盘高），再放大会糊；
-     *  · 再按屏宽 90% 收一道：横图格子可能比屏还宽，浮起来得能整张看到；
-     *  · 再按屏高 86% 收一道：竖长图不至于顶出屏幕上下沿。
+     * 「原尺寸」的唯一例外：格子在相册条里就比屏幕还宽/还高（横图很常见，格子宽 =
+     * 面板高 × 比例）。这种图原尺寸拎起来会挂出屏幕两侧，于是按比例收进屏幕。
+     * 收的动作跟着 150ms 的抬起动画一起做（不是"啪"地变小）；普通竖图/截图 fit = 1，
+     * 全程一个像素都不变。
      */
-    val cardWidth = (cellWidth * 1.25f)
-        .coerceAtMost(screenWidthPx * 0.9f)
-        .coerceAtMost(screenHeightPx * 0.86f * aspect)
-    val cardHeight = cardWidth / aspect
-    // 横向居中在被按的格子上，但整张卡片不许出屏（格子贴着屏幕边时往里推）
-    val edgePx = with(density) { 8.dp.toPx() }
-    val cardCenterX = (cellLeft + cellWidth / 2f)
-        .coerceIn(cardWidth / 2f + edgePx, screenWidthPx - cardWidth / 2f - edgePx)
-    val cardLeft = cardCenterX - cardWidth / 2f
-    // 纵向**保持格子中心**：抬起时图不该在竖直方向先跳一下
-    val cardTop = cellTop + cellHeight / 2f - cardHeight / 2f
+    val fit = minOf(1f, screenWidthPx / cellWidth, screenHeightPx * 0.94f / cellHeight)
 
-    /** 抬起进度 0→1：从"就是那一格"过渡到"浮起的卡片"，只跑一次，跟手指无关 */
-    val lift = remember { Animatable(0f) }
-    LaunchedEffect(Unit) {
-        lift.animateTo(1f, tween(durationMillis = 170, easing = FastOutSlowInEasing))
+    /** 拎起来的程度：0 = 完全等同格子，1 = 完全浮起（只对 fit < 1 的图有可见差异） */
+    val lift = remember(painter) { Animatable(0f) }
+    /** 落回相册时把位移收回去：1 = 跟着手指，0 = 已回到格子原位 */
+    val settle = remember(painter) { Animatable(1f) }
+    /** 丢出去的退场：1 = 已经飞走并淡出 */
+    val exit = remember(painter) { Animatable(0f) }
+    val finishExit by rememberUpdatedState(onExitFinished)
+    val sendPx = with(density) { ALBUM_SEND_DISTANCE_DP.dp.toPx() }
+    val flyUpPx = with(density) { 96.dp.toPx() }
+
+    LaunchedEffect(released, painter) {
+        if (!released) {
+            // 拎起来：普通图 fit = 1，这里什么都不会变；横图才看得见那一下"收进屏幕"
+            lift.animateTo(1f, tween(durationMillis = 150, easing = FastOutSlowInEasing))
+            return@LaunchedEffect
+        }
+        // 松手：先掐掉可能还在跑的抬起动画（同一个 Animatable 不能被两个动画抢）
+        lift.stop()
+        if (offsetY() <= -sendPx) {
+            // 丢出去：一边往上飞一边淡出
+            val flying = launch { lift.animateTo(1f, tween(durationMillis = 120)) }
+            val fading = launch { exit.animateTo(1f, tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
+            flying.join()
+            fading.join()
+        } else {
+            // 没滑够：落回相册那一格
+            val back = launch { settle.animateTo(0f, tween(durationMillis = 180, easing = FastOutSlowInEasing)) }
+            val down = launch { lift.animateTo(0f, tween(durationMillis = 180, easing = FastOutSlowInEasing)) }
+            back.join()
+            down.join()
+        }
+        finishExit()
     }
 
     /** 上滑多少 px 压层到满：比发送判定略长一点，滑到能松手时压层已经到底 */
@@ -2960,12 +3003,20 @@ private fun AlbumDragOverlay(
                     }
                 },
         )
-        // 压层：只有相册条**以上**这一块（参考图是浅底），浓度跟着上滑距离淡入
+        /**
+         * 压层：只有相册条**以上**这一块（参考图是浅底）。
+         *
+         * 浓度跟着**上滑距离**涨（横向拖动不压层，参考视频里左右挪图时背景是不变的），
+         * 丢出去时跟着退场一起淡掉；落回相册时位移在收，压层也跟着退。
+         */
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(with(density) { cellTop.coerceAtLeast(0f).toDp() })
-                .graphicsLayer { alpha = (-offsetY() / rampPx).coerceIn(0f, 1f) }
+                .graphicsLayer {
+                    val progress = (-offsetY() * settle.value / rampPx).coerceIn(0f, 1f)
+                    alpha = progress * (1f - exit.value)
+                }
                 .background(Color.White.copy(alpha = 0.72f)),
         )
         // 提示：纸飞机 + 松手发送（屏幕上方，和参考图一致；浅底上用深色才看得清）
@@ -2973,14 +3024,17 @@ private fun AlbumDragOverlay(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = (cfg.screenHeightDp * 0.2f).dp)
-                .graphicsLayer { alpha = (-offsetY() / rampPx).coerceIn(0f, 1f) },
+                .graphicsLayer {
+                    val progress = (-offsetY() * settle.value / rampPx).coerceIn(0f, 1f)
+                    alpha = progress * (1f - exit.value)
+                },
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Glyph(tint = c.textPrimary, kind = GlyphKind.Send, size = 30.dp)
             Spacer(Modifier.height(KSpacing.xs))
             Text(text = "松手发送", style = KType.body, color = c.textPrimary)
         }
-        // 浮起的图 = 相册里那一格的**同一张位图**，从格子矩形插值到卡片矩形，再跟手上下走
+        // 拎在手上的那张图：**原尺寸**，横竖都跟手，丢出去时向上飞 + 淡出
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
             Image(
                 painter = painter,
@@ -2988,22 +3042,23 @@ private fun AlbumDragOverlay(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .size(
-                        with(density) { cardWidth.toDp() },
-                        with(density) { cardHeight.toDp() },
+                        with(density) { cellWidth.toDp() },
+                        with(density) { cellHeight.toDp() },
                     )
-                    // 缩放/位移必须挂在**最外层**：里面的阴影、圆角跟着一起缩，
-                    // 抬起的第一帧才和相册里那一格完全重合（阴影若挂外层不缩，会先糊一圈黑边）
+                    // 缩放/位移挂在最外层：阴影跟着一起动
                     .graphicsLayer {
-                        val p = lift.value
-                        transformOrigin = TransformOrigin(0f, 0f)
-                        val s = lerp(cellWidth / cardWidth, 1f, p)
-                        scaleX = s
-                        scaleY = s
-                        translationX = lerp(cellLeft, cardLeft, p)
-                        translationY = lerp(cellTop, cardTop, p) + offsetY()
+                        transformOrigin = TransformOrigin.Center
+                        val s = lerp(1f, fit, lift.value)
+                        // 丢出去时略收一点（6%），像被抛走的手感；其余时刻恒为原尺寸
+                        val toss = 1f - 0.06f * exit.value
+                        scaleX = s * toss
+                        scaleY = s * toss
+                        translationX = cellLeft + offsetX() * settle.value
+                        translationY = cellTop + offsetY() * settle.value - flyUpPx * exit.value
+                        alpha = 1f - exit.value
                     }
-                    .shadow(12.dp, RoundedCornerShape(KRadius.control))
-                    .clip(RoundedCornerShape(KRadius.control)),
+                    // 直角 + 阴影：和格子里的那张一模一样，只是"离了地"
+                    .shadow(8.dp),
             )
         }
     }
