@@ -9,6 +9,7 @@ import android.os.Build
 import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -45,6 +46,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
@@ -55,7 +57,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import coil3.compose.AsyncImage
+import coil3.compose.rememberAsyncImagePainter
+import coil3.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -74,6 +77,9 @@ import top.kuangdada.k.core.designsystem.theme.KType
  *    宽度按原图宽高比算 —— 横图铺得宽、竖图窄，和参考图一致；
  *  · 比例不变、内容不裁：框本身就是这张图的比例（`aspectRatio` + `Crop`）；
  *  · 点照片选中，右上角圆圈打勾；最多选 9 张，右下角发送；
+ *  · **按住一张往上拖** = 抬起来发送：图从**它在相册条里的位置**就地长大、跟手走，
+ *    相册条留在原地不消失（2026-10-20 用户按 QQ 参考视频纠正："上滑应该是选中相册
+ *    的位置上滑出去，不需要重新加载一张"）；
  *  · 左下角「相册」才打开系统全屏 Photo Picker；
  *  · 无权限时给「允许访问 / 打开系统相册」两个出口。
  *
@@ -91,10 +97,14 @@ fun InlineAlbumPanel(
     modifier: Modifier = Modifier,
     /**
      * 「上滑松手发送」的拖拽预览：**面板只负责手势与判定**，浮层画在页面层
-     * （全屏、模糊背景 + 大图 + 提示）—— 那个浮层要盖住顶栏、还要能超出面板高度，
+     * （浅色压层 + 大图 + 提示）—— 那个浮层要盖住顶栏、还要能超出面板高度，
      * 画在面板里会被交换区的 `clipToBounds` 裁掉。
+     *
+     * 传出去的是**这一格已经解码好的 [Painter]**（不是 uri）：浮层直接画同一张
+     * 位图，"抬起"那一下不会重新走一遍取图/解码 —— 用户反馈的"重新加载一张"就是
+     * 浮层自己 new 了一个更大的请求、从空白开始加载造成的。
      */
-    onDragPreviewStart: (uri: Uri, aspect: Float, bounds: Rect) -> Unit = { _, _, _ -> },
+    onDragPreviewStart: (painter: Painter, bounds: Rect) -> Unit = { _, _ -> },
     onDragPreviewMove: (offsetY: Float) -> Unit = {},
     onDragPreviewEnd: () -> Unit = {},
 ) {
@@ -206,8 +216,8 @@ fun InlineAlbumPanel(
                                     if (idx >= 0) selected.removeAt(idx)
                                     else if (selected.size < 9) selected.add(photo.uri)
                                 },
-                                onDragStart = { bounds ->
-                                    onDragPreviewStart(photo.uri, photo.aspect(), bounds)
+                                onDragStart = { painter, bounds ->
+                                    onDragPreviewStart(painter, bounds)
                                 },
                                 onDragMove = onDragPreviewMove,
                                 onDragEnd = { offsetY ->
@@ -285,8 +295,9 @@ fun InlineAlbumPanel(
  *
  * 手势（2026-10-20，用户参考 QQ）：
  *  · **短按** = 选中 / 取消选中；
- *  · **按住不放**（[ALBUM_LONG_PRESS_MS]）→ 进入「上滑松手发送」：整张图浮起来跟着
- *    手指走，松手时上滑超过 [ALBUM_SEND_DISTANCE_DP] 就直接发这张；
+ *  · **按住不放**（[ALBUM_LONG_PRESS_MS]）→ 进入「上滑松手发送」：**这一格的那张图
+ *    原地长大**（同一张位图，不重新加载）然后跟着手指走，松手时上滑超过
+ *    [ALBUM_SEND_DISTANCE_DP] 就直接发这张；
  *  · 没滑够就松手 = 取消（回到面板，不发送）—— 长按本来是"想看看大图"的常见动作，
  *    不设门槛会误发。
  *
@@ -304,11 +315,13 @@ private fun AlbumThumb(
     height: Dp,
     selectedIndex: Int,
     onToggle: () -> Unit,
-    onDragStart: (Rect) -> Unit,
+    onDragStart: (Painter, Rect) -> Unit,
     onDragMove: (Float) -> Unit,
     onDragEnd: (Float) -> Unit,
 ) {
     val c = KTheme.colors
+    val context = LocalContext.current
+    val density = LocalDensity.current
     val toggle by rememberUpdatedState(onToggle)
     val dragStart by rememberUpdatedState(onDragStart)
     val dragMove by rememberUpdatedState(onDragMove)
@@ -321,11 +334,38 @@ private fun AlbumThumb(
      * 长按成立的那一刻把它交给页面层的浮层。
      */
     var boundsInRoot by remember { mutableStateOf(Rect.Zero) }
+    val cellAspect = aspect.coerceIn(0.2f, 5f)
+    /**
+     * 这一格的图**自己解码、尺寸正好等于格子**（不是交给 `AsyncImage` 按约束算）：
+     *
+     *  · 只有显式给死 `size`，`rememberAsyncImagePainter` 才不会退化成"按原图尺寸解码"
+     *    （相册里一张 4000×3000 的原图 = 48MB 一张，滑两下就 OOM）；
+     *  · 尺寸 = 格子的像素尺寸 → 和格子里画的**完全同一张位图**，浮层直接拿去放大，
+     *    不需要第二次解码，用户说的"不要重新加载一张"就落在这里；
+     *  · key 里带上 height/aspect：键盘高度变了、格子重排时请求跟着换，图不会被拉花。
+     */
+    val painter = rememberAsyncImagePainter(
+        model = remember(uri, height, cellAspect, density) {
+            ImageRequest.Builder(context)
+                .data(uri)
+                .size(
+                    with(density) { (height * cellAspect).roundToPx() },
+                    with(density) { height.roundToPx() },
+                )
+                .build()
+        },
+    )
+    /**
+     * 交给浮层的 painter 必须走 `rememberUpdatedState`：下面的 `pointerInput(uri)` 只在
+     * uri 变化时重建，直接闭包进去的话，格子尺寸变了（键盘高度被量到 → 面板变高 →
+     * 请求换了新 painter）之后长按交出去的还是那个已经没人画的旧实例。
+     */
+    val currentPainter by rememberUpdatedState(painter)
     Box(
         modifier = Modifier
             .height(height)
             // 宽度完全由原图比例决定（aspectRatio 会按已定的高度算出宽度）
-            .aspectRatio(aspect.coerceIn(0.2f, 5f))
+            .aspectRatio(cellAspect)
             .background(Color.Black)
             .onGloballyPositioned { boundsInRoot = it.boundsInRoot() }
             .pointerInput(uri) {
@@ -362,9 +402,10 @@ private fun AlbumThumb(
                         toggle()
                         return@awaitEachGesture
                     }
-                    // 长按成立：之后每一帧把**累计**位移交给调用方（浮层按它移动），
-                    // 同时 consume 掉，把列表的横向滚动挡在门外
-                    dragStart(boundsInRoot)
+                    // 长按成立：把**这一格已经解码好的图 + 它现在的位置**交给浮层
+                    // （浮图就是这张图本身，从这里长出来，不重新加载），
+                    // 之后每一帧把累计位移交给调用方，同时 consume 掉，把列表的横向滚动挡在门外
+                    dragStart(currentPainter, boundsInRoot)
                     var totalY = 0f
                     while (true) {
                         val event = awaitPointerEvent()
@@ -380,8 +421,8 @@ private fun AlbumThumb(
                 }
             },
     ) {
-        AsyncImage(
-            model = uri,
+        Image(
+            painter = painter,
             contentDescription = null,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -491,5 +532,10 @@ private fun queryRecentImages(context: Context, limit: Int): List<AlbumPhoto> {
 /** 相册：按住多久进入「上滑松手发送」（与语音按钮的 200ms 同档，手感一致） */
 private const val ALBUM_LONG_PRESS_MS = 220L
 
-/** 上滑多少 dp 松手才真的发送（低于这个距离视为误触，取消） */
-private const val ALBUM_SEND_DISTANCE_DP = 56
+/**
+ * 上滑多少 dp 松手才真的发送（低于这个距离视为误触，取消）。
+ *
+ * `internal` 而不是 `private`：页面层的浮层（`AlbumDragOverlay`）要用同一个距离去算
+ * 压层的显现进度 —— 两处各写一个数，改判定的时候一定会漏掉另一处。
+ */
+internal const val ALBUM_SEND_DISTANCE_DP = 56
