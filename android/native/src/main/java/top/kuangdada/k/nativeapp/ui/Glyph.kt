@@ -38,7 +38,7 @@ enum class GlyphKind {
     Home, Chat, Book, Voice, User, Image, Bookmark, Repost, Share, Search, Mail,
     ChevronLeft, Menu, Sun, More, Plus, Close,
     Mic, Volume, Monitor, LogOut, Dot, Sliders, Megaphone,
-    Shield, ChevronRight, Maximize, PictureInPicture, Photo, Check,
+    Shield, ChevronRight, Maximize, PictureInPicture, Photo, Check, Send,
 }
 
 /**
@@ -151,6 +151,9 @@ fun Glyph(
             GlyphKind.User -> drawLucide(LUCIDE_USER, tint, s)
             /** lucide `image`：发布页「从相册选一张图作为封面」那个按钮（M6.6） */
             GlyphKind.Image -> drawLucide(LUCIDE_IMAGE, tint, s)
+
+            /** lucide `send`（纸飞机）：相册「上滑松手发送」的提示图标（2026-10-20） */
+            GlyphKind.Send -> drawLucide(LUCIDE_SEND, tint, s)
 
             // lucide bookmark（书签带缺口）—— 已收藏时走**实心填充**（用户要求）
             GlyphKind.Bookmark -> {

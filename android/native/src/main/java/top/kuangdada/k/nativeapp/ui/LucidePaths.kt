@@ -80,6 +80,16 @@ internal val LUCIDE_IMAGE = listOf(
 )
 
 /**
+ * lucide `send`（纸飞机）：相册「上滑松手发送」浮层的提示图标。
+ *
+ * 两条 path：机身轮廓 + 那条斜向折线（机翼分界）。lucide 原始数据，未改写。
+ */
+internal val LUCIDE_SEND = listOf(
+    "M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z",
+    "m21.854 2.147-10.94 10.939",
+)
+
+/**
  * lucide `maximize`（语音房共享舞台「全屏」按钮，M6.20 —— 与 Web 端 `VoiceShareStage`
  * 的 `Maximize` 同款）。
  *

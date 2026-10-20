@@ -61,6 +61,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -78,6 +79,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.MutableState
@@ -112,6 +114,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -239,6 +242,18 @@ fun ChatScreen(
     var sending by remember { mutableStateOf(false) }
     /** 内嵌相册面板：点相册图标在交换区展开最近照片，左下角「相册」才进系统全屏 */
     var albumOpen by remember { mutableStateOf(false) }
+    /**
+     * 相册「上滑松手发送」的拖拽预览（浮层画在整页层级，见 [AlbumDragOverlay]）。
+     *
+     * 拆成三个状态而不是一个对象：
+     *  · [albumDragUri] 只在按住/松手时变（低频）→ 用它决定浮层显隐与整页模糊；
+     *  · [albumDragOffset] **每帧都变** → 只在浮层的 `Modifier.offset { }` 里读，
+     *    走布局期读取、不进组合；否则拖着图每帧重组整个 ChatScreen
+     *    （连消息 LazyColumn 的 item DSL 一起，帧率会直接塌）。
+     */
+    var albumDragUri by remember { mutableStateOf<Uri?>(null) }
+    var albumDragAspect by remember { mutableFloatStateOf(1f) }
+    var albumDragOffset by remember { mutableFloatStateOf(0f) }
     /**
      * 输入内容。**刻意用 MutableState 而不是 `var input by`**：组合期唯一读它的地方
      * 是 [ChatInputField] 内部的 `input.value`（KTextField 的 value）—— 读取被圈在
@@ -1476,6 +1491,18 @@ fun ChatScreen(
                                     )
                                 },
                                 modifier = panelModifier,
+                                // 拖拽预览的浮层在整页层级画（见 AlbumDragOverlay）：
+                                // 面板自己会被交换区 clipToBounds 裁掉，图抬不出面板
+                                onDragPreviewStart = { uri, aspect ->
+                                    albumDragUri = uri
+                                    albumDragAspect = aspect
+                                    albumDragOffset = 0f
+                                },
+                                onDragPreviewMove = { albumDragOffset = it },
+                                onDragPreviewEnd = {
+                                    albumDragUri = null
+                                    albumDragOffset = 0f
+                                },
                             )
                             // 表情面板自带 navigationBarsPadding，高度只算网格那一段
                             else -> KEmojiPanel(
@@ -1548,6 +1575,14 @@ fun ChatScreen(
                 }
             }
         }
+
+        // 相册「上滑松手发送」浮层：盖在整页最上层（连顶栏一起），
+        // 拖拽期间底层压暗，把浮起的图衬出来
+        AlbumDragOverlay(
+            uri = albumDragUri,
+            aspect = albumDragAspect,
+            offsetY = { albumDragOffset },
+        )
 
         if (toast != null) {
             // 聊天页是沉浸态，没有胶囊要避让，直接放在输入栏之上。
@@ -2818,6 +2853,73 @@ private fun ChatSendButton(
             text = if (sending) "…" else "发送",
             style = KType.bodyStrong,
             color = c.onAccent,
+        )
+    }
+}
+
+/**
+ * 相册「上滑松手发送」的浮层（2026-10-20，用户参考 QQ）。
+ *
+ * 画在**整页层级**而不是相册面板里：面板被交换区的 `clipToBounds` 裁着，图根本抬不出
+ * 那块区域；参考图也是整页压暗、浮图居中、上面一行「松手发送」。
+ *
+ * [offsetY] 传 lambda 不传值：它每帧都在变，在 `Modifier.offset { }` 里读是**布局期**
+ * 读取 —— 只重布局这一张图，不会把整个聊天页（含消息 LazyColumn 的 item DSL）拖进
+ * 每帧重组。传值的话拖动会明显掉帧。
+ *
+ * 遮罩层顺便**吃掉所有触摸**：拖拽期间点别处不该穿透到底下的列表或按钮
+ * （否则松手那一刻可能顺带走了一次"点空白收面板"）。
+ */
+@Composable
+private fun AlbumDragOverlay(
+    uri: Uri?,
+    aspect: Float,
+    offsetY: () -> Float,
+) {
+    if (uri == null) return
+    val cfg = LocalConfiguration.current
+    // 浮图上限：宽 74% 屏宽、高 42% 屏高；比例不变，取更严的那一边
+    val maxWidth = (cfg.screenWidthDp * 0.74f).dp
+    val maxHeight = (cfg.screenHeightDp * 0.42f).dp
+    val safeAspect = aspect.coerceIn(0.2f, 5f)
+    val previewWidth = minOf(maxWidth, maxHeight * safeAspect)
+    val previewHeight = previewWidth / safeAspect
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.55f))
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            awaitPointerEvent().changes.forEach { it.consume() }
+                        }
+                    }
+                },
+        )
+        // 提示：纸飞机 + 松手发送（放在屏幕上方，和参考图一致）
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = (cfg.screenHeightDp * 0.22f).dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Glyph(tint = Color.White, kind = GlyphKind.Send, size = 30.dp)
+            Spacer(Modifier.height(KSpacing.xs))
+            Text(text = "松手发送", style = KType.body, color = Color.White)
+        }
+        // 浮起的图：跟着手指上下走
+        AsyncImage(
+            model = uri,
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .offset { IntOffset(0, offsetY().roundToInt()) }
+                .size(previewWidth, previewHeight)
+                .clip(RoundedCornerShape(KRadius.card))
+                .border(2.dp, Color.White.copy(alpha = 0.9f), RoundedCornerShape(KRadius.card)),
         )
     }
 }

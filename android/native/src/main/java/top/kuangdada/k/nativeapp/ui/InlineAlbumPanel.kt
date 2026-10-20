@@ -12,7 +12,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -44,14 +45,17 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import top.kuangdada.k.core.designsystem.component.KButton
 import top.kuangdada.k.core.designsystem.theme.KRadius
 import top.kuangdada.k.core.designsystem.theme.KSpacing
@@ -82,9 +86,19 @@ fun InlineAlbumPanel(
     onSend: (List<Uri>) -> Unit,
     onOpenSystemGallery: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * 「上滑松手发送」的拖拽预览：**面板只负责手势与判定**，浮层画在页面层
+     * （全屏、模糊背景 + 大图 + 提示）—— 那个浮层要盖住顶栏、还要能超出面板高度，
+     * 画在面板里会被交换区的 `clipToBounds` 裁掉。
+     */
+    onDragPreviewStart: (uri: Uri, aspect: Float) -> Unit = { _, _ -> },
+    onDragPreviewMove: (offsetY: Float) -> Unit = {},
+    onDragPreviewEnd: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val c = KTheme.colors
+    /** 上滑多少 px 松手才算"要发送"（dp → px 只在这一处算一次） */
+    val sendDistancePx = with(LocalDensity.current) { ALBUM_SEND_DISTANCE_DP.dp.toPx() }
     var hasPermission by remember { mutableStateOf(hasMediaPermission(context)) }
     var askedOnce by rememberSaveable { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
@@ -189,6 +203,15 @@ fun InlineAlbumPanel(
                                     if (idx >= 0) selected.removeAt(idx)
                                     else if (selected.size < 9) selected.add(photo.uri)
                                 },
+                                onDragStart = { onDragPreviewStart(photo.uri, photo.aspect()) },
+                                onDragMove = onDragPreviewMove,
+                                onDragEnd = { offsetY ->
+                                    onDragPreviewEnd()
+                                    // 上滑够距离 = 直接发这一张；没够 = 取消（回到面板）
+                                    if (offsetY <= -sendDistancePx && !sending) {
+                                        onSend(listOf(photo.uri))
+                                    }
+                                },
                             )
                         }
                     }
@@ -255,8 +278,18 @@ fun InlineAlbumPanel(
  * 因为框本身就是这张图的比例，`Crop` 等于"铺满且不裁内容" —— 用 `Fit` 反而会在
  * 换算取整时留下一两条像素的黑边，"挨着"的观感就没那么齐。
  *
- * [onToggle] 用 [rememberUpdatedState] 兜一层：手势的 `pointerInput(uri)` 只在 uri
- * 变化时重建，直接捕获 lambda 会一直是首次组合那个（`selected` 变了它还是旧视图），
+ * 手势（2026-10-20，用户参考 QQ）：
+ *  · **短按** = 选中 / 取消选中；
+ *  · **按住不放**（[ALBUM_LONG_PRESS_MS]）→ 进入「上滑松手发送」：整张图浮起来跟着
+ *    手指走，松手时上滑超过 [ALBUM_SEND_DISTANCE_DP] 就直接发这张；
+ *  · 没滑够就松手 = 取消（回到面板，不发送）—— 长按本来是"想看看大图"的常见动作，
+ *    不设门槛会误发。
+ *
+ * 为什么不用 `detectDragGesturesAfterLongPress`：它在"长按后没移动就松手"这条路径上
+ * 不保证回调 `onDragEnd`（语音按钮那边踩过同一个坑），这里必须保证松手一定有结论。
+ *
+ * 三个回调都用 [rememberUpdatedState] 包一层：`pointerInput(uri)` 只在 uri 变化时
+ * 重建，直接捕获 lambda 会一直是首次组合那个（`selected` 变了它还是旧视图），
  * 表现就是"点第一下能选、再点不取消"。
  */
 @Composable
@@ -266,16 +299,72 @@ private fun AlbumThumb(
     height: Dp,
     selectedIndex: Int,
     onToggle: () -> Unit,
+    onDragStart: () -> Unit,
+    onDragMove: (Float) -> Unit,
+    onDragEnd: (Float) -> Unit,
 ) {
     val c = KTheme.colors
     val toggle by rememberUpdatedState(onToggle)
+    val dragStart by rememberUpdatedState(onDragStart)
+    val dragMove by rememberUpdatedState(onDragMove)
+    val dragEnd by rememberUpdatedState(onDragEnd)
     Box(
         modifier = Modifier
             .height(height)
             // 宽度完全由原图比例决定（aspectRatio 会按已定的高度算出宽度）
             .aspectRatio(aspect.coerceIn(0.2f, 5f))
             .background(Color.Black)
-            .pointerInput(uri) { detectTapGestures { toggle() } },
+            .pointerInput(uri) {
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    /**
+                     * ⚠️ **不要 consume 这个 down**：横向列表（LazyRow）要靠它判断
+                     * "我要开始滚"。一旦在按下时就吃掉，相册条直接滑不动。
+                     *
+                     * 接下来 ALBUM_LONG_PRESS_MS 内观察：
+                     *  · 抬手 → 点选（切换选中）；
+                     *  · 事件被别人消费（列表开始横向滚）→ 让给列表，什么都不做；
+                     *  · 一直按着没动 → 长按成立，进入「上滑松手发送」。
+                     */
+                    var released = false
+                    var listTookOver = false
+                    withTimeoutOrNull(ALBUM_LONG_PRESS_MS) {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                            if (!change.pressed) {
+                                released = true
+                                break
+                            }
+                            if (change.isConsumed) {
+                                listTookOver = true
+                                break
+                            }
+                        }
+                        Unit
+                    }
+                    if (listTookOver) return@awaitEachGesture
+                    if (released) {
+                        toggle()
+                        return@awaitEachGesture
+                    }
+                    // 长按成立：之后每一帧把**累计**位移交给调用方（浮层按它移动），
+                    // 同时 consume 掉，把列表的横向滚动挡在门外
+                    dragStart()
+                    var totalY = 0f
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!change.pressed) {
+                            dragEnd(totalY)
+                            break
+                        }
+                        totalY += change.positionChange().y
+                        change.consume()
+                        dragMove(totalY)
+                    }
+                }
+            },
     ) {
         AsyncImage(
             model = uri,
@@ -384,3 +473,9 @@ private fun queryRecentImages(context: Context, limit: Int): List<AlbumPhoto> {
     }
     return out
 }
+
+/** 相册：按住多久进入「上滑松手发送」（与语音按钮的 200ms 同档，手感一致） */
+private const val ALBUM_LONG_PRESS_MS = 220L
+
+/** 上滑多少 dp 松手才真的发送（低于这个距离视为误触，取消） */
+private const val ALBUM_SEND_DISTANCE_DP = 56
