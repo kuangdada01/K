@@ -418,22 +418,21 @@ private fun AlbumThumb(
                      * ⚠️ **不要 consume 这个 down**：横向列表（LazyRow）要靠它判断
                      * "我要开始滚"。一旦在按下时就吃掉，相册条直接滑不动。
                      *
-                     * 接下来 ALBUM_LONG_PRESS_MS 内观察：
-                     *  · 抬手 → 点选（切换选中）；
-                     *  · 事件被别人消费（列表开始横向滚）→ 让给列表，什么都不做；
-                     *  · 一直按着没动 → 长按成立，进入「上滑松手发送」。
+                     * 按下之后三条出路（2026-10-21 按 QQ 参考视频重做）：
+                     *  · 抬手（没动）→ 点选（切换选中）；
+                     *  · **纵向移动超过 touchSlop → 立刻拎起来拖**，不等长按 ——
+                     *    上一版必须按住 220ms 才动，用户的原话是"上滑还是有延迟跳动"：
+                     *    手指先走、图后追，再补一次位移，观感就是"延迟 + 跳一下"；
+                     *  · 横向为主 / 列表先吃掉事件 → 让给相册条滚动，什么都不做；
+                     *  · 按着不动到 ALBUM_LONG_PRESS_MS → 原地拎起（位移 0，不跳）。
+                     *
+                     * 判方向而不是只判距离：相册条是横向滚的，竖着拖本来就不该触发它；
+                     * 横向占优时立刻退出、把手势还给列表。
                      */
                     var released = false
                     var listTookOver = false
-                    /**
-                     * 长按判定期间手指已经走了多远（纵向）。
-                     *
-                     * 用户 2026-10-21 反馈"上滑不是很跟手"：以前这里只等，不记位移 ——
-                     * 手快的人按住就开始往上推，等 220ms 到、图被拎起来时 `totalY` 是从 0
-                     * 起算的，图会一直落后手指那一段距离，看起来就是"跟不上"。
-                     * 现在把这段位移记下来当作起点，图一被拎起就正好在手指底下。
-                     */
                     var movedY = 0f
+                    var movedX = 0f
                     withTimeoutOrNull(ALBUM_LONG_PRESS_MS) {
                         while (true) {
                             val event = awaitPointerEvent()
@@ -446,7 +445,20 @@ private fun AlbumThumb(
                                 listTookOver = true
                                 break
                             }
-                            movedY += change.positionChange().y
+                            val d = change.positionChange()
+                            movedX += d.x
+                            movedY += d.y
+                            val ax = kotlin.math.abs(movedX)
+                            val ay = kotlin.math.abs(movedY)
+                            if (ax > viewConfiguration.touchSlop && ax > ay) {
+                                // 横向为主：这是"滚相册条"，我们不管了
+                                listTookOver = true
+                                break
+                            }
+                            if (ay > viewConfiguration.touchSlop && ay > ax) {
+                                // 纵向为主：**立刻**拎起，跟手从这一下开始
+                                break
+                            }
                         }
                         Unit
                     }
@@ -455,13 +467,13 @@ private fun AlbumThumb(
                         toggle()
                         return@awaitEachGesture
                     }
-                    // 长按成立：把**这一格已经解码好的图 + 它现在的位置**交给浮层
-                    // （浮图就是这张图本身，从这里被拎起来，不重新加载），
+                    // 拎起：把**这一格已经解码好的图 + 它现在的位置**交给浮层
+                    // （浮图就是这张图本身，从这儿被拎起来，不重新加载），
                     // 之后每一帧把**累计纵向位移**交给调用方（横向不跟手，见入参注释）。
                     // 横竖两个轴的事件都要 consume：不吃掉的话相册条会跟着横向滚。
                     dragStart(currentPainter, boundsInRoot)
-                    // 起点 = 长按判定期间已经走掉的位移：图一拎起来就贴在手指底下，
-                    // 不会永远落后那一段（见上面 movedY 的注释）
+                    // 起点 = 判定期间已经走掉的位移（**最多一个 touchSlop**，因为超过就立刻
+                    // 拎起来了）：图一拎起就贴在手指底下，既没有"延迟追手指"，也不会跳一大截
                     var totalY = movedY
                     if (totalY != 0f) dragMove(totalY)
                     while (true) {
