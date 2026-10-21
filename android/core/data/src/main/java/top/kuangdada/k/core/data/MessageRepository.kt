@@ -41,6 +41,15 @@ class MessageRepository(private val session: SessionRepository) {
         val timeText: String,
     )
 
+    /**
+     * 本地发送态（2026-10-21）。
+     *
+     * 以前消息要等服务端响应回来才出现在列表里（用户说的"发出去是硬切"）。现在发的瞬间
+     * 就先插一条 [SendState.Sending] 的本地消息（负数 id），气泡左侧带转圈；成功换成
+     * 服务端那条（转圈消失），失败留在原位标 [SendState.Failed]（红色感叹号）。
+     */
+    enum class SendState { Sent, Sending, Failed }
+
     data class MessageUi(
         val raw: MessageDto,
         val isMine: Boolean,
@@ -54,8 +63,13 @@ class MessageRepository(private val session: SessionRepository) {
         /** 转写文本（本地转写成功后回填，避免重进会话再点一次） */
         val audioText: String?,
         val timeText: String,
+        /** 发送态；历史/对方来的消息恒为 [SendState.Sent] */
+        val sendState: SendState = SendState.Sent,
     ) {
         val hasAudio: Boolean get() = !audioUrl.isNullOrBlank()
+
+        /** 还在发（本地占位，服务端还没有这条） */
+        val isSending: Boolean get() = sendState == SendState.Sending
     }
 
     data class NotificationUi(

@@ -75,6 +75,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import android.os.Build
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -83,6 +84,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
@@ -161,6 +163,8 @@ import top.kuangdada.k.core.data.InboxStore
 import top.kuangdada.k.core.data.MessageRepository
 import top.kuangdada.k.core.data.RealtimeClient
 import top.kuangdada.k.core.data.dayDividerText
+import top.kuangdada.k.core.data.model.MessageDto
+import top.kuangdada.k.core.data.timeOfDay
 import top.kuangdada.k.core.data.displayMessage
 import top.kuangdada.k.core.data.image.ImageCompressor
 import top.kuangdada.k.core.data.timeGapMillis
@@ -276,23 +280,105 @@ fun ChatScreen(
     var albumDragReleased by remember { mutableStateOf(false) }
     /** 被按住那一格在屏幕上的矩形：浮图从**这里**被拎起来，而不是凭空出现在屏幕中央 */
     var albumDragBounds by remember { mutableStateOf(Rect.Zero) }
+
     /**
-     * 一条真实消息进列表的**唯一入口**：同 id 只留一条。
+     * ============================================================
+     * 本地待发消息（"先发出去、再等服务端"）
+     * ============================================================
+     * 用户 2026-10-21："现在发出去是硬切……所以信息都是先触发发出去动画，
+     * 消息左边一个发送中的转圈，失败就感叹号，成功就消失。"
      *
-     * 服务端插库后会立刻广播 SSE，而客户端**在 POST 响应回来之前**就已经被那次广播
-     * 触发的 `messages.history()` 重拉合并过了（见实时收集器）——图/语音越大越慢，
-     * 几乎必中。以前三处发送回调都是 `items + r.data`，直接造出两条同 id 的消息，
-     * `LazyColumn` 的 key 撞车就抛 "Key msg-xxx was already used" **闪退**
-     * （2026-10-20 用户报的"发送图片触发闪退"）。
+     * 做法：点的瞬间先往列表里插一条**负数 id** 的本地消息（真实 id 恒为正，不会撞），
+     * 气泡左侧按 [MessageRepository.SendState] 画转圈/感叹号；服务端回来之后：
+     *  · 成功 → [settlePending] 把这条**原位换成**服务端那份（转圈消失，内容不变）；
+     *  · 失败 → [markPendingFailed] 只改状态，消息留在原位（红感叹号）。
      *
-     * 现在：已在列表里 → 原位替换（顺带让服务端版本覆盖本地那份），不在 → 追加。
+     * 负数 id 还顺带保证了几件事：`buildChatEntries` 的 key 唯一；SSE 合并里
+     * `it.raw.id < minFreshId` 恒成立 —— 占位消息不会被那次重拉顺手删掉。
      */
-    fun mergeMessage(msg: MessageRepository.MessageUi) {
-        items = if (items.any { it.raw.id == msg.raw.id }) {
-            items.map { if (it.raw.id == msg.raw.id) msg else it }
-        } else {
-            items + msg
+    val pendingSeq = remember { longArrayOf(0L) }
+
+    /** 下一个本地待发消息 id（-1、-2……） */
+    fun nextPendingId(): Long = --pendingSeq[0]
+
+    /** 造一条"发送中"的本地消息（图片/语音用本地地址直接显示，不等上传） */
+    fun pendingMessage(
+        id: Long,
+        content: String = "",
+        imageUrl: String? = null,
+        audioUrl: String? = null,
+        audioDurationMs: Int = 0,
+        audioWaveform: List<Int> = emptyList(),
+    ): MessageRepository.MessageUi {
+        // 与服务端同格式（`yyyy-MM-dd HH:mm:ss`）：日期分隔条/排序都按字符串解析
+        val at = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+            .format(java.util.Date())
+        return MessageRepository.MessageUi(
+            raw = MessageDto(
+                id = id,
+                senderId = 0,
+                receiverId = partnerId,
+                content = content,
+                imageUrl = imageUrl,
+                audioUrl = audioUrl,
+                audioDurationMs = audioDurationMs,
+                audioWaveform = audioWaveform,
+                createdAt = at,
+            ),
+            isMine = true,
+            imageUrl = imageUrl,
+            audioUrl = audioUrl,
+            audioDurationMs = audioDurationMs,
+            audioWaveform = audioWaveform,
+            audioText = null,
+            timeText = timeOfDay(at),
+            sendState = MessageRepository.SendState.Sending,
+        )
+    }
+
+    /** 放进列表并贴底（乐观插入的唯一入口）。点击回调里调用，所以用非挂起的 requestScrollToItem */
+    fun appendPending(ui: MessageRepository.MessageUi) {
+        items = items + ui
+        listState.requestScrollToItem(0)
+    }
+
+    /** 发送失败：原位标红，不动顺序 */
+    fun markPendingFailed(pendingId: Long) {
+        items = items.map {
+            if (it.raw.id == pendingId) {
+                it.copy(sendState = MessageRepository.SendState.Failed)
+            } else {
+                it
+            }
         }
+    }
+
+    /**
+     * 发送成功：把占位那条换成服务端返回的真实消息。
+     *
+     * ⚠️ 顺手把 SSE 已经合进来的**同 id** 也清掉：服务端 `notifyUser` 在 HTTP 响应**之前**
+     * 广播，客户端被那次广播触发的 `history()` 很可能已经把真实消息追加了一遍
+     * （2026-10-20 的闪退就是同 id 两条撞了 `LazyColumn` 的 key）。
+     */
+    fun settlePending(pendingId: Long, real: MessageRepository.MessageUi) {
+        val realId = real.raw.id
+        val hadPending = items.any { it.raw.id == pendingId }
+        items = items.filterNot { it.raw.id == realId || (hadPending && it.raw.id == pendingId) } +
+            if (hadPending) listOf(real) else emptyList()
+    }
+
+    /**
+     * 撤回提示："某某 撤回了一条消息"。
+     *
+     * 服务端撤回是**直接删行**，重拉历史之后就没有痕迹了；这里在本地记一条提示，
+     * 按时间插到原消息的位置，本次会话内一直可见（重进会话会消失 —— 要持久得让
+     * 服务端保留一行"已撤回"，那是另一件事）。
+     */
+    val recallNotices = remember { mutableStateListOf<RecallNotice>() }
+
+    fun addRecallNotice(id: Long, name: String, at: String) {
+        if (recallNotices.any { it.id == id }) return
+        recallNotices += RecallNotice(id, name.ifBlank { "对方" }, at)
     }
     /**
      * 输入内容。**刻意用 MutableState 而不是 `var input by`**：组合期唯一读它的地方
@@ -337,12 +423,16 @@ fun ChatScreen(
      * 内嵌相册多选与系统全屏 Picker 都走这里，避免两套压缩/失败处理。
      */
     suspend fun sendImageUri(uri: Uri, quotedMessageId: Long?): Boolean {
+        // 先上屏（本地 content:// 直接能画），拷图/压缩/上传都在它后面进行
+        val pendingId = nextPendingId()
+        appendPending(pendingMessage(pendingId, imageUrl = uri.toString()))
         val file = withContext(Dispatchers.IO) {
             copyUriToCache(context, uri)?.let { raw ->
                 ImageCompressor.compressFile(context, raw)?.also { raw.delete() } ?: raw
             }
         }
         if (file == null) {
+            markPendingFailed(pendingId)
             toast = "读取图片失败，请重试"
             return false
         }
@@ -355,11 +445,12 @@ fun ChatScreen(
             )
         ) {
             is ApiResult.Success -> {
-                // 走统一入口：SSE 大概率已经先把这条合进来了（见 mergeMessage）
-                mergeMessage(r.data)
+                // 占位那条**原位换成**服务端消息（SSE 已合进来的同 id 一并清掉）
+                settlePending(pendingId, r.data)
                 true
             }
             is ApiResult.Failure -> {
+                markPendingFailed(pendingId)
                 toast = r.error.displayMessage
                 false
             }
@@ -443,8 +534,19 @@ fun ChatScreen(
             return
         }
         sendingVoice = true
+        val quoted = replyTo?.raw?.id
+        replyTo = null
+        // 先上屏：`file://` 前缀是必须的，ExoPlayer 的 MediaItem.fromUri 只认带 scheme 的地址
+        val pendingId = nextPendingId()
+        appendPending(
+            pendingMessage(
+                pendingId,
+                audioUrl = "file://" + result.file.absolutePath,
+                audioDurationMs = result.durationMs,
+                audioWaveform = result.waveform,
+            )
+        )
         scope.launch {
-            val quoted = replyTo?.raw?.id
             when (
                 val r = messages.send(
                     receiverId = partnerId,
@@ -456,14 +558,15 @@ fun ChatScreen(
                 )
             ) {
                 is ApiResult.Success -> {
-                    mergeMessage(r.data)
-                    replyTo = null
-                    // reverseLayout：新消息在 index 0
-                    listState.animateScrollToItem(0)
+                    settlePending(pendingId, r.data)
+                    // 上传成功才删本地文件：失败时气泡还指着它（还能点开听一遍）
+                    result.file.delete()
                 }
-                is ApiResult.Failure -> toast = r.error.displayMessage
+                is ApiResult.Failure -> {
+                    markPendingFailed(pendingId)
+                    toast = r.error.displayMessage
+                }
             }
-            result.file.delete()
             sendingVoice = false
         }
     }
@@ -682,6 +785,16 @@ fun ChatScreen(
         if (realtime == null) return@LaunchedEffect
         realtime.events.collect { event ->
             if (event.isMessage && (event.from == partnerId || event.to == partnerId)) {
+                // 撤回事件：先把"谁撤回了哪条"记成提示（历史重拉之后原文就没了，记不到）
+                event.recalled?.let { recalledId ->
+                    items.firstOrNull { it.raw.id == recalledId }?.let { m ->
+                        addRecallNotice(
+                            recalledId,
+                            m.raw.senderUsername.ifBlank { if (m.isMine) "你" else "对方" },
+                            m.raw.createdAt,
+                        )
+                    }
+                }
                 when (val r = messages.history(partnerId)) {
                     is ApiResult.Success -> {
                         val fresh = r.data.first
@@ -701,7 +814,9 @@ fun ChatScreen(
     }
 
     // 按自然日切分隔条（设计稿顶部那条「今天 14:32」）
-    val entries = remember(items) { buildChatEntries(items) }
+    // 撤回提示一起进时间轴：`toList()` 在组合期读一次状态列表，撤回后立刻重算
+    val noticesNow = recallNotices.toList()
+    val entries = remember(items, noticesNow) { buildChatEntries(items, noticesNow) }
 
     /**
      * 这一段对话里的**全部图片**（时间正序）。
@@ -1079,10 +1194,18 @@ fun ChatScreen(
                             key = { it.key },
                             // 日期分隔条与气泡两种形态混排：声明槽位类型，滚动回收时
                             // 跨同类型复用（快速翻长会话历史少付一次组合成本）
-                            contentType = { if (it is ChatEntry.Day) "day" else "bubble" },
+                            contentType = {
+                                when (it) {
+                                    is ChatEntry.Day -> "day"
+                                    is ChatEntry.Notice -> "notice"
+                                    else -> "bubble"
+                                }
+                            },
                         ) { entry ->
                             when (entry) {
                                 is ChatEntry.Day -> DayDivider(entry.text)
+                                // "某某 撤回了一条消息"：居中细提示，不进气泡、不可长按
+                                is ChatEntry.Notice -> RecallNoticeLine(entry.text)
                                 is ChatEntry.Bubble -> MessageBubble(
                                     msg = entry.msg,
                                     // 按图记忆（不按 messages 记）：鉴权头只在 token 变化时才变，
@@ -1142,11 +1265,16 @@ fun ChatScreen(
                                     // 引用与撤回都在长按菜单里（气泡自身不带常显操作文字）
                                     onQuote = { quoteMessage(entry.msg) },
                                     onRecall = {
+                                        val id = entry.msg.raw.id
+                                        val at = entry.msg.raw.createdAt
+                                        val who = entry.msg.raw.senderUsername
+                                            .ifBlank { if (entry.msg.isMine) "你" else "对方" }
                                         scope.launch {
-                                            val id = entry.msg.raw.id
                                             when (val r = messages.recall(id)) {
                                                 is ApiResult.Success -> {
+                                                    // 删掉原文，原位留一条"某某 撤回了一条消息"
                                                     items = items.filterNot { it.raw.id == id }
+                                                    addRecallNotice(id, who, at)
                                                     toast = "已撤回"
                                                 }
                                                 is ApiResult.Failure -> toast = r.error.displayMessage
@@ -1387,25 +1515,22 @@ fun ChatScreen(
                                 toast = "不能发空消息"
                                 return@ChatSendButton
                             }
+                            // 先把清空的、要发的都取出来：乐观插入之后输入框立刻清空，
+                            // 协程里不能再读 input.value（那时已经是空串）
+                            val text = input.value.trim()
+                            val quoted = replyTo?.raw?.id
+                            val pendingId = nextPendingId()
+                            input.value = ""
+                            replyTo = null
+                            appendPending(pendingMessage(pendingId, content = text))
                             scope.launch {
                                 sending = true
-                                val quoted = replyTo?.raw?.id
-                                when (
-                                    val r = messages.send(
-                                        partnerId,
-                                        input.value.trim(),
-                                        quotedMessageId = quoted,
-                                    )
-                                ) {
-                                    is ApiResult.Success -> {
-                                        mergeMessage(r.data)
-                                        input.value = ""
-                                        replyTo = null
-                                        // 发出去的消息在 reverseLayout 里是 index 0：
-                                        // 主动滚一次，避免用户翻了旧消息后看不到自己刚发的那条
-                                        listState.animateScrollToItem(0)
+                                when (val r = messages.send(partnerId, text, quotedMessageId = quoted)) {
+                                    is ApiResult.Success -> settlePending(pendingId, r.data)
+                                    is ApiResult.Failure -> {
+                                        markPendingFailed(pendingId)
+                                        toast = r.error.displayMessage
                                     }
-                                    is ApiResult.Failure -> toast = r.error.displayMessage
                                 }
                                 sending = false
                             }
@@ -2114,13 +2239,77 @@ private fun DayDivider(text: String) {
     }
 }
 
+/**
+ * "某某 撤回了一条消息"：居中一条浅灰细提示（2026-10-21）。
+ *
+ * 不用气泡：它不是内容，是**系统事实**；用气泡会被误认为还能长按/引用/撤回。
+ */
+@Composable
+private fun RecallNoticeLine(text: String) {
+    val c = KTheme.colors
+    Box(
+        modifier = Modifier.fillMaxWidth().padding(vertical = KSpacing.xxs),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = text,
+            style = KType.footnote,
+            color = c.textMuted,
+            modifier = Modifier
+                .clip(RoundedCornerShape(KRadius.control))
+                .background(c.surfaceSunken)
+                .padding(horizontal = KSpacing.sm, vertical = 3.dp),
+        )
+    }
+}
+
+/**
+ * 自己的消息左侧的发送态：转圈 / 红色感叹号（2026-10-21）。
+ *
+ * 只在自己这条还没落定时出现（[MessageRepository.SendState]），成功换成服务端消息后
+ * 就消失了 —— 用户要的就是"发出瞬间有反馈，成功后不占地方"。
+ */
+@Composable
+private fun SendStatus(state: MessageRepository.SendState) {
+    val c = KTheme.colors
+    Box(
+        modifier = Modifier.size(20.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        when (state) {
+            MessageRepository.SendState.Sending -> CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                strokeWidth = 2.dp,
+                color = c.textMuted,
+            )
+            MessageRepository.SendState.Failed -> Text(
+                text = "!",
+                style = KType.bodyStrong,
+                color = c.danger,
+            )
+            MessageRepository.SendState.Sent -> Unit
+        }
+    }
+}
+
 /** 聊天列表项：日期分隔条 或 一条消息 */
 private sealed interface ChatEntry {
     val key: String
 
     data class Day(override val key: String, val text: String) : ChatEntry
     data class Bubble(override val key: String, val msg: MessageRepository.MessageUi) : ChatEntry
+
+    /** 系统提示（目前只有"某某 撤回了一条消息"）：居中、muted、不可长按 */
+    data class Notice(override val key: String, val text: String) : ChatEntry
 }
+
+/**
+ * 撤回提示（本地，2026-10-21）。
+ *
+ * 服务端撤回是删行，历史里不会留痕；这条提示按**被撤回那条消息的 createdAt**
+ * 插回原位，本次会话内一直可见。
+ */
+private data class RecallNotice(val id: Long, val name: String, val at: String)
 
 /**
  * 把消息切成「分隔条 + 消息」的扁平列表。
@@ -2130,7 +2319,10 @@ private sealed interface ChatEntry {
  * 文案取那条消息的时间（「今天 14:32」/「昨天 14:32」/「9月12日 14:32」）。
  * 气泡下不再带时间戳（web 移动端亦然），分隔条是唯一的时间信息。
  */
-private fun buildChatEntries(items: List<MessageRepository.MessageUi>): List<ChatEntry> {
+private fun buildChatEntries(
+    items: List<MessageRepository.MessageUi>,
+    notices: List<RecallNotice> = emptyList(),
+): List<ChatEntry> {
     val out = mutableListOf<ChatEntry>()
     /**
      * 已画过的 id：**兜底防重**。
@@ -2140,15 +2332,33 @@ private fun buildChatEntries(items: List<MessageRepository.MessageUi>): List<Cha
      * 产生重复 id，这里再兜一层 —— 宁可少画一条，也不能让整页崩掉。
      */
     val drawn = HashSet<Long>(items.size)
-    var prev: MessageRepository.MessageUi? = null
-    items.forEach { msg ->
-        if (!drawn.add(msg.raw.id)) return@forEach
-        val gap = prev?.let { timeGapMillis(msg.raw.createdAt, it.raw.createdAt) }
-        if (prev == null || (gap != null && gap > CHAT_TIME_GAP_MS)) {
-            out += ChatEntry.Day("day-${msg.raw.id}", dayDividerText(msg.raw.createdAt))
+    /** 时间轴：消息 + 撤回提示，按 createdAt 升序（字符串格式固定，直接可比较） */
+    val lines = ArrayList<Pair<String, Any>>(items.size + notices.size)
+    items.forEach { m -> lines += m.raw.createdAt to m }
+    notices.forEach { n -> lines += n.at to n }
+    if (notices.isNotEmpty()) lines.sortBy { it.first }
+
+    var prevAt: String? = null
+    lines.forEach { (at, payload) ->
+        if (payload is MessageRepository.MessageUi) {
+            val msg = payload
+            if (!drawn.add(msg.raw.id)) return@forEach
+            val gap = prevAt?.let { timeGapMillis(at, it) }
+            if (prevAt == null || (gap != null && gap > CHAT_TIME_GAP_MS)) {
+                out += ChatEntry.Day("day-${msg.raw.id}", dayDividerText(at))
+            }
+            out += ChatEntry.Bubble("msg-${msg.raw.id}", msg)
+        } else if (payload is RecallNotice) {
+            val gap = prevAt?.let { timeGapMillis(at, it) }
+            if (prevAt == null || (gap != null && gap > CHAT_TIME_GAP_MS)) {
+                out += ChatEntry.Day("day-recall-${payload.id}", dayDividerText(at))
+            }
+            out += ChatEntry.Notice(
+                "recall-${payload.id}",
+                "${payload.name} 撤回了一条消息",
+            )
         }
-        out += ChatEntry.Bubble("msg-${msg.raw.id}", msg)
-        prev = msg
+        prevAt = at
     }
     return out
 }
@@ -2250,6 +2460,13 @@ private fun MessageBubble(
                 fg = c.textPrimary,
             )
             Spacer(Modifier.width(KSpacing.xs))
+        }
+
+        // 自己的消息：左侧发送态（转圈 / 感叹号）。成功换成服务端那条后 SendState 变 Sent，
+        // 这里自然消失 —— 不占位、不留白（Row 是 End 对齐，它在气泡左边）
+        if (mine && msg.sendState != MessageRepository.SendState.Sent) {
+            Box(Modifier.padding(top = 3.dp)) { SendStatus(msg.sendState) }
+            Spacer(Modifier.width(KSpacing.xxs))
         }
 
         Column(
@@ -2461,7 +2678,10 @@ private fun MessageBubble(
                                 // 单击不做任何事（设计稿里气泡是"可长按"而不是"可点"）；
                                 // 复制/引用/撤回全部收进长按菜单，界面上不再常显任何操作文字。
                                 onClick = {},
-                                onLongClick = { menu = true },
+                                // 发送中/失败的不弹菜单：撤回、引用都还没意义（id 是本地负数）
+                                onLongClick = {
+                                    if (msg.sendState == MessageRepository.SendState.Sent) menu = true
+                                },
                             )
                             .padding(horizontal = KSpacing.sm),
                         contentAlignment = Alignment.CenterStart,
