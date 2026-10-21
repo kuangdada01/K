@@ -295,7 +295,13 @@ fun InlineAlbumPanel(
                     .height(34.dp)
                     .clip(RoundedCornerShape(KRadius.control))
                     .background(if (canSend) c.accent else c.accent.copy(alpha = 0.42f))
-                    .clickable(enabled = canSend) { onSend(selected.toList()) }
+                    // 发完就清空选择：面板不再自动关闭（见 ChatScreen 的 keepPanel），
+                    // 不清的话下一次点发送会把上一批又发一遍
+                    .clickable(enabled = canSend) {
+                        val batch = selected.toList()
+                        selected.clear()
+                        onSend(batch)
+                    }
                     .padding(horizontal = KSpacing.md),
                 contentAlignment = Alignment.Center,
             ) {
@@ -419,6 +425,15 @@ private fun AlbumThumb(
                      */
                     var released = false
                     var listTookOver = false
+                    /**
+                     * 长按判定期间手指已经走了多远（纵向）。
+                     *
+                     * 用户 2026-10-21 反馈"上滑不是很跟手"：以前这里只等，不记位移 ——
+                     * 手快的人按住就开始往上推，等 220ms 到、图被拎起来时 `totalY` 是从 0
+                     * 起算的，图会一直落后手指那一段距离，看起来就是"跟不上"。
+                     * 现在把这段位移记下来当作起点，图一被拎起就正好在手指底下。
+                     */
+                    var movedY = 0f
                     withTimeoutOrNull(ALBUM_LONG_PRESS_MS) {
                         while (true) {
                             val event = awaitPointerEvent()
@@ -431,6 +446,7 @@ private fun AlbumThumb(
                                 listTookOver = true
                                 break
                             }
+                            movedY += change.positionChange().y
                         }
                         Unit
                     }
@@ -444,7 +460,10 @@ private fun AlbumThumb(
                     // 之后每一帧把**累计纵向位移**交给调用方（横向不跟手，见入参注释）。
                     // 横竖两个轴的事件都要 consume：不吃掉的话相册条会跟着横向滚。
                     dragStart(currentPainter, boundsInRoot)
-                    var totalY = 0f
+                    // 起点 = 长按判定期间已经走掉的位移：图一拎起来就贴在手指底下，
+                    // 不会永远落后那一段（见上面 movedY 的注释）
+                    var totalY = movedY
+                    if (totalY != 0f) dragMove(totalY)
                     while (true) {
                         val event = awaitPointerEvent()
                         val change = event.changes.firstOrNull { it.id == down.id } ?: break

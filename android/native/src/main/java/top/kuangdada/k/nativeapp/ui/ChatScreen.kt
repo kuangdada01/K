@@ -369,10 +369,12 @@ fun ChatScreen(
     /**
      * 批量发图（内嵌相册最多 9 张；系统 Picker 也走这里）。
      *
-     * 服务端一条消息只带一张图 → 逐张发成多条；引用只落在第一张上，
-     * 发完统一滚到最新、关掉相册面板。
+     * 服务端一条消息只带一张图 → 逐张发成多条；引用只落在第一张上，发完统一滚到最新。
+     *
+     * [keepPanel]：内嵌相册发的**不关面板**（用户 2026-10-21："发送图片不要退出功能区"）——
+     * 连发几张是常见操作，每发一次就关掉、要再点开一次相册，很打断。系统 Picker 发完仍然关闭。
      */
-    fun sendImageUris(uris: List<Uri>) {
+    fun sendImageUris(uris: List<Uri>, keepPanel: Boolean = false) {
         if (uris.isEmpty()) return
         if (sending) {
             toast = "正在发送，请稍候"
@@ -390,7 +392,8 @@ fun ChatScreen(
                 }
                 if (sent > 0) {
                     replyTo = null
-                    albumOpen = false
+                    // 内嵌相册发完留在功能区里，可以接着挑下一张
+                    if (!keepPanel) albumOpen = false
                     listState.animateScrollToItem(0)
                 }
             } finally {
@@ -1580,7 +1583,8 @@ fun ChatScreen(
                             )
                             ChatPanel.Album -> InlineAlbumPanel(
                                 sending = sending,
-                                onSend = { uris -> sendImageUris(uris) },
+                                // keepPanel：发完**不关**相册面板（连发场景）
+                                onSend = { uris -> sendImageUris(uris, keepPanel = true) },
                                 onOpenSystemGallery = {
                                     pickChatImage.launch(
                                         PickVisualMediaRequest(
