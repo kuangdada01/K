@@ -112,6 +112,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -261,6 +262,16 @@ fun ChatScreen(
     var albumDragPainter by remember { mutableStateOf<Painter?>(null) }
     /** 只累计上下：上滑是"从原来那一格垂直往上"，横向不动（用户 2026-10-20 明确） */
     var albumDragDy by remember { mutableFloatStateOf(0f) }
+    /**
+     * 相册拖拽时蒙版的范围 = **消息区**（顶栏下沿 → 输入栏上沿）。
+     *
+     * 参考图（2026-10-21）里只有这块被压层，顶栏、输入栏、功能排、相册条都是原样 ——
+     * 整页盖白会把"从相册里拎出来"的语境抹掉。矩形在拖拽开始那一刻从
+     * [messageAreaBounds] 取一次（低频），不是每帧算。
+     */
+    var albumDragVeil by remember { mutableStateOf(Rect.Zero) }
+    /** 消息区矩形（**普通字段**：键盘/面板动画里每帧都变，写成 State 就是整页每帧重组） */
+    val messageAreaBounds = remember { RectField() }
     /** 松手了（或正在退场）：浮层播完"丢出去 / 落回相册"再回调清状态 */
     var albumDragReleased by remember { mutableStateOf(false) }
     /** 被按住那一格在屏幕上的矩形：浮图从**这里**被拎起来，而不是凭空出现在屏幕中央 */
@@ -1006,6 +1017,13 @@ fun ChatScreen(
                     .weight(1f)
                     .fillMaxWidth()
                     /**
+                     * 记下**消息区**的矩形（普通字段，不是 State —— 它在键盘/面板动画里每帧都变，
+                     * 写成 State 就把整页拖进每帧重组，正是 2026-10-20 那轮"弹跳"的来源）。
+                     * 只在"相册拖拽开始"那一刻被读一次，用来铺蒙版：参考图里**只有消息区**压层，
+                     * 顶栏/输入栏/功能排/相册条都保持原样。
+                     */
+                    .onGloballyPositioned { messageAreaBounds.value = it.boundsInRoot() }
+                    /**
                      * 点消息区空白 → 收键盘 + 收起**所有**输入辅助面板（语音/表情/相册）。
                      *
                      * 手势挂在**外层 Box** 上而不是列表上：这样"还没有消息"的空态、
@@ -1578,6 +1596,14 @@ fun ChatScreen(
                                     albumDragBounds = bounds
                                     albumDragDy = 0f
                                     albumDragReleased = false
+                                    // 蒙版只铺**消息区**（参考图）：顶栏下沿 → 输入栏上沿。
+                                    // 取一次就够 —— 拖拽期间键盘/面板都不会动。
+                                    val area = messageAreaBounds.value
+                                    albumDragVeil = if (area.width > 0f && area.height > 0f) {
+                                        Rect(0f, topBarPx.toFloat(), area.width, area.bottom)
+                                    } else {
+                                        Rect.Zero
+                                    }
                                 },
                                 onDragPreviewMove = { dy -> albumDragDy = dy },
                                 // 松手后不立刻抹掉浮层：让它把"丢出去 / 落回相册"演完，
@@ -1658,16 +1684,18 @@ fun ChatScreen(
             }
         }
 
-        // 相册「拎起来丢出去」浮层：盖在整页最上层（连顶栏一起），整页压白
+        // 相册「拎起来丢出去」浮层：盖在整页最上层；蒙版**只铺消息区**（参考图 2026-10-21）
         AlbumDragOverlay(
             painter = albumDragPainter,
             bounds = albumDragBounds,
+            veil = albumDragVeil,
             offsetY = { albumDragDy },
             released = albumDragReleased,
             onExitFinished = {
                 albumDragPainter = null
                 albumDragReleased = false
                 albumDragDy = 0f
+                albumDragVeil = Rect.Zero
             },
         )
 
@@ -2968,8 +2996,9 @@ private fun ChatSendButton(
  *     （用户："上滑是在原来的位置垂直往上"）。
  *  4. **原位留空**：被拎走的那一格由相册面板自己画成透明（`draggedPainter`），
  *     所以后面不会还压着一张一样的图。
- *  5. **背景是白的**：整页盖一层白 0.72，把聊天压下去，浮图才立得住
- *     （用户："背景应该是白色才对"）。压层随拎起淡入、随落回/丢出淡出。
+ *  5. **蒙版只盖消息区**（2026-10-21 参考图）：白色 0.72 只铺"顶栏下沿 → 输入栏上沿"
+ *     这一块（[veil]），顶栏、输入栏、功能排、相册条一律保持原样 —— 整页压白会把
+ *     "这张图是从下面相册里拎起来的"这层语境抹掉。压层随拎起淡入、随落回/丢出淡出。
  *
  * 松手两种退场：
  *  · 上滑够 [ALBUM_SEND_DISTANCE_DP] → **丢出去**：继续向上飞 96dp 同时淡出（200ms）；
@@ -2985,6 +3014,8 @@ private fun ChatSendButton(
 private fun AlbumDragOverlay(
     painter: Painter?,
     bounds: Rect,
+    /** 蒙版范围 = 消息区矩形（顶栏下沿 → 输入栏上沿）；空矩形时退回"到相册条上沿为止" */
+    veil: Rect,
     offsetY: () -> Float,
     released: Boolean,
     onExitFinished: () -> Unit,
@@ -3011,6 +3042,14 @@ private fun AlbumDragOverlay(
     val finishExit by rememberUpdatedState(onExitFinished)
     val sendPx = with(density) { ALBUM_SEND_DISTANCE_DP.dp.toPx() }
     val flyUpPx = with(density) { 96.dp.toPx() }
+    /**
+     * 蒙版的纵向范围（px）。正常来自 [veil]（= 消息区矩形，见 ChatScreen 的
+     * `messageAreaBounds`）；拿不到时退回"从 0 到相册条上沿"，至少不会整页压白。
+     */
+    val veilTopPx = if (veil.height > 0f) veil.top else 0f
+    val veilHeightPx = if (veil.height > 0f) veil.height else cellTop.coerceAtLeast(0f)
+    /** 蒙版浓度：随拎起淡入、随落回/丢出淡出（只在绘制期读，不进组合） */
+    val veilAlpha: () -> Float = { liftIn.value * settle.value * (1f - exit.value) }
 
     LaunchedEffect(released, painter) {
         if (!released) {
@@ -3045,28 +3084,30 @@ private fun AlbumDragOverlay(
                     }
                 },
         )
-        // 白色压层：**整页**（含相册条），随拎起淡入、随落回/丢出淡出
+        /**
+         * 压层 + 提示：**都只铺在消息区**（[veil]）。
+         *
+         * 参考图（2026-10-21）：蒙版止于输入栏上沿，输入栏/功能排/相册条保持原样 ——
+         * 用户一眼能看出"图是从下面那排相册里拎起来的"。提示跟着蒙版居中偏上。
+         */
         Box(
             modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    alpha = liftIn.value * settle.value * (1f - exit.value)
-                }
-                .background(Color.White.copy(alpha = 0.72f)),
-        )
-        // 提示：纸飞机 + 松手发送（屏幕上方，浅底上用深色才看得清）
-        Column(
-            modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = (cfg.screenHeightDp * 0.2f).dp)
-                .graphicsLayer {
-                    alpha = liftIn.value * settle.value * (1f - exit.value)
-                },
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .height(with(density) { veilHeightPx.toDp() })
+                .offset { IntOffset(0, veilTopPx.roundToInt()) }
+                .graphicsLayer { alpha = veilAlpha() }
+                .background(Color.White.copy(alpha = 0.72f)),
+            contentAlignment = Alignment.Center,
         ) {
-            Glyph(tint = c.textPrimary, kind = GlyphKind.Send, size = 30.dp)
-            Spacer(Modifier.height(KSpacing.xs))
-            Text(text = "松手发送", style = KType.body, color = c.textPrimary)
+            // 提示：纸飞机 + 松手发送（浅底上用深色才看得清）
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.offset(y = with(density) { (-veilHeightPx * 0.08f).toDp() }),
+            ) {
+                Glyph(tint = c.textPrimary, kind = GlyphKind.Send, size = 30.dp)
+                Spacer(Modifier.height(KSpacing.xs))
+                Text(text = "松手发送", style = KType.body, color = c.textPrimary)
+            }
         }
         // 拎在手上的那张图：**原尺寸、原位出发、只走竖直**，丢出去时向上飞 + 淡出
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopStart) {
@@ -3089,4 +3130,15 @@ private fun AlbumDragOverlay(
             )
         }
     }
+}
+
+/**
+ * 装一个会随布局变化的 [Rect] 的小盒子。
+ *
+ * **刻意不是 `mutableStateOf`**：消息区矩形在键盘/面板动画里**每帧都变**，
+ * 写成 State 就等于让整页订阅它 —— 那正是 2026-10-20 "消息内容上下弹跳"的成因。
+ * 这里只在"相册拖拽开始"那一刻被读一次，读到的就是当时的准确值。
+ */
+private class RectField {
+    var value: Rect = Rect.Zero
 }
