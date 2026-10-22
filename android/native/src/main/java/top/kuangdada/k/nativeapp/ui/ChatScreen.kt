@@ -1482,10 +1482,17 @@ fun ChatScreen(
                 // （ime 全高含导航栏，叠加等于把导航栏让了两次）。
                 // 垂直留白收一档（sm → xs），配合输入框矮一档（36dp，见 KTextField 调用）：
                 // 用户反馈"输入框高度小一点、上下留白间隙也小一点"。
+                /**
+                 * ⚠️ **上下留白要对称**（2026-10-22 用户："功能图标上窄下宽，不一样，
+                 * 上下间距要一样"）：功能排上方是 `spacedBy`(4dp)，下方是 Column 的
+                 * bottom padding —— 以前是 8dp，所以图标看起来"上面贴着、下面空一截"。
+                 * 现在两者都取 `KSpacing.xxs`(4dp)；顶部那 8dp 只影响输入框上方的留白。
+                 */
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = KSpacing.md, vertical = KSpacing.xs),
+                        .padding(horizontal = KSpacing.md)
+                        .padding(top = KSpacing.xs, bottom = KSpacing.xxs),
                     // 两行之间 4dp：QQ 式输入栏（输入在上、功能钮在下）
                     verticalArrangement = Arrangement.spacedBy(KSpacing.xxs),
                 ) {
@@ -1537,16 +1544,15 @@ fun ChatScreen(
                         }
                     }
 
-                    // 功能排（QQ 式通栏均分）：语音 / 表情 / 相册 各占 1/3，
-                    // 图标在各自格子里居中 —— 参考图里 QQ 的 6 个功能是铺满整行的，
-                    // 不是靠左挤成一串。这里只有 3 个真功能，就三等分。
-                    // 功能排**锁定 44dp 高**：以后再加语音/拍摄/更多等入口，
-                    // 只在等宽格子里多分一份，行高不会变（用户要求"等高，以后加功能也不跳"）。
-                    // 每个格子 fillMaxHeight + 图标居中，不靠内容撑高。
+                    // 功能排（QQ 式通栏均分，**最多放 6 个**）：
+                    // 每格 `weight(1f)`，N 个功能就是 N 等分，加到 6 个仍然一行铺满；
+                    // 行高**锁 34dp**（2026-10-22 用户："图标和上下空间太高了"——原 44dp），
+                    // 以后再加入口只在等宽格子里多分一份，行高不会变。
+                    // 图标 22dp 居中放在 30dp 盒里（原 28dp 图标 + 36dp 盒，用户："图标太大"）。
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(44.dp),
+                            .height(34.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         // 语音开关：点亮（主题色）= 下方「按住说话」面板展开；
@@ -1578,8 +1584,8 @@ fun ChatScreen(
                             // 盒 36dp / 图标 28dp —— 与输入框同高，图标留 4dp 呼吸位。
                             KEmojiButton(
                                 active = emojiOpen,
-                                boxSize = 36.dp,
-                                iconSize = 28.dp,
+                                boxSize = 30.dp,
+                                iconSize = 22.dp,
                                 onClick = {
                                     // 走 closeVoiceMode 而不是直接 `voiceMode = false`：
                                     // 录到一半切面板时要先停掉麦克风（面板都没了，还在录就是 bug）
@@ -1612,7 +1618,7 @@ fun ChatScreen(
                             // 尺寸与表情钮、输入框三者一致：盒 36dp
                             Box(
                                 modifier = Modifier
-                                    .size(36.dp)
+                                    .size(30.dp)
                                     // 不垫按下底色（M6.24 用户要求"选中图标反色主题色……要遮罩干嘛"）：
                                     // 选中反馈统一走"**图标变主题色**"（见下面 Glyph 的 tint）。
                                     //（此前为圆形底色配了 clip(pill)，会把方形图标的四角切掉。）
@@ -1642,7 +1648,7 @@ fun ChatScreen(
                                     // 24dp 下糊团（"锯齿"）；相机与 album 相继被否——最终选经典照片
                                     // 造型（相框+山坡+实心太阳点，见 IconPathsExtra.kt / TABLER_PHOTO）
                                     kind = GlyphKind.Photo,
-                                    size = 28.dp,
+                                    size = 22.dp,
                                 )
                             }
                         }
@@ -2944,7 +2950,7 @@ private fun ToolbarMicButton(
     val c = KTheme.colors
     Box(
         modifier = Modifier
-            .size(36.dp)
+            .size(30.dp)
             .clip(CircleShape)
             .clickable(onClick = onClick)
             .semantics { contentDescription = if (active) "收起语音输入" else "语音输入" },
@@ -2953,7 +2959,7 @@ private fun ToolbarMicButton(
         Glyph(
             tint = if (active) c.accentText else c.textSecondary,
             kind = GlyphKind.Mic,
-            size = 28.dp,
+            size = 22.dp,
         )
     }
 }
