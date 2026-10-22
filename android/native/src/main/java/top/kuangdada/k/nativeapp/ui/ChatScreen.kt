@@ -991,14 +991,39 @@ fun ChatScreen(
          * snapshotFlow 在 IME 变化时直接喂 —— 组合期零参与。
          */
         var imeBottomState by remember { mutableIntStateOf(0) }
+        /**
+         * 「像键盘」的高度下限（160dp）。
+         *
+         * ⚠️ 2026-10-22 实测：这台机器上 `WindowInsets.ime.getBottom()` 会报出 **1px**
+         * 这种残值，而面板高度就是从它推出来的 —— 面板高被算成 1px，等于"点功能区
+         * 没反应"（诊断 toast 里 `h=1 f=1.0` 就是现场：状态和动画都对，高度是 1）。
+         * 所以：小于这个下限的值一律当"没量到"，退回 [estimatedPanelPx]。
+         */
+        val minPanelPx = with(density) { 160.dp.toPx() }.roundToInt()
+        /** 完全量不到键盘时的估算（屏高 42%，量级与常见键盘一致） */
+        val estimatedPanelPx =
+            (LocalConfiguration.current.screenHeightDp * density.density * 0.42f).roundToInt()
+
+        /** 面板高按"量到的键盘全高 → 进程内记录 → 屏高估算"顺序取，残值一律跳过 */
+        fun resolvePanelHeightPx(): Int {
+            val fromIme = imeMaxPx[0]
+            if (fromIme >= minPanelPx) return fromIme
+            val remembered = KeyboardHeightMemory.lastDp
+            if (remembered > 0f) {
+                val px = with(density) { remembered.dp.toPx() }.roundToInt()
+                if (px >= minPanelPx) return px
+            }
+            return estimatedPanelPx
+        }
+
         LaunchedEffect(density) {
             // snapshotFlow 里读 insets 的底层快照状态：变化只触发这里重新发射，
             // 不触发任何重组（捕获的 ime/nav 是 WindowInsetsHolder 里的稳定单例）
             snapshotFlow { ime.getBottom(density) }.collect {
                 imeBottomState = it
                 if (it > imeMaxPx[0]) imeMaxPx[0] = it
-                // 跨页共享：别的地方以后弹键盘，聊天页的面板也能按真实高度画
-                if (it > 0) KeyboardHeightMemory.lastDp = with(density) { it.toDp().value }
+                // 跨页共享：**只记像键盘的值**（1px 残值会把别处也带坏）
+                if (it >= minPanelPx) KeyboardHeightMemory.lastDp = with(density) { it.toDp().value }
             }
         }
 
@@ -1017,18 +1042,7 @@ fun ChatScreen(
          * （2026-10-20 "消息内容上下弹跳"的根因之一）。初值取进程内记录/屏高估算，
          * 不用 0：首帧就要按真实高度画，否则面板会先塌一下再长出来。
          */
-        // 初值在组合期算好（LocalConfiguration 是 @Composable getter，不能进 remember 的 lambda）
-        val estimatedPanelPx =
-            (LocalConfiguration.current.screenHeightDp * density.density * 0.42f).roundToInt()
-        var panelHeightPx by remember {
-            mutableIntStateOf(
-                if (KeyboardHeightMemory.lastDp > 0f) {
-                    with(density) { KeyboardHeightMemory.lastDp.dp.toPx() }.roundToInt()
-                } else {
-                    estimatedPanelPx
-                }
-            )
-        }
+        var panelHeightPx by remember { mutableIntStateOf(resolvePanelHeightPx()) }
         val panelGridHeightDp = with(density) { (panelHeightPx - navBottomPx).toDp() }
 
         /** 面板展开比例 0..1：0 = 收起，1 = 与键盘等高占满交换区 */
@@ -1046,12 +1060,8 @@ fun ChatScreen(
         // 面板高度也不会在动画中途被改（改一次 = 整块面板重新测量 = 抖一下）
         LaunchedEffect(openPanel) {
             if (openPanel == ChatPanel.None) return@LaunchedEffect
-            val measured = imeMaxPx[0]
-            if (measured > 0 && measured != panelHeightPx) panelHeightPx = measured
-            // ⚠️ 临时诊断（下一版删）：400ms 后把"落定状态"吐出来，
-            // 用来区分"面板状态没置上（f=0）"和"高度没长起来（h=0）"
-            kotlinx.coroutines.delay(400)
-            toast = "panel=$openPanel h=$panelHeightPx f=${panelFraction.value}"
+            val resolved = resolvePanelHeightPx()
+            if (resolved != panelHeightPx) panelHeightPx = resolved
         }
         /**
          * 关闭面板时布尔量先变 false，但高度还在 `panelFraction` 上做退场动画 ——
