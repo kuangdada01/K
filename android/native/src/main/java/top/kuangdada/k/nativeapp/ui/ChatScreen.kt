@@ -1048,6 +1048,10 @@ fun ChatScreen(
             if (openPanel == ChatPanel.None) return@LaunchedEffect
             val measured = imeMaxPx[0]
             if (measured > 0 && measured != panelHeightPx) panelHeightPx = measured
+            // ⚠️ 临时诊断（下一版删）：400ms 后把"落定状态"吐出来，
+            // 用来区分"面板状态没置上（f=0）"和"高度没长起来（h=0）"
+            kotlinx.coroutines.delay(400)
+            toast = "panel=$openPanel h=$panelHeightPx f=${panelFraction.value}"
         }
         /**
          * 关闭面板时布尔量先变 false，但高度还在 `panelFraction` 上做退场动画 ——
@@ -1563,11 +1567,17 @@ fun ChatScreen(
                          * 图标组件自己不再挂 clickable —— 内层 clickable 会先消费掉点击，
                          * 外层就永远收不到（这正是"点了没反应"的经典写法）。
                          */
+                        val micInteraction = remember { MutableInteractionSource() }
                         Box(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()
-                                .clickable {
+                                .clickable(
+                                    // indication = null：不要 Material 默认的灰色按压高亮
+                                    // （用户 2026-10-22："加了个点击变灰色，不要这个"）
+                                    interactionSource = micInteraction,
+                                    indication = null,
+                                ) {
                                     if (voiceMode) {
                                         closeVoiceMode()
                                     } else {
@@ -1585,11 +1595,15 @@ fun ChatScreen(
                         ) {
                             ToolbarMicButton(active = voiceMode)
                         }
+                        val emojiInteraction = remember { MutableInteractionSource() }
                         Box(
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxHeight()
-                                .clickable {
+                                .clickable(
+                                    interactionSource = emojiInteraction,
+                                    indication = null,
+                                ) {
                                     // 走 closeVoiceMode 而不是直接 `voiceMode = false`：
                                     // 录到一半切面板时要先停掉麦克风（面板都没了，还在录就是 bug）
                                     closeVoiceMode()
