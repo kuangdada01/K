@@ -2898,12 +2898,16 @@ private fun MessageBubble(
                                         }
                                     }
                                 )
-                                add(
-                                    ChatMenuAction(if (voice.speakerOn) "听筒播放" else "扬声器播放") {
-                                        menu = false
-                                        voice.toggleSpeaker()
-                                    }
-                                )
+                                // 接着耳机时不提供「听筒播放」：声音只能留在耳机里，
+                                // 这一项点了也没有意义（QQ/微信同样不显示），2026-10-22
+                                if (!voice.headsetConnected) {
+                                    add(
+                                        ChatMenuAction(if (voice.speakerOn) "听筒播放" else "扬声器播放") {
+                                            menu = false
+                                            voice.toggleSpeaker()
+                                        }
+                                    )
+                                }
                             }
                             // 纯图片消息没有文字可复制，这一项就不出现（Web 版恒定显示，点了是空操作）
                             if (msg.raw.content.isNotBlank()) {
