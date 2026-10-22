@@ -1557,13 +1557,17 @@ fun ChatScreen(
                     ) {
                         // 语音开关：点亮（主题色）= 下方「按住说话」面板展开；
                         // 再点一次收起。录音手势在大按钮上，不在这个小图标上。
+                        /**
+                         * ⚠️ **整格可点**，别只让 30dp 的图标可点（2026-10-22 用户："点功能区
+                         * 没有反应"）：格子是 1/N 宽 × 34dp，手指随便落在格子里都算。
+                         * 图标组件自己不再挂 clickable —— 内层 clickable 会先消费掉点击，
+                         * 外层就永远收不到（这正是"点了没反应"的经典写法）。
+                         */
                         Box(
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            ToolbarMicButton(
-                                active = voiceMode,
-                                onClick = {
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clickable {
                                     if (voiceMode) {
                                         closeVoiceMode()
                                     } else {
@@ -1573,73 +1577,75 @@ fun ChatScreen(
                                         focusManager.clearFocus()
                                         voiceMode = true
                                     }
+                                }
+                                .semantics {
+                                    contentDescription = if (voiceMode) "收起语音输入" else "语音输入"
                                 },
-                            )
-                        }
-                        Box(
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
                             contentAlignment = Alignment.Center,
                         ) {
-                            // 表情开关（笑脸）：点亮态 = 面板正开着。
-                            // 盒 36dp / 图标 28dp —— 与输入框同高，图标留 4dp 呼吸位。
-                            KEmojiButton(
-                                active = emojiOpen,
-                                boxSize = 30.dp,
-                                iconSize = 22.dp,
-                                onClick = {
+                            ToolbarMicButton(active = voiceMode)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clickable {
                                     // 走 closeVoiceMode 而不是直接 `voiceMode = false`：
                                     // 录到一半切面板时要先停掉麦克风（面板都没了，还在录就是 bug）
                                     closeVoiceMode()
                                     albumOpen = false
                                     emojiOpen = !emojiOpen
                                     if (emojiOpen) {
-                                        // 开面板 = 收起键盘，并**清掉输入框焦点**：
-                                        //  · 键盘此刻还没降，交换区的 max() 会取面板高顶住输入栏，
-                                        //    键盘滑走正好露出面板 —— 输入栏全程不动（见「交换区」总注释）；
-                                        //  · 不收键盘的话 IME 占着半屏，面板直接被顶到屏幕外；
-                                        //  · 不清焦点的话聚焦态的交接规则会把面板在下次焦点
-                                        //    变化时秒收，连点笑脸关闭时的退场动画也没了。
                                         keyboard?.hide()
                                         focusManager.clearFocus()
                                     }
+                                }
+                                .semantics {
+                                    contentDescription = if (emojiOpen) "收起表情" else "表情"
                                 },
-                            )
-                        }
-                        Box(
-                            modifier = Modifier.weight(1f).fillMaxHeight(),
                             contentAlignment = Alignment.Center,
                         ) {
-                            // 发图按钮（系统相册选一张、选完直接发出）：与表情钮同一套
-                            // **盒 36dp + 图标 28dp**（图标略小于输入框，留呼吸位），
-                            // 按下/发送中只换图标色（accentText），不垫底色。
-                            // 图标用 Tabler photo（见 IconPathsExtra.kt）。
-                            val imageInteraction = remember { MutableInteractionSource() }
-                            val imagePressed by imageInteraction.collectIsPressedAsState()
-                            // 尺寸与表情钮、输入框三者一致：盒 36dp
+                            // 表情开关（笑脸）：点亮态 = 面板正开着。视觉 30dp 盒 / 22dp 图标，
+                            // 点击由**整格**接管（见语音格上的注释），所以这里 clickable = false
+                            KEmojiButton(
+                                active = emojiOpen,
+                                boxSize = 30.dp,
+                                iconSize = 22.dp,
+                                clickable = false,
+                                // clickable = false 时不会被调用；真正的动作在格子的 clickable 里
+                                onClick = {},
+                            )
+                        }
+                        // 相册格：同样**整格可点**（见语音格注释）
+                        val imageInteraction = remember { MutableInteractionSource() }
+                        val imagePressed by imageInteraction.collectIsPressedAsState()
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clickable(
+                                    interactionSource = imageInteraction,
+                                    indication = null,
+                                    onClick = {
+                                        if (albumOpen) {
+                                            albumOpen = false
+                                        } else {
+                                            // 相册图标是**开关**：展开内嵌最近照片，不再直接弹全屏。
+                                            // 全屏入口在面板左下角的「相册」上。
+                                            closeVoiceMode()
+                                            emojiOpen = false
+                                            keyboard?.hide()
+                                            focusManager.clearFocus()
+                                            albumOpen = true
+                                        }
+                                    },
+                                )
+                                .semantics { contentDescription = "相册" },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            // 视觉：盒 30dp + 图标 22dp（按下/发送中只换图标色，不垫底色）
                             Box(
-                                modifier = Modifier
-                                    .size(30.dp)
-                                    // 不垫按下底色（M6.24 用户要求"选中图标反色主题色……要遮罩干嘛"）：
-                                    // 选中反馈统一走"**图标变主题色**"（见下面 Glyph 的 tint）。
-                                    //（此前为圆形底色配了 clip(pill)，会把方形图标的四角切掉。）
-                                    .clickable(
-                                        interactionSource = imageInteraction,
-                                        indication = null,
-                                        onClick = {
-                                            if (albumOpen) {
-                                                albumOpen = false
-                                            } else {
-                                                // 相册图标是**开关**：展开内嵌最近照片，不再直接弹全屏。
-                                                // 全屏入口在面板左下角的「相册」上。
-                                                closeVoiceMode()
-                                                emojiOpen = false
-                                                keyboard?.hide()
-                                                focusManager.clearFocus()
-                                                albumOpen = true
-                                            }
-                                        },
-                                    )
-                                    .semantics { contentDescription = "相册" },
+                                modifier = Modifier.size(30.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Glyph(
@@ -2943,17 +2949,11 @@ private fun <T : Any> rememberLastNonNull(value: T?): T? {
  * 自己用 `awaitEachGesture` 逐事件读，抬起一帧就能收尾。
  */
 @Composable
-private fun ToolbarMicButton(
-    active: Boolean,
-    onClick: () -> Unit,
-) {
+private fun ToolbarMicButton(active: Boolean) {
     val c = KTheme.colors
+    // **只负责画**：点击由功能排的整格接管（内层 clickable 会吃掉外层命中）
     Box(
-        modifier = Modifier
-            .size(30.dp)
-            .clip(CircleShape)
-            .clickable(onClick = onClick)
-            .semantics { contentDescription = if (active) "收起语音输入" else "语音输入" },
+        modifier = Modifier.size(30.dp),
         contentAlignment = Alignment.Center,
     ) {
         Glyph(

@@ -121,6 +121,12 @@ fun KEmojiButton(
     modifier: Modifier = Modifier,
     iconSize: Dp = KDimens.navIcon,
     boxSize: Dp = KDimens.minTouchTarget,
+    /**
+     * 是否自己处理点击。窗口/格子由调用方接管命中区时传 `false`：
+     * 聊天页功能排把**整格**做成可点，这里再挂一层 clickable 会把图标上的点击
+     * 吃掉（内层先消费，外层收不到）—— 表现就是"点图标没反应"。
+     */
+    clickable: Boolean = true,
 ) {
     val c = KTheme.colors
     val interaction = remember { MutableInteractionSource() }
@@ -135,12 +141,19 @@ fun KEmojiButton(
             // 手指实际能点到的范围必须达标，否则输入栏这一排等于"半个按钮"；
             // 紧凑场景可经 [boxSize] 调小（代价是触控目标跟着变小）
             .size(boxSize)
-            .clickable(
-                interactionSource = interaction,
-                indication = null,
-                onClick = onClick,
-            )
-            .semantics { contentDescription = if (active) "收起表情" else "表情" },
+            .then(
+                if (clickable) {
+                    Modifier
+                        .clickable(
+                            interactionSource = interaction,
+                            indication = null,
+                            onClick = onClick,
+                        )
+                        .semantics { contentDescription = if (active) "收起表情" else "表情" }
+                } else {
+                    Modifier
+                }
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Canvas(modifier = Modifier.size(iconSize)) {
