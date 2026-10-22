@@ -48,6 +48,19 @@ import kotlin.math.roundToInt
  * 聊天页的面板就直接按真实键盘高度画。完全没有记录时由调用方按屏高估算
  * （见 ChatScreen 的 `panelHeightPx`），不再退回那个 240dp。
  */
+/**
+ * 「这个进程里 ADJUST_NOTHING 到底行不行」的记忆。
+ *
+ * 聊天页会临时把窗口切成 `ADJUST_NOTHING`，好让系统派发**完整**的 IME inset
+ * （`adjustResize` 下有些机型会把 inset 吃掉，只剩 1px）。第一次聚焦输入框后仍未量到
+ * 真实键盘高，就判定这台机器不支持，此后整个进程都直接用 `ADJUST_RESIZE` ——
+ * 免得每次进会话都要经历一次"输入栏被键盘盖住 0.7 秒"。
+ */
+internal object WindowSoftInputMemory {
+    @Volatile
+    var nothingUnsupported: Boolean = false
+}
+
 internal object KeyboardHeightMemory {
     /**
      * 键盘全高（dp，含导航栏那一条）；`0f` = 还没量到过。

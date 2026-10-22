@@ -16,6 +16,7 @@ import android.content.ClipData
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -858,6 +859,32 @@ fun ChatScreen(
     }
 
     /**
+     * ============================================================
+     * 键盘模式：本页改用 `ADJUST_NOTHING` + 自己按 IME inset 撑底部（方案二）
+     * ============================================================
+     * `adjustResize` 下这台机器的 `WindowInsets.ime` 只报 **1px**（窗口被系统压缩时
+     * inset 被"吃掉"了），于是面板高度只能猜、键盘↔面板切换必跳。
+     *
+     * 换 `ADJUST_NOTHING` 之后系统必须把**完整的 IME inset** 派发给应用，
+     * 交换区就能逐帧跟着键盘动画长/收，面板也因此与键盘等高（QQ/微信那套）。
+     *
+     * **只在本页生效**：`onDispose` 还原成进来的模式，别的页面仍走系统 resize。
+     * 万一换了模式 inset 仍然量不到，下面的看门狗会把模式退回去（见 inputFocused 的 effect）。
+     */
+    val hostWindow = LocalContext.current.findActivity()?.window
+    DisposableEffect(hostWindow) {
+        val previous = hostWindow?.attributes?.softInputMode
+        // 本机已经证明 ADJUST_NOTHING 拿不到 inset → 直接用系统 resize，别再折腾一次
+        if (!WindowSoftInputMemory.nothingUnsupported) {
+            hostWindow?.setSoftInputMode(
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING or
+                    WindowManager.LayoutParams.SOFT_INPUT_STATE_UNSPECIFIED,
+            )
+        }
+        onDispose { if (previous != null) hostWindow?.setSoftInputMode(previous) }
+    }
+
+    /**
      * 页面根节点的实时高度 + 历史最大高度。
      *
      * **用途**：有些机型（本机就是）在 edge-to-edge + `adjustResize` 下
@@ -1047,6 +1074,21 @@ fun ChatScreen(
                 if (px >= minPanelPx) return px
             }
             return estimatedPanelPx
+        }
+
+        /**
+         * 看门狗（配合上面的 ADJUST_NOTHING）：
+         * 第一次聚焦输入框后等键盘动画走完，如果 IME inset 仍然是"不像键盘"的残值，
+         * 说明这台机器换了模式也拿不到真实高度 —— 立刻退回 `ADJUST_RESIZE`，
+         * 让系统压缩窗口来顶（老行为），**绝不让输入栏被键盘盖住**。
+         */
+        LaunchedEffect(inputFocused) {
+            if (!inputFocused) return@LaunchedEffect
+            delay(700)
+            if (imeMaxPx[0] < minPanelPx) {
+                WindowSoftInputMemory.nothingUnsupported = true
+                hostWindow?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+            }
         }
 
         LaunchedEffect(density) {
