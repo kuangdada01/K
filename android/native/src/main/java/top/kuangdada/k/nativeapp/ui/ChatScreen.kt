@@ -85,7 +85,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
@@ -369,19 +368,13 @@ fun ChatScreen(
             if (hadPending) listOf(real) else emptyList()
     }
 
-    /**
-     * 撤回提示："某某 撤回了一条消息"。
+    /*
+     * 撤回提示（"你/对方 撤回了一条消息"）不再需要本地记一份。
      *
-     * 服务端撤回是**直接删行**，重拉历史之后就没有痕迹了；这里在本地记一条提示，
-     * 按时间插到原消息的位置，本次会话内一直可见（重进会话会消失 —— 要持久得让
-     * 服务端保留一行"已撤回"，那是另一件事）。
+     * 2026-10-22 起**由服务端留痕**（`messages.recalled_at`）：撤回不再删行，行还在原来的
+     * 时间位置、内容与媒体清空。所以提示就是从 `items` 里那些 `isRecalled` 的行派生出来的
+     * （见 [buildChatEntries]），重进会话、换设备、对方那边看到的都是同一条。
      */
-    val recallNotices = remember { mutableStateListOf<RecallNotice>() }
-
-    fun addRecallNotice(id: Long, name: String, at: String) {
-        if (recallNotices.any { it.id == id }) return
-        recallNotices += RecallNotice(id, name.ifBlank { "对方" }, at)
-    }
     /**
      * 输入内容。**刻意用 MutableState 而不是 `var input by`**：组合期唯一读它的地方
      * 是 [ChatInputField] 内部的 `input.value`（KTextField 的 value）—— 读取被圈在
@@ -787,15 +780,11 @@ fun ChatScreen(
         if (realtime == null) return@LaunchedEffect
         realtime.events.collect { event ->
             if (event.isMessage && (event.from == partnerId || event.to == partnerId)) {
-                // 撤回事件：先把"谁撤回了哪条"记成提示（历史重拉之后原文就没了，记不到）
-                event.recalled?.let { recalledId ->
-                    items.firstOrNull { it.raw.id == recalledId }?.let { m ->
-                        addRecallNotice(
-                            recalledId,
-                            m.raw.senderUsername.ifBlank { if (m.isMine) "你" else "对方" },
-                            m.raw.createdAt,
-                        )
-                    }
+                // 撤回：先把本地这条就地标成"已撤回"（提示立刻出现）。
+                // 下面重拉只回最新 50 条 —— 撤回的若是翻页加载的更早消息，
+                // 不标的话它要等到重进会话才变成提示。
+                event.recalled?.let { id ->
+                    items = items.map { if (it.raw.id == id) it.asRecalled() else it }
                 }
                 when (val r = messages.history(partnerId)) {
                     is ApiResult.Success -> {
@@ -816,9 +805,8 @@ fun ChatScreen(
     }
 
     // 按自然日切分隔条（设计稿顶部那条「今天 14:32」）
-    // 撤回提示一起进时间轴：`toList()` 在组合期读一次状态列表，撤回后立刻重算
-    val noticesNow = recallNotices.toList()
-    val entries = remember(items, noticesNow) { buildChatEntries(items, noticesNow) }
+    // 撤回提示已经包含在 items 里（服务端留痕），不用再单独拼一份
+    val entries = remember(items) { buildChatEntries(items) }
 
     /**
      * 这一段对话里的**全部图片**（时间正序）。
@@ -1383,15 +1371,14 @@ fun ChatScreen(
                                     onQuote = { quoteMessage(entry.msg) },
                                     onRecall = {
                                         val id = entry.msg.raw.id
-                                        val at = entry.msg.raw.createdAt
-                                        val who = entry.msg.raw.senderUsername
-                                            .ifBlank { if (entry.msg.isMine) "你" else "对方" }
                                         scope.launch {
                                             when (val r = messages.recall(id)) {
                                                 is ApiResult.Success -> {
-                                                    // 删掉原文，原位留一条"某某 撤回了一条消息"
-                                                    items = items.filterNot { it.raw.id == id }
-                                                    addRecallNotice(id, who, at)
+                                                    // 服务端只是标记 recalled_at（行保留）：
+                                                    // 本地就地换成提示，重拉历史后以服务端时间为准
+                                                    items = items.map {
+                                                        if (it.raw.id == id) it.asRecalled() else it
+                                                    }
                                                     toast = "已撤回"
                                                 }
                                                 is ApiResult.Failure -> toast = r.error.displayMessage
@@ -2455,12 +2442,48 @@ private sealed interface ChatEntry {
 }
 
 /**
- * 撤回提示（本地，2026-10-21）。
+ * 本地把一条消息就地改成"已撤回"（撤回成功后立刻换提示，不等下一次重拉）。
  *
- * 服务端撤回是删行，历史里不会留痕；这条提示按**被撤回那条消息的 createdAt**
- * 插回原位，本次会话内一直可见。
+ * 清空规则与服务端 `markMessageRecalled` 对齐：内容、图片、语音（含转写与波形）、
+ * 引用全部清掉 —— 撤回之后这些数据不该再出现在界面或缓存里。
+ * `recalledAt` 客户端先给一个本地时间，下一次 `history()` 会用服务端时间覆盖。
  */
-private data class RecallNotice(val id: Long, val name: String, val at: String)
+private fun MessageRepository.MessageUi.asRecalled(): MessageRepository.MessageUi {
+    val now = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+        .format(java.util.Date())
+    return copy(
+        raw = raw.copy(
+            content = "",
+            imageUrl = null,
+            audioUrl = null,
+            audioDurationMs = 0,
+            audioWaveform = emptyList(),
+            audioText = null,
+            quotedMessageId = null,
+            quotedContent = null,
+            quotedImageUrl = null,
+            quotedAudioUrl = null,
+            quotedSenderUsername = null,
+            recalledAt = raw.recalledAt ?: now,
+        ),
+        imageUrl = null,
+        audioUrl = null,
+        audioDurationMs = 0,
+        audioWaveform = emptyList(),
+        audioText = null,
+    )
+}
+
+/**
+ * "你/对方 撤回了一条消息"（2026-10-21 引入，2026-10-22 改由服务端留痕）。
+ *
+ * 不再是本地临时记的一条：服务端撤回时保留行、写 `recalled_at` 并清空内容，
+ * 这里只是把那一行画成系统提示。所以重进会话、换设备、对方那边都能看到。
+ *
+ * 文案与 QQ/微信一致：自己撤的 = 你，对方撤的 = 对方（不用昵称，1:1 会话里没有歧义）。
+ */
+private fun recallNoticeText(isMine: Boolean): String =
+    if (isMine) "你撤回了一条消息" else "对方撤回了一条消息"
 
 /**
  * 把消息切成「分隔条 + 消息」的扁平列表。
@@ -2469,10 +2492,12 @@ private data class RecallNotice(val id: Long, val name: String, val at: String)
  * 最旧的一条总是带（跨天必然超过 5 分钟，所以不用再单独判 `isSameDay`）。
  * 文案取那条消息的时间（「今天 14:32」/「昨天 14:32」/「9月12日 14:32」）。
  * 气泡下不再带时间戳（web 移动端亦然），分隔条是唯一的时间信息。
+ *
+ * 已撤回的行（`raw.isRecalled`）画成 [ChatEntry.Notice]：位置不变（还是它原来的时间），
+ * 但不再有气泡、也不能长按引用/撤回 —— 它不是内容，是系统事实。
  */
 private fun buildChatEntries(
     items: List<MessageRepository.MessageUi>,
-    notices: List<RecallNotice> = emptyList(),
 ): List<ChatEntry> {
     val out = mutableListOf<ChatEntry>()
     /**
@@ -2483,31 +2508,19 @@ private fun buildChatEntries(
      * 产生重复 id，这里再兜一层 —— 宁可少画一条，也不能让整页崩掉。
      */
     val drawn = HashSet<Long>(items.size)
-    /** 时间轴：消息 + 撤回提示，按 createdAt 升序（字符串格式固定，直接可比较） */
-    val lines = ArrayList<Pair<String, Any>>(items.size + notices.size)
-    items.forEach { m -> lines += m.raw.createdAt to m }
-    notices.forEach { n -> lines += n.at to n }
-    if (notices.isNotEmpty()) lines.sortBy { it.first }
 
     var prevAt: String? = null
-    lines.forEach { (at, payload) ->
-        if (payload is MessageRepository.MessageUi) {
-            val msg = payload
-            if (!drawn.add(msg.raw.id)) return@forEach
-            val gap = prevAt?.let { timeGapMillis(at, it) }
-            if (prevAt == null || (gap != null && gap > CHAT_TIME_GAP_MS)) {
-                out += ChatEntry.Day("day-${msg.raw.id}", dayDividerText(at))
-            }
+    items.forEach { msg ->
+        if (!drawn.add(msg.raw.id)) return@forEach
+        val at = msg.raw.createdAt
+        val gap = prevAt?.let { timeGapMillis(at, it) }
+        if (prevAt == null || (gap != null && gap > CHAT_TIME_GAP_MS)) {
+            out += ChatEntry.Day("day-${msg.raw.id}", dayDividerText(at))
+        }
+        if (msg.raw.isRecalled) {
+            out += ChatEntry.Notice("recall-${msg.raw.id}", recallNoticeText(msg.isMine))
+        } else {
             out += ChatEntry.Bubble("msg-${msg.raw.id}", msg)
-        } else if (payload is RecallNotice) {
-            val gap = prevAt?.let { timeGapMillis(at, it) }
-            if (prevAt == null || (gap != null && gap > CHAT_TIME_GAP_MS)) {
-                out += ChatEntry.Day("day-recall-${payload.id}", dayDividerText(at))
-            }
-            out += ChatEntry.Notice(
-                "recall-${payload.id}",
-                "${payload.name} 撤回了一条消息",
-            )
         }
         prevAt = at
     }

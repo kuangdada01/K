@@ -100,7 +100,7 @@ export default function Messages() {
     loadOlder,
     handleSseMessage,
     appendMessage,
-    removeMessageById,
+    markRecalled,
     clearMessagesLocal,
   } = useMessages({
     partnerId: activePartnerId,
@@ -135,7 +135,7 @@ export default function Messages() {
     imageInputRef,
     refreshConversations,
     onAppend: appendMessage,
-    onRemove: removeMessageById,
+    onRecalled: markRecalled,
     onClearLocal: clearMessagesLocal,
     closeMenu: menu.closeMenu,
   });

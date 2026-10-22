@@ -6,10 +6,11 @@
  * 输入器与空状态（纯展示组件，数据与行为回调由 Messages 提供）
  */
 
-import { RefObject, useMemo } from 'react';
+import { Fragment, RefObject, useMemo } from 'react';
 import { ChevronLeft, Trash2, MessageCircle } from 'lucide-react';
 import type { Conversation, Message, User } from '../../types';
 import { buildChatRows } from '../../lib/chatRows';
+import { formatTimeSeparator } from '../../utils';
 import MessageBubble from './MessageBubble';
 import ChatComposer from './ChatComposer';
 import Avatar from '../ui/Avatar';
@@ -87,6 +88,28 @@ export default function ChatWindow({
           const isSent = msg.sender_id === user?.id;
           const avatar = isSent ? user?.avatar : selectedPartner.avatar;
           const name = isSent ? user?.username : selectedPartner.username;
+
+          /**
+           * 已撤回：画一条**居中的系统提示**，不画气泡（QQ/微信一致）。
+           *
+           * 服务端保留该行并写 `recalled_at`，所以重进会话、换设备、对方那边都能看到 ——
+           * 以前撤回是删行，只有当场在会话里的人知道，重进就消失了。
+           * 提示文案按"是不是自己撤的"分：你 / 对方。
+           */
+          if (msg.recalled_at) {
+            return (
+              <Fragment key={msg.id}>
+                <div className={styles.recallNotice}>
+                  <span>{isSent ? '你撤回了一条消息' : '对方撤回了一条消息'}</span>
+                </div>
+                {showSeparator && (
+                  <div className={styles.timeSeparator}>
+                    <span>{formatTimeSeparator(msg.created_at)}</span>
+                  </div>
+                )}
+              </Fragment>
+            );
+          }
 
           return (
             <MessageBubble

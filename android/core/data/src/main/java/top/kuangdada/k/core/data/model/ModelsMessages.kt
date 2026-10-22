@@ -51,6 +51,14 @@ data class MessageDto(
     @SerialName("audio_text") val audioText: String? = null,
     /** 0 = 未读，1 = 已读 */
     val read: Int = 0,
+    /**
+     * 撤回时间（非空 = 已撤回）。
+     *
+     * 2026-10-22 服务端改成**留痕**：撤回不再删行，而是保留行 + 清空内容/媒体 + 写这个字段。
+     * 所以历史里必须能表达"这条变成了一条系统提示"—— 否则重进会话就看不到撤回过什么，
+     * 对方那边也不知道（用户反馈原话）。字段缺省 = 正常消息（兼容老服务端）。
+     */
+    @SerialName("recalled_at") val recalledAt: String? = null,
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("sender_username") val senderUsername: String = "",
     @SerialName("quoted_message_id") val quotedMessageId: Long? = null,
@@ -62,6 +70,9 @@ data class MessageDto(
     val hasImage: Boolean get() = !imageUrl.isNullOrBlank()
     val hasAudio: Boolean get() = !audioUrl.isNullOrBlank()
     val isRead: Boolean get() = read == 1
+
+    /** 已撤回（内容/媒体都已由服务端清空，只该画一条「某某撤回了一条消息」提示） */
+    val isRecalled: Boolean get() = !recalledAt.isNullOrBlank()
     /** 引用的内容摘要（纯图片/纯语音引用也要有可显示的文本） */
     val quotedPreview: String
         get() = quotedContent?.takeIf { it.isNotBlank() }

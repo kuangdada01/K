@@ -204,15 +204,21 @@ describe('私信撤回的顺序（先 DB 后文件）', () => {
     expect(fs.existsSync(mediaFile)).toBe(true);
   });
 
-  it('DB 删除成功后文件随之回收', () => {
+  it('DB 标记成功后文件随之回收（行保留，用于双方看到撤回提示）', () => {
     fs.writeFileSync(mediaFile, 'image-bytes-2');
     const id = insertMessage(`/uploads_private/${path.basename(mediaFile)}`);
 
     recallMessage(aliceId, id);
 
     expect(fs.existsSync(mediaFile)).toBe(false);
-    const row = getDb().prepare('SELECT 1 FROM messages WHERE id = ?').get(id);
-    expect(row).toBeUndefined();
+    // 2026-10-22 起撤回不删行：写 recalled_at + 清空内容，双方重进会话都能看到提示
+    const row = getDb()
+      .prepare('SELECT recalled_at, content, image_url FROM messages WHERE id = ?')
+      .get(id) as { recalled_at: string | null; content: string; image_url: string | null };
+    expect(row).toBeTruthy();
+    expect(row.recalled_at).toBeTruthy();
+    expect(row.content).toBe('');
+    expect(row.image_url).toBeNull();
   });
 
   it('非发送者撤回被拒绝（403），DB 与文件都不动', () => {

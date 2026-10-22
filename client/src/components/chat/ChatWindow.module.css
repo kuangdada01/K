@@ -386,3 +386,35 @@
     padding: 6px 12px;
   }
 }
+
+/* ============================================================
+ * 撤回提示（消息页，2026-10-22）
+ * ============================================================
+ * 与时间分隔条同一视觉层级：居中、muted、不占气泡。
+ * 服务端保留撤回行（recalled_at），所以重进会话也画这一条。
+ */
+.recallNotice {
+  text-align: center;
+  padding: 6px 0;
+}
+
+.recallNotice span {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 2px 10px;
+  border-radius: 6px;
+  background: var(--surface-sunken);
+}
+
+/* 撤回行也要带时间分隔条（与 MessageBubble 内的时间条同款） */
+.timeSeparator {
+  text-align: center;
+  padding: 8px 0;
+}
+
+.timeSeparator span {
+  font-size: 12px;
+  color: var(--text-secondary);
+  padding: 2px 12px;
+  border-radius: 4px;
+}

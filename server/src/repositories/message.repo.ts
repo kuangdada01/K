@@ -17,6 +17,10 @@ export interface ConversationRow {
   unread_count: number;
   /** 该会话最后一条消息的 id（D1：排序决胜键 + 游标定位键；additive，老客户端忽略） */
   last_id: number;
+  /** 最后一条消息的发送者（撤回预览要判"你/对方"，additive） */
+  last_sender_id: number;
+  /** 最后一条消息的撤回时间（非空 = 最后一条是撤回提示，additive） */
+  last_recalled_at: string | null;
 }
 
 export interface MessageRow {
@@ -34,6 +38,8 @@ export interface MessageRow {
   audio_text: string | null;
   read: number;
   quoted_message_id: number | null;
+  /** 撤回时间（非空 = 这一行现在是"某某撤回了一条消息"；内容/媒体字段已清空） */
+  recalled_at: string | null;
   created_at: string;
   sender_username: string;
   quoted_content?: string | null;
@@ -56,6 +62,8 @@ const CONVERSATION_SELECT = `
     END as last_message,
     m.created_at as last_message_at,
     m.id as last_id,
+    m.sender_id as last_sender_id,
+    m.recalled_at as last_recalled_at,
     t.unread_count
   FROM (
     SELECT
@@ -167,11 +175,19 @@ export function listConversationsByCursor(
 export function latestReceivedMessage(
   senderId: number,
   receiverId: number
-): { name: string; content: string; image_url: string | null; audio_url: string | null } | undefined {
+):
+  | {
+      name: string;
+      content: string;
+      image_url: string | null;
+      audio_url: string | null;
+      recalled_at: string | null;
+    }
+  | undefined {
   return stmt(
     `
     SELECT u.username AS name, m.content AS content, m.image_url AS image_url,
-           m.audio_url AS audio_url
+           m.audio_url AS audio_url, m.recalled_at AS recalled_at
     FROM messages m
     JOIN users u ON u.id = m.sender_id
     WHERE m.sender_id = ? AND m.receiver_id = ?
@@ -179,7 +195,14 @@ export function latestReceivedMessage(
     LIMIT 1
   `
   ).get(senderId, receiverId) as
-    { name: string; content: string; image_url: string | null; audio_url: string | null } | undefined;
+    | {
+        name: string;
+        content: string;
+        image_url: string | null;
+        audio_url: string | null;
+        recalled_at: string | null;
+      }
+    | undefined;
 }
 
 /** 某发送者发给某接收者的未读消息数（离线推送的「(N条新消息)」计数标题用） */
@@ -220,8 +243,8 @@ export function listMessageHistory(
     page = stmt(
       `
       SELECT m.*, u.username as sender_username,
-             qm.content as quoted_content,
-             qm.image_url as quoted_image_url,
+             CASE WHEN qm.recalled_at IS NOT NULL THEN '[消息已撤回]' ELSE qm.content END as quoted_content,
+             CASE WHEN qm.recalled_at IS NULL THEN qm.image_url END as quoted_image_url,
              qu.username as quoted_sender_username
       FROM messages m
       JOIN users u ON m.sender_id = u.id
@@ -238,8 +261,8 @@ export function listMessageHistory(
     page = stmt(
       `
       SELECT m.*, u.username as sender_username,
-             qm.content as quoted_content,
-             qm.image_url as quoted_image_url,
+             CASE WHEN qm.recalled_at IS NOT NULL THEN '[消息已撤回]' ELSE qm.content END as quoted_content,
+             CASE WHEN qm.recalled_at IS NULL THEN qm.image_url END as quoted_image_url,
              qu.username as quoted_sender_username
       FROM messages m
       JOIN users u ON m.sender_id = u.id
@@ -273,11 +296,11 @@ export function listMessageHistory(
   return { messages, has_more: hasMore };
 }
 
-/** 验证引用消息存在且属于当前对话 */
+/** 验证引用消息存在且属于当前对话（**已撤回的不能引用**：内容都不存在了） */
 export function isValidQuotedMessage(quotedMessageId: number, senderId: number, receiverId: number): boolean {
   const quoted = stmt(
     `
-    SELECT id FROM messages WHERE id = ? AND (
+    SELECT id FROM messages WHERE id = ? AND recalled_at IS NULL AND (
       (sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)
     )
   `
@@ -315,9 +338,9 @@ export function insertMessage(input: {
   return stmt(
     `
     SELECT m.*, u.username as sender_username,
-           qm.content as quoted_content,
-           qm.image_url as quoted_image_url,
-           qm.audio_url as quoted_audio_url,
+           CASE WHEN qm.recalled_at IS NOT NULL THEN '[消息已撤回]' ELSE qm.content END as quoted_content,
+           CASE WHEN qm.recalled_at IS NULL THEN qm.image_url END as quoted_image_url,
+           CASE WHEN qm.recalled_at IS NULL THEN qm.audio_url END as quoted_audio_url,
            qu.username as quoted_sender_username
     FROM messages m
     JOIN users u ON m.sender_id = u.id
@@ -337,10 +360,11 @@ export function getMessageMedia(messageId: number):
       image_url: string | null;
       audio_url: string | null;
       audio_text: string | null;
+      recalled_at: string | null;
     }
   | undefined {
   return stmt(
-    'SELECT id, sender_id, receiver_id, image_url, audio_url, audio_text FROM messages WHERE id = ?'
+    'SELECT id, sender_id, receiver_id, image_url, audio_url, audio_text, recalled_at FROM messages WHERE id = ?'
   ).get(messageId) as
     | {
         id: number;
@@ -349,6 +373,7 @@ export function getMessageMedia(messageId: number):
         image_url: string | null;
         audio_url: string | null;
         audio_text: string | null;
+        recalled_at: string | null;
       }
     | undefined;
 }
@@ -358,9 +383,31 @@ export function setMessageAudioText(messageId: number, text: string): void {
   stmt('UPDATE messages SET audio_text = ? WHERE id = ?').run(text, messageId);
 }
 
-/** 撤回（删除）单条消息 */
-export function deleteMessage(messageId: number): void {
-  stmt('DELETE FROM messages WHERE id = ?').run(messageId);
+/**
+ * 撤回单条消息（**留痕**，2026-10-22）。
+ *
+ * 以前是 `DELETE FROM messages`：撤回后重进会话什么都看不到，对方那边也没有任何痕迹。
+ * 现在保留行、写 `recalled_at`，同时把**内容与媒体字段清空**（媒体文件另由 service 删）：
+ *  · 双方重进会话都能看到「你/对方 撤回了一条消息」，时间轴位置不变（QQ/微信一致）；
+ *  · 历史接口不会把已撤回的正文/图片/语音再发出去；
+ *  · `read = 1`：撤回的消息不该继续算未读（否则角标会为一个"已撤回"计数）。
+ *
+ * 清掉 `quoted_message_id`：撤回后的消息不再展示"引用某某"，避免把原引用内容留在时间轴上。
+ */
+export function markMessageRecalled(messageId: number, at: string): void {
+  stmt(
+    `UPDATE messages SET
+       recalled_at = ?,
+       content = '',
+       image_url = NULL,
+       audio_url = NULL,
+       audio_duration_ms = 0,
+       audio_waveform = NULL,
+       audio_text = NULL,
+       quoted_message_id = NULL,
+       read = 1
+     WHERE id = ?`
+  ).run(at, messageId);
 }
 
 /**

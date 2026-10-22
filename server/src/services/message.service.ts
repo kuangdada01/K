@@ -4,7 +4,7 @@
  * ============================================================
  * 自 routes/messages.ts 拆分的编排逻辑：
  * - sendMessage：图片压缩 → 内容/接收者/引用校验 → 失败清理 → 入库 → SSE 推送双方
- * - recallMessage：撤回（仅发送者）→ 磁盘图片清理 → 删行 → SSE 推送双方
+ * - recallMessage：撤回（仅发送者）→ 行标记 recalled_at（留痕）+ 清空内容 → 磁盘附件清理 → SSE 推送双方
  * - clearConversationMessages：清除会话（DB 事务删行）→ 磁盘图片清理 → SSE 推送双方
  *
  * SSE 推送（P1 修复点）必须保留：撤回/清除若不同步推送双方，其他端会残留
@@ -147,12 +147,16 @@ export async function sendMessage(input: {
 /**
  * 撤回单条消息编排（仅消息发送者可以撤回自己的消息）
  *
- * 流程（P1-3.5 调整顺序）：归属校验 → **删除 DB 行（先提交）** → 再删附件文件 → SSE 推送双方。
- * 原实现先删文件后删库：DB 删除失败会留下指向已删文件的死链（用户看到裂图）；
- * 反序后 DB 失败只是消息还在（文件未动，状态一致），文件删除失败则转清理任务重试。
+ * 2026-10-22 起**不再删行**：撤回要"双方都能看到、重进会话也在"（用户反馈
+ * "撤回重新进消息对话不显示，对方撤回两边都应该知道"，即 QQ/微信的行为）。
+ * 流程：归属校验 → **行标记 recalled_at + 清空内容/媒体字段** → 再删附件文件 → SSE 推送双方。
+ *
+ * 先改库后删文件：DB 失败时消息还在、文件未动（状态一致）；文件删除失败转清理任务重试。
  * 错误文案/状态码不变：
  * - 404 '消息不存在'
  * - 403 '只能撤回自己发送的消息'
+ *
+ * 已撤回的消息再撤回一次是**幂等无操作**（双击/多端同时撤回不该报错）。
  */
 export function recallMessage(userId: number, messageId: number): void {
   const message = messageRepo.getMessageMedia(messageId);
@@ -164,8 +168,10 @@ export function recallMessage(userId: number, messageId: number): void {
     throw new AppError(403, '只能撤回自己发送的消息');
   }
 
-  // 先提交数据库：行删成功后消息层面已一致
-  messageRepo.deleteMessage(messageId);
+  if (message.recalled_at) return; // 已撤回：幂等返回（媒体早已清空）
+
+  // 先提交数据库：行保留（双方都能看到提示），内容与媒体字段清空
+  messageRepo.markMessageRecalled(messageId, new Date().toISOString());
 
   // 再回收附件（文件系统与 SQLite 之间只能补偿，不能假定回滚会恢复文件）；
   // 删除失败转清理任务重试，不留孤儿（P1-3.5）
@@ -180,7 +186,8 @@ export function recallMessage(userId: number, messageId: number): void {
     }
   }
 
-  // 实时推送撤回事件：双方各端立即移除该消息（此前无推送 → 其他端残留幽灵消息）
+  // 实时推送撤回事件：双方各端立即把那条换成「撤回了一条消息」提示
+  // （客户端收到后重拉历史，服务端这边已经有 recalled_at 了）
   const eventData = {
     type: 'message',
     from: message.sender_id,

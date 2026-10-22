@@ -66,8 +66,15 @@ export function composePush(userId: number, event: SseEvent): ComposedPush | nul
       const row = messageRepo.latestReceivedMessage(event.from, userId);
       if (!row) return null;
 
-      // 语音消息 content 为空（不带正文）—— 预览优先按媒体类型给可读摘要
-      const preview = row.audio_url ? '[语音]' : row.image_url ? '[图片]' : row.content.trim() || '[新消息]';
+      // 语音消息 content 为空（不带正文）—— 预览优先按媒体类型给可读摘要；
+      // 已撤回的（行保留、内容清空）给系统文案，不要推出一个空正文
+      const preview = row.recalled_at
+        ? '[消息已撤回]'
+        : row.audio_url
+          ? '[语音]'
+          : row.image_url
+            ? '[图片]'
+            : row.content.trim() || '[新消息]';
       // QQ 式计数标题（2026-10-11 反馈）：锁屏上应该是「昵称(N条新消息) + 最新一条」。
       // N = 来自该发送者的未读总数；>1 才带计数（单条消息带计数是噪音）。
       // 同一个人连发多条时不在这里叠卡：App 内通知靠同 id 覆盖，

@@ -107,13 +107,27 @@ router.get(
         limit,
         cursor,
       });
-      res.json({ conversations: rows, next_cursor, has_more });
+      res.json({ conversations: rows.map((r) => withRecallPreview(r, userId)), next_cursor, has_more });
       return;
     }
     const { rows, has_more, next_cursor } = messageRepo.listConversations(userId);
-    res.json({ conversations: rows, has_more, next_cursor });
+    res.json({ conversations: rows.map((r) => withRecallPreview(r, userId)), has_more, next_cursor });
   })
 );
+
+/**
+ * 会话列表的「最后一条」预览：撤回要显示成 QQ/微信那样的系统提示。
+ *
+ * 放在路由层而不是 SQL：文案依赖**看的人是谁**（自己撤回的 = 你，对方撤回的 = 对方），
+ * 塞进那条被两个查询共用的 SELECT 里就得再加一个位置参数，容易和游标参数错位。
+ */
+function withRecallPreview<T extends messageRepo.ConversationRow>(row: T, viewerId: number): T {
+  if (!row.last_recalled_at) return row;
+  return {
+    ...row,
+    last_message: row.last_sender_id === viewerId ? '你撤回了一条消息' : '对方撤回了一条消息',
+  };
+}
 
 // ============================================================
 // 标记全部已读端点
@@ -328,7 +342,8 @@ router.post(
  * 认证: 必须
  *
  * 仅消息发送者可以撤回自己的消息
- * 撤回后删除该消息记录（磁盘图片清理 + SSE 推送双方在 messageService.recallMessage）
+ * 撤回后**保留该行**并标记 recalled_at（双方都能看到「撤回了一条消息」，重进会话也在），
+ * 内容/媒体字段清空、磁盘文件删除、SSE 推送双方（见 messageService.recallMessage）
  */
 router.delete(
   '/single/:id',

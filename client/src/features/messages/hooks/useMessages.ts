@@ -152,8 +152,40 @@ export function useMessages({
   }, [partnerId, chatMessagesRef]);
 
   /**
+   * 原地标记一条消息为「已撤回」。
+   *
+   * 只改 `recalled_at` 与内容/媒体字段（服务端同样会清空），**不删行**：
+   * 删掉的话时间轴会少一条、重进会话也查不到 —— 而 QQ/微信是留一条系统提示。
+   * 服务端权威数据随后由 [loadMessages] 覆盖（撤回时间以服务端为准）。
+   */
+  const markRecalled = useCallback((id: number) => {
+    const now = new Date().toISOString();
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === id
+          ? {
+              ...m,
+              content: '',
+              image_url: null,
+              audio_url: null,
+              audio_duration_ms: 0,
+              audio_waveform: [],
+              audio_text: null,
+              quoted_message_id: null,
+              quoted_content: null,
+              quoted_image_url: null,
+              quoted_audio_url: null,
+              recalled_at: m.recalled_at ?? now,
+            }
+          : m
+      )
+    );
+  }, []);
+
+  /**
    * SSE 'message' 事件处理：
-   * - recalled（撤回）：服务器已删记录，本地直接过滤，避免幽灵消息
+   * - recalled（撤回）：服务端**保留行并标记 recalled_at**（双方都要看到提示），
+   *   本地先乐观标一下，再重拉一次拿到权威数据（正文/媒体已被服务端清空）
    * - cleared（清除会话）：本地清空并复位分页游标
    * - 其余（新消息）：涉及当前对话时重拉最新页；一律刷新会话列表角标
    */
@@ -162,10 +194,12 @@ export function useMessages({
       const epoch = sessionEpochRef.current;
       const { from, to, recalled, cleared } = data;
       const matchesCurrent = partnerId !== null && (Number(from) === partnerId || Number(to) === partnerId);
-      // 撤回推送
+      // 撤回推送：不是"删掉本地这条"，而是换成一条「撤回了一条消息」的系统提示
+      // （服务端现在会留痕，重进会话也还在 —— QQ/微信的行为）
       if (typeof recalled === 'number' && matchesCurrent) {
         if (epoch !== sessionEpochRef.current) return;
-        setMessages((prev) => prev.filter((m) => m.id !== recalled));
+        markRecalled(recalled);
+        loadMessages();
         refreshConversations();
         return;
       }
@@ -183,17 +217,12 @@ export function useMessages({
       }
       refreshConversations();
     },
-    [partnerId, loadMessages, refreshConversations]
+    [partnerId, loadMessages, refreshConversations, markRecalled]
   );
 
   /** 发送成功后追加（handleSend/handleSendImage 共用） */
   const appendMessage = useCallback((m: Message) => {
     setMessages((prev) => [...prev, m]);
-  }, []);
-
-  /** 撤回成功/SSE 撤回后移除 */
-  const removeMessageById = useCallback((id: number) => {
-    setMessages((prev) => prev.filter((m) => m.id !== id));
   }, []);
 
   /** 清除会话后本地清空 + 复位分页游标 */
@@ -214,7 +243,7 @@ export function useMessages({
     loadOlder,
     handleSseMessage,
     appendMessage,
-    removeMessageById,
+    markRecalled,
     clearMessagesLocal,
   };
 }

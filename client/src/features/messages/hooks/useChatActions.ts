@@ -25,7 +25,8 @@ export interface UseChatActionsOptions {
   /** 会话/通知刷新（共享收件箱 store 的单飞请求，见 state/inboxStore） */
   refreshConversations: () => Promise<void>;
   onAppend: (m: Message) => void;
-  onRemove: (id: number) => void;
+  /** 撤回成功：**原地换成提示**（不删行 —— 服务端留痕，重进会话也要看到） */
+  onRecalled: (id: number) => void;
   onClearLocal: () => void;
   /** 上下文菜单关闭（复制/引用/撤回后收起菜单） */
   closeMenu: () => void;
@@ -40,7 +41,7 @@ export function useChatActions({
   imageInputRef,
   refreshConversations,
   onAppend,
-  onRemove,
+  onRecalled,
   onClearLocal,
   closeMenu,
 }: UseChatActionsOptions) {
@@ -185,13 +186,14 @@ export function useChatActions({
       closeMenu();
       try {
         await api.delete(`/messages/single/${msgId}`);
-        onRemove(msgId);
+        // 服务端保留行、标记 recalled_at；本地同步成「你撤回了一条消息」
+        onRecalled(msgId);
         showToast('消息已撤回');
       } catch {
         showToast('撤回失败');
       }
     },
-    [closeMenu, onRemove]
+    [closeMenu, onRecalled]
   );
 
   return {

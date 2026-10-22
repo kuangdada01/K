@@ -130,6 +130,8 @@ export interface Message {
   /** 转写文本（点过「转文字」且成功后有值） */
   audio_text?: string | null;
   read: number; // 已读状态: 0=未读, 1=已读
+  /** 撤回时间（非空 = 这条已撤回：内容/媒体字段为空，界面画「你/对方 撤回了一条消息」） */
+  recalled_at?: string | null;
   created_at: string;
   sender_username: string; // 发送者用户名
   quoted_message_id?: number | null; // 被引用消息ID

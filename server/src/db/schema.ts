@@ -146,6 +146,7 @@ export function createSchema(db: InstanceType<typeof Database>): void {
       audio_text TEXT DEFAULT NULL,            -- 语音转写缓存（按需写入）
       read INTEGER DEFAULT 0,                  -- 已读状态: 0=未读, 1=已读
       quoted_message_id INTEGER DEFAULT NULL,  -- 被引用消息ID
+      recalled_at TEXT DEFAULT NULL,           -- 撤回时间（非空 = 已撤回，行保留以便双方都看到提示）
       created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
       FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE
