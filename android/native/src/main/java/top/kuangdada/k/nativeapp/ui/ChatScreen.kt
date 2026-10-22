@@ -857,7 +857,26 @@ fun ChatScreen(
         onDispose { viewerOrigins?.removeChatOrigins(partnerId) }
     }
 
-    Box(modifier = Modifier.fillMaxSize().background(c.bgPage)) {
+    /**
+     * 页面根节点的实时高度 + 历史最大高度。
+     *
+     * **用途**：有些机型（本机就是）在 edge-to-edge + `adjustResize` 下
+     * `WindowInsets.ime` 只报 1px，但**窗口确实被键盘压缩了** —— 两次高度的差值
+     * 就是键盘真实占的高度。这是 PanelSwitchHelper（QQ/微信那套面板切换库）的
+     * "方案一"：用布局高度差取键盘高，拿不到 insets 时靠它兜底。
+     */
+    var rootHeightPx by remember { mutableIntStateOf(0) }
+    val maxRootHeightPx = remember { intArrayOf(0) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .onSizeChanged { size ->
+                rootHeightPx = size.height
+                if (size.height > maxRootHeightPx[0]) maxRootHeightPx[0] = size.height
+            }
+            .background(c.bgPage),
+    ) {
         // 顶栏真毛玻璃：Kyant0 的 backdrop 库。用法与注意事项见 BooksScreen 同段注释
         // （要点：backdrop 里先铺页底色；**不要加 vibrancy/colorFilter**，本机实测会打断效果链）。
         val canBlur = Build.VERSION.SDK_INT >= 31
@@ -1002,12 +1021,26 @@ fun ChatScreen(
         val minPanelPx = with(density) { 160.dp.toPx() }.roundToInt()
         /** 完全量不到键盘时的估算（屏高 42%，量级与常见键盘一致） */
         val estimatedPanelPx =
-            (LocalConfiguration.current.screenHeightDp * density.density * 0.42f).roundToInt()
+            (LocalConfiguration.current.screenHeightDp * density.density * 0.40f).roundToInt()
 
-        /** 面板高按"量到的键盘全高 → 进程内记录 → 屏高估算"顺序取，残值一律跳过 */
+        /**
+         * 面板高 = 键盘高，按可信度依次取（任何"不像键盘"的残值都跳过）：
+         *
+         *  1. `WindowInsets.ime` 量到的全高（正常机型，最准）；
+         *  2. **窗口被压缩的差值** `maxRootHeight - rootHeight`（本机这种 insets 只报
+         *     1px、但窗口真的被 adjustResize 压缩的机型 —— PanelSwitchHelper 的方案一）；
+         *  3. 进程内记住的上次键盘高（跨页复用）；
+         *  4. 屏高 40% 估算（完全没量到过时）。
+         *
+         * 为什么必须"取真键盘高"而不是固定比例：面板与键盘**等高**才能在
+         * "点输入框 ↔ 点表情"之间原地换位、输入栏不动（QQ/微信的做法）；
+         * 比例猜的值每次切换都会矮一截或高一截，看着就是"跳 + 难看"。
+         */
         fun resolvePanelHeightPx(): Int {
             val fromIme = imeMaxPx[0]
             if (fromIme >= minPanelPx) return fromIme
+            val byResize = maxRootHeightPx[0] - rootHeightPx
+            if (byResize >= minPanelPx) return byResize
             val remembered = KeyboardHeightMemory.lastDp
             if (remembered > 0f) {
                 val px = with(density) { remembered.dp.toPx() }.roundToInt()
@@ -1024,6 +1057,14 @@ fun ChatScreen(
                 if (it > imeMaxPx[0]) imeMaxPx[0] = it
                 // 跨页共享：**只记像键盘的值**（1px 残值会把别处也带坏）
                 if (it >= minPanelPx) KeyboardHeightMemory.lastDp = with(density) { it.toDp().value }
+            }
+        }
+        // 兜底采集：insets 不上报的机型，用"窗口被压缩了多少"当键盘高
+        LaunchedEffect(rootHeightPx) {
+            val shrunk = maxRootHeightPx[0] - rootHeightPx
+            if (shrunk >= minPanelPx) {
+                if (shrunk > imeMaxPx[0]) imeMaxPx[0] = shrunk
+                KeyboardHeightMemory.lastDp = with(density) { shrunk.toDp().value }
             }
         }
 
