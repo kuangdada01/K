@@ -47,6 +47,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.runtime.mutableIntStateOf
@@ -86,6 +87,7 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -101,7 +103,6 @@ import top.kuangdada.k.core.designsystem.component.KButton
 import top.kuangdada.k.core.designsystem.component.KButtonVariant
 import top.kuangdada.k.core.designsystem.component.KEmojiButton
 import top.kuangdada.k.core.designsystem.component.KEmojiPanel
-import top.kuangdada.k.core.designsystem.component.KEmojiPanelHeight
 import top.kuangdada.k.core.designsystem.component.KPlaceholder
 import top.kuangdada.k.core.designsystem.component.KPlaceholderKind
 import top.kuangdada.k.core.designsystem.component.KTextField
@@ -510,18 +511,42 @@ fun PostDetailScreen(
         // 直接喂值，组合期零参与（老实现靠"每次重组回写"，根作用域因此被迫订阅 IME）
         var imeBottomState by remember { mutableIntStateOf(0) }
         LaunchedEffect(density) {
-            snapshotFlow { ime.getBottom(density) }.collect {
-                imeBottomState = it
-                if (it > lastImeBottomPx) lastImeBottomPx = it
+            snapshotFlow { ime.getBottom(density) }.collect { imeBottomState = it }
+        }
+        /**
+         * 键盘**停稳后**的全高（px）才当面板高。
+         *
+         * 逐帧取值有两个后果：① `lastImeBottomPx` 是 State，键盘动画每一帧都让整页
+         * （含评论列表）重组一遍；② 收起动画的最后一条合规值只有半截高度（≈160dp），
+         * 会被当成"键盘高"写进记忆 —— 下次面板就矮一大截。所以去抖 120ms 再认。
+         */
+        val minPanelPx = with(density) { MinPanelHeightDp.toPx() }.roundToInt()
+        LaunchedEffect(density) {
+            snapshotFlow { ime.getBottom(density) }.collectLatest { v ->
+                delay(ImeSettleMs)
+                if (v >= minPanelPx) {
+                    lastImeBottomPx = v
+                    // 与聊天页共用同一份记忆（落盘）：面板高 = 键盘高，两页必须是同一个数
+                    KeyboardHeightMemory.remember(with(density) { v.toDp().value })
+                }
             }
         }
 
-        // 面板全高与 IME 全高同口径（都含导航栏那一条），网格内容再自己避让导航栏
-        val panelHeightPx = if (lastImeBottomPx > 0) {
-            lastImeBottomPx
-        } else {
-            navBottomPx + with(density) { KEmojiPanelHeight.toPx() }.roundToInt()
-        }
+        /**
+         * 面板全高与 IME 全高同口径（都含导航栏那一条），网格内容再自己避让导航栏。
+         *
+         * **与聊天页共用 [resolvePanelHeightPx]**：以前这里退回
+         * `导航栏 + KEmojiPanelHeight(240dp)`，和聊天页按真实键盘高画的面板不是一个高度，
+         * 同一个人从帖子详情回消息页会看到"功能面板两种高度"；而且那一档在
+         * insets 报 1px 的机型上会把 1px 当成面板高（面板直接看不见）。
+         */
+        val screenHeightPx =
+            (LocalConfiguration.current.screenHeightDp * density.density).roundToInt()
+        val panelHeightPx = resolvePanelHeightPx(
+            density = density,
+            screenHeightPx = screenHeightPx,
+            candidates = intArrayOf(lastImeBottomPx),
+        )
         val panelGridHeightDp = with(density) { (panelHeightPx - navBottomPx).toDp() }
 
         val panelFraction = remember { Animatable(0f) }
@@ -1005,17 +1030,27 @@ fun PostDetailScreen(
                 contentAlignment = Alignment.BottomCenter,
             ) {
                 if (panelFraction.value > 0f) {
-                    KEmojiPanel(
-                        onPick = { emoji ->
-                            // 追加到末尾（与聊天页同语义）。面板**选完不关**：
-                            // 连发几个表情是常见操作
-                            input.value += emoji
-                        },
+                    // 底色铺满整个面板高（含导航条那一条）—— 与聊天页同款：
+                    // KEmojiPanel 自己的背景只到网格下沿，导航条会透出页面底色
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .navigationBarsPadding(),
-                        height = panelGridHeightDp,
-                    )
+                            .height(with(density) { panelHeightPx.toDp() })
+                            .background(c.surface),
+                        contentAlignment = Alignment.BottomCenter,
+                    ) {
+                        KEmojiPanel(
+                            onPick = { emoji ->
+                                // 追加到末尾（与聊天页同语义）。面板**选完不关**：
+                                // 连发几个表情是常见操作
+                                input.value += emoji
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .navigationBarsPadding(),
+                            height = panelGridHeightDp,
+                        )
+                    }
                 }
             }
         }

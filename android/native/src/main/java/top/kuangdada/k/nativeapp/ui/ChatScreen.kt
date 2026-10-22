@@ -155,6 +155,7 @@ import androidx.core.content.ContextCompat
 import kotlin.math.sqrt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -1038,43 +1039,45 @@ fun ChatScreen(
          */
         var imeBottomState by remember { mutableIntStateOf(0) }
         /**
-         * 「像键盘」的高度下限（160dp）。
+         * 「像键盘」的高度下限（160dp，见 [MinPanelHeightDp]）。
          *
          * ⚠️ 2026-10-22 实测：这台机器上 `WindowInsets.ime.getBottom()` 会报出 **1px**
          * 这种残值，而面板高度就是从它推出来的 —— 面板高被算成 1px，等于"点功能区
          * 没反应"（诊断 toast 里 `h=1 f=1.0` 就是现场：状态和动画都对，高度是 1）。
-         * 所以：小于这个下限的值一律当"没量到"，退回 [estimatedPanelPx]。
+         * 所以：小于这个下限的值一律当"没量到"，交给 [resolvePanelHeightPx] 回落。
          */
-        val minPanelPx = with(density) { 160.dp.toPx() }.roundToInt()
-        /** 完全量不到键盘时的估算（屏高 42%，量级与常见键盘一致） */
-        val estimatedPanelPx =
-            (LocalConfiguration.current.screenHeightDp * density.density * 0.40f).roundToInt()
+        val minPanelPx = with(density) { MinPanelHeightDp.toPx() }.roundToInt()
+        /** 屏高（px）：面板高的上限/兜底估算都按它算 */
+        val screenHeightPx =
+            (LocalConfiguration.current.screenHeightDp * density.density).roundToInt()
 
         /**
-         * 面板高 = 键盘高，按可信度依次取（任何"不像键盘"的残值都跳过）：
+         * 键盘**停稳后**的全高（px，普通数组不是 State）：面板高只认这个值。
          *
-         *  1. `WindowInsets.ime` 量到的全高（正常机型，最准）；
+         * 为什么不能逐帧记：键盘收起是逐帧动画，inset 会从 820 → 700 → … → 170 一路报，
+         * 逐帧写记忆最后一条落盘的会是"半截键盘高"（≈160dp）；下一次面板就矮一大截 ——
+         * 又是一组"两种高度"。所以只在 inset **连续 [ImeSettleMs] 不变**时才认。
+         */
+        val settledImePx = remember { intArrayOf(0) }
+
+        /**
+         * 面板高 = 键盘高，**与帖子详情页共用同一个决策函数**：
+         *
+         *  1. 停稳的 `WindowInsets.ime` 全高（正常机型，最准）；
          *  2. **窗口被压缩的差值** `maxRootHeight - rootHeight`（本机这种 insets 只报
          *     1px、但窗口真的被 adjustResize 压缩的机型 —— PanelSwitchHelper 的方案一）；
-         *  3. 进程内记住的上次键盘高（跨页复用）；
-         *  4. 屏高 40% 估算（完全没量到过时）。
+         *  3. **落盘记住**的上次键盘高（[KeyboardHeightMemory]，跨页 + 跨启动复用）；
+         *  4. 屏高 40% 估算（这台设备从没量到过键盘时）。
          *
          * 为什么必须"取真键盘高"而不是固定比例：面板与键盘**等高**才能在
          * "点输入框 ↔ 点表情"之间原地换位、输入栏不动（QQ/微信的做法）；
          * 比例猜的值每次切换都会矮一截或高一截，看着就是"跳 + 难看"。
          */
-        fun resolvePanelHeightPx(): Int {
-            val fromIme = imeMaxPx[0]
-            if (fromIme >= minPanelPx) return fromIme
-            val byResize = maxRootHeightPx[0] - rootHeightPx
-            if (byResize >= minPanelPx) return byResize
-            val remembered = KeyboardHeightMemory.lastDp
-            if (remembered > 0f) {
-                val px = with(density) { remembered.dp.toPx() }.roundToInt()
-                if (px >= minPanelPx) return px
-            }
-            return estimatedPanelPx
-        }
+        fun currentPanelHeightPx(): Int = resolvePanelHeightPx(
+            density = density,
+            screenHeightPx = screenHeightPx,
+            candidates = intArrayOf(settledImePx[0], maxRootHeightPx[0] - rootHeightPx),
+        )
 
         /**
          * 看门狗（配合上面的 ADJUST_NOTHING）：
@@ -1094,19 +1097,28 @@ fun ChatScreen(
         LaunchedEffect(density) {
             // snapshotFlow 里读 insets 的底层快照状态：变化只触发这里重新发射，
             // 不触发任何重组（捕获的 ime/nav 是 WindowInsetsHolder 里的稳定单例）
-            snapshotFlow { ime.getBottom(density) }.collect {
-                imeBottomState = it
-                if (it > imeMaxPx[0]) imeMaxPx[0] = it
-                // 跨页共享：**只记像键盘的值**（1px 残值会把别处也带坏）
-                if (it >= minPanelPx) KeyboardHeightMemory.lastDp = with(density) { it.toDp().value }
+            snapshotFlow { ime.getBottom(density) }.collect { imeBottomState = it }
+        }
+        LaunchedEffect(density) {
+            // collectLatest = 去抖：新一帧 inset 到来就取消上一个等待，只有"不再变化"的那帧留下
+            snapshotFlow { ime.getBottom(density) }.collectLatest { v ->
+                delay(ImeSettleMs)
+                // 只认像键盘的值（1px 残值会把面板和记忆一起带坏，见 MinPanelHeightDp）
+                if (v >= minPanelPx) {
+                    settledImePx[0] = v
+                    if (v > imeMaxPx[0]) imeMaxPx[0] = v
+                    // 跨页/跨启动共享 + 落盘：下次冷启动直接就是真实键盘高
+                    KeyboardHeightMemory.remember(with(density) { v.toDp().value })
+                }
             }
         }
         // 兜底采集：insets 不上报的机型，用"窗口被压缩了多少"当键盘高
         LaunchedEffect(rootHeightPx) {
             val shrunk = maxRootHeightPx[0] - rootHeightPx
             if (shrunk >= minPanelPx) {
+                settledImePx[0] = shrunk
                 if (shrunk > imeMaxPx[0]) imeMaxPx[0] = shrunk
-                KeyboardHeightMemory.lastDp = with(density) { shrunk.toDp().value }
+                KeyboardHeightMemory.remember(with(density) { shrunk.toDp().value })
             }
         }
 
@@ -1114,18 +1126,26 @@ fun ChatScreen(
          * 面板全高（与 IME 全高同口径，都含导航栏那一条）。
          *
          * **只认"键盘高度"这一种高度**（用户反馈："功能区有两种高度，只保留键盘唤起
-         * 在点功能区的高度"）——以前没弹过键盘时退回 `导航栏 + 240dp`，和真实键盘高度
-         * 差着一大截，同一个面板第一次点、弹过键盘后点会是两个高度。现在：
-         *  1. 本次会话量到过键盘 → 用它；
-         *  2. 本次没量到、但进程里别处量到过 → 用那个（[KeyboardHeightMemory]）；
-         *  3. 完全没量到过（刚装好就点相册）→ 按屏高 42% 估一个，量级和常见键盘一致。
+         * 在点功能区的高度"）。以前没弹过键盘时退回 `导航栏 + 240dp`，和真实键盘高度
+         * 差着一大截 —— 同一个面板第一次点、弹过键盘后点会是两个高度。
+         *
+         * 2026-10-22 起键盘高**落盘**（[KeyboardHeightMemory]）：只要这台设备上弹过
+         * 一次键盘，冷启动后直接点功能区也是真实键盘高，不再有"估算"那一档。
+         * 顺序：本次实测 → 落盘的上次实测 → 屏高 40%（见 [resolvePanelHeightPx]）。
          *
          * ★ **只在开面板那一刻取值**（`LaunchedEffect(openPanel)`，见下），不是每次重组
          * 都从 IME 状态重算 —— 后者会让组合期订阅键盘高度，键盘动画每帧整页重组
-         * （2026-10-20 "消息内容上下弹跳"的根因之一）。初值取进程内记录/屏高估算，
+         * （2026-10-20 "消息内容上下弹跳"的根因之一）。初值取落盘记录/屏高估算，
          * 不用 0：首帧就要按真实高度画，否则面板会先塌一下再长出来。
          */
-        var panelHeightPx by remember { mutableIntStateOf(resolvePanelHeightPx()) }
+        // ★ 初值**只读普通变量**（settledImePx 数组 / 落盘记录），不读 rootHeightPx 这种 State：
+        // 在 remember 里读 State 会让整页订阅它，窗口随键盘 resize 的每一帧都重组一遍
+        // （就是 2026-10-20 那轮"消息上下弹跳"的病根）。窗口压缩差只在开面板那一刻取。
+        var panelHeightPx by remember {
+            mutableIntStateOf(
+                resolvePanelHeightPx(density, screenHeightPx, intArrayOf(settledImePx[0]))
+            )
+        }
         val panelGridHeightDp = with(density) { (panelHeightPx - navBottomPx).toDp() }
 
         /** 面板展开比例 0..1：0 = 收起，1 = 与键盘等高占满交换区 */
@@ -1143,7 +1163,7 @@ fun ChatScreen(
         // 面板高度也不会在动画中途被改（改一次 = 整块面板重新测量 = 抖一下）
         LaunchedEffect(openPanel) {
             if (openPanel == ChatPanel.None) return@LaunchedEffect
-            val resolved = resolvePanelHeightPx()
+            val resolved = currentPanelHeightPx()
             if (resolved != panelHeightPx) panelHeightPx = resolved
         }
         /**
@@ -1860,19 +1880,31 @@ fun ChatScreen(
                                 // 被拎走的那张：相册条里那一格画成透明，原位留空
                                 draggedPainter = albumDragPainter,
                             )
-                            // 表情面板自带 navigationBarsPadding，高度只算网格那一段
-                            else -> KEmojiPanel(
-                                onPick = { emoji ->
-                                    // 追加到末尾（与 Web 端 onSelect 同语义）。面板**选完不关**：
-                                    // 连发几个表情是常见操作，关掉每发一个都要重开一次
-                                    // （Web 端选了即关是桌面端习惯，移动端不照搬）
-                                    input.value += emoji
-                                },
+                            // 表情面板自带 navigationBarsPadding，高度只算网格那一段。
+                            // ⚠️ 底色必须由**外面这层 Box**铺满整个面板高（含导航条那一条）：
+                            // KEmojiPanel 的 background 画在它自己的 height 里 = 只到网格下沿，
+                            // 导航条那一条会透出页面底色 —— 看起来就像"表情面板比语音/相册
+                            // 矮了一条"，也就是同一个面板的第二种高度。
+                            else -> Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .navigationBarsPadding(),
-                                height = panelGridHeightDp,
-                            )
+                                    .height(panelFullHeightDp)
+                                    .background(c.surface),
+                                contentAlignment = Alignment.BottomCenter,
+                            ) {
+                                KEmojiPanel(
+                                    onPick = { emoji ->
+                                        // 追加到末尾（与 Web 端 onSelect 同语义）。面板**选完不关**：
+                                        // 连发几个表情是常见操作，关掉每发一个都要重开一次
+                                        // （Web 端选了即关是桌面端习惯，移动端不照搬）
+                                        input.value += emoji
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .navigationBarsPadding(),
+                                    height = panelGridHeightDp,
+                                )
+                            }
                         }
                     }
                 }

@@ -59,6 +59,15 @@ class KApp : Application(), SingletonImageLoader.Factory {
         // 只留一份现场文件，不改任何崩溃行为，下次启动由 AppRoot 弹出来。
         CrashLog.install(this)
         super.onCreate()
+        /*
+         * 键盘高（= 输入区功能面板高）的落盘恢复，必须在这里、早于任何一帧。
+         *
+         * 面板要和键盘**等高**才能原地换位、输入栏不动（QQ/微信那套）。以前这个值只在
+         * 进程内存里，冷启动就忘光 —— 用户"打开 App 直接点表情"看到的是按屏高估的
+         * 高度，弹过键盘后再点又变成真实键盘高，这就是"消息页有两种高度"。
+         * 见 KeyboardHeightMemory 的注释。
+         */
+        top.kuangdada.k.nativeapp.ui.KeyboardHeightMemory.install(this)
         graph = AppGraph(this)
         /*
          * 屏幕共享渲染器持有者的装配点（M6.17）。
