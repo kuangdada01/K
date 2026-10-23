@@ -45,7 +45,12 @@ export function useContextMenu(userId: number | undefined) {
       const target = e.currentTarget;
       longPressTimer.current = setTimeout(() => {
         const isSent = msg.sender_id === userId;
-        setContextMenu({ msgId: msg.id, isSent, rect: target.getBoundingClientRect() });
+        setContextMenu({
+          msgId: msg.id,
+          isSent,
+          rect: target.getBoundingClientRect(),
+          hasText: !!msg.content.trim(),
+        });
       }, 500);
     },
     [userId]
@@ -70,7 +75,12 @@ export function useContextMenu(userId: number | undefined) {
     (e: React.MouseEvent, msg: Message) => {
       e.preventDefault();
       const isSent = msg.sender_id === userId;
-      setContextMenu({ msgId: msg.id, isSent, rect: e.currentTarget.getBoundingClientRect() });
+      setContextMenu({
+        msgId: msg.id,
+        isSent,
+        rect: e.currentTarget.getBoundingClientRect(),
+        hasText: !!msg.content.trim(),
+      });
     },
     [userId]
   );

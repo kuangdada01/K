@@ -15,13 +15,14 @@
 import { useState, useEffect, useRef, useCallback, Suspense, lazy } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { isNative } from '../../lib/native';
-import api from '../../api/http';
-import { Conversation, Notification } from '../../types';
+import api, { getApiErrorMessage } from '../../api/http';
+import { Conversation, Message, Notification } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { events } from '../../state/events';
 import { markNotificationReadLocal } from '../../state/inboxStore';
 import { useSse } from '../../hooks/useSse';
 import ConfirmDialog from '../ui/ConfirmDialog';
+import { showToast } from '../ui/Toast';
 // PostDetail 懒加载：浮层只在点开帖子时用到，静态 import 会把它连着
 // PostMedia/手势 hook 的子树打进私信页 chunk（与 HomePage 同一处理）
 import { loadPostDetail } from '../../router/composerChunks';
@@ -30,11 +31,14 @@ import ConversationSidebar from './ConversationSidebar';
 import ChatWindow, { ChatEmpty } from './ChatWindow';
 import ChatContextMenu from './ChatContextMenu';
 import ChatZoomOverlay from './ChatZoomOverlay';
+import FilePreviewOverlay from './FilePreviewOverlay';
 import { useConversations } from '../../features/messages/hooks/useConversations';
 import { useMessages } from '../../features/messages/hooks/useMessages';
 import { useChatActions } from '../../features/messages/hooks/useChatActions';
+import { useFileUpload } from '../../features/messages/hooks/useFileUpload';
 import { useUserSearch } from '../../features/messages/hooks/useUserSearch';
 import { useContextMenu } from '../../features/messages/hooks/useContextMenu';
+import { downloadMessageFile } from '../../features/messages/utils/fileMessage';
 import styles from './Messages.module.css';
 
 export default function Messages() {
@@ -67,8 +71,11 @@ export default function Messages() {
   const chatMessagesRef = useRef<HTMLDivElement>(null);
   const scrollSentinelRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
   const postDetailHandledBack = useRef(false);
+  /** 站内文件预览（图片/音视频/PDF/文本）；null = 不显示浮层 */
+  const [previewFile, setPreviewFile] = useState<Message | null>(null);
 
   // 渲染期同步 selectedPartner（prev 值模式）：仅当 partner 变化时调整，
   // 替代 effect 内同步 setState（react-hooks/set-state-in-effect）
@@ -139,6 +146,38 @@ export default function Messages() {
     onClearLocal: clearMessagesLocal,
     closeMenu: menu.closeMenu,
   });
+
+  // 文件上传队列：选完就传，进度/失败重试在输入栏上方的托盘里
+  const { uploads, enqueueFiles, retryUpload, dismissUpload } = useFileUpload({
+    partnerId: activePartnerId,
+    onSent: (m) => {
+      appendMessage(m);
+      // column-reverse：scrollTop = 0 即底部（与文字发送一致）
+      requestAnimationFrame(() => {
+        const el = chatMessagesRef.current;
+        if (el) el.scrollTop = 0;
+      });
+    },
+    refreshConversations,
+  });
+
+  /** 选文件后立刻入队；清空 value 让「同一个文件再发一次」也能触发 change */
+  const handlePickFiles = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (e.target.files) enqueueFiles(e.target.files);
+      e.target.value = '';
+    },
+    [enqueueFiles]
+  );
+
+  /** 下载文件消息：附件要带鉴权，失败给明确 toast（不是静默） */
+  const handleDownloadFile = useCallback(async (msg: Message) => {
+    try {
+      await downloadMessageFile(msg);
+    } catch (err) {
+      showToast(getApiErrorMessage(err, '下载失败，请稍后重试'));
+    }
+  }, []);
 
   // 返回键：处理对话和标签页的返回逻辑
   // 安卓端主 Tab 退出由 App.tsx 统一处理，此处仅处理对话关闭
@@ -259,19 +298,26 @@ export default function Messages() {
             quoteMsg={quoteMsg}
             setQuoteMsg={setQuoteMsg}
             imageInputRef={imageInputRef}
+            fileInputRef={fileInputRef}
             chatInputRef={chatInputRef}
+            uploadItems={uploads}
             onBack={() => {
               window.history.back();
             }}
             onClear={handleClearMessages}
             onSend={handleSend}
             onSendImage={handleSendImage}
+            onPickFiles={handlePickFiles}
+            onRetryUpload={retryUpload}
+            onDismissUpload={dismissUpload}
             onContextMenu={menu.handleContextMenu}
             onTouchStart={menu.handleTouchStart}
             onTouchEnd={menu.handleTouchEnd}
             onTouchMove={menu.handleTouchMove}
             onZoomImage={menu.setZoomImage}
             onScrollToMessage={(id) => scrollToMessage(id)}
+            onPreviewFile={setPreviewFile}
+            onDownloadFile={handleDownloadFile}
           />
         ) : (
           <ChatEmpty />
@@ -279,6 +325,8 @@ export default function Messages() {
       </div>
 
       {menu.zoomImage && <ChatZoomOverlay zoomImage={menu.zoomImage} onClose={menu.closeZoom} />}
+
+      {previewFile && <FilePreviewOverlay msg={previewFile} onClose={() => setPreviewFile(null)} />}
 
       {menu.contextMenu && (
         <ChatContextMenu

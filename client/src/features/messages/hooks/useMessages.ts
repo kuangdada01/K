@@ -171,10 +171,15 @@ export function useMessages({
               audio_duration_ms: 0,
               audio_waveform: [],
               audio_text: null,
+              file_url: null,
+              file_name: null,
+              file_size: 0,
+              file_mime: null,
               quoted_message_id: null,
               quoted_content: null,
               quoted_image_url: null,
               quoted_audio_url: null,
+              quoted_file_name: null,
               recalled_at: m.recalled_at ?? now,
             }
           : m
@@ -220,9 +225,23 @@ export function useMessages({
     [partnerId, loadMessages, refreshConversations, markRecalled]
   );
 
-  /** 发送成功后追加（handleSend/handleSendImage 共用） */
+  /**
+   * 发送成功后追加（文字/图片/文件共用）。
+   *
+   * **必须按 id 去重**：服务端的 SSE 广播在 HTTP 响应之前发出，5s 轮询可能先把
+   * 这条拉回来；此时无脑 push 会出现同一个 id 两条 → React 重复 key（列表错位、
+   * 气泡闪烁）。已存在就原位替换（服务端数据为准），不存在才追加。
+   */
   const appendMessage = useCallback((m: Message) => {
-    setMessages((prev) => [...prev, m]);
+    setMessages((prev) => {
+      const idx = prev.findIndex((x) => x.id === m.id);
+      if (idx >= 0) {
+        const next = prev.slice();
+        next[idx] = m;
+        return next;
+      }
+      return [...prev, m];
+    });
   }, []);
 
   /** 清除会话后本地清空 + 复位分页游标 */

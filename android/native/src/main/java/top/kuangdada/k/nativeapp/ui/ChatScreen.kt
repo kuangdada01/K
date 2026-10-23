@@ -2978,7 +2978,10 @@ private fun MessageBubble(
                         contentAlignment = Alignment.CenterStart,
                     ) {
                         Text(
-                            text = msg.raw.content,
+                            // 文件消息（2026-10-23）：content 为空，原生端先回退成
+                            // 「[文件] 名字（大小）」的可读气泡 —— 发/收文件与下载预览在 Web 端，
+                            // 原生端至少不能画出一个空气泡（见 MessageDto.fileLabel）
+                            text = if (msg.raw.hasFile) msg.raw.fileLabel else msg.raw.content,
                             style = KType.body,
                             // 自己的气泡是 accent 底 → 文字必须 onAccent（深色下 accent 是浅金）
                             color = bubbleFg,

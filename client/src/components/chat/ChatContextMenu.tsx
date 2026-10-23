@@ -13,6 +13,8 @@ export interface ChatContextMenuData {
   msgId: number;
   isSent: boolean;
   rect: DOMRect;
+  /** 有正文才给「复制」：文件/图片/语音消息复制出空字符串只会让人困惑 */
+  hasText: boolean;
 }
 
 interface ChatContextMenuProps {
@@ -23,7 +25,7 @@ interface ChatContextMenuProps {
 }
 
 export default function ChatContextMenu({ contextMenu, onCopy, onQuote, onRecall }: ChatContextMenuProps) {
-  const menuWidth = contextMenu.isSent ? 180 : 130;
+  const menuWidth = contextMenu.isSent ? (contextMenu.hasText ? 180 : 100) : 130;
   const menuHeight = 56;
   const gap = 14;
   const { rect } = contextMenu;
@@ -45,10 +47,12 @@ export default function ChatContextMenu({ contextMenu, onCopy, onQuote, onRecall
       style={{ left: x, top: y, '--arrow-x': `${arrowX}px` } as React.CSSProperties}
       onClick={(e) => e.stopPropagation()}
     >
-      <button className={styles.item} onClick={() => onCopy(contextMenu.msgId)}>
-        <Copy size={15} />
-        <span>复制</span>
-      </button>
+      {contextMenu.hasText && (
+        <button className={styles.item} onClick={() => onCopy(contextMenu.msgId)}>
+          <Copy size={15} />
+          <span>复制</span>
+        </button>
+      )}
       <button className={styles.item} onClick={() => onQuote(contextMenu.msgId)}>
         <Quote size={15} />
         <span>引用</span>

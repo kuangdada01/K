@@ -92,11 +92,7 @@
   padding: 12px 20px;
   border-top: 1px solid var(--border-color);
   background: var(--bg-page);
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  z-index: 2;
+  /* 定位交给 .composerStack（见其注释）：这里只负责这一行的排版 */
 }
 
 .imageBtn {
@@ -222,6 +218,32 @@
  * 引用预览（输入框上方）
  * ============================================================ */
 
+/**
+ * 输入区整体（附件区 + 输入栏）。
+ *
+ * 桌面端：整块**贴在聊天区底部**（绝对定位），内部按列排「附件区 → 输入栏」——
+ * 这样附件区永远紧贴输入栏上沿，不需要写死「输入栏有多高」这种魔法数
+ * （以前引用预览用 bottom:56px 对齐，输入栏实际 66px，底部一条被盖住）。
+ * 移动端：改成正常流（见下面的 media query），附件区把消息区顶上去而不是盖住。
+ */
+.composerStack {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+}
+
+/**
+ * 输入栏上方的「附件区」：引用预览 + 文件上传托盘叠在一起，由 composerStack 负责定位。
+ */
+.composerDock {
+  display: flex;
+  flex-direction: column;
+}
+
 .quotePreview {
   display: flex;
   align-items: center;
@@ -229,11 +251,6 @@
   padding: 8px 16px;
   background: var(--bg-hover);
   border-top: 1px solid var(--border-color);
-  position: absolute;
-  bottom: 56px;
-  left: 0;
-  right: 0;
-  z-index: 2;
   animation: chatWindowSlideUp 0.15s ease;
 }
 
@@ -345,12 +362,10 @@
   }
 
   .inputWrapper {
-    position: relative;
     flex-shrink: 0;
     padding: 6px 10px;
     gap: 6px;
     border-top: 1px solid var(--border-color);
-    z-index: 2;
   }
 
   .inputContainer {
@@ -381,10 +396,112 @@
   }
 
   .quotePreview {
-    position: relative;
-    bottom: auto;
     padding: 6px 12px;
   }
+
+  .composerStack {
+    /* 移动端：附件区/输入栏回到正常流，靠 flex 撑开（不盖住最后几条消息） */
+    position: relative;
+    bottom: auto;
+    flex-shrink: 0;
+  }
+}
+
+/* ============================================================
+ * 文件上传托盘（2026-10-23）
+ * ============================================================
+ * 选完文件立刻开传：在输入栏上方逐条显示 名字 / 进度百分比 / 进度条，
+ * 失败的那条变红并出现「重试」。多条时整体限高滚动，不把消息区挤没。
+ */
+
+.uploadTray {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 16px;
+  background: var(--bg-page);
+  border-top: 1px solid var(--border-color);
+  max-height: 38vh;
+  overflow-y: auto;
+  animation: chatWindowSlideUp 0.15s ease;
+}
+
+.uploadItem {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.uploadHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.uploadName {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.uploadSize {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.uploadIconBtn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@media (hover: hover) {
+  .uploadIconBtn:hover {
+    color: var(--accent-text);
+    background: var(--accent-soft);
+  }
+}
+
+.uploadBar {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border-color);
+  overflow: hidden;
+}
+
+.uploadBarFill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.2s linear;
+}
+
+.uploadBarFailed {
+  background: var(--danger);
+}
+
+.uploadFoot {
+  font-size: 11px;
+  color: var(--text-secondary);
+  min-height: 14px;
+}
+
+.uploadError {
+  color: var(--danger);
 }
 
 /* ============================================================

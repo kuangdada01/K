@@ -78,6 +78,10 @@ export function createApp(): express.Express {
           // 默认 CSP 仅允许 'self'，会拦截 blob 视频导致黑屏/无法解码
           'media-src': ["'self'", 'blob:'],
           'img-src': ["'self'", 'data:', 'blob:'],
+          // 私信「PDF / 纯文本」预览：内容经鉴权接口取回后是 blob: URL，
+          // 塞进 <iframe> 需要 frame-src 放行 blob（否则回落到 default-src 'self'
+          // → 预览区一片空白）。blob URL 只能由本站脚本创建，风险等同本站资源。
+          'frame-src': ["'self'", 'blob:'],
         },
       },
     })

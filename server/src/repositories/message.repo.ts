@@ -36,6 +36,14 @@ export interface MessageRow {
   audio_waveform: string | null;
   /** ASR 转写缓存（null = 还没转写过） */
   audio_text: string | null;
+  /** 文件消息的存储文件名（uploads_private），与 image_url / audio_url 互斥 */
+  file_url: string | null;
+  /** 文件原始名（展示 + 下载保存名） */
+  file_name: string | null;
+  /** 文件字节数 */
+  file_size: number;
+  /** 服务端按扩展名判定的 MIME */
+  file_mime: string | null;
   read: number;
   quoted_message_id: number | null;
   /** 撤回时间（非空 = 这一行现在是"某某撤回了一条消息"；内容/媒体字段已清空） */
@@ -45,6 +53,8 @@ export interface MessageRow {
   quoted_content?: string | null;
   quoted_image_url?: string | null;
   quoted_audio_url?: string | null;
+  /** 被引用消息是文件时非空（引用条显示「[文件] 名字」） */
+  quoted_file_name?: string | null;
   quoted_sender_username?: string | null;
 }
 
@@ -57,6 +67,8 @@ const CONVERSATION_SELECT = `
     u.avatar,
     CASE
       WHEN m.audio_url IS NOT NULL AND m.audio_url != '' THEN '[语音]'
+      WHEN m.file_url IS NOT NULL AND m.file_url != '' THEN
+        CASE WHEN m.file_name IS NOT NULL AND m.file_name != '' THEN '[文件] ' || m.file_name ELSE '[文件]' END
       WHEN m.image_url IS NOT NULL AND m.image_url != '' AND m.content = '' THEN '[图片]'
       ELSE m.content
     END as last_message,
@@ -181,13 +193,16 @@ export function latestReceivedMessage(
       content: string;
       image_url: string | null;
       audio_url: string | null;
+      file_url: string | null;
+      file_name: string | null;
       recalled_at: string | null;
     }
   | undefined {
   return stmt(
     `
     SELECT u.username AS name, m.content AS content, m.image_url AS image_url,
-           m.audio_url AS audio_url, m.recalled_at AS recalled_at
+           m.audio_url AS audio_url, m.file_url AS file_url, m.file_name AS file_name,
+           m.recalled_at AS recalled_at
     FROM messages m
     JOIN users u ON u.id = m.sender_id
     WHERE m.sender_id = ? AND m.receiver_id = ?
@@ -200,6 +215,8 @@ export function latestReceivedMessage(
         content: string;
         image_url: string | null;
         audio_url: string | null;
+        file_url: string | null;
+        file_name: string | null;
         recalled_at: string | null;
       }
     | undefined;
@@ -245,6 +262,8 @@ export function listMessageHistory(
       SELECT m.*, u.username as sender_username,
              CASE WHEN qm.recalled_at IS NOT NULL THEN '[消息已撤回]' ELSE qm.content END as quoted_content,
              CASE WHEN qm.recalled_at IS NULL THEN qm.image_url END as quoted_image_url,
+             CASE WHEN qm.recalled_at IS NULL THEN qm.audio_url END as quoted_audio_url,
+             CASE WHEN qm.recalled_at IS NULL THEN qm.file_name END as quoted_file_name,
              qu.username as quoted_sender_username
       FROM messages m
       JOIN users u ON m.sender_id = u.id
@@ -263,6 +282,8 @@ export function listMessageHistory(
       SELECT m.*, u.username as sender_username,
              CASE WHEN qm.recalled_at IS NOT NULL THEN '[消息已撤回]' ELSE qm.content END as quoted_content,
              CASE WHEN qm.recalled_at IS NULL THEN qm.image_url END as quoted_image_url,
+             CASE WHEN qm.recalled_at IS NULL THEN qm.audio_url END as quoted_audio_url,
+             CASE WHEN qm.recalled_at IS NULL THEN qm.file_name END as quoted_file_name,
              qu.username as quoted_sender_username
       FROM messages m
       JOIN users u ON m.sender_id = u.id
@@ -318,12 +339,18 @@ export function insertMessage(input: {
   audioUrl?: string | null;
   audioDurationMs?: number;
   audioWaveform?: string | null;
+  /** 文件相关字段（与 imageUrl / audioUrl 互斥；其他消息传 null/0） */
+  fileUrl?: string | null;
+  fileName?: string | null;
+  fileSize?: number;
+  fileMime?: string | null;
   quotedMessageId: number | null;
 }): MessageRow {
   const result = stmt(
     `INSERT INTO messages
-       (sender_id, receiver_id, content, image_url, audio_url, audio_duration_ms, audio_waveform, quoted_message_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (sender_id, receiver_id, content, image_url, audio_url, audio_duration_ms, audio_waveform,
+        file_url, file_name, file_size, file_mime, quoted_message_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     input.senderId,
     input.receiverId,
@@ -332,6 +359,10 @@ export function insertMessage(input: {
     input.audioUrl ?? null,
     input.audioDurationMs ?? 0,
     input.audioWaveform ?? null,
+    input.fileUrl ?? null,
+    input.fileName ?? null,
+    input.fileSize ?? 0,
+    input.fileMime ?? null,
     input.quotedMessageId
   );
 
@@ -341,6 +372,7 @@ export function insertMessage(input: {
            CASE WHEN qm.recalled_at IS NOT NULL THEN '[消息已撤回]' ELSE qm.content END as quoted_content,
            CASE WHEN qm.recalled_at IS NULL THEN qm.image_url END as quoted_image_url,
            CASE WHEN qm.recalled_at IS NULL THEN qm.audio_url END as quoted_audio_url,
+           CASE WHEN qm.recalled_at IS NULL THEN qm.file_name END as quoted_file_name,
            qu.username as quoted_sender_username
     FROM messages m
     JOIN users u ON m.sender_id = u.id
@@ -360,11 +392,17 @@ export function getMessageMedia(messageId: number):
       image_url: string | null;
       audio_url: string | null;
       audio_text: string | null;
+      /** 文件消息的存储名 / 原始名 / MIME（下发时决定文件名与 Content-Type） */
+      file_url: string | null;
+      file_name: string | null;
+      file_mime: string | null;
       recalled_at: string | null;
     }
   | undefined {
   return stmt(
-    'SELECT id, sender_id, receiver_id, image_url, audio_url, audio_text, recalled_at FROM messages WHERE id = ?'
+    `SELECT id, sender_id, receiver_id, image_url, audio_url, audio_text,
+            file_url, file_name, file_mime, recalled_at
+     FROM messages WHERE id = ?`
   ).get(messageId) as
     | {
         id: number;
@@ -373,6 +411,9 @@ export function getMessageMedia(messageId: number):
         image_url: string | null;
         audio_url: string | null;
         audio_text: string | null;
+        file_url: string | null;
+        file_name: string | null;
+        file_mime: string | null;
         recalled_at: string | null;
       }
     | undefined;
@@ -404,6 +445,10 @@ export function markMessageRecalled(messageId: number, at: string): void {
        audio_duration_ms = 0,
        audio_waveform = NULL,
        audio_text = NULL,
+       file_url = NULL,
+       file_name = NULL,
+       file_size = 0,
+       file_mime = NULL,
        quoted_message_id = NULL,
        read = 1
      WHERE id = ?`
@@ -411,7 +456,8 @@ export function markMessageRecalled(messageId: number, at: string): void {
 }
 
 /**
- * 清除两人之间的所有消息（双向），返回被删消息引用的**私密媒体文件名**（图片 + 语音，去重）。
+ * 清除两人之间的所有消息（双向），返回被删消息引用的**私密媒体文件名**
+ * （图片 + 语音 + 文件，去重）。
  * 引用消息共享被引用行的物理文件，二者都随会话删除，因此删除全部行后
  * 这些文件必然成为孤儿——由路由层在事务提交后统一删磁盘文件。
  */
@@ -427,8 +473,16 @@ export function clearConversation(currentUserId: number, otherUserId: number): s
       SELECT DISTINCT audio_url AS name FROM messages
       WHERE audio_url IS NOT NULL
         AND ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
+      UNION
+      SELECT DISTINCT file_url AS name FROM messages
+      WHERE file_url IS NOT NULL
+        AND ((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?))
     `
     ).all(
+      currentUserId,
+      otherUserId,
+      otherUserId,
+      currentUserId,
       currentUserId,
       otherUserId,
       otherUserId,

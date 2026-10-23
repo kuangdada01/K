@@ -129,6 +129,14 @@ export interface Message {
   audio_waveform?: number[];
   /** 转写文本（点过「转文字」且成功后有值） */
   audio_text?: string | null;
+  /** 文件消息的鉴权媒体地址（`/api/messages/:id/media`）；与 image_url / audio_url 互斥 */
+  file_url?: string | null;
+  /** 文件原始名（展示 + 下载时的保存名） */
+  file_name?: string | null;
+  /** 文件字节数（UI 格式化成 KB/MB） */
+  file_size?: number;
+  /** 服务端按扩展名判定的 MIME（只用于挑图标/预览方式，不参与安全判断） */
+  file_mime?: string | null;
   read: number; // 已读状态: 0=未读, 1=已读
   /** 撤回时间（非空 = 这条已撤回：内容/媒体字段为空，界面画「你/对方 撤回了一条消息」） */
   recalled_at?: string | null;
@@ -138,6 +146,7 @@ export interface Message {
   quoted_content?: string | null; // 被引用消息内容
   quoted_image_url?: string | null; // 被引用消息图片URL
   quoted_audio_url?: string | null; // 被引用消息是语音时非空
+  quoted_file_name?: string | null; // 被引用消息是文件时非空
   quoted_sender_username?: string | null; // 被引用消息发送者用户名
 }
 

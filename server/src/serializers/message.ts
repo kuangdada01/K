@@ -36,6 +36,10 @@ export function toMessageJson(m: MessageRow) {
     ...m,
     image_url: m.image_url ? `/api/messages/${m.id}/media` : null,
     audio_url: m.audio_url ? `/api/messages/${m.id}/media` : null,
+    file_url: m.file_url ? `/api/messages/${m.id}/media` : null,
+    file_name: m.file_name ?? null,
+    file_size: m.file_size ?? 0,
+    file_mime: m.file_mime ?? null,
     audio_duration_ms: m.audio_duration_ms ?? 0,
     audio_waveform: parseWaveform(m.audio_waveform),
     audio_text: m.audio_text ?? null,
@@ -43,5 +47,6 @@ export function toMessageJson(m: MessageRow) {
       m.quoted_image_url && m.quoted_message_id ? `/api/messages/${m.quoted_message_id}/media` : null,
     quoted_audio_url:
       m.quoted_audio_url && m.quoted_message_id ? `/api/messages/${m.quoted_message_id}/media` : null,
+    quoted_file_name: m.quoted_file_name ?? null,
   };
 }

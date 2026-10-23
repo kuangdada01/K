@@ -11,6 +11,7 @@ import { ChevronLeft, Trash2, MessageCircle } from 'lucide-react';
 import type { Conversation, Message, User } from '../../types';
 import { buildChatRows } from '../../lib/chatRows';
 import { formatTimeSeparator } from '../../utils';
+import type { UploadItem } from '../../features/messages/hooks/useFileUpload';
 import MessageBubble from './MessageBubble';
 import ChatComposer from './ChatComposer';
 import Avatar from '../ui/Avatar';
@@ -26,17 +27,25 @@ interface ChatWindowProps {
   quoteMsg: Message | null;
   setQuoteMsg: (m: Message | null) => void;
   imageInputRef: RefObject<HTMLInputElement | null>;
+  fileInputRef: RefObject<HTMLInputElement | null>;
   chatInputRef: RefObject<HTMLInputElement | null>;
+  /** 文件上传队列（进度/失败重试的展示数据） */
+  uploadItems: UploadItem[];
   onBack: () => void;
   onClear: () => void;
   onSend: (text: string) => void;
   onSendImage: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onPickFiles: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onRetryUpload: (id: string) => void;
+  onDismissUpload: (id: string) => void;
   onContextMenu: (e: React.MouseEvent, msg: Message) => void;
   onTouchStart: (e: React.TouchEvent, msg: Message) => void;
   onTouchEnd: () => void;
   onTouchMove: () => void;
   onZoomImage: (url: string) => void;
   onScrollToMessage: (msgId: number) => void;
+  onPreviewFile: (msg: Message) => void;
+  onDownloadFile: (msg: Message) => void;
 }
 
 export default function ChatWindow({
@@ -49,17 +58,24 @@ export default function ChatWindow({
   quoteMsg,
   setQuoteMsg,
   imageInputRef,
+  fileInputRef,
   chatInputRef,
+  uploadItems,
   onBack,
   onClear,
   onSend,
   onSendImage,
+  onPickFiles,
+  onRetryUpload,
+  onDismissUpload,
   onContextMenu,
   onTouchStart,
   onTouchEnd,
   onTouchMove,
   onZoomImage,
   onScrollToMessage,
+  onPreviewFile,
+  onDownloadFile,
 }: ChatWindowProps) {
   // 倒序 + 时间分隔符只随消息列表变化重算（此前在渲染体内，输入框每敲一个字都重算一遍）
   const rows = useMemo(() => buildChatRows(messages), [messages]);
@@ -125,6 +141,8 @@ export default function ChatWindow({
               onTouchMove={onTouchMove}
               onZoomImage={onZoomImage}
               onScrollToMessage={onScrollToMessage}
+              onPreviewFile={onPreviewFile}
+              onDownloadFile={onDownloadFile}
             />
           );
         })}
@@ -137,9 +155,14 @@ export default function ChatWindow({
         quoteMsg={quoteMsg}
         setQuoteMsg={setQuoteMsg}
         imageInputRef={imageInputRef}
+        fileInputRef={fileInputRef}
         chatInputRef={chatInputRef}
+        uploadItems={uploadItems}
         onSend={onSend}
         onSendImage={onSendImage}
+        onPickFiles={onPickFiles}
+        onRetryUpload={onRetryUpload}
+        onDismissUpload={onDismissUpload}
       />
     </>
   );

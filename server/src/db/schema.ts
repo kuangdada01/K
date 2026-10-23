@@ -144,6 +144,10 @@ export function createSchema(db: InstanceType<typeof Database>): void {
       audio_duration_ms INTEGER DEFAULT 0,     -- 语音时长（ms）
       audio_waveform TEXT DEFAULT NULL,        -- 波形 JSON（0-100，约 32 根）
       audio_text TEXT DEFAULT NULL,            -- 语音转写缓存（按需写入）
+      file_url TEXT DEFAULT NULL,              -- 文件消息的存储文件名（与 image_url / audio_url 互斥）
+      file_name TEXT DEFAULT NULL,             -- 文件原始名（展示 + 下载保存名）
+      file_size INTEGER DEFAULT 0,             -- 文件字节数
+      file_mime TEXT DEFAULT NULL,             -- 服务端按扩展名判定的 MIME
       read INTEGER DEFAULT 0,                  -- 已读状态: 0=未读, 1=已读
       quoted_message_id INTEGER DEFAULT NULL,  -- 被引用消息ID
       recalled_at TEXT DEFAULT NULL,           -- 撤回时间（非空 = 已撤回，行保留以便双方都看到提示）

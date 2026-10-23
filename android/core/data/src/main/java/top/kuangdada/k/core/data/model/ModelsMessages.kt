@@ -2,6 +2,8 @@ package top.kuangdada.k.core.data.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * ============================================================
@@ -49,6 +51,14 @@ data class MessageDto(
     @SerialName("audio_waveform") val audioWaveform: List<Int> = emptyList(),
     /** 语音转写结果（点过「转文字」且成功后有值） */
     @SerialName("audio_text") val audioText: String? = null,
+    /** 文件消息的鉴权媒体地址；与 [imageUrl] / [audioUrl] 互斥（2026-10-23） */
+    @SerialName("file_url") val fileUrl: String? = null,
+    /** 文件原始名（展示用） */
+    @SerialName("file_name") val fileName: String? = null,
+    /** 文件字节数 */
+    @SerialName("file_size") val fileSize: Long = 0,
+    /** 服务端按扩展名判定的 MIME */
+    @SerialName("file_mime") val fileMime: String? = null,
     /** 0 = 未读，1 = 已读 */
     val read: Int = 0,
     /**
@@ -65,22 +75,55 @@ data class MessageDto(
     @SerialName("quoted_content") val quotedContent: String? = null,
     @SerialName("quoted_image_url") val quotedImageUrl: String? = null,
     @SerialName("quoted_audio_url") val quotedAudioUrl: String? = null,
+    /** 被引用消息是文件时带出的原始名（引用条显示「[文件] 名字」） */
+    @SerialName("quoted_file_name") val quotedFileName: String? = null,
     @SerialName("quoted_sender_username") val quotedSenderUsername: String? = null,
 ) {
     val hasImage: Boolean get() = !imageUrl.isNullOrBlank()
     val hasAudio: Boolean get() = !audioUrl.isNullOrBlank()
+    val hasFile: Boolean get() = !fileUrl.isNullOrBlank()
     val isRead: Boolean get() = read == 1
+
+    /**
+     * 文件消息在**原生端**的展示文案。
+     *
+     * 原生版目前只做到"能看见"（收/发文件与下载、预览留在 Web 端）：
+     * 文件消息的 content 是空的，不做这个回退就会画出一个空气泡 —— 比缺功能更难解释。
+     * 文案刻意写成「[文件] 名字（大小）」，用户至少知道对方发了什么。
+     */
+    val fileLabel: String
+        get() {
+            val name = fileName?.takeIf { it.isNotBlank() } ?: "文件"
+            val size = formatFileBytes(fileSize)
+            return if (size.isEmpty()) "[文件] $name" else "[文件] $name（$size）"
+        }
 
     /** 已撤回（内容/媒体都已由服务端清空，只该画一条「某某撤回了一条消息」提示） */
     val isRecalled: Boolean get() = !recalledAt.isNullOrBlank()
-    /** 引用的内容摘要（纯图片/纯语音引用也要有可显示的文本） */
+    /** 引用的内容摘要（纯图片/纯语音/纯文件引用也要有可显示的文本） */
     val quotedPreview: String
         get() = quotedContent?.takeIf { it.isNotBlank() }
             ?: when {
                 !quotedAudioUrl.isNullOrBlank() -> "[语音]"
                 !quotedImageUrl.isNullOrBlank() -> "[图片]"
+                !quotedFileName.isNullOrBlank() -> "[文件] $quotedFileName"
                 else -> ""
             }
+}
+
+/** 字节 → 人类可读（与 Web 端 formatFileSize 同一口径：小于 10 保留一位小数） */
+private fun formatFileBytes(bytes: Long): String {
+    if (bytes <= 0) return ""
+    if (bytes < 1024) return "$bytes B"
+    val units = listOf("KB", "MB", "GB", "TB")
+    var value = bytes / 1024.0
+    var unit = 0
+    while (value >= 1024 && unit < units.size - 1) {
+        value /= 1024
+        unit += 1
+    }
+    val text = if (value < 10) String.format(Locale.US, "%.1f", value) else value.roundToInt().toString()
+    return "$text ${units[unit]}"
 }
 
 /**

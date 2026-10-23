@@ -20,20 +20,32 @@ import { PATHS } from '../config';
 import { AppError } from '../middleware/error';
 import { compressImage } from '../lib/image';
 import { safeDeleteFile, absoluteUploadPath } from '../lib/file';
-import { MAX_VOICE_BYTES, MAX_VOICE_MS, MIN_VOICE_MS } from '@k/shared';
+import { mimeForFileName, sanitizeFileName } from '../lib/fileType';
+import {
+  MAX_FILE_BYTES,
+  MAX_FILE_NAME_CHARS,
+  MAX_IMAGE_BYTES,
+  MAX_VOICE_BYTES,
+  MAX_VOICE_MS,
+  MIN_VOICE_MS,
+  isAllowedMessageFile,
+  toMB,
+} from '@k/shared';
 import { notifyUser } from '../sse';
 import { enqueueFileCleanup } from '../lib/video/queue';
 import * as messageRepo from '../repositories/message.repo';
 import * as friendRepo from '../repositories/friend.repo';
 
 /**
- * 发送消息编排（文字/图片，可选引用消息）
+ * 发送消息编排（文字/图片/语音/文件，可选引用消息）
  *
- * 校验失败（无内容、给自己发消息、接收人不存在）时清理已压缩的图片文件后抛错，
- * 状态码/错误文案与历史路由实现逐字节一致：
+ * 校验失败时清理已落盘的附件后抛错，状态码/错误文案与历史实现逐字节一致：
  * - 400 '请输入消息内容或发送图片'
  * - 400 '不能给自己发消息'
  * - 404 '接收人不存在'
+ *
+ * 附件三者互斥（图片 / 语音 / 文件）：一条消息只带一个附件 ——
+ * 客户端也是一条消息发一个文件，避免"文件+说明"让气泡布局分叉。
  *
  * 成功后返回入库的消息行（含引用信息），由路由层序列化响应并返回 201；
  * 实时推送（notifyUser 双方）在本服务内完成，与历史行为一致。
@@ -50,23 +62,33 @@ export async function sendMessage(input: {
   audioDurationMs?: number | undefined;
   /** 波形 JSON 字符串（0-100，≤64 根；非法值退化成空数组） */
   audioWaveform?: string | undefined;
+  /** 文件（与 imageFile / audioFile 互斥） */
+  fileFile?: Express.Multer.File | undefined;
 }): Promise<messageRepo.MessageRow> {
   const { senderId, receiverId } = input;
 
-  /** 失败清理：图片与语音都可能已经落盘，两条路径都要收干净 */
+  /** 失败清理：图片 / 语音 / 文件都可能已经落盘，三条路径都要收干净 */
   const cleanupUploads = (imageName: string | null) => {
     if (imageName) safeDeleteFile(`/uploads_private/${imageName}`, 'uploads_private');
     if (input.audioFile) {
       safeDeleteFile(`/uploads_private/${path.basename(input.audioFile.filename)}`, 'uploads_private');
     }
+    if (input.fileFile) {
+      safeDeleteFile(`/uploads_private/${path.basename(input.fileFile.filename)}`, 'uploads_private');
+    }
   };
 
-  // ---- 语音：先做参数校验（在压缩图片之前，省一次 CPU）----
+  // ---- 附件互斥：先做参数校验（在压缩图片之前，省一次 CPU）----
   const hasAudio = Boolean(input.audioFile);
-  if (hasAudio && input.imageFile) {
-    // 两个附件都落盘了：图片用原始文件名删（还没压缩）
+  const hasFile = Boolean(input.fileFile);
+  if ((hasAudio || hasFile) && input.imageFile) {
+    // 附件都落盘了：图片用原始文件名删（还没压缩）
     cleanupUploads(path.basename(input.imageFile.filename));
-    throw new AppError(400, '一条消息只能带图片或语音');
+    throw new AppError(400, hasFile ? '一条消息只能带一个附件' : '一条消息只能带图片或语音');
+  }
+  if (hasAudio && hasFile) {
+    cleanupUploads(null);
+    throw new AppError(400, '一条消息只能带一个附件');
   }
 
   let audioName: string | null = null;
@@ -92,15 +114,52 @@ export async function sendMessage(input: {
     audioWaveform = normalizeWaveform(input.audioWaveform);
   }
 
+  // ---- 文件：大小/类型/名字三道校验（类型再看一次，不信任 multer filter）----
+  let fileNameStored: string | null = null;
+  let fileName: string | null = null;
+  let fileSize = 0;
+  let fileMime: string | null = null;
+  if (hasFile && input.fileFile) {
+    if (input.fileFile.size <= 0) {
+      cleanupUploads(null);
+      throw new AppError(400, '文件是空的');
+    }
+    if (input.fileFile.size > MAX_FILE_BYTES) {
+      cleanupUploads(null);
+      throw new AppError(400, `文件不能超过 ${toMB(MAX_FILE_BYTES)}MB`);
+    }
+    if (!isAllowedMessageFile(input.fileFile.originalname)) {
+      cleanupUploads(null);
+      throw new AppError(400, '不支持该文件类型');
+    }
+    // 原始名要留给对方看（下载保存名），中文原样存；去掉路径与控制字符并限量截断
+    const clean = sanitizeFileName(input.fileFile.originalname, MAX_FILE_NAME_CHARS);
+    if (!clean) {
+      cleanupUploads(null);
+      throw new AppError(400, '文件名无效');
+    }
+    fileNameStored = path.basename(input.fileFile.filename);
+    fileName = clean;
+    fileSize = input.fileFile.size;
+    fileMime = mimeForFileName(clean);
+  }
+
   // image_url 只存文件名（uploads_private 不做静态暴露）
-  // 上传后立即压缩；heic 会转成 jpg，后续清理/入库一律用压缩后的文件名
+  // 上传后立即压缩；heic 会转成 jpg，后续清理/入库一律用压缩后的文件名。
+  // ★ 大小上限在这里补一道：multer 的 fileSize 已被抬到「文件」的 100MB
+  //   （一个 uploader 只认一个上限），不补的话 80MB 的「图片」会被丢进
+  //   sharp 解码 —— 内存和 CPU 都可能被一张图打满。
+  if (input.imageFile && input.imageFile.size > MAX_IMAGE_BYTES) {
+    cleanupUploads(path.basename(input.imageFile.filename));
+    throw new AppError(400, `图片不能超过 ${toMB(MAX_IMAGE_BYTES)}MB`);
+  }
   const imageFile = input.imageFile
     ? path.basename(
         await compressImage(path.join(PATHS.uploadsPrivate, input.imageFile.filename), { maxWidth: 1280 })
       )
     : null;
 
-  if ((!input.content || !input.content.trim()) && !imageFile && !audioName) {
+  if ((!input.content || !input.content.trim()) && !imageFile && !audioName && !fileNameStored) {
     throw new AppError(400, '请输入消息内容或发送图片');
   }
 
@@ -127,12 +186,16 @@ export async function sendMessage(input: {
   const message = messageRepo.insertMessage({
     senderId,
     receiverId,
-    // 语音消息不带正文（客户端不提供输入框内容）；图片消息仍允许「图 + 文」
-    content: audioName ? '' : (input.content || '').trim(),
+    // 语音/文件消息不带正文（客户端不提供输入框内容）；图片消息仍允许「图 + 文」
+    content: audioName || fileNameStored ? '' : (input.content || '').trim(),
     imageUrl: imageFile,
     audioUrl: audioName,
     audioDurationMs,
     audioWaveform,
+    fileUrl: fileNameStored,
+    fileName,
+    fileSize,
+    fileMime,
     quotedMessageId: quotedId,
   });
 
@@ -175,7 +238,7 @@ export function recallMessage(userId: number, messageId: number): void {
 
   // 再回收附件（文件系统与 SQLite 之间只能补偿，不能假定回滚会恢复文件）；
   // 删除失败转清理任务重试，不留孤儿（P1-3.5）
-  for (const media of [message.image_url, message.audio_url]) {
+  for (const media of [message.image_url, message.audio_url, message.file_url]) {
     if (!media) continue;
     if (!safeDeleteFile(`/uploads_private/${path.basename(media)}`, 'uploads_private')) {
       try {
@@ -206,8 +269,8 @@ export function recallMessage(userId: number, messageId: number): void {
  * 目标用户存在性/自对话拦截由路由层在调用前完成。
  */
 export function clearConversationMessages(currentUserId: number, otherUserId: number): void {
-  // 事务提交（DB 行已删）后清理磁盘私密图片：引用消息共享同一物理文件，
-  // 行全删后这些文件必成孤儿，不清会永久累积（safeDeleteFile 限定 uploads_private 内）
+  // 事务提交（DB 行已删）后清理磁盘私密附件（图片 / 语音 / 文件）：引用消息共享
+  // 同一物理文件，行全删后这些文件必成孤儿，不清会永久累积（safeDeleteFile 限定 uploads_private 内）
   const imageNames = messageRepo.clearConversation(currentUserId, otherUserId);
   for (const name of imageNames) {
     if (!safeDeleteFile(`/uploads_private/${path.basename(name)}`, 'uploads_private')) {

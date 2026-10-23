@@ -8,7 +8,7 @@
  * - GET    /api/messages/conversations    - 获取会话列表（含最后消息、未读数）
  * - PUT    /api/messages/read             - 标记所有消息为已读
  * - GET    /api/messages/:userId          - 获取与某用户的消息历史
- * - POST   /api/messages                  - 发送消息（文字或图片）
+ * - POST   /api/messages                  - 发送消息（文字 / 图片 / 语音 / 文件）
  * - DELETE /api/messages/single/:id       - 撤回单条消息（仅发送者）
  * - DELETE /api/messages/:userId          - 清除与某用户的所有消息
  *
@@ -19,16 +19,18 @@
  * ============================================================
  */
 
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
+import multer from 'multer';
 import { PATHS } from '../config';
 import { authMiddleware } from '../middleware/auth';
 import { asyncHandler, AppError } from '../middleware/error';
 import { imageFileFilter } from '../lib/image';
+import { contentDisposition, isInlineSafeMime, mimeForFileName } from '../lib/fileType';
 import { validateBody } from '../validate';
 import { sendMessageSchema } from '@k/shared/schemas';
-import { MAX_IMAGE_BYTES } from '@k/shared';
+import { MAX_FILE_BYTES, isAllowedMessageFile, toMB } from '@k/shared';
 import { createUploader, messageFilename } from '../lib/upload';
 import * as messageRepo from '../repositories/message.repo';
 import { getSafeUser } from '../repositories/user.repo';
@@ -40,17 +42,23 @@ import rateLimit from 'express-rate-limit';
 const router = Router();
 
 /**
- * 消息图片上传中间件: 大小上限见 @k/shared（与客户端校验同一个常量），仅允许图片
+ * 消息附件上传中间件：图片 / 语音 / 文件三者互斥，一个请求只带一个。
  * 存储在 uploads_private（不在静态服务范围，经 /api/messages/:id/media 鉴权下发）
- * DB 中 image_url 只存文件名
+ * DB 中 image_url / audio_url / file_url 只存文件名
+ *
+ * 大小上限取三者里最大的（文件 100MB）—— multer 的 `limits.fileSize` 是
+ * **整个 uploader 一个值**，图片 10MB / 语音 5MB 由 service 再校验一次。
  */
 /** 语音扩展名/类型（录音端固定 m4a；其余是给将来 Web 录音留的口子） */
 const AUDIO_EXT_RE = /\.(m4a|mp4|aac|mp3|ogg|wav|3gp)$/i;
 const AUDIO_MIME_RE = /^audio\/(mp4|m4a|x-m4a|aac|mpeg|mp3|ogg|wav|3gpp)$/i;
 
+/** 文件类型被拒时的统一文案（客户端直接展示，所以写清楚"能发什么"） */
+const FILE_TYPE_ERROR = '不支持该文件类型（支持文档、图片、音视频、压缩包等常见格式）';
+
 /**
- * 消息附件过滤器：`image` 走原来的图片白名单，`audio` 走音频白名单。
- * 超过上限（图片 10MB / 语音 5MB）由 multer 与服务端二次校验分别兜住。
+ * 消息附件过滤器：`image` 走原来的图片白名单，`audio` 走音频白名单，
+ * `file` 走 @k/shared 的扩展名白名单（前后端同一份，客户端选文件时已先拦一次）。
  */
 const messageFileFilter = (
   req: Express.Request,
@@ -67,16 +75,67 @@ const messageFileFilter = (
     }
     return;
   }
+  if (file.fieldname === 'file') {
+    // 只按扩展名判：客户端送来的 mimetype 可以随便写（写 text/html 也没成本），
+    // 真正决定下发 Content-Type 的是服务端按扩展名算出来的值（lib/fileType）
+    if (isAllowedMessageFile(file.originalname)) {
+      cb(null, true);
+    } else {
+      cb(new Error(FILE_TYPE_ERROR));
+    }
+    return;
+  }
   imageFileFilter(req, file, cb);
 };
 
 const upload = createUploader({
   dir: PATHS.uploadsPrivate,
   filename: messageFilename,
-  // 上限取图片的 10MB；语音的 5MB 在 service 里按 MAX_VOICE_BYTES 再校验
-  maxSize: MAX_IMAGE_BYTES,
+  maxSize: MAX_FILE_BYTES,
   fileFilter: messageFileFilter,
 });
+
+/**
+ * 把 upload.fields 包一层，只为了**改写 multer 的错误文案**。
+ *
+ * 全局 errorHandler 对 `LIMIT_FILE_SIZE` 回的是「文件过大，图片最大10MB，视频最大300MB」——
+ * 那是发帖语境的文案，私信里会让人以为 10MB 就是上限。这里按私信的上限重新说一遍，
+ * 并且**先删掉已经落盘的半截文件**（multer 超限时会把已写入的临时文件留在目录里）。
+ */
+const uploadMessageFiles = (req: Request, res: Response, next: NextFunction) => {
+  upload.fields([
+    { name: 'image', maxCount: 1 },
+    { name: 'audio', maxCount: 1 },
+    { name: 'file', maxCount: 1 },
+  ])(req, res, (err?: unknown) => {
+    if (!err) {
+      next();
+      return;
+    }
+    // 超限时 multer 已经把超出部分写进磁盘（file.path 仍指向那个文件）
+    const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+    for (const list of Object.values(files ?? {})) {
+      for (const f of list) {
+        if (f?.path) fs.promises.unlink(f.path).catch(() => {});
+      }
+    }
+    if (err instanceof multer.MulterError) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        next(new AppError(400, `文件不能超过 ${toMB(MAX_FILE_BYTES)}MB`));
+        return;
+      }
+      next(new AppError(400, `文件上传失败：${err.message}`));
+      return;
+    }
+    // fileFilter 抛出的错误（图片/语音/文件白名单）——文案是我们自己写的，可以直出
+    const message = err instanceof Error ? err.message : '';
+    if (message === FILE_TYPE_ERROR || message.startsWith('Only ')) {
+      next(new AppError(400, message));
+      return;
+    }
+    next(err);
+  });
+};
 
 // ============================================================
 // 会话端点
@@ -197,10 +256,17 @@ router.get(
 // ============================================================
 
 /**
- * GET /api/messages/:id/media - 获取消息图片
+ * GET /api/messages/:id/media - 获取消息附件（图片 / 语音 / 文件）
  *
  * 认证: 必须（仅消息的发送者/接收者可访问）
- * 图片存储在 uploads_private，不经静态服务暴露
+ * 附件存储在 uploads_private，不经静态服务暴露
+ *
+ * 文件消息（2026-10-23）：
+ * - `?download=1` → 强制 `Content-Disposition: attachment`（客户端"下载"按钮）；
+ * - 不带参数但类型可安全内联（图片/音视频/PDF/纯文本）→ `inline`，供站内预览；
+ * - html / svg / xml / 可执行类一律 `attachment` —— 私信内容是用户互传的，
+ *   绝不能在站点源上执行；
+ * - 所有文件响应带 `X-Content-Type-Options: nosniff`，避免 MIME 嗅探。
  */
 router.get(
   '/:id/media',
@@ -209,8 +275,8 @@ router.get(
     const messageId = parseInt(req.params.id as string);
     const media = messageRepo.getMessageMedia(messageId);
 
-    // 图片与语音共用这一个鉴权端点（DB 里两条字段互斥，取有值的那个）
-    const name = media?.audio_url || media?.image_url;
+    // 三种附件共用这一个鉴权端点（DB 里字段互斥，取有值的那个）
+    const name = media?.audio_url || media?.image_url || media?.file_url;
     if (!media || !name) {
       throw new AppError(404, '媒体不存在');
     }
@@ -224,12 +290,20 @@ router.get(
     }
 
     res.setHeader('Cache-Control', 'private, max-age=86400');
-    // 拖动语音进度要 Range（ExoPlayer / <audio> 都会发）；sendFile 原生支持，
-    // 这里显式声明接受范围，部分客户端据此决定是否启用按需加载。
+    // 拖动语音/视频进度要 Range（ExoPlayer / <audio> / <video> 都会发）；
+    // sendFile 原生支持，这里显式声明接受范围，部分客户端据此决定是否启用按需加载。
     res.setHeader('Accept-Ranges', 'bytes');
     if (media.audio_url) {
       // .m4a 在不同 mime 库里的映射不一致，显式钉成 audio/mp4（浏览器与 ExoPlayer 都认）
       res.setHeader('Content-Type', 'audio/mp4');
+    } else if (media.file_url) {
+      const displayName = media.file_name || path.basename(name);
+      const mime = media.file_mime || mimeForFileName(displayName);
+      const wantsDownload = req.query.download === '1' || req.query.download === 'true';
+      const inline = !wantsDownload && isInlineSafeMime(mime);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Type', inline ? mime : 'application/octet-stream');
+      res.setHeader('Content-Disposition', contentDisposition(inline ? 'inline' : 'attachment', displayName));
     }
     res.sendFile(filePath);
   })
@@ -299,21 +373,19 @@ router.post(
  * - content: 文字内容（可选）
  * - image: 图片文件（可选，10MB限制）
  * - audio: 语音文件（可选，m4a/AAC，服务端按 5MB / 60s 校验；与 image 互斥）
+ * - file: 文件（可选，100MB限制，扩展名白名单见 @k/shared；与 image/audio 互斥）
  * - durationMs: 语音时长（毫秒，带 audio 时必填且 ≥1000）
  * - waveform: 波形 JSON 数组字符串（0–100，≤64 根；画柱状图用）
  * - quotedMessageId: 被引用消息ID（可选）
  *
- * 中间件顺序: authMiddleware → upload.fields(image/audio) → validateBody(sendMessageSchema)
+ * 中间件顺序: authMiddleware → upload.fields(image/audio/file) → validateBody(sendMessageSchema)
  * （multer → validateBody 顺序不可变：validateBody 失败时按已落盘文件清理）。
  * 编排（压缩/校验/清理/入库/SSE 推送）在 messageService.sendMessage。
  */
 router.post(
   '/',
   authMiddleware,
-  upload.fields([
-    { name: 'image', maxCount: 1 },
-    { name: 'audio', maxCount: 1 },
-  ]),
+  uploadMessageFiles,
   validateBody(sendMessageSchema),
   asyncHandler(async (req: Request, res: Response) => {
     const { receiverId, content, quotedMessageId, durationMs, waveform } = req.body;
@@ -327,6 +399,7 @@ router.post(
       audioFile: files.audio?.[0],
       audioDurationMs: durationMs,
       audioWaveform: waveform,
+      fileFile: files.file?.[0],
     });
     res.status(201).json(toMessageJson(message));
   })

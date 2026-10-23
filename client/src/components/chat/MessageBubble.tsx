@@ -13,6 +13,7 @@ import { formatTimeSeparator } from '../../utils';
 import { useAuthMediaUrl } from '../../hooks/useAuthMediaUrl';
 import Avatar from '../ui/Avatar';
 import VoiceMessage from './VoiceMessage';
+import FileMessage from './FileMessage';
 import styles from './MessageBubble.module.css';
 
 interface MessageBubbleProps {
@@ -27,6 +28,16 @@ interface MessageBubbleProps {
   onTouchMove: (e: React.TouchEvent) => void;
   onZoomImage: (imageUrl: string) => void;
   onScrollToMessage: (messageId: number) => void;
+  onPreviewFile: (msg: Message) => void;
+  onDownloadFile: (msg: Message) => void;
+}
+
+/** 引用条的内容摘要：纯图片/语音/文件也要有可读文字（content 可能为空） */
+function quotePreviewText(msg: Message): string {
+  if (msg.quoted_content) return msg.quoted_content;
+  if (msg.quoted_file_name) return `[文件] ${msg.quoted_file_name}`;
+  if (msg.quoted_audio_url) return '[语音]';
+  return '[消息]';
 }
 
 function MessageBubble({
@@ -41,6 +52,8 @@ function MessageBubble({
   onTouchMove,
   onZoomImage,
   onScrollToMessage,
+  onPreviewFile,
+  onDownloadFile,
 }: MessageBubbleProps) {
   // 消息图片/引用缩略图为鉴权接口 URL，需拉取 blob 后展示
   const imageUrl = useAuthMediaUrl(msg.image_url);
@@ -61,6 +74,8 @@ function MessageBubble({
         >
           {msg.audio_url ? (
             <VoiceMessage key={msg.id} msg={msg} isSent={isSent} />
+          ) : msg.file_url ? (
+            <FileMessage msg={msg} isSent={isSent} onPreview={onPreviewFile} onDownload={onDownloadFile} />
           ) : msg.image_url ? (
             imageUrl ? (
               <img
@@ -85,8 +100,7 @@ function MessageBubble({
                 </div>
               ) : (
                 <span>
-                  {msg.quoted_sender_username}:{' '}
-                  {msg.quoted_content || (msg.quoted_audio_url ? '[语音]' : '[消息]')}
+                  {msg.quoted_sender_username}: {quotePreviewText(msg)}
                 </span>
               )}
             </div>
