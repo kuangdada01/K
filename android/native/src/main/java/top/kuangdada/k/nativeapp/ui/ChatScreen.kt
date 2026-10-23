@@ -266,6 +266,20 @@ fun ChatScreen(
      * 映射只在页面存活期间有效；重进会话时消息都已经是真 id，不需要它。
      */
     val localKeyByServerId = remember { mutableStateMapOf<Long, Long>() }
+    /**
+     * 刚发出去的图片：serverId → 本地 `content://` 地址。
+     *
+     * 占位气泡显示的就是本地这张图；发送成功后服务端那条的 `imageUrl` 是另一个地址
+     * （`/api/messages/:id/media`），如果直接换过去，Coil 会**重新取一遍**：占位块
+     * （180dp 方块 + shimmer）再闪一次、图从方块跳到真实比例 —— 用户说的"图片加载 2 次"。
+     *
+     * 内容本来就是同一张（本地还压过一道），所以页面存活期间继续画本地那份：
+     *  · 只在 `ChatEntry.Bubble.displayImageUrl` 上生效，`msg.imageUrl` 仍是服务端地址
+     *    （查看器、保存、引用都用服务端那份，不受影响）；
+     *  · 不写进 `rememberHistory` 缓存（缓存里永远是服务端地址），重进会话照常走网络；
+     *  · 映射随页面销毁，不会在别处留下失效的本地地址。
+     */
+    val localImageByServerId = remember { mutableStateMapOf<Long, String>() }
     var hasMore by remember { mutableStateOf(cachedHistory?.second ?: false) }
     var loading by remember { mutableStateOf(cachedHistory == null) }
     var sending by remember { mutableStateOf(false) }
@@ -391,11 +405,22 @@ fun ChatScreen(
      * 广播，客户端被那次广播触发的 `history()` 很可能已经把真实消息追加了一遍
      * （2026-10-20 的闪退就是同 id 两条撞了 `LazyColumn` 的 key）。
      */
-    fun settlePending(pendingId: Long, real: MessageRepository.MessageUi) {
+    fun settlePending(
+        pendingId: Long,
+        real: MessageRepository.MessageUi,
+        /** 占位那条显示用的本地图片地址（图片消息才有） */
+        localImageUrl: String? = null,
+    ) {
         val realId = real.raw.id
         val hadPending = items.any { it.raw.id == pendingId }
-        // 先把"这条消息的稳定 key"钉住，再换 id：否则 LazyColumn 会当成删一条、加一条
-        if (hadPending) localKeyByServerId[realId] = pendingId
+        if (hadPending) {
+            // 先把"这条消息的稳定 key"钉住，再换 id：否则 LazyColumn 会当成删一条、加一条
+            localKeyByServerId[realId] = pendingId
+            // 本地那张图已经解码过了：显示继续用它，别让服务端 URL 再触发一次取图动画
+            if (localImageUrl != null && real.imageUrl != null) {
+                localImageByServerId[realId] = localImageUrl
+            }
+        }
         items = items.filterNot { it.raw.id == realId || (hadPending && it.raw.id == pendingId) } +
             if (hadPending) listOf(real) else emptyList()
     }
@@ -452,7 +477,8 @@ fun ChatScreen(
     suspend fun sendImageUri(uri: Uri, quotedMessageId: Long?): Boolean {
         // 先上屏（本地 content:// 直接能画），拷图/压缩/上传都在它后面进行
         val pendingId = nextPendingId()
-        appendPending(pendingMessage(pendingId, imageUrl = uri.toString()))
+        val pending = pendingMessage(pendingId, imageUrl = uri.toString())
+        appendPending(pending)
         val file = withContext(Dispatchers.IO) {
             copyUriToCache(context, uri)?.let { raw ->
                 ImageCompressor.compressFile(context, raw)?.also { raw.delete() } ?: raw
@@ -472,8 +498,9 @@ fun ChatScreen(
             )
         ) {
             is ApiResult.Success -> {
-                // 占位那条**原位换成**服务端消息（SSE 已合进来的同 id 一并清掉）
-                settlePending(pendingId, r.data)
+                // 占位那条**原位换成**服务端消息（SSE 已合进来的同 id 一并清掉）。
+                // 图片仍画本地那份：换服务端 URL 会再走一次取图 → 用户说的"加载 2 次"
+                settlePending(pendingId, r.data, localImageUrl = pending.imageUrl)
                 true
             }
             is ApiResult.Failure -> {
@@ -850,8 +877,12 @@ fun ChatScreen(
     // 按自然日切分隔条（设计稿顶部那条「今天 14:32」）
     // 撤回提示已经包含在 items 里（服务端留痕），不用再单独拼一份
     // ★ 带上"待发消息的稳定 key"：发送成功时 id 会从负数变真 id，key 必须保持不变
+    // ★ 带上"本地图片映射"：刚发出去的图继续画本地那份，避免第二次取图动画
     val stableKeyCount = localKeyByServerId.size
-    val entries = remember(items, stableKeyCount) { buildChatEntries(items, localKeyByServerId) }
+    val localImageCount = localImageByServerId.size
+    val entries = remember(items, stableKeyCount, localImageCount) {
+        buildChatEntries(items, localKeyByServerId, localImageByServerId)
+    }
 
     /**
      * 这一段对话里的**全部图片**（时间正序）。
@@ -1358,6 +1389,8 @@ fun ChatScreen(
                                 is ChatEntry.Notice -> RecallNoticeLine(entry.text)
                                 is ChatEntry.Bubble -> MessageBubble(
                                     msg = entry.msg,
+                                    // 刚发出去的图：继续画本地那份（服务端 URL 会再取一次图）
+                                    displayImageUrl = entry.displayImageUrl,
                                     // 按图记忆（不按 messages 记）：鉴权头只在 token 变化时才变，
                                     // 而这个 item 的外层作用域重组高频（比如根作用域一次刷新就
                                     // 重跑整个 item DSL）—— 不记忆的话每条可见气泡都拿到新 Map
@@ -2482,7 +2515,20 @@ private sealed interface ChatEntry {
     val key: String
 
     data class Day(override val key: String, val text: String) : ChatEntry
-    data class Bubble(override val key: String, val msg: MessageRepository.MessageUi) : ChatEntry
+    data class Bubble(
+        override val key: String,
+        val msg: MessageRepository.MessageUi,
+        /**
+         * 气泡**画哪一张图**。正常为 null（用 `msg.imageUrl` 的服务端地址）。
+         *
+         * 只在自己刚发出去的图片上有值 = 本地 `content://` 地址（见
+         * ChatScreen 的 `localImageByServerId`）：服务端那条的图片地址是另一个
+         * URL，换成它会**再走一次取图/解码 → 再闪一次占位动画**（用户说的"加载 2 次"）。
+         * 显示用本地那份（同一个位图，内存缓存命中），`msg.imageUrl` 仍是服务端地址 ——
+         * 查看器、保存、引用都用那一份，不受影响。
+         */
+        val displayImageUrl: String? = null,
+    ) : ChatEntry
 
     /** 系统提示（目前只有"某某 撤回了一条消息"）：居中、muted、不可长按 */
     data class Notice(override val key: String, val text: String) : ChatEntry
@@ -2550,6 +2596,8 @@ private fun buildChatEntries(
     items: List<MessageRepository.MessageUi>,
     /** 待发消息的稳定 key：serverId → 本地负数 id（见 ChatScreen 的 `localKeyByServerId`） */
     localKeys: Map<Long, Long> = emptyMap(),
+    /** 刚发出去的图片：serverId → 本地 content:// 地址（见 ChatScreen 的 `localImageByServerId`） */
+    localImages: Map<Long, String> = emptyMap(),
 ): List<ChatEntry> {
     val out = mutableListOf<ChatEntry>()
     /**
@@ -2578,7 +2626,7 @@ private fun buildChatEntries(
         if (msg.raw.isRecalled) {
             out += ChatEntry.Notice("recall-$stableId", recallNoticeText(msg.isMine))
         } else {
-            out += ChatEntry.Bubble("msg-$stableId", msg)
+            out += ChatEntry.Bubble("msg-$stableId", msg, localImages[msg.raw.id])
         }
         prevAt = at
     }
@@ -2587,6 +2635,15 @@ private fun buildChatEntries(
 
 /** 相邻消息超过这个间隔就插时间分隔条（与 web 的 `TIME_GAP_MS` 同值） */
 private const val CHAT_TIME_GAP_MS = 5 * 60 * 1000L
+
+/**
+ * 本地媒体地址（系统相册 `content://` / 相册面板的 `file://`）。
+ *
+ * 这类地址的画都在本机、且刚发出去那张已经在 Coil 内存缓存里：
+ * 按"已缓存"处理（不等动画闸门、不闪 shimmer），否则发送瞬间会先闪一次占位块。
+ */
+private fun isLocalMediaUrl(url: String?): Boolean =
+    url != null && (url.startsWith("content://") || url.startsWith("file://"))
 
 /**
  * 这张图是否已经在 Coil 的**磁盘缓存**里（进程重启后仍在，内存缓存不管）。
@@ -2620,6 +2677,14 @@ private fun isImageDiskCached(context: Context, url: String?): Boolean {
 @Composable
 private fun MessageBubble(
     msg: MessageRepository.MessageUi,
+    /**
+     * 气泡**画哪一张图**；null = `msg.imageUrl`。
+     *
+     * 只有自己刚发出去的图片会传本地 `content://` 地址（见 ChatEntry.Bubble 的注释）：
+     * 服务端那条的图片地址是另一个 URL，换过去会再取一次图、占位动画再闪一次。
+     * `msg.imageUrl` 始终保持服务端地址 —— 查看器、保存、引用都用它。
+     */
+    displayImageUrl: String? = null,
     imageHeaders: Map<String, String>,
     partnerAvatar: String?,
     myAvatar: String?,
@@ -2703,6 +2768,8 @@ private fun MessageBubble(
                     // 旧版是"彩色气泡里再塞一张方图"，观感上多了一层壳。
                     // 私密图片必须带鉴权头，否则恒 403（表现为"图片永远白块"）。
                     val context = androidx.compose.ui.platform.LocalContext.current
+                    /** 实际画的地址：刚发出去的图是本地那份（见 [displayImageUrl]） */
+                    val imageModel = displayImageUrl ?: msg.imageUrl
                     val headers = coil3.network.NetworkHeaders.Builder().apply {
                         imageHeaders.forEach { (k, v) -> set(k, v) }
                     }.build()
@@ -2720,8 +2787,10 @@ private fun MessageBubble(
                      *    动画只会成为闪一下的杂讯（用户要求的"直接显示"）。
                      * 没缓存的图维持原样（shimmer + gated），不为新图牺牲转场帧率。
                      */
-                    val imageDiskCached = remember(msg.imageUrl) {
-                        isImageDiskCached(context, msg.imageUrl)
+                    val imageDiskCached = remember(imageModel) {
+                        // 本地地址（刚发出去那张）本来就在内存缓存里：直接当"已缓存"，
+                        // 不闪 shimmer，也不等动画闸门
+                        isLocalMediaUrl(imageModel) || isImageDiskCached(context, imageModel)
                     }
                     /**
                      * 图片消息的两个手势（与文字气泡**刻意不同**）：
@@ -2750,7 +2819,7 @@ private fun MessageBubble(
                      */
                     val originPainter = coil3.compose.rememberAsyncImagePainter(
                         model = coil3.request.ImageRequest.Builder(context)
-                            .data(msg.imageUrl)
+                            .data(imageModel)
                             .httpHeaders(headers)
                             .build(),
                     )
@@ -2801,7 +2870,7 @@ private fun MessageBubble(
                     ) {
                         SubcomposeAsyncImage(
                             model = coil3.request.ImageRequest.Builder(context)
-                                .data(msg.imageUrl)
+                                .data(imageModel)
                                 .httpHeaders(headers)
                                 // 磁盘里已有的图不等动画闸门（见上面 imageDiskCached 的注释）：
                                 // 取图/解码直接在立即池跑，一两帧内就位，占位块只是闪现前的底色
