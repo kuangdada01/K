@@ -63,10 +63,23 @@ class MessageRepository(private val session: SessionRepository) {
         /** 转写文本（本地转写成功后回填，避免重进会话再点一次） */
         val audioText: String?,
         val timeText: String,
+        /**
+         * 文件消息的鉴权媒体绝对地址；非文件为 null。
+         * 刚发出去的占位是本地 `file://`（还没上传完，没得下载）。
+         */
+        val fileUrl: String? = null,
+        /**
+         * 上传进度（0–100，仅**本地占位**有值）：文件动辄几十 MB，只画转圈分不清
+         * "在传"还是"卡死"。服务端消息恒为 null。
+         */
+        val uploadProgress: Int? = null,
         /** 发送态；历史/对方来的消息恒为 [SendState.Sent] */
         val sendState: SendState = SendState.Sent,
     ) {
         val hasAudio: Boolean get() = !audioUrl.isNullOrBlank()
+
+        /** 文件消息（占位与服务端消息都认：判 `raw.hasFile`，不看 fileUrl） */
+        val hasFile: Boolean get() = raw.hasFile
 
         /** 还在发（本地占位，服务端还没有这条） */
         val isSending: Boolean get() = sendState == SendState.Sending
@@ -241,9 +254,11 @@ class MessageRepository(private val session: SessionRepository) {
     }
 
     /**
-     * 发消息。`content` / `image` / `audio` 至少有一个（服务端校验）。
+     * 发消息。`content` / `image` / `audio` / `file` 至少有一个（服务端校验）。
      *  · 图片走 multipart 的 `image` 字段；
-     *  · 语音走 `audio` + `durationMs` + `waveform`（波形是 JSON 数组字符串）。
+     *  · 语音走 `audio` + `durationMs` + `waveform`（波形是 JSON 数组字符串）；
+     *  · 文件走 `file`（2026-10-23，与上面两种互斥），[fileName] 是**原始名**，服务端据此
+     *    决定下载保存名与 MIME；[onFileProgress] 回传 0..100 的上传百分比。
      */
     suspend fun send(
         receiverId: Long,
@@ -253,6 +268,9 @@ class MessageRepository(private val session: SessionRepository) {
         audio: File? = null,
         audioDurationMs: Int = 0,
         audioWaveform: List<Int> = emptyList(),
+        file: File? = null,
+        fileName: String? = null,
+        onFileProgress: ((Int) -> Unit)? = null,
     ): ApiResult<MessageUi> {
         val myId = session.tokens.userId
         return call {
@@ -270,7 +288,18 @@ class MessageRepository(private val session: SessionRepository) {
                 // JSON 数组字符串；服务端会再做规范化（0–100，≤64 根）
                 audioWaveform.joinToString(prefix = "[", postfix = "]", separator = ",").toRequestBody(TEXT)
             }
-            val dto = session.api.messages.send(
+            // 文件：multipart 的 filename 就是对方看到的原始名（中文原样），
+            // 内容类型给 octet-stream —— 服务端按扩展名自己算 MIME，不信客户端。
+            val filePart = file?.let {
+                MultipartBody.Part.createFormData(
+                    "file",
+                    fileName ?: it.name,
+                    it.asUploadBody(FILE_UPLOAD_MEDIA_TYPE, onFileProgress),
+                )
+            }
+            // 有文件就走「长超时」通道（见 KApi.messagesMedia），其余仍走普通通道
+            val api = if (filePart != null) session.api.messagesMedia else session.api.messages
+            val dto = api.send(
                 receiverPart,
                 contentPart,
                 quotedPart,
@@ -278,6 +307,7 @@ class MessageRepository(private val session: SessionRepository) {
                 audioPart,
                 durationPart,
                 waveformPart,
+                filePart,
             )
             dto.toUi(myId)
         }
@@ -305,6 +335,22 @@ class MessageRepository(private val session: SessionRepository) {
     fun imageHeaders(): Map<String, String> =
         session.tokens.token?.let { mapOf("Authorization" to "Bearer $it") } ?: emptyMap()
 
+    /**
+     * 把文件消息的附件下载到 [target]（2026-10-23）。
+     *
+     * 落盘位置由调用方决定（ui 层给 cacheDir 下的路径）—— 仓库不持有 Context。
+     * 走 `@Streaming` 的 media 接口**边收边写**：100MB 的包整份读进内存会直接把
+     * 低端机打 OOM；下载完把 File 交回去，由调用方用 FileProvider + ACTION_VIEW 打开。
+     */
+    suspend fun downloadMessageFile(messageId: Long, target: File): ApiResult<File> = call {
+        val body = session.api.messages.media(messageId)
+        target.parentFile?.mkdirs()
+        body.byteStream().use { input ->
+            target.outputStream().use { output -> input.copyTo(output) }
+        }
+        target
+    }
+
     /** DTO → UI 模型（历史与发送两处共用，避免字段改了两边不同步） */
     private fun MessageDto.toUi(myId: Long): MessageUi = MessageUi(
         raw = this,
@@ -314,6 +360,8 @@ class MessageRepository(private val session: SessionRepository) {
         audioDurationMs = audioDurationMs,
         audioWaveform = audioWaveform,
         audioText = audioText,
+        // 文件同样走鉴权接口，Coil/下载都要绝对地址
+        fileUrl = resolveUrl(fileUrl, baseUrl),
         // 聊天页只显示「时:分」：日期由日期分隔条负责（见 PostUi.timeOfDay）
         timeText = timeOfDay(createdAt),
     )
@@ -332,6 +380,11 @@ class MessageRepository(private val session: SessionRepository) {
         val JPEG = "image/jpeg".toMediaType()
         /** 录音端固定 MPEG_4/AAC（.m4a）；服务端按扩展名与 mime 双白名单校验 */
         val AUDIO = "audio/mp4".toMediaType()
+        /**
+         * 私信文件的内容类型：一律 octet-stream。
+         * 服务端**按扩展名**自己算 MIME（不信客户端送的），这里写什么都不影响下发。
+         */
+        val FILE_UPLOAD_MEDIA_TYPE = "application/octet-stream".toMediaType()
     }
 }
 

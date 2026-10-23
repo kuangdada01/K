@@ -14,7 +14,9 @@ package top.kuangdada.k.nativeapp.ui
 import android.Manifest
 import android.content.ClipData
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.provider.OpenableColumns
 import android.net.Uri
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
@@ -151,8 +153,10 @@ import coil3.compose.SubcomposeAsyncImage
 import coil3.compose.SubcomposeAsyncImageContent
 import coil3.network.httpHeaders
 import java.io.File
+import java.util.Locale
 import kotlin.math.roundToInt
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import kotlin.math.sqrt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -166,7 +170,15 @@ import top.kuangdada.k.core.data.InboxStore
 import top.kuangdada.k.core.data.MessageRepository
 import top.kuangdada.k.core.data.RealtimeClient
 import top.kuangdada.k.core.data.dayDividerText
+import top.kuangdada.k.core.data.model.MAX_MESSAGE_FILES
 import top.kuangdada.k.core.data.model.MessageDto
+import top.kuangdada.k.core.data.model.formatFileBytes
+import top.kuangdada.k.core.data.model.isAllowedMessageFile
+import top.kuangdada.k.core.data.model.messageFileExtension
+import top.kuangdada.k.core.data.model.messageFileKind
+import top.kuangdada.k.core.data.model.messageFileKindLabel
+import top.kuangdada.k.core.data.model.messageFileMime
+import top.kuangdada.k.core.data.model.messageFileSizeError
 import top.kuangdada.k.core.data.timeOfDay
 import top.kuangdada.k.core.data.displayMessage
 import top.kuangdada.k.core.data.image.ImageCompressor
@@ -336,7 +348,7 @@ fun ChatScreen(
     /** 下一个本地待发消息 id（-1、-2……） */
     fun nextPendingId(): Long = --pendingSeq[0]
 
-    /** 造一条"发送中"的本地消息（图片/语音用本地地址直接显示，不等上传） */
+    /** 造一条"发送中"的本地消息（图片/语音/文件用本地地址直接显示，不等上传） */
     fun pendingMessage(
         id: Long,
         content: String = "",
@@ -344,6 +356,11 @@ fun ChatScreen(
         audioUrl: String? = null,
         audioDurationMs: Int = 0,
         audioWaveform: List<Int> = emptyList(),
+        /** 文件消息：本地 `file://` 地址（服务端还没这条，没得下载） */
+        fileUrl: String? = null,
+        fileName: String? = null,
+        fileSize: Long = 0,
+        fileMime: String? = null,
     ): MessageRepository.MessageUi {
         /**
          * 与服务端**同格式、同时区**：ISO UTC（库里的默认值就是
@@ -368,6 +385,10 @@ fun ChatScreen(
                 audioUrl = audioUrl,
                 audioDurationMs = audioDurationMs,
                 audioWaveform = audioWaveform,
+                fileUrl = fileUrl,
+                fileName = fileName,
+                fileSize = fileSize,
+                fileMime = fileMime,
                 createdAt = at,
             ),
             isMine = true,
@@ -376,6 +397,8 @@ fun ChatScreen(
             audioDurationMs = audioDurationMs,
             audioWaveform = audioWaveform,
             audioText = null,
+            // 本地 file:// 直接给（不经 resolveUrl，那会把 scheme 拼坏）
+            fileUrl = fileUrl,
             timeText = timeOfDay(at),
             sendState = MessageRepository.SendState.Sending,
         )
@@ -391,7 +414,23 @@ fun ChatScreen(
     fun markPendingFailed(pendingId: Long) {
         items = items.map {
             if (it.raw.id == pendingId) {
-                it.copy(sendState = MessageRepository.SendState.Failed)
+                it.copy(sendState = MessageRepository.SendState.Failed, uploadProgress = null)
+            } else {
+                it
+            }
+        }
+    }
+
+    /**
+     * 上传进度：只改那一条占位消息的百分比（文件动辄几十 MB，转圈看不出"在动"还是"卡死"）。
+     *
+     * 每 1% 才回调一次（见 MessageRepository.asUploadBody），这里不加节流；
+     * `items` 是 SnapshotStateList，逐条 copy 只重组那一格。
+     */
+    fun updatePendingProgress(pendingId: Long, progress: Int) {
+        items = items.map {
+            if (it.raw.id == pendingId) {
+                it.copy(uploadProgress = progress.coerceIn(0, 100))
             } else {
                 it
             }
@@ -555,6 +594,169 @@ fun ChatScreen(
         ActivityResultContracts.PickMultipleVisualMedia(9)
     ) { uris: List<Uri> ->
         sendImageUris(uris)
+    }
+
+    /**
+     * ============================================================
+     * 文件消息（2026-10-23）
+     * ============================================================
+     * 功能排第 4 格「文件」→ SAF 文档选择器（`OpenMultipleDocuments`，可多选、不需要存储权限）
+     * → 本地校验（类型白名单 / 100MB / 最多 9 个）→ 先上屏再上传（带百分比）
+     * → 成功原位换成服务端那条；失败留红感叹号。
+     *
+     * 与图片的差别只有两处：**不压缩**（原样传，压缩会把 pdf/doc 弄坏），并且
+     * 上传走 [MessageRepository.send] 的 `file` 分支（长超时通道，见 KApi.messagesMedia）。
+     */
+    suspend fun sendFileUri(uri: Uri, quotedMessageId: Long?): Boolean {
+        val meta = withContext(Dispatchers.IO) { queryFileMeta(context, uri) }
+        if (meta == null) {
+            toast = "读取文件失败，请重试"
+            return false
+        }
+        val (name, size) = meta
+        if (!isAllowedMessageFile(name)) {
+            toast = "不支持该文件类型"
+            return false
+        }
+        // 云盘类 provider 常常不给 SIZE（回 0 = 未知）：这时不做本地大小校验，
+        // 交给服务端兜底 —— 否则会被 messageFileSizeError 当成"空文件"直接拒掉
+        if (size > 0) {
+            messageFileSizeError(size)?.let {
+                toast = it
+                return false
+            }
+        }
+
+        // 先上屏：文件大，等上传完再出现会让人以为"点了没反应"
+        val pendingId = nextPendingId()
+        appendPending(
+            pendingMessage(
+                pendingId,
+                fileUrl = uri.toString(),
+                fileName = name,
+                fileSize = size,
+                fileMime = messageFileMime(name, null),
+            )
+        )
+        // 拷进 cacheDir 再传：SAF 的 Uri 是临时授权，长上传期间可能失效；
+        // 文件名保持原样（扩展名是服务端白名单的唯一依据）
+        val cached = withContext(Dispatchers.IO) { copyFileUriToCache(context, uri, name) }
+        if (cached == null) {
+            markPendingFailed(pendingId)
+            toast = "读取文件失败，请重试"
+            return false
+        }
+        return when (
+            val r = messages.send(
+                partnerId,
+                "",
+                file = cached,
+                fileName = name,
+                quotedMessageId = quotedMessageId,
+                // 回调在 OkHttp 的写线程上 → 投递回组合作用域再改状态
+                onFileProgress = { pct -> scope.launch { updatePendingProgress(pendingId, pct) } },
+            )
+        ) {
+            is ApiResult.Success -> {
+                settlePending(pendingId, r.data)
+                // 只有这次上传的临时副本可以删；服务端拿到的内容与它无关
+                cached.delete()
+                true
+            }
+            is ApiResult.Failure -> {
+                markPendingFailed(pendingId)
+                toast = r.error.displayMessage
+                false
+            }
+        }
+    }
+
+    /** 多选发送：一个文件一条消息，引用只跟第一个（与图片同一套规则） */
+    fun sendFileUris(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        if (sending) {
+            toast = "正在发送，请稍候"
+            return
+        }
+        if (uris.size > MAX_MESSAGE_FILES) {
+            toast = "一次最多发送 ${MAX_MESSAGE_FILES} 个文件"
+        }
+        scope.launch {
+            sending = true
+            var quoted = replyTo?.raw?.id
+            var sent = 0
+            try {
+                for (uri in uris.take(MAX_MESSAGE_FILES)) {
+                    if (!sendFileUri(uri, quoted)) break
+                    sent += 1
+                    quoted = null
+                }
+                if (sent > 0) {
+                    replyTo = null
+                    listState.animateScrollToItem(0)
+                }
+            } finally {
+                sending = false
+            }
+        }
+    }
+
+    /** SAF 文档选择器：可多选任意文件（类型白名单在选完后再校验，选择器里过滤不全平台一致） */
+    val pickChatFile = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> ->
+        sendFileUris(uris)
+    }
+
+    /** 正在下载/打开的那条（防重复点，也用来把气泡右侧换成「打开中…」） */
+    var openingFileId by remember { mutableStateOf<Long?>(null) }
+
+    /**
+     * 点文件气泡 → 带鉴权下载到 cacheDir → 交给系统打开。
+     *
+     * 为什么落盘再打开：附件在 uploads_private 后面，只有 Bearer 能取；
+     * 下载完再用 FileProvider 授权给外部应用（cache-path 已在 file_paths.xml 里声明）。
+     * 打不开（没有对应应用）时给出明确提示，而不是静默失败。
+     */
+    fun openFileMessage(msg: MessageRepository.MessageUi) {
+        // 失败的气泡 id 还是本地负数，点它没有文件可下 —— 给一句能照做的提示，
+        // 别让用户对着一个"点了没反应"的卡片猜（重新选择文件即可再发一次）
+        if (msg.sendState == MessageRepository.SendState.Failed) {
+            toast = "发送失败，请重新选择文件发送"
+            return
+        }
+        val messageId = msg.raw.id
+        if (messageId <= 0) {
+            toast = "发送完成后才能打开"
+            return
+        }
+        if (openingFileId != null) return
+        val name = msg.raw.fileName?.takeIf { it.isNotBlank() } ?: "文件"
+        val mime = messageFileMime(name, msg.raw.fileMime)
+        scope.launch {
+            openingFileId = messageId
+            toast = "正在打开…"
+            val dir = File(context.cacheDir, "chatfiles").apply { mkdirs() }
+            val target = File(dir, cacheSafeName(name, messageId))
+            when (val r = messages.downloadMessageFile(messageId, target)) {
+                is ApiResult.Success -> {
+                    val uri = FileProvider.getUriForFile(
+                        context,
+                        "${context.packageName}.fileprovider",
+                        r.data,
+                    )
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        setDataAndType(uri, mime)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    val launched = runCatching { context.startActivity(intent) }.isSuccess
+                    toast = if (launched) null else "已下载，但没有能打开该文件的应用"
+                }
+                is ApiResult.Failure -> toast = r.error.displayMessage
+            }
+            openingFileId = null
+        }
     }
 
     /**
@@ -1445,6 +1647,10 @@ fun ChatScreen(
                                             )
                                         }
                                     },
+                                    // 文件消息：点击 = 带鉴权下载 + 系统打开；这边只传回调，
+                                    // 「正在打开哪条」由外层 state 决定（气泡右侧显示「打开中」）
+                                    onOpenFile = { openFileMessage(it) },
+                                    openingFileId = openingFileId,
                                     // 引用与撤回都在长按菜单里（气泡自身不带常显操作文字）
                                     onQuote = { quoteMessage(entry.msg) },
                                     onRecall = {
@@ -1615,6 +1821,7 @@ fun ChatScreen(
                             text = "${target.raw.senderUsername}：" + target.raw.content.ifBlank {
                                 when {
                                     target.raw.hasAudio -> "[语音]"
+                                    target.raw.hasFile -> "[文件] ${target.raw.fileName.orEmpty()}".trim()
                                     target.raw.hasImage -> "[图片]"
                                     else -> ""
                                 }
@@ -1846,6 +2053,49 @@ fun ChatScreen(
                                     // 24dp 下糊团（"锯齿"）；相机与 album 相继被否——最终选经典照片
                                     // 造型（相框+山坡+实心太阳点，见 IconPathsExtra.kt / TABLER_PHOTO）
                                     kind = GlyphKind.Photo,
+                                    size = 22.dp,
+                                )
+                            }
+                        }
+                        /**
+                         * 文件格（2026-10-23）：**入口**，点亮 = SAF 文档选择器。
+                         *
+                         * 与相册的区别：相册是"展开面板再挑"，文件没有内嵌面板可展开，
+                         * 直接拉起系统选择器（`OpenMultipleDocuments`，可多选、无需存储权限）。
+                         * 选中后由 [sendFileUris] 逐个校验并上传 —— 面板状态一律先收掉，
+                         * 免得选择器关掉后还残留一个半开的表情/相册面板。
+                         */
+                        val fileInteraction = remember { MutableInteractionSource() }
+                        val filePressed by fileInteraction.collectIsPressedAsState()
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .clickable(
+                                    interactionSource = fileInteraction,
+                                    indication = null,
+                                    onClick = {
+                                        closeVoiceMode()
+                                        albumOpen = false
+                                        emojiOpen = false
+                                        keyboard?.hide()
+                                        focusManager.clearFocus()
+                                        // "*/*"：扩展名白名单在选完后再判（SAF 的类型过滤
+                                        // 各厂商不一致，选完给明确提示比"文件全灰掉"好）
+                                        pickChatFile.launch(arrayOf("*/*"))
+                                    },
+                                )
+                                .semantics { contentDescription = "发送文件" },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(
+                                modifier = Modifier.size(30.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Glyph(
+                                    tint = if (filePressed || sending) c.accentText else c.textSecondary,
+                                    // lucide `paperclip`：与 Web 输入栏的回形针同一个图标
+                                    kind = GlyphKind.Clip,
                                     size = 22.dp,
                                 )
                             }
@@ -2701,6 +2951,10 @@ private fun MessageBubble(
     imageOriginIndex: Int = -1,
     /** 点图片：打开全屏查看器（图片消息才用得到） */
     onImageClick: () -> Unit,
+    /** 点文件气泡：下载并用系统应用打开（文件消息才用得到） */
+    onOpenFile: (MessageRepository.MessageUi) -> Unit,
+    /** 正在下载/打开的那条消息 id（气泡右侧显示「打开中」） */
+    openingFileId: Long? = null,
     onQuote: () -> Unit,
     onRecall: () -> Unit,
     /** 语音消息：聊天页共享的播放控制器（同一条互斥、切条自动换源） */
@@ -2918,6 +3172,22 @@ private fun MessageBubble(
                                 )
                             }
                         }
+                    }
+                } else if (msg.hasFile) {
+                    // ---- 文件消息（2026-10-23）----
+                    // 点气泡：带鉴权下载 → 系统打开；发送中显示百分比。
+                    Box(
+                        modifier = Modifier.onGloballyPositioned {
+                            bubbleBounds = it.boundsInWindow()
+                        },
+                    ) {
+                        FileMessageBubble(
+                            msg = msg,
+                            mine = mine,
+                            opening = openingFileId == msg.raw.id,
+                            onOpen = { onOpenFile(msg) },
+                            onLongPress = { if (msg.sendState == MessageRepository.SendState.Sent) menu = true },
+                        )
                     }
                 } else if (msg.hasAudio) {
                     // ---- 语音消息（QQ 式波形气泡）----
@@ -3205,6 +3475,66 @@ private fun copyUriToCache(context: Context, uri: Uri): File? = runCatching {
     }
     target
 }.getOrNull()
+
+/**
+ * 读 SAF 选中文档的**显示名与大小**（文件消息用）。
+ *
+ * 显示名就是对方看到的文件名（也决定扩展名白名单与下载保存名）。大小可能拿不到
+ * （云盘类 provider 常常返回 null）—— 这时回 0 表示"未知"，本地就不做大小校验，
+ * 交给服务端兜底（100MB 上限在服务端是权威的）。
+ *
+ * @return 名字/大小；连名字都拿不到（provider 异常）返回 null
+ */
+private fun queryFileMeta(context: Context, uri: Uri): Pair<String, Long>? = runCatching {
+    var name = ""
+    var size = 0L
+    context.contentResolver.query(
+        uri,
+        arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE),
+        null,
+        null,
+        null,
+    )?.use { cursor ->
+        if (cursor.moveToFirst()) {
+            val nameIdx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (nameIdx >= 0 && !cursor.isNull(nameIdx)) name = cursor.getString(nameIdx) ?: ""
+            val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+            if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) size = cursor.getLong(sizeIdx)
+        }
+    }
+    if (name.isBlank()) {
+        name = uri.lastPathSegment?.substringAfterLast('/') ?: ""
+    }
+    if (name.isBlank()) return@runCatching null
+    name to size.coerceAtLeast(0L)
+}.getOrNull()
+
+/**
+ * 把选中的文档拷进 cacheDir（上传用）。
+ *
+ * 为什么要拷：SAF 给的 Uri 是**临时授权**，长上传（几十 MB）期间可能失效；
+ * 而且 OkHttp 需要能反复读的文件。文件名保留原名（扩展名是服务端白名单的唯一依据），
+ * 前面加时间戳+随机数避免同名覆盖。
+ */
+private fun copyFileUriToCache(context: Context, uri: Uri, name: String): File? = runCatching {
+    val dir = File(context.cacheDir, "chatfiles").apply { mkdirs() }
+    val safe = name.substringAfterLast('/').substringAfterLast('\\').ifBlank { "file" }
+    val target = File(dir, "up_${System.currentTimeMillis()}_${(0..9999).random()}_$safe")
+    val input = context.contentResolver.openInputStream(uri) ?: return@runCatching null
+    input.use { source ->
+        target.outputStream().use { source.copyTo(it) }
+    }
+    target
+}.getOrNull()
+
+/** 下载落盘名：去掉路径分隔符与控制字符，并带消息 id 前缀（同名文件不互相覆盖） */
+private fun cacheSafeName(name: String, messageId: Long): String {
+    val base = name.substringAfterLast('/')
+        .substringAfterLast('\\')
+        .replace(Regex("[\\u0000-\\u001f]"), "")
+        .ifBlank { "file" }
+    return "${messageId}_$base"
+}
 
 /**
  * 「最后一个非空值」：专门给**退场动画**用。
@@ -3697,4 +4027,109 @@ private fun AlbumDragOverlay(
  */
 private class RectField {
     var value: Rect = Rect.Zero
+}
+
+/**
+ * 文件消息气泡（2026-10-23）。
+ *
+ * 布局照 Web 端 `FileMessage` 卡片：左侧扩展名小方块 → 文件名（最多两行）→
+ * `大小 · 类型`；右侧是状态位。
+ *
+ * 右侧状态按顺序判断，**发送态优先于打开态**：
+ *  · 失败 → 红「发送失败」；
+ *  · 发送中 → 百分比（拿不到进度时一个省略号，别让气泡看起来是空的）；
+ *  · 打开中 → 「打开中…」；
+ *  · 其余 → 「打开」（点气泡即下载并用系统应用打开）。
+ *
+ * 为什么左侧用**扩展名文字**而不是图标：pdf/zip/docx/mp4 这些在聊天里一眼就要分清，
+ * 而这里只有 22dp 的绘制区；四个大写字母比四个近似的小图标辨识度高得多，
+ * 也不必为 10 种类型各画一条 path。
+ */
+@Composable
+private fun FileMessageBubble(
+    msg: MessageRepository.MessageUi,
+    mine: Boolean,
+    opening: Boolean,
+    onOpen: () -> Unit,
+    /** 长按弹菜单（引用/撤回）；发送中/失败的不弹，与文字气泡一致 */
+    onLongPress: () -> Unit,
+) {
+    val c = KTheme.colors
+    val raw = msg.raw
+    val name = raw.fileName?.takeIf { it.isNotBlank() } ?: "文件"
+    val kind = messageFileKind(raw.fileName, raw.fileMime)
+    val ext = messageFileExtension(name).uppercase(Locale.US).take(4).ifBlank { "FILE" }
+    val sizeText = formatFileBytes(raw.fileSize)
+    val metaText = listOf(sizeText, messageFileKindLabel(kind))
+        .filter { it.isNotBlank() }
+        .joinToString(" · ")
+
+    val bg = if (mine) c.accent else c.surface
+    val fg = if (mine) c.onAccent else c.textPrimary
+    val subFg = if (mine) c.onAccent.copy(alpha = 0.78f) else c.textSecondary
+
+    Row(
+        modifier = Modifier
+            .widthIn(max = 258.dp)
+            .clip(RoundedCornerShape(KRadius.row))
+            .background(bg)
+            // 点击 = 打开；长按 = 菜单（引用/撤回）。用 combinedClickable 而不是在
+            // 外层 Box 上再挂一个 —— 内层 clickable 会先吃掉事件，外层永远收不到长按。
+            .combinedClickable(
+                enabled = !msg.isSending,
+                onClick = onOpen,
+                onLongClick = onLongPress,
+            )
+            .padding(horizontal = KSpacing.sm, vertical = KSpacing.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // 扩展名方块：自己的气泡是浅色底（accent 底上压白），对方的是 surfaceSubtle
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(RoundedCornerShape(KRadius.control))
+                .background(if (mine) c.onAccent.copy(alpha = 0.18f) else c.surfaceSubtle),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = ext,
+                style = KType.tiny,
+                color = if (mine) c.onAccent else c.accentText,
+                maxLines = 1,
+            )
+        }
+        Spacer(Modifier.width(KSpacing.xs))
+        Column(modifier = Modifier.weight(1f, fill = false)) {
+            Text(
+                text = name,
+                style = KType.caption,
+                color = fg,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (metaText.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(text = metaText, style = KType.tiny, color = subFg, maxLines = 1)
+            }
+        }
+        Spacer(Modifier.width(KSpacing.xs))
+        val status = when {
+            msg.sendState == MessageRepository.SendState.Failed -> "发送失败"
+            msg.isSending -> msg.uploadProgress?.let { "$it%" } ?: "…"
+            opening -> "打开中…"
+            else -> "打开"
+        }
+        Text(
+            text = status,
+            style = KType.tiny,
+            // 失败态：自己的气泡是 accent 深底，红字读不清 → 用 onAccent；
+            // 对方的浅底才用 danger（与左侧那个红感叹号是同一语义）
+            color = if (msg.sendState == MessageRepository.SendState.Failed && !mine) {
+                c.danger
+            } else {
+                subFg
+            },
+            maxLines = 1,
+        )
+    }
 }

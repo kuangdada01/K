@@ -1,7 +1,7 @@
 {
   "name": "k-client",
   "private": true,
-  "version": "0.2.28",
+  "version": "0.2.29",
   "engines": {
     "node": ">=24.15.0"
   },

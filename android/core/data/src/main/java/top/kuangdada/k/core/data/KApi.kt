@@ -155,6 +155,14 @@ class KApi(
     /** 云端朗读（`/api/tts`）：房间文字聊天的「朗读」云端音色，与 Web 端同一接口 */
     val tts: TtsApi by lazy { retrofit.create(TtsApi::class.java) }
     val messages: MessageApi by lazy { retrofit.create(MessageApi::class.java) }
+    /**
+     * 私信发**文件**用的通道（2026-10-23）。
+     *
+     * 与 [messages] 是同一套接口，只是换了 [mediaRetrofit] 的超时：全局 read 20s / write 30s
+     * 是按 JSON 接口定的，传一个 100MB 的压缩包在 4G 上要几分钟 —— 走全局通道会稳定超时，
+     * 而服务端其实已经收下了整个文件。与视频上传共用同一份 OkHttp 配置（继承鉴权/续期拦截器）。
+     */
+    val messagesMedia: MessageApi by lazy { mediaRetrofit.create(MessageApi::class.java) }
     val composer: ComposerApi by lazy { retrofit.create(ComposerApi::class.java) }
     val events: EventApi by lazy { retrofit.create(EventApi::class.java) }
     /** 通知链路的自检上报（`POST /api/notify-diag`，服务端只写日志） */

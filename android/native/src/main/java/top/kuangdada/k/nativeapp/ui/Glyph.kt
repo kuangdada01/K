@@ -38,7 +38,7 @@ enum class GlyphKind {
     Home, Chat, Book, Voice, User, Image, Bookmark, Repost, Share, Search, Mail,
     ChevronLeft, Menu, Sun, More, Plus, Close,
     Mic, Volume, Monitor, LogOut, Dot, Sliders, Megaphone,
-    Shield, ChevronRight, Maximize, PictureInPicture, Photo, Check, Send,
+    Shield, ChevronRight, Maximize, PictureInPicture, Photo, Check, Send, Clip,
 }
 
 /**
@@ -154,6 +154,9 @@ fun Glyph(
 
             /** lucide `send`（纸飞机）：相册「上滑松手发送」的提示图标（2026-10-20） */
             GlyphKind.Send -> drawLucide(LUCIDE_SEND, tint, s)
+
+            /** lucide `paperclip`（回形针）：聊天功能排「发送文件」（2026-10-23） */
+            GlyphKind.Clip -> drawLucide(LUCIDE_PAPERCLIP, tint, s)
 
             // lucide bookmark（书签带缺口）—— 已收藏时走**实心填充**（用户要求）
             GlyphKind.Bookmark -> {

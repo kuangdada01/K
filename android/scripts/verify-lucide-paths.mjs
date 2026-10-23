@@ -58,6 +58,8 @@ const ICONS = {
   LUCIDE_MAXIMIZE: 'maximize',
   //  语音房共享舞台「小窗」按钮（Web 端 VoiceShareStage 的 PictureInPicture2，M6.20）
   LUCIDE_PICTURE_IN_PICTURE_2: 'picture-in-picture-2',
+  //  聊天功能排「发送文件」回形针（Web 端 ChatComposer 的 Paperclip，2026-10-23）
+  LUCIDE_PAPERCLIP: 'paperclip',
 };
 
 /** 从 Kotlin 源码里取出 `internal val NAME = listOf( "…", … )` 的字符串列表 */

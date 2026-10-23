@@ -64,6 +64,13 @@ interface MessageApi {
         @Part("durationMs") durationMs: RequestBody?,
         /** 波形 JSON 数组字符串（0–100） */
         @Part("waveform") waveform: RequestBody?,
+        /**
+         * 文件（与 image / audio 三者互斥）。
+         *
+         * `filename` 必须带**原始扩展名**：服务端按扩展名白名单判定，也会把它当作
+         * 下载时的保存名（中文原样保留）。
+         */
+        @Part file: MultipartBody.Part? = null,
     ): MessageDto
 
     /** 语音转文字（服务端缓存结果；非收发双方 403） */

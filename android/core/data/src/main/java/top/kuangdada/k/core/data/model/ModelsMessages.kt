@@ -2,8 +2,6 @@ package top.kuangdada.k.core.data.model
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import java.util.Locale
-import kotlin.math.roundToInt
 
 /**
  * ============================================================
@@ -85,11 +83,10 @@ data class MessageDto(
     val isRead: Boolean get() = read == 1
 
     /**
-     * 文件消息在**原生端**的展示文案。
+     * 文件消息在**原生端**的展示文案（发送中的占位气泡没有布局，先用一行字兜底）。
      *
-     * 原生版目前只做到"能看见"（收/发文件与下载、预览留在 Web 端）：
      * 文件消息的 content 是空的，不做这个回退就会画出一个空气泡 —— 比缺功能更难解释。
-     * 文案刻意写成「[文件] 名字（大小）」，用户至少知道对方发了什么。
+     * 大小格式化与判定规则都在 [formatFileBytes] / [isAllowedMessageFile]（MessageFileRules.kt）。
      */
     val fileLabel: String
         get() {
@@ -109,21 +106,6 @@ data class MessageDto(
                 !quotedFileName.isNullOrBlank() -> "[文件] $quotedFileName"
                 else -> ""
             }
-}
-
-/** 字节 → 人类可读（与 Web 端 formatFileSize 同一口径：小于 10 保留一位小数） */
-private fun formatFileBytes(bytes: Long): String {
-    if (bytes <= 0) return ""
-    if (bytes < 1024) return "$bytes B"
-    val units = listOf("KB", "MB", "GB", "TB")
-    var value = bytes / 1024.0
-    var unit = 0
-    while (value >= 1024 && unit < units.size - 1) {
-        value /= 1024
-        unit += 1
-    }
-    val text = if (value < 10) String.format(Locale.US, "%.1f", value) else value.roundToInt().toString()
-    return "$text ${units[unit]}"
 }
 
 /**
