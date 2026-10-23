@@ -86,6 +86,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -250,6 +251,21 @@ fun ChatScreen(
         // 与消息页的会话列表同一套做法；缓存由 MessageRepository.history 与下面的回写维护。
         mutableStateOf(cachedHistory?.first ?: emptyList())
     }
+    /**
+     * 待发消息的**稳定 key**：serverId → 本地负数 id（-1、-2……）。
+     *
+     * 发送时先插一条 id = -1 的占位气泡，成功后 [settlePending] 把它换成服务端那条
+     * （id 变成 12345）。若 LazyColumn 的 key 也跟着从 `msg--1` 变 `msg-12345`，
+     * Compose 会当成**删掉一条 + 新增一条**：
+     *  · 旧项按 `fadeOutSpec` 留在原位淡出（还占着一整条气泡的高度）；
+     *  · 新项同时出现 —— 两条并排占位，上面的内容被顶一下再落回来。
+     * 用户反馈的"发消息动画跳一下、不是一个位置"就是这个。
+     *
+     * 所以 key 用"这条消息第一次出现时的本地 id"，从发送中到成功**全程不变**，
+     * 视觉上就是同一个气泡里转圈消失（QQ/微信的行为）。
+     * 映射只在页面存活期间有效；重进会话时消息都已经是真 id，不需要它。
+     */
+    val localKeyByServerId = remember { mutableStateMapOf<Long, Long>() }
     var hasMore by remember { mutableStateOf(cachedHistory?.second ?: false) }
     var loading by remember { mutableStateOf(cachedHistory == null) }
     var sending by remember { mutableStateOf(false) }
@@ -315,8 +331,18 @@ fun ChatScreen(
         audioDurationMs: Int = 0,
         audioWaveform: List<Int> = emptyList(),
     ): MessageRepository.MessageUi {
-        // 与服务端同格式（`yyyy-MM-dd HH:mm:ss`）：日期分隔条/排序都按字符串解析
-        val at = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+        /**
+         * 与服务端**同格式、同时区**：ISO UTC（库里的默认值就是
+         * `strftime('%Y-%m-%dT%H:%M:%fZ','now')`，即 `2026-10-23T06:20:31.123Z`）。
+         *
+         * ⚠️ 2026-10-23 之前这里写的是**本地时间 + 空格格式**（`yyyy-MM-dd HH:mm:ss`），
+         * 而 [parseIso] 把所有格式一律按 UTC 解 —— 东八区下这条"假 UTC"比真实时间**快 8 小时**，
+         * 于是发送中的气泡与上一条的间隔恒 > 5 分钟 → **头上多出一条时间分隔条**；
+         * 服务端那条（真 UTC）回来后又消失，气泡整体上移一条分隔条的高度。
+         * 用户反馈的"发消息动画跳一下、不是一个位置"，一半原因在这里。
+         */
+        val at = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+            .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
             .format(java.util.Date())
         return MessageRepository.MessageUi(
             raw = MessageDto(
@@ -368,6 +394,8 @@ fun ChatScreen(
     fun settlePending(pendingId: Long, real: MessageRepository.MessageUi) {
         val realId = real.raw.id
         val hadPending = items.any { it.raw.id == pendingId }
+        // 先把"这条消息的稳定 key"钉住，再换 id：否则 LazyColumn 会当成删一条、加一条
+        if (hadPending) localKeyByServerId[realId] = pendingId
         items = items.filterNot { it.raw.id == realId || (hadPending && it.raw.id == pendingId) } +
             if (hadPending) listOf(real) else emptyList()
     }
@@ -784,6 +812,17 @@ fun ChatScreen(
         if (realtime == null) return@LaunchedEffect
         realtime.events.collect { event ->
             if (event.isMessage && (event.from == partnerId || event.to == partnerId)) {
+                /**
+                 * ★ 自己刚发出去的那条**回声**：服务端 `notifyUser` 在 HTTP 响应**之前**广播。
+                 *
+                 * 这会儿重拉历史，服务端那条会被追加进列表，和本地占位**并排**出现两条气泡
+                 * （一条转圈、一条正常）；等响应回来 [settlePending] 再合成一条 ——
+                 * 用户看到的就是"发出去跳一下 / 不是一个位置"。
+                 *
+                 * 响应紧接着就回来（settlePending 会把占位原位换成服务端那条），所以这条回声
+                 * 直接跳过。**只跳自己发出的**（`from != partnerId`）：对方此刻发来的消息照常重拉。
+                 */
+                if (sending && event.from != partnerId) return@collect
                 // 撤回：先把本地这条就地标成"已撤回"（提示立刻出现）。
                 // 下面重拉只回最新 50 条 —— 撤回的若是翻页加载的更早消息，
                 // 不标的话它要等到重进会话才变成提示。
@@ -810,7 +849,9 @@ fun ChatScreen(
 
     // 按自然日切分隔条（设计稿顶部那条「今天 14:32」）
     // 撤回提示已经包含在 items 里（服务端留痕），不用再单独拼一份
-    val entries = remember(items) { buildChatEntries(items) }
+    // ★ 带上"待发消息的稳定 key"：发送成功时 id 会从负数变真 id，key 必须保持不变
+    val stableKeyCount = localKeyByServerId.size
+    val entries = remember(items, stableKeyCount) { buildChatEntries(items, localKeyByServerId) }
 
     /**
      * 这一段对话里的**全部图片**（时间正序）。
@@ -2455,7 +2496,10 @@ private sealed interface ChatEntry {
  * `recalledAt` 客户端先给一个本地时间，下一次 `history()` 会用服务端时间覆盖。
  */
 private fun MessageRepository.MessageUi.asRecalled(): MessageRepository.MessageUi {
-    val now = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+    // 与服务端同一格式/时区（ISO UTC）：这个值只当"已撤回"的标记用，但别在这里
+    // 留一套本地时间的旧写法（解析口径不一致会再坑一次，见 pendingMessage 的注释）
+    val now = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+        .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
         .format(java.util.Date())
     return copy(
         raw = raw.copy(
@@ -2504,6 +2548,8 @@ private fun recallNoticeText(isMine: Boolean): String =
  */
 private fun buildChatEntries(
     items: List<MessageRepository.MessageUi>,
+    /** 待发消息的稳定 key：serverId → 本地负数 id（见 ChatScreen 的 `localKeyByServerId`） */
+    localKeys: Map<Long, Long> = emptyMap(),
 ): List<ChatEntry> {
     val out = mutableListOf<ChatEntry>()
     /**
@@ -2519,14 +2565,20 @@ private fun buildChatEntries(
     items.forEach { msg ->
         if (!drawn.add(msg.raw.id)) return@forEach
         val at = msg.raw.createdAt
+        /**
+         * 列表项的 key。**不能用 `raw.id` 裸算**：发送成功那一刻它会从 -1 变成 12345，
+         * Compose 就会把这一项当成"删掉旧项 + 新增新项"（旧项还要按退场动画占一会儿位），
+         * 视觉上就是发送中的气泡跳一下。用 [localKeys] 记住"第一次出现时的 id"即可全程不变。
+         */
+        val stableId = localKeys[msg.raw.id] ?: msg.raw.id
         val gap = prevAt?.let { timeGapMillis(at, it) }
         if (prevAt == null || (gap != null && gap > CHAT_TIME_GAP_MS)) {
-            out += ChatEntry.Day("day-${msg.raw.id}", dayDividerText(at))
+            out += ChatEntry.Day("day-$stableId", dayDividerText(at))
         }
         if (msg.raw.isRecalled) {
-            out += ChatEntry.Notice("recall-${msg.raw.id}", recallNoticeText(msg.isMine))
+            out += ChatEntry.Notice("recall-$stableId", recallNoticeText(msg.isMine))
         } else {
-            out += ChatEntry.Bubble("msg-${msg.raw.id}", msg)
+            out += ChatEntry.Bubble("msg-$stableId", msg)
         }
         prevAt = at
     }
