@@ -107,6 +107,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.PathOperation
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
@@ -184,8 +185,11 @@ import top.kuangdada.k.core.designsystem.theme.KMotion
 import top.kuangdada.k.core.designsystem.theme.KRadius
 import top.kuangdada.k.core.designsystem.theme.KSpacing
 import top.kuangdada.k.core.designsystem.theme.KTheme
+import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
+import com.kyant.backdrop.drawPlainBackdrop
+import com.kyant.backdrop.effects.blur
 import top.kuangdada.k.core.designsystem.theme.KType
 import top.kuangdada.k.core.designsystem.theme.LocalAnimationsEnabled
 import top.kuangdada.k.nativeapp.notify.SocialNotifier
@@ -1958,6 +1962,8 @@ fun ChatScreen(
             veil = albumDragVeil,
             offsetY = { albumDragDy },
             released = albumDragReleased,
+            backdrop = backdrop,
+            canBlur = canBlur,
             onExitFinished = {
                 albumDragPainter = null
                 albumDragReleased = false
@@ -3382,9 +3388,10 @@ private fun ChatSendButton(
  *     （用户："上滑是在原来的位置垂直往上"）。
  *  4. **原位留空**：被拎走的那一格由相册面板自己画成透明（`draggedPainter`），
  *     所以后面不会还压着一张一样的图。
- *  5. **蒙版只盖消息区**（2026-10-21 参考图）：白色 0.72 只铺"顶栏下沿 → 输入栏上沿"
+ *  5. **蒙版只盖消息区**（2026-10-21 参考图）：模糊副本只铺"顶栏下沿 → 输入栏上沿"
  *     这一块（[veil]），顶栏、输入栏、功能排、相册条一律保持原样 —— 整页压白会把
  *     "这张图是从下面相册里拎起来的"这层语境抹掉。压层随拎起淡入、随落回/丢出淡出。
+ *     2026-10-23 起蒙版是**模糊**（[AlbumVeilBlur]）而不是半透明白（用户要求）。
  *
  * 松手两种退场：
  *  · 上滑够 [ALBUM_SEND_DISTANCE_DP] → **丢出去**：继续向上飞 96dp 同时淡出（200ms）；
@@ -3396,6 +3403,11 @@ private fun ChatSendButton(
  * 第一层那个透明 Box 顺便**吃掉所有触摸**：拖拽期间点别处不该穿透到底下的列表或按钮
  * （否则松手那一刻可能顺带走了一次"点空白收面板"）。
  */
+/**
+ * 「拎起来」蒙版的模糊半径：文字看不清、排版轮廓还在（与图片格兜底模糊同档 24dp）。
+ */
+private val AlbumVeilBlur = 24.dp
+
 @Composable
 private fun AlbumDragOverlay(
     painter: Painter?,
@@ -3404,6 +3416,10 @@ private fun AlbumDragOverlay(
     veil: Rect,
     offsetY: () -> Float,
     released: Boolean,
+    /** 拍摄源：本页内容列上录的那一层（顶栏毛玻璃同源），蒙版在这里取「模糊副本」 */
+    backdrop: LayerBackdrop,
+    /** 能否用 RenderEffect（API 31+）；不能就退不透明底色 */
+    canBlur: Boolean,
     onExitFinished: () -> Unit,
 ) {
     if (painter == null) return
@@ -3434,8 +3450,39 @@ private fun AlbumDragOverlay(
      */
     val veilTopPx = if (veil.height > 0f) veil.top else 0f
     val veilHeightPx = if (veil.height > 0f) veil.height else cellTop.coerceAtLeast(0f)
-    /** 蒙版浓度：随拎起淡入、随落回/丢出淡出（只在绘制期读，不进组合） */
-    val veilAlpha: () -> Float = { liftIn.value * settle.value * (1f - exit.value) }
+
+    /**
+     * 蒙版的画法：**把身后的消息区模糊掉**，而不是盖一层半透明白（2026-10-23 用户要求）。
+     *
+     *  · 采样本页的内容层（`backdrop` 就是聊天页内容列上挂 `layerBackdrop` 录的那一份，
+     *    与顶栏毛玻璃同源），在蒙版矩形里画一份**带 blur 的副本**；
+     *  · **不画色膜**（`onDrawSurface` 不传）：用户明确"不要半透明"，模糊本身就够压住内容；
+     *  · 淡入淡出走 `layerBlock` 的 alpha —— 库给这一层单独准备了 GraphicsLayer，
+     *    不用在外面再套一个 `graphicsLayer`（套了会多一层离屏缓冲）。
+     *
+     * ★ 整份 `remember`：链上的 lambda 是身份比较，每次重组都新建会让库
+     * `updateEffects()` 把模糊链清掉重建（与顶栏玻璃同一个坑，见 BackdropSource.kt）。
+     * 闭包里只读 [liftIn]/[settle]/[exit] 这几个稳定的 Animatable，取第一份实例没问题。
+     *
+     * 低版本（无 RenderEffect，API < 31）退**不透明**页面底色：仍然是"不要半透明"，
+     * 只是失去"能看见模糊轮廓"的效果。
+     */
+    val veilModifier = remember(canBlur, backdrop, c.bgPage) {
+        if (canBlur) {
+            Modifier.drawPlainBackdrop(
+                backdrop = backdrop,
+                shape = { RectangleShape },
+                effects = { blur(AlbumVeilBlur.toPx()) },
+                layerBlock = {
+                    alpha = liftIn.value * settle.value * (1f - exit.value)
+                },
+            )
+        } else {
+            Modifier
+                .graphicsLayer { alpha = liftIn.value * settle.value * (1f - exit.value) }
+                .background(c.bgPage)
+        }
+    }
 
     LaunchedEffect(released, painter) {
         if (!released) {
@@ -3481,8 +3528,7 @@ private fun AlbumDragOverlay(
                 .fillMaxWidth()
                 .height(with(density) { veilHeightPx.toDp() })
                 .offset { IntOffset(0, veilTopPx.roundToInt()) }
-                .graphicsLayer { alpha = veilAlpha() }
-                .background(Color.White.copy(alpha = 0.72f)),
+                .then(veilModifier),
             contentAlignment = Alignment.Center,
         ) {
             // 提示：纸飞机 + 松手发送（浅底上用深色才看得清）
