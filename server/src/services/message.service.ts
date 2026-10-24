@@ -28,13 +28,13 @@ import {
   MAX_VOICE_BYTES,
   MAX_VOICE_MS,
   MIN_VOICE_MS,
-  isAllowedMessageFile,
   toMB,
 } from '@k/shared';
 import { notifyUser } from '../sse';
 import { enqueueFileCleanup } from '../lib/video/queue';
 import * as messageRepo from '../repositories/message.repo';
 import * as friendRepo from '../repositories/friend.repo';
+import * as blockRepo from '../repositories/block.repo';
 
 /**
  * 发送消息编排（文字/图片/语音/文件，可选引用消息）
@@ -114,7 +114,7 @@ export async function sendMessage(input: {
     audioWaveform = normalizeWaveform(input.audioWaveform);
   }
 
-  // ---- 文件：大小/类型/名字三道校验（类型再看一次，不信任 multer filter）----
+  // ---- 文件：大小/名字两道校验（类型不限，安全在下发侧把守）----
   let fileNameStored: string | null = null;
   let fileName: string | null = null;
   let fileSize = 0;
@@ -127,10 +127,6 @@ export async function sendMessage(input: {
     if (input.fileFile.size > MAX_FILE_BYTES) {
       cleanupUploads(null);
       throw new AppError(400, `文件不能超过 ${toMB(MAX_FILE_BYTES)}MB`);
-    }
-    if (!isAllowedMessageFile(input.fileFile.originalname)) {
-      cleanupUploads(null);
-      throw new AppError(400, '不支持该文件类型');
     }
     // 原始名要留给对方看（下载保存名），中文原样存；去掉路径与控制字符并限量截断
     const clean = sanitizeFileName(input.fileFile.originalname, MAX_FILE_NAME_CHARS);
@@ -173,6 +169,17 @@ export async function sendMessage(input: {
   if (!receiver) {
     cleanupUploads(imageFile);
     throw new AppError(404, '接收人不存在');
+  }
+
+  // ---- 拉黑拦截（双向，2026-10-24）----
+  // 文案按方向分开：被拉黑的人要能明白「不是网络问题」，拉黑了别人的人要知道去哪解除。
+  if (blockRepo.isBlocked(receiverId, senderId)) {
+    cleanupUploads(imageFile);
+    throw new AppError(403, '对方暂不接受你的消息');
+  }
+  if (blockRepo.isBlocked(senderId, receiverId)) {
+    cleanupUploads(imageFile);
+    throw new AppError(403, '你已拉黑对方，解除拉黑后才能发消息');
   }
 
   // 验证引用消息存在且属于当前对话
@@ -233,8 +240,37 @@ export function recallMessage(userId: number, messageId: number): void {
 
   if (message.recalled_at) return; // 已撤回：幂等返回（媒体早已清空）
 
+  wipeMessage(message);
+}
+
+/**
+ * 管理员删除消息（2026-10-24，举报处置用）。
+ *
+ * 复用撤回的语义（行保留 + 字段清空 + 磁盘附件回收 + SSE 推送）——
+ * 不另做「物理删行」：双方端上会原位变成「撤回了一条消息」的提示，
+ * 与用户自己撤回的展示一致，不需要客户端发新版本。
+ */
+export function deleteMessageAsAdmin(messageId: number): boolean {
+  const message = messageRepo.getMessageMedia(messageId);
+  if (!message || message.recalled_at) return false; // 不存在或已清空：幂等无操作
+  wipeMessage(message);
+  return true;
+}
+
+/**
+ * 消息内容与附件的统一回收（撤回 / 管理员删除共用）：
+ * DB 先行（行保留、字段清空），再清磁盘，最后 SSE 推双方。
+ */
+function wipeMessage(message: {
+  id: number;
+  sender_id: number;
+  receiver_id: number;
+  image_url: string | null;
+  audio_url: string | null;
+  file_url: string | null;
+}): void {
   // 先提交数据库：行保留（双方都能看到提示），内容与媒体字段清空
-  messageRepo.markMessageRecalled(messageId, new Date().toISOString());
+  messageRepo.markMessageRecalled(message.id, new Date().toISOString());
 
   // 再回收附件（文件系统与 SQLite 之间只能补偿，不能假定回滚会恢复文件）；
   // 删除失败转清理任务重试，不留孤儿（P1-3.5）
@@ -255,7 +291,7 @@ export function recallMessage(userId: number, messageId: number): void {
     type: 'message',
     from: message.sender_id,
     to: message.receiver_id,
-    recalled: messageId,
+    recalled: message.id,
   } as const;
   notifyUser(message.receiver_id, eventData);
   notifyUser(message.sender_id, eventData);

@@ -7,7 +7,7 @@
  */
 
 import { Fragment, RefObject, useMemo } from 'react';
-import { ChevronLeft, Trash2, MessageCircle } from 'lucide-react';
+import { Ban, ChevronLeft, Trash2, MessageCircle } from 'lucide-react';
 import type { Conversation, Message, User } from '../../types';
 import { buildChatRows } from '../../lib/chatRows';
 import { formatTimeSeparator } from '../../utils';
@@ -46,6 +46,10 @@ interface ChatWindowProps {
   onScrollToMessage: (msgId: number) => void;
   onPreviewFile: (msg: Message) => void;
   onDownloadFile: (msg: Message) => void;
+  /** 我是否已拉黑当前会话对方（决定头部按钮与横幅状态） */
+  partnerBlocked: boolean;
+  /** 拉黑 / 解除拉黑（弹确认由编排层做，这里只触发） */
+  onToggleBlock: () => void;
 }
 
 export default function ChatWindow({
@@ -76,6 +80,8 @@ export default function ChatWindow({
   onScrollToMessage,
   onPreviewFile,
   onDownloadFile,
+  partnerBlocked,
+  onToggleBlock,
 }: ChatWindowProps) {
   // 倒序 + 时间分隔符只随消息列表变化重算（此前在渲染体内，输入框每敲一个字都重算一遍）
   const rows = useMemo(() => buildChatRows(messages), [messages]);
@@ -93,10 +99,26 @@ export default function ChatWindow({
           className={styles.headerAvatar}
         />
         <span className={styles.headerUsername}>{selectedPartner.username}</span>
+        <button
+          className={`${styles.clearBtn} ${partnerBlocked ? styles.blockActive : ''}`}
+          onClick={onToggleBlock}
+          title={partnerBlocked ? '解除拉黑' : '拉黑用户'}
+          aria-label={partnerBlocked ? '解除拉黑' : '拉黑用户'}
+        >
+          <Ban size={18} />
+        </button>
         <button className={styles.clearBtn} onClick={onClear} title="清除全部消息" aria-label="清除全部消息">
           <Trash2 size={18} />
         </button>
       </div>
+
+      {/* 已拉黑横幅：拉黑后双方都发不了消息（对方发送会被服务端 403），
+          这里说清状态与出路 —— 留在会话里是为了保住「解除拉黑」入口 */}
+      {partnerBlocked && (
+        <div className={styles.blockBanner}>
+          你已拉黑对方，双方都无法发送消息。点击右上角的禁止图标可解除拉黑。
+        </div>
+      )}
 
       <div className={styles.messages} ref={chatMessagesRef}>
         {/* column-reverse: 最新消息自然在底部，无需 spacer */}

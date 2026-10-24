@@ -7,8 +7,8 @@
  *  · **进度**：axios 的 onUploadProgress 给到 0–100%，进度条直接读；
  *  · **串行**：一次选 9 个 100MB 的文件，并发会把上行带宽切成 9 份、
  *    每个都慢慢爬 —— 串行至少让第一个尽快到达；
- *  · **失败留在托盘里**：错误文案用服务端的 `error`（"文件不能超过 100MB"、
- *    "不支持该文件类型"），点「重试」用同一个 File 对象再传一次，不用重选；
+ *  · **失败留在托盘里**：错误文案用服务端的 `error`（"文件不能超过 100MB"），
+ *    点「重试」用同一个 File 对象再传一次，不用重选；
  *  · **切会话即作废**：纪元 +1 后在途请求 abort，迟到的响应不许落到新会话里
  *    （与 useMessages 的 sessionEpoch 同一个套路）。
  *
@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import api, { getApiErrorMessage } from '../../../api/http';
-import { MAX_FILES_PER_SEND, MAX_FILE_BYTES, isAllowedMessageFile, toMB } from '@k/shared';
+import { MAX_FILES_PER_SEND, MAX_FILE_BYTES, toMB } from '@k/shared';
 import { showToast } from '../../../components/ui/Toast';
 import type { Message } from '../../../types';
 
@@ -140,7 +140,7 @@ export function useFileUpload({ partnerId, onSent, refreshConversations }: UseFi
   /**
    * 选完文件后入队。
    *
-   * 校验顺序：数量 → 大小 → 类型（与服务端同一份白名单）。不合法的不入队，
+   * 校验顺序：数量 → 大小（类型不限，apk/exe 等都能发）。不合法的不入队，
    * 直接 toast 说清是哪一条为什么没发出去 —— 静默丢弃是这类功能最常见的投诉点。
    */
   const enqueueFiles = useCallback(
@@ -164,10 +164,6 @@ export function useFileUpload({ partnerId, onSent, refreshConversations }: UseFi
         }
         if (file.size > MAX_FILE_BYTES) {
           rejected.push(`${file.name} 超过 ${toMB(MAX_FILE_BYTES)}MB`);
-          continue;
-        }
-        if (!isAllowedMessageFile(file.name)) {
-          rejected.push(`${file.name} 的类型不支持`);
           continue;
         }
         accepted.push(file);

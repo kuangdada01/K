@@ -14,7 +14,7 @@
  * ============================================================
  */
 
-import type { AdminAnnouncement, AdminPost, AdminUser } from './types';
+import type { AdminAnnouncement, AdminPost, AdminReport, AdminUser } from './types';
 
 /** 用户列表每页条数：与服务端 limitQuerySchema 的默认值一致（服务端上限 50） */
 export const ADMIN_USERS_PAGE_SIZE = 20;
@@ -24,6 +24,9 @@ export const ADMIN_POSTS_PAGE_SIZE = 20;
 
 /** 公告列表每页条数（服务端同样默认 20） */
 export const ADMIN_ANNOUNCEMENTS_PAGE_SIZE = 20;
+
+/** 举报列表每页条数（服务端同样默认 20） */
+export const ADMIN_REPORTS_PAGE_SIZE = 20;
 
 /** 管理端用户列表的一页数据（与 /api/admin/users 分页模式响应对齐） */
 export interface AdminUsersPage {
@@ -42,6 +45,13 @@ export interface AdminPostsPage {
 /** 管理端公告列表的一页数据（与 /api/admin/announcements 分页模式响应对齐） */
 export interface AdminAnnouncementsPage {
   announcements: AdminAnnouncement[];
+  total: number;
+  totalPages: number;
+}
+
+/** 管理端举报列表的一页数据（与 /api/admin/reports 分页模式响应对齐） */
+export interface AdminReportsPage {
+  reports: AdminReport[];
   total: number;
   totalPages: number;
 }
@@ -86,6 +96,14 @@ export function removeAnnouncementFromPage(
   if (announcements.length === page.announcements.length) return page;
   const total = Math.max(0, page.total - 1);
   return { announcements, total, totalPages: pageCount(total, ADMIN_ANNOUNCEMENTS_PAGE_SIZE) };
+}
+
+/** 乐观移除举报（处置完从当前页摘掉；与删除公告同款语义） */
+export function removeReportFromPage(page: AdminReportsPage, reportId: number): AdminReportsPage {
+  const reports = page.reports.filter((r) => r.id !== reportId);
+  if (reports.length === page.reports.length) return page;
+  const total = Math.max(0, page.total - 1);
+  return { reports, total, totalPages: pageCount(total, ADMIN_REPORTS_PAGE_SIZE) };
 }
 
 /** 乐观更新某一行（封禁/解封就地改 banned_until，不重取列表） */

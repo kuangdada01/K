@@ -86,7 +86,7 @@ data class MessageDto(
      * 文件消息在**原生端**的展示文案（发送中的占位气泡没有布局，先用一行字兜底）。
      *
      * 文件消息的 content 是空的，不做这个回退就会画出一个空气泡 —— 比缺功能更难解释。
-     * 大小格式化与判定规则都在 [formatFileBytes] / [isAllowedMessageFile]（MessageFileRules.kt）。
+     * 大小格式化规则在 [formatFileBytes]（MessageFileRules.kt）。
      */
     val fileLabel: String
         get() {

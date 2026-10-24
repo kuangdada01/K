@@ -4,13 +4,13 @@ import java.util.Locale
 
 /**
  * ============================================================
- * 私信文件规则（2026-10-23）
+ * 私信文件规则（2026-10-23；2026-10-24 取消类型白名单）
  * ============================================================
- * **镜像** `shared/src/constants/upload.ts`：服务端按那份白名单判定，客户端先在本地拦一道
- * —— 不拦的话，选完一个 300MB 的压缩包要先把文件读进 cache、再白传几分钟，
- * 最后才收到 400（这正是视频上传踩过的坑，见 MessageRepository.MAX_VIDEO_BYTES 的注释）。
- *
- * 改这里必须同步改 shared（`MessageFileRulesTest` 会把几个关键数字钉死，漏改会红）。
+ * **类型不限**（apk/exe 等都能发），本地只拦大小/数量 —— 不拦的话，选完一个
+ * 300MB 的压缩包要先把文件读进 cache、再白传几分钟，最后才收到 400
+ * （这正是视频上传踩过的坑，见 MessageRepository.MAX_VIDEO_BYTES 的注释）。
+ * 下发侧的安全（未知类型按二进制流强制下载、html/svg 绝不内联）由服务端
+ * `lib/fileType.ts` 把守，与「能不能发」无关。
  */
 
 /** 单个文件上限：100 MB */
@@ -19,27 +19,6 @@ const val MAX_MESSAGE_FILE_BYTES: Long = 100L * 1024 * 1024
 /** 单次最多发几个（一个文件一条消息） */
 const val MAX_MESSAGE_FILES = 9
 
-/** 允许发送的扩展名（小写、不含点）；可执行文件一律不在内 */
-val MESSAGE_FILE_EXTENSIONS: Set<String> = setOf(
-    // 文档
-    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "txt", "md", "rtf", "csv",
-    "odt", "ods", "odp", "pages", "numbers", "key",
-    // 电子书
-    "epub", "mobi", "azw3",
-    // 图片
-    "jpg", "jpeg", "png", "gif", "webp", "bmp", "avif", "heic", "heif", "svg",
-    // 音频
-    "mp3", "wav", "m4a", "aac", "ogg", "oga", "flac", "amr", "wma", "opus",
-    // 视频
-    "mp4", "mov", "m4v", "webm", "mkv", "avi", "3gp", "flv", "wmv",
-    // 压缩包
-    "zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz",
-    // 代码 / 配置 / 日志
-    "json", "xml", "yaml", "yml", "html", "htm", "css", "js", "ts", "tsx", "jsx",
-    "py", "java", "kt", "c", "h", "cpp", "cs", "go", "rs", "php", "rb", "sql",
-    "log", "ini", "conf", "toml", "patch", "diff",
-)
-
 /** 扩展名（小写、不含点）；没有扩展名返回空串 */
 fun messageFileExtension(name: String): String {
     val base = name.substringAfterLast('/').substringAfterLast('\\')
@@ -47,8 +26,27 @@ fun messageFileExtension(name: String): String {
     return if (dot > 0) base.substring(dot + 1).lowercase(Locale.US) else ""
 }
 
-/** 是否允许发送（只看扩展名，大小写不敏感） */
-fun isAllowedMessageFile(name: String): Boolean = messageFileExtension(name) in MESSAGE_FILE_EXTENSIONS
+/**
+ * 可执行 / 安装类扩展名（与 shared 的 `EXECUTABLE_FILE_EXTENSIONS` 手工镜像）。
+ *
+ * 类型放开（2026-10-24）后这些都能发，但它们「下载完双击就跑」——
+ * 聊天传安装包是安卓木马最典型的投递方式，下载/打开前要过一次警示确认
+ * （[isExecutableMessageFile] 就是那个判断；漏改两端会表现为「一边弹窗一边不弹」）。
+ */
+val EXECUTABLE_MESSAGE_EXTENSIONS: Set<String> = setOf(
+    // 安卓安装包
+    "apk", "xapk", "apks",
+    // Windows
+    "exe", "msi", "msix", "scr", "com", "pif", "bat", "cmd", "ps1", "vbs", "vbe",
+    // macOS / Linux
+    "dmg", "pkg", "deb", "rpm", "appimage",
+    // Java
+    "jar",
+)
+
+/** 是否可执行/安装类文件（决定下载前要不要警示） */
+fun isExecutableMessageFile(name: String): Boolean =
+    messageFileExtension(name) in EXECUTABLE_MESSAGE_EXTENSIONS
 
 /**
  * 文件大小校验：返回 null 表示通过，否则是给用户看的错误文案。
@@ -64,7 +62,7 @@ fun messageFileSizeError(bytes: Long): String? {
 }
 
 /** 文件归类：决定气泡图标（与 Web 的 fileKind 同一套映射） */
-enum class MessageFileKind { Image, Video, Audio, Pdf, Text, Doc, Sheet, Slide, Archive, Ebook, Other }
+enum class MessageFileKind { Image, Video, Audio, Pdf, Text, Doc, Sheet, Slide, Archive, Ebook, App, Other }
 
 private val KIND_BY_EXT: Map<String, MessageFileKind> = buildMap {
     listOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "avif", "heic", "heif", "svg")
@@ -84,6 +82,8 @@ private val KIND_BY_EXT: Map<String, MessageFileKind> = buildMap {
     listOf("ppt", "pptx", "odp", "key").forEach { put(it, MessageFileKind.Slide) }
     listOf("zip", "rar", "7z", "tar", "gz", "tgz", "bz2", "xz").forEach { put(it, MessageFileKind.Archive) }
     listOf("epub", "mobi", "azw3").forEach { put(it, MessageFileKind.Ebook) }
+    // 安装包/可执行（2026-10-24）：与 [EXECUTABLE_MESSAGE_EXTENSIONS] 同一族
+    EXECUTABLE_MESSAGE_EXTENSIONS.forEach { put(it, MessageFileKind.App) }
 }
 
 /** 归类：扩展名优先，MIME 兜底 */
@@ -112,6 +112,7 @@ fun messageFileKindLabel(kind: MessageFileKind): String = when (kind) {
     MessageFileKind.Slide -> "演示"
     MessageFileKind.Archive -> "压缩包"
     MessageFileKind.Ebook -> "电子书"
+    MessageFileKind.App -> "安装包"
     MessageFileKind.Other -> "文件"
 }
 
@@ -162,6 +163,8 @@ fun messageFileMime(name: String?, mime: String?): String {
         "rar" -> "application/vnd.rar"
         "7z" -> "application/x-7z-compressed"
         "epub" -> "application/epub+zip"
+        // 安装包：给正式 MIME，点开才会拉起系统安装器
+        "apk", "xapk" -> "application/vnd.android.package-archive"
         else -> "*/*"
     }
 }

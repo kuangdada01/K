@@ -12,7 +12,6 @@
 
 import { useState } from 'react';
 import { X, Image as ImageIcon, Paperclip, RotateCw, Send } from 'lucide-react';
-import { MESSAGE_FILE_ACCEPT } from '@k/shared';
 import type { Message } from '../../types';
 import type { UploadItem } from '../../features/messages/hooks/useFileUpload';
 import { formatFileSize } from '../../features/messages/utils/fileMessage';
@@ -151,7 +150,7 @@ export default function ChatComposer({
             ref={fileInputRef}
             type="file"
             multiple
-            accept={MESSAGE_FILE_ACCEPT}
+            // 不设 accept：类型不限（apk/exe 也能发），选择器不再灰掉任何文件
             style={{ display: 'none' }}
             onChange={onPickFiles}
           />

@@ -62,108 +62,15 @@ export const MAX_FILES_PER_SEND = 9;
 export const MAX_FILE_NAME_CHARS = 120;
 
 /**
- * 允许通过私信发送的扩展名（小写、不含点）。
+ * 私信文件**不限类型**（2026-10-24 起）：此前是扩展名白名单，apk/exe 等可执行文件
+ * 一律被拒 —— 结果「传个 APK 给同事」这类最常见的需求反而不行。现在只保留
+ * 大小 / 数量 / 文件名三道校验（见 [MAX_FILE_BYTES] / [MAX_FILES_PER_SEND] /
+ * 服务端 `sanitizeFileName`）。
  *
- * 采用**白名单**而不是黑名单：可执行文件（exe/bat/cmd/msi/scr/apk/jar/sh/ps1…）
- * 一律不在列表里 —— 私信是点对点投递，发过去的可执行文件几乎只会被用来钓鱼。
- * 覆盖面按「用户真的会在聊天里传的东西」来：文档 / 表格 / 演示 / 图片 / 音视频 /
- * 压缩包 / 电子书 / 常见代码与配置。
+ * 安全边界与「能不能发」无关，在**下发侧**单独把守（server/src/lib/fileType.ts）：
+ * 按扩展名推导 MIME、未知类型按二进制流强制下载（attachment + nosniff），
+ * 能在浏览器里执行脚本的类型（html/svg/xml/js）永远不进内联预览白名单。
  */
-export const MESSAGE_FILE_EXTENSIONS: readonly string[] = [
-  // 文档
-  'pdf',
-  'doc',
-  'docx',
-  'xls',
-  'xlsx',
-  'ppt',
-  'pptx',
-  'txt',
-  'md',
-  'rtf',
-  'csv',
-  'odt',
-  'ods',
-  'odp',
-  'pages',
-  'numbers',
-  'key',
-  // 电子书
-  'epub',
-  'mobi',
-  'azw3',
-  // 图片（svg/heic 只允许下载，不做站内预览）
-  'jpg',
-  'jpeg',
-  'png',
-  'gif',
-  'webp',
-  'bmp',
-  'avif',
-  'heic',
-  'heif',
-  'svg',
-  // 音频
-  'mp3',
-  'wav',
-  'm4a',
-  'aac',
-  'ogg',
-  'oga',
-  'flac',
-  'amr',
-  'wma',
-  'opus',
-  // 视频
-  'mp4',
-  'mov',
-  'm4v',
-  'webm',
-  'mkv',
-  'avi',
-  '3gp',
-  'flv',
-  'wmv',
-  // 压缩包
-  'zip',
-  'rar',
-  '7z',
-  'tar',
-  'gz',
-  'tgz',
-  'bz2',
-  'xz',
-  // 代码 / 配置 / 日志
-  'json',
-  'xml',
-  'yaml',
-  'yml',
-  'html',
-  'htm',
-  'css',
-  'js',
-  'ts',
-  'tsx',
-  'jsx',
-  'py',
-  'java',
-  'kt',
-  'c',
-  'h',
-  'cpp',
-  'cs',
-  'go',
-  'rs',
-  'php',
-  'rb',
-  'sql',
-  'log',
-  'ini',
-  'conf',
-  'toml',
-  'patch',
-  'diff',
-];
 
 /** 扩展名（小写、不含点）；没有扩展名时返回空串 */
 export function fileExtensionOf(name: string): string {
@@ -172,19 +79,47 @@ export function fileExtensionOf(name: string): string {
   return dot > 0 ? base.slice(dot + 1).toLowerCase() : '';
 }
 
-/** 文件名是否允许通过私信发送（大小写不敏感；只看扩展名） */
-export function isAllowedMessageFile(name: string): boolean {
-  return MESSAGE_FILE_EXTENSIONS.includes(fileExtensionOf(name));
-}
-
 /**
- * `<input type="file" accept>` 用的字符串：按扩展名列出白名单。
+ * 可执行 / 安装类扩展名（小写、不含点）。
  *
- * 用扩展名而不是 MIME：`.docx` / `.mkv` / `.7z` 这类格式的 MIME 在各平台并不统一，
- * 写 MIME 会把一部分文件在选择器里灰掉。真正的类型判断仍以
- * [isAllowedMessageFile] 为准（服务端同一份白名单再校验一次）。
+ * 类型放开（2026-10-24）后这些都能发，但它们是「下载后双击就跑」的东西 ——
+ * 聊天里传安装包是安卓木马最典型的投递方式，所以两端在**下载/打开前**
+ * 要再给用户一次明确警示（`isExecutableFile` 就是那个判断）。
+ *
+ * 只列「直接可执行」的：安装包（apk/exe/dmg/deb…）与系统脚本（bat/cmd/ps1/vbs…）。
+ * sh/js/py 这类开发文件不列 —— 不会被系统顺手执行，列了只会把警示变成噪音。
  */
-export const MESSAGE_FILE_ACCEPT = MESSAGE_FILE_EXTENSIONS.map((ext) => `.${ext}`).join(',');
+export const EXECUTABLE_FILE_EXTENSIONS: readonly string[] = [
+  // 安卓安装包
+  'apk',
+  'xapk',
+  'apks',
+  // Windows
+  'exe',
+  'msi',
+  'msix',
+  'scr',
+  'com',
+  'pif',
+  'bat',
+  'cmd',
+  'ps1',
+  'vbs',
+  'vbe',
+  // macOS / Linux
+  'dmg',
+  'pkg',
+  'deb',
+  'rpm',
+  'appimage',
+  // Java（双击可跑的 jar）
+  'jar',
+];
+
+/** 是否可执行/安装类文件（决定下载前要不要警示；大小写不敏感） */
+export function isExecutableFile(name: string): boolean {
+  return EXECUTABLE_FILE_EXTENSIONS.includes(fileExtensionOf(name));
+}
 
 /**
  * 字节 → MB 整数，用于拼提示文案。

@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { isExecutableFile } from '@k/shared';
 import { fileKind, fileMetaText, formatFileSize, isPreviewable, kindLabel } from './fileMessage';
 
 describe('formatFileSize', () => {
@@ -37,6 +38,10 @@ describe('fileKind', () => {
     expect(fileKind({ file_name: 'a.m4a' })).toBe('audio');
     expect(fileKind({ file_name: 'a.png' })).toBe('image');
     expect(fileKind({ file_name: 'a.tar' })).toBe('archive');
+    // 安装包/可执行（2026-10-24）：类型已放开，归到「安装包」，下载前过警示确认
+    expect(fileKind({ file_name: 'app.apk' })).toBe('app');
+    expect(fileKind({ file_name: 'tool.exe' })).toBe('app');
+    expect(fileKind({ file_name: 'setup.MSI' })).toBe('app');
     expect(fileKind({ file_name: 'README' })).toBe('other');
   });
 
@@ -60,7 +65,7 @@ describe('isPreviewable', () => {
     expect(isPreviewable({ file_name: 'a.json' })).toBe(true);
   });
 
-  it('服务端只会以附件下发的类型不给预览（html/svg/xml/css/js/压缩包/Office）', () => {
+  it('服务端只会以附件下发的类型不给预览（html/svg/xml/css/js/压缩包/Office/安装包）', () => {
     expect(isPreviewable({ file_name: 'a.html' })).toBe(false);
     expect(isPreviewable({ file_name: 'a.svg' })).toBe(false);
     expect(isPreviewable({ file_name: 'a.xml' })).toBe(false);
@@ -68,6 +73,24 @@ describe('isPreviewable', () => {
     expect(isPreviewable({ file_name: 'a.js' })).toBe(false);
     expect(isPreviewable({ file_name: 'a.zip' })).toBe(false);
     expect(isPreviewable({ file_name: 'a.docx' })).toBe(false);
+    expect(isPreviewable({ file_name: 'a.apk' })).toBe(false);
+    expect(isPreviewable({ file_name: 'a.exe' })).toBe(false);
+  });
+});
+
+describe('isExecutableFile（shared：下载前警示的判定）', () => {
+  it('安装包与系统脚本要警示', () => {
+    expect(isExecutableFile('app.apk')).toBe(true);
+    expect(isExecutableFile('tool.EXE')).toBe(true);
+    expect(isExecutableFile('run.bat')).toBe(true);
+    expect(isExecutableFile('setup.dmg')).toBe(true);
+  });
+
+  it('普通文件不警示', () => {
+    expect(isExecutableFile('report.pdf')).toBe(false);
+    expect(isExecutableFile('deploy.sh')).toBe(false);
+    expect(isExecutableFile('main.js')).toBe(false);
+    expect(isExecutableFile('无扩展名')).toBe(false);
   });
 });
 

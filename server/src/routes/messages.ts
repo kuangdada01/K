@@ -22,6 +22,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import multer from 'multer';
 import { PATHS } from '../config';
 import { authMiddleware } from '../middleware/auth';
@@ -30,9 +31,12 @@ import { imageFileFilter } from '../lib/image';
 import { contentDisposition, isInlineSafeMime, mimeForFileName } from '../lib/fileType';
 import { validateBody } from '../validate';
 import { sendMessageSchema } from '@k/shared/schemas';
-import { MAX_FILE_BYTES, isAllowedMessageFile, toMB } from '@k/shared';
+import { MAX_FILE_BYTES, toMB } from '@k/shared';
 import { createUploader, messageFilename } from '../lib/upload';
 import * as messageRepo from '../repositories/message.repo';
+import * as friendRepo from '../repositories/friend.repo';
+import * as blockRepo from '../repositories/block.repo';
+import * as reportRepo from '../repositories/report.repo';
 import { getSafeUser } from '../repositories/user.repo';
 import { toMessageJson } from '../serializers/message';
 import * as messageService from '../services/message.service';
@@ -53,12 +57,10 @@ const router = Router();
 const AUDIO_EXT_RE = /\.(m4a|mp4|aac|mp3|ogg|wav|3gp)$/i;
 const AUDIO_MIME_RE = /^audio\/(mp4|m4a|x-m4a|aac|mpeg|mp3|ogg|wav|3gpp)$/i;
 
-/** 文件类型被拒时的统一文案（客户端直接展示，所以写清楚"能发什么"） */
-const FILE_TYPE_ERROR = '不支持该文件类型（支持文档、图片、音视频、压缩包等常见格式）';
-
 /**
  * 消息附件过滤器：`image` 走原来的图片白名单，`audio` 走音频白名单，
- * `file` 走 @k/shared 的扩展名白名单（前后端同一份，客户端选文件时已先拦一次）。
+ * `file` **不限类型**（2026-10-24 起，apk/exe 等也能发；安全在下发侧把守，
+ * 见 lib/fileType —— 未知类型按二进制流强制下载，绝不内联执行）。
  */
 const messageFileFilter = (
   req: Express.Request,
@@ -76,13 +78,7 @@ const messageFileFilter = (
     return;
   }
   if (file.fieldname === 'file') {
-    // 只按扩展名判：客户端送来的 mimetype 可以随便写（写 text/html 也没成本），
-    // 真正决定下发 Content-Type 的是服务端按扩展名算出来的值（lib/fileType）
-    if (isAllowedMessageFile(file.originalname)) {
-      cb(null, true);
-    } else {
-      cb(new Error(FILE_TYPE_ERROR));
-    }
+    cb(null, true);
     return;
   }
   imageFileFilter(req, file, cb);
@@ -127,9 +123,9 @@ const uploadMessageFiles = (req: Request, res: Response, next: NextFunction) => 
       next(new AppError(400, `文件上传失败：${err.message}`));
       return;
     }
-    // fileFilter 抛出的错误（图片/语音/文件白名单）——文案是我们自己写的，可以直出
+    // fileFilter 抛出的错误（语音白名单）——文案是我们自己写的，可以直出
     const message = err instanceof Error ? err.message : '';
-    if (message === FILE_TYPE_ERROR || message.startsWith('Only ')) {
+    if (message.startsWith('Only ')) {
       next(new AppError(400, message));
       return;
     }
@@ -206,6 +202,135 @@ router.put(
     const userId = req.user!.id;
     messageRepo.markAllRead(userId);
     res.json({ success: true });
+  })
+);
+
+// ============================================================
+// 拉黑端点（2026-10-24）
+// ============================================================
+// 注册在 GET /:userId **之前**：`/blocks` 是字面量路径，排在参数路由后面会被吞掉。
+
+/**
+ * GET /api/messages/blocks - 我拉黑的用户 id 列表
+ *
+ * 认证: 必须
+ *
+ * 客户端会话页据此画「已拉黑」横幅 / 决定输入区状态（对方是否拉黑了我
+ * 客户端不可知 —— 发消息时服务端会用 403 文案告知）。
+ */
+router.get(
+  '/blocks',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    res.json({ blocked_ids: blockRepo.listBlockedBy(req.user!.id) });
+  })
+);
+
+/**
+ * POST /api/messages/:userId/block - 拉黑用户
+ *
+ * 认证: 必须
+ * 拉黑后双向都不能再发私信；已有消息保留（会话列表仍可见，保住解除入口）。
+ */
+router.post(
+  '/:userId/block',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const targetId = parseInt(req.params.userId as string);
+    const userId = req.user!.id;
+    if (!Number.isInteger(targetId)) throw new AppError(400, '参数错误');
+    if (targetId === userId) throw new AppError(400, '不能拉黑自己');
+    if (!friendRepo.userExists(targetId)) throw new AppError(404, '用户不存在');
+    blockRepo.block(userId, targetId);
+    res.json({ blocked: true });
+  })
+);
+
+/**
+ * DELETE /api/messages/:userId/block - 解除拉黑
+ *
+ * 认证: 必须（幂等：没拉黑过也返回成功）
+ */
+router.delete(
+  '/:userId/block',
+  authMiddleware,
+  asyncHandler(async (req: Request, res: Response) => {
+    const targetId = parseInt(req.params.userId as string);
+    if (!Number.isInteger(targetId)) throw new AppError(400, '参数错误');
+    blockRepo.unblock(req.user!.id, targetId);
+    res.json({ blocked: false });
+  })
+);
+
+// ============================================================
+// 举报端点（2026-10-24）
+// ============================================================
+
+/** 举报频率限制：恶意用户不能靠循环举报把管理员列表刷爆 */
+const reportLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 10,
+  keyGenerator: (req) => `u:${req.user?.id ?? 0}`,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '举报太频繁，请稍后再试' },
+});
+
+/**
+ * POST /api/messages/:id/report - 举报一条消息
+ *
+ * 认证: 必须；只有**收件人**能举报（发给自己的消息才是受害现场）。
+ * body: { reason?: string }（客户端预设选项文案，≤200 字）
+ *
+ * 行为：文件消息会**现算 sha256** 落库 —— 同一个恶意包改名重发，哈希不变，
+ * 管理员列表里一眼看出惯犯。重复举报同一消息幂等成功（不新增行）。
+ */
+router.post(
+  '/:id/report',
+  authMiddleware,
+  reportLimiter,
+  asyncHandler(async (req: Request, res: Response) => {
+    const messageId = parseInt(req.params.id as string);
+    if (!Number.isInteger(messageId)) throw new AppError(400, '参数错误');
+
+    const media = messageRepo.getMessageMedia(messageId);
+    if (!media) throw new AppError(404, '消息不存在');
+    if (media.receiver_id !== req.user!.id) {
+      throw new AppError(403, '只能举报发给你的消息');
+    }
+    if (media.recalled_at) {
+      throw new AppError(400, '该消息已被撤回');
+    }
+
+    const reasonRaw = req.body?.reason;
+    const reason = (typeof reasonRaw === 'string' ? reasonRaw : '').trim().slice(0, 200);
+
+    // 文件消息：流式算 sha256（100MB 上限下哈希百毫秒级，放请求里可接受）
+    let fileSha256: string | null = null;
+    if (media.file_url) {
+      const filePath = path.join(PATHS.uploadsPrivate, path.basename(media.file_url));
+      if (fs.existsSync(filePath)) {
+        fileSha256 = await new Promise<string | null>((resolve) => {
+          const hash = crypto.createHash('sha256');
+          const stream = fs.createReadStream(filePath);
+          stream.on('data', (chunk) => hash.update(chunk));
+          stream.on('end', () => resolve(hash.digest('hex')));
+          stream.on('error', () => {
+            stream.destroy();
+            resolve(null); // 哈希失败不挡举报本身
+          });
+        });
+      }
+    }
+
+    reportRepo.createReport({
+      messageId,
+      reporterId: req.user!.id,
+      senderId: media.sender_id,
+      reason,
+      fileSha256,
+    });
+    res.status(201).json({ ok: true });
   })
 );
 
@@ -373,7 +498,7 @@ router.post(
  * - content: 文字内容（可选）
  * - image: 图片文件（可选，10MB限制）
  * - audio: 语音文件（可选，m4a/AAC，服务端按 5MB / 60s 校验；与 image 互斥）
- * - file: 文件（可选，100MB限制，扩展名白名单见 @k/shared；与 image/audio 互斥）
+ * - file: 文件（可选，100MB限制，类型不限；与 image/audio 互斥）
  * - durationMs: 语音时长（毫秒，带 audio 时必填且 ≥1000）
  * - waveform: 波形 JSON 数组字符串（0–100，≤64 根；画柱状图用）
  * - quotedMessageId: 被引用消息ID（可选）

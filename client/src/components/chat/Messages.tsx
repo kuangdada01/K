@@ -16,6 +16,7 @@ import { useState, useEffect, useRef, useCallback, Suspense, lazy } from 'react'
 import { useParams, useNavigate } from 'react-router-dom';
 import { isNative } from '../../lib/native';
 import api, { getApiErrorMessage } from '../../api/http';
+import { isExecutableFile } from '@k/shared';
 import { Conversation, Message, Notification } from '../../types';
 import { useAuth } from '../../context/AuthContext';
 import { events } from '../../state/events';
@@ -23,6 +24,7 @@ import { markNotificationReadLocal } from '../../state/inboxStore';
 import { useSse } from '../../hooks/useSse';
 import ConfirmDialog from '../ui/ConfirmDialog';
 import { showToast } from '../ui/Toast';
+import ReportDialog from './ReportDialog';
 // PostDetail 懒加载：浮层只在点开帖子时用到，静态 import 会把它连着
 // PostMedia/手势 hook 的子树打进私信页 chunk（与 HomePage 同一处理）
 import { loadPostDetail } from '../../router/composerChunks';
@@ -77,6 +79,24 @@ export default function Messages() {
   /** 站内文件预览（图片/音视频/PDF/文本）；null = 不显示浮层 */
   const [previewFile, setPreviewFile] = useState<Message | null>(null);
 
+  // ---- 举报 / 拉黑 / 可执行文件警示（2026-10-24）----
+  /** 正在选理由的举报对象；null = 不显示对话框 */
+  const [reportMsg, setReportMsg] = useState<Message | null>(null);
+  /** 等待「确定下载」确认的安装包/可执行文件 */
+  const [execFileConfirm, setExecFileConfirm] = useState<Message | null>(null);
+  /** 拉黑确认：null 不显示；'block' / 'unblock' 决定文案与动作 */
+  const [blockConfirm, setBlockConfirm] = useState<'block' | 'unblock' | null>(null);
+  /** 我拉黑的用户 id 列表（会话页横幅/按钮状态） */
+  const [blockedIds, setBlockedIds] = useState<number[]>([]);
+
+  // 拉黑列表只在整个私信页挂载时取一次（拉黑/解除时本地同步增删）
+  useEffect(() => {
+    api
+      .get<{ blocked_ids: number[] }>('/messages/blocks')
+      .then((res) => setBlockedIds(res.data.blocked_ids ?? []))
+      .catch(() => {});
+  }, []);
+
   // 渲染期同步 selectedPartner（prev 值模式）：仅当 partner 变化时调整，
   // 替代 effect 内同步 setState（react-hooks/set-state-in-effect）
   const activePartnerId = userId ? parseInt(userId) : null;
@@ -94,6 +114,31 @@ export default function Messages() {
       }
     );
   }
+
+  const partnerBlocked = activePartnerId !== null && blockedIds.includes(activePartnerId);
+
+  /** 头部禁止图标：先弹确认再调接口（拉黑/解除都不可随手点） */
+  const handleToggleBlockClick = useCallback(() => {
+    setBlockConfirm(partnerBlocked ? 'unblock' : 'block');
+  }, [partnerBlocked]);
+
+  const confirmToggleBlock = useCallback(async () => {
+    if (activePartnerId === null) return;
+    const wasBlocked = blockedIds.includes(activePartnerId);
+    try {
+      if (wasBlocked) {
+        await api.delete(`/messages/${activePartnerId}/block`);
+        setBlockedIds((prev) => prev.filter((id) => id !== activePartnerId));
+        showToast('已解除拉黑');
+      } else {
+        await api.post(`/messages/${activePartnerId}/block`);
+        setBlockedIds((prev) => [...prev, activePartnerId]);
+        showToast('已拉黑，对方无法再给你发消息');
+      }
+    } catch (err) {
+      showToast(getApiErrorMessage(err, '操作失败，请稍后重试'));
+    }
+  }, [activePartnerId, blockedIds]);
 
   // 骨架用户信息回填（会话列表里没有该用户时，由消息数据层拉取后回调）
   const handlePartnerInfo = useCallback((partnerId: number, username: string, avatar: string | null) => {
@@ -170,14 +215,59 @@ export default function Messages() {
     [enqueueFiles]
   );
 
-  /** 下载文件消息：附件要带鉴权，失败给明确 toast（不是静默） */
+  /**
+   * 下载文件消息：附件要带鉴权，失败给明确 toast（不是静默）。
+   * 安装包/可执行文件（apk/exe…）先过一道警示确认 —— 聊天传安装包是
+   * 安卓木马最典型的投递方式，多这一次点击能挡掉绝大多数顺手点开。
+   */
   const handleDownloadFile = useCallback(async (msg: Message) => {
+    if (isExecutableFile(msg.file_name ?? '')) {
+      setExecFileConfirm(msg);
+      return;
+    }
     try {
       await downloadMessageFile(msg);
     } catch (err) {
       showToast(getApiErrorMessage(err, '下载失败，请稍后重试'));
     }
   }, []);
+
+  /** 确认下载安装包/可执行文件（警示对话框的确认分支） */
+  const confirmDownloadExecFile = useCallback(async () => {
+    const msg = execFileConfirm;
+    setExecFileConfirm(null);
+    if (!msg) return;
+    try {
+      await downloadMessageFile(msg);
+    } catch (err) {
+      showToast(getApiErrorMessage(err, '下载失败，请稍后重试'));
+    }
+  }, [execFileConfirm]);
+
+  /** 长按菜单「举报」：找到那条消息，弹理由选择 */
+  const handleReport = useCallback(
+    (msgId: number) => {
+      const msg = messages.find((m) => m.id === msgId);
+      if (msg) setReportMsg(msg);
+    },
+    [messages]
+  );
+
+  /** 提交举报（服务端算文件哈希、限频；重复举报幂等） */
+  const submitReport = useCallback(
+    async (reason: string) => {
+      const msg = reportMsg;
+      setReportMsg(null);
+      if (!msg) return;
+      try {
+        await api.post(`/messages/${msg.id}/report`, { reason });
+        showToast('已举报，管理员会尽快处理');
+      } catch (err) {
+        showToast(getApiErrorMessage(err, '举报失败，请稍后重试'));
+      }
+    },
+    [reportMsg]
+  );
 
   // 返回键：处理对话和标签页的返回逻辑
   // 安卓端主 Tab 退出由 App.tsx 统一处理，此处仅处理对话关闭
@@ -318,6 +408,8 @@ export default function Messages() {
             onScrollToMessage={(id) => scrollToMessage(id)}
             onPreviewFile={setPreviewFile}
             onDownloadFile={handleDownloadFile}
+            partnerBlocked={partnerBlocked}
+            onToggleBlock={handleToggleBlockClick}
           />
         ) : (
           <ChatEmpty />
@@ -333,7 +425,46 @@ export default function Messages() {
           contextMenu={menu.contextMenu}
           onCopy={handleCopy}
           onQuote={handleQuote}
+          onReport={handleReport}
           onRecall={handleRecall}
+        />
+      )}
+
+      {/* 举报：选理由 → 提交（摘要取文件名或正文，让用户确认举报的就是这条） */}
+      {reportMsg && (
+        <ReportDialog
+          summary={
+            reportMsg.file_name ||
+            reportMsg.content.slice(0, 60) ||
+            (reportMsg.image_url ? '[图片]' : '[语音]')
+          }
+          onCancel={() => setReportMsg(null)}
+          onSubmit={submitReport}
+        />
+      )}
+
+      {/* 安装包/可执行文件下载警示 */}
+      {execFileConfirm && (
+        <ConfirmDialog
+          message={`「${execFileConfirm.file_name || '该文件'}」是安装包/可执行文件，可能危害设备。确定要下载吗？`}
+          onConfirm={confirmDownloadExecFile}
+          onCancel={() => setExecFileConfirm(null)}
+        />
+      )}
+
+      {/* 拉黑/解除拉黑确认 */}
+      {blockConfirm && (
+        <ConfirmDialog
+          message={
+            blockConfirm === 'block'
+              ? `拉黑后双方都无法发送私信（已有消息保留）。确定拉黑「${selectedPartner?.username || '该用户'}」吗？`
+              : '确定解除拉黑吗？解除后双方可以继续互发私信。'
+          }
+          onConfirm={() => {
+            setBlockConfirm(null);
+            void confirmToggleBlock();
+          }}
+          onCancel={() => setBlockConfirm(null)}
         />
       )}
 

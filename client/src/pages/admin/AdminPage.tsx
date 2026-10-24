@@ -32,7 +32,7 @@ import { Navigate } from 'react-router-dom';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { updatePostsFeed } from '../../hooks/usePostsFeed';
 import { useDebouncedValue } from '../../hooks/useDebouncedValue';
-import { Users, FileText, Megaphone } from 'lucide-react';
+import { Users, FileText, Megaphone, Flag } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { showToast } from '../../components/ui/Toast';
 // PostDetail 懒加载：浮层只在点开帖子时用到（与 HomePage 同一处理）
@@ -43,22 +43,26 @@ import api, { getApiErrorMessage } from '../../api/http';
 import AdminUsersTab from './AdminUsersTab';
 import AdminPostsTab from './AdminPostsTab';
 import AdminAnnouncementsTab, { AnnSearchResult } from './AdminAnnouncementsTab';
-import type { AdminUser, AdminPost, AdminAnnouncement } from './types';
+import AdminReportsTab from './AdminReportsTab';
+import type { AdminUser, AdminPost, AdminAnnouncement, AdminReport } from './types';
 import {
   ADMIN_ANNOUNCEMENTS_PAGE_SIZE,
   ADMIN_POSTS_PAGE_SIZE,
+  ADMIN_REPORTS_PAGE_SIZE,
   ADMIN_USERS_PAGE_SIZE,
   patchUserInPage,
   removeAnnouncementFromPage,
   removePostFromPage,
+  removeReportFromPage,
   removeUserFromPage,
   type AdminAnnouncementsPage,
   type AdminPostsPage,
+  type AdminReportsPage,
   type AdminUsersPage,
 } from './adminPaging';
 import styles from '../AdminPage.module.css';
 
-type Tab = 'users' | 'posts' | 'announcements';
+type Tab = 'users' | 'posts' | 'announcements' | 'reports';
 
 /** 用户列表查询（服务端分页 + 服务端搜索；key 含 page/q，翻页/改词即取）
  *  limit 显式带上：本地算页数用的是同一个常量，不能让服务端默认值改动后两边不一致 */
@@ -93,6 +97,19 @@ function loadAdminAnnouncements(page: number, q: string) {
     })
     .then((res) => ({
       announcements: res.data.announcements as AdminAnnouncement[],
+      total: res.data.total as number,
+      totalPages: res.data.totalPages as number,
+    }));
+}
+
+/** 举报列表查询（服务端分页；status 过滤，默认只看待处理） */
+function loadAdminReports(page: number, status: 'open' | 'resolved' | 'all') {
+  return api
+    .get('/admin/reports', {
+      params: { page, limit: ADMIN_REPORTS_PAGE_SIZE, status },
+    })
+    .then((res) => ({
+      reports: res.data.reports as AdminReport[],
       total: res.data.total as number,
       totalPages: res.data.totalPages as number,
     }));
@@ -163,7 +180,15 @@ export default function AdminPage() {
   // Post detail（页面级渲染：切换 tab 时保持打开，与历史实现一致）
   const [selectedPostId, setSelectedPostId] = useState<number | null>(null);
 
-  // ---- 三 tab 列表数据（§4.2：useQuery 取代手写 effect + 序号守卫）----
+  // Reports state（举报 Tab：状态筛选切换即回第 1 页，与列表搜索同一手法）
+  const [reportStatus, setReportStatus] = useState<'open' | 'resolved' | 'all'>('open');
+  const [reportPage, setReportPage] = useState(1);
+  const handleReportStatus = (s: 'open' | 'resolved' | 'all') => {
+    setReportStatus(s);
+    setReportPage(1);
+  };
+
+  // ---- 四 tab 列表数据（§4.2：useQuery 取代手写 effect + 序号守卫）----
   const usersQuery = useQuery({
     queryKey: ['admin', 'users', userPage, debouncedUserSearch],
     queryFn: () =>
@@ -203,6 +228,39 @@ export default function AdminPage() {
   });
   const announcements = announcementsQuery.data?.announcements ?? [];
   const annTotalPages = announcementsQuery.data?.totalPages ?? 0;
+
+  const reportsQuery = useQuery({
+    queryKey: ['admin', 'reports', reportPage, reportStatus],
+    queryFn: () =>
+      loadAdminReports(reportPage, reportStatus).catch((err) => {
+        showToast(getApiErrorMessage(err, '举报列表加载失败'));
+        throw err;
+      }),
+    enabled: tab === 'reports',
+    placeholderData: keepPreviousData,
+  });
+  const reports = reportsQuery.data?.reports ?? [];
+  const reportTotalPages = reportsQuery.data?.totalPages ?? 0;
+
+  /** 处置举报：action = delete（删消息）/ dismiss（忽略误报），完成就地把这行摘掉 */
+  const handleResolveReport = (r: AdminReport, action: 'delete' | 'dismiss') => {
+    const desc =
+      action === 'delete'
+        ? `确定删除被举报的消息吗？（${r.message_file_name || r.message_content?.slice(0, 30) || `消息 #${r.message_id}`}，附件一并回收，双方会看到「撤回了一条消息」）`
+        : `确定忽略这条举报吗？（${r.reason || '无理由'}）`;
+    setConfirmMsg(desc);
+    setConfirmAction(() => async () => {
+      try {
+        await api.post(`/admin/reports/${r.id}/resolve`, { action });
+        queryClient.setQueryData<AdminReportsPage>(['admin', 'reports', reportPage, reportStatus], (prev) =>
+          prev ? removeReportFromPage(prev, r.id) : prev
+        );
+        showToast(action === 'delete' ? '消息已删除' : '已忽略');
+      } catch {
+        showToast('操作失败');
+      }
+    });
+  };
 
   const handleDeleteUser = (u: AdminUser) => {
     setConfirmMsg(`确定要删除用户 "${u.username}" 吗？该用户的帖子、评论等数据将一并删除。`);
@@ -416,6 +474,12 @@ export default function AdminPage() {
         >
           <Megaphone size={18} /> 公告管理
         </button>
+        <button
+          className={`${styles.tab} ${tab === 'reports' ? styles.active : ''}`}
+          onClick={() => setTab('reports')}
+        >
+          <Flag size={18} /> 举报处理
+        </button>
       </div>
 
       <div>
@@ -480,6 +544,19 @@ export default function AdminPage() {
             onClearTarget={clearAnnTarget}
             onSend={handleSendAnn}
             onDelete={handleDeleteAnn}
+          />
+        )}
+
+        {tab === 'reports' && (
+          <AdminReportsTab
+            reports={reports}
+            statusFilter={reportStatus}
+            setStatusFilter={handleReportStatus}
+            reportPage={reportPage}
+            setReportPage={setReportPage}
+            reportTotalPages={reportTotalPages}
+            onDeleteMessage={(r) => handleResolveReport(r, 'delete')}
+            onDismiss={(r) => handleResolveReport(r, 'dismiss')}
           />
         )}
       </div>

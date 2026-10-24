@@ -19,6 +19,7 @@ import {
   Film,
   Image as ImageIcon,
   Music,
+  Package,
 } from 'lucide-react';
 import type { Message } from '../../types';
 import { fileKind, fileMetaText, isPreviewable } from '../../features/messages/utils/fileMessage';
@@ -48,6 +49,9 @@ function KindIcon({ kind }: { kind: ReturnType<typeof fileKind> }) {
       return <FileCode size={22} />;
     case 'archive':
       return <FileArchive size={22} />;
+    // 安装包：盒子图标 + 归类文案「安装包」，与下载前的警示确认是同一套语义
+    case 'app':
+      return <Package size={22} />;
     default:
       return <File size={22} />;
   }

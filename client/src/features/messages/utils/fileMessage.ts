@@ -12,7 +12,18 @@ import { fileExtensionOf } from '@k/shared';
 
 /** 文件归类：决定图标、说明文案与"能不能预览" */
 export type FileKind =
-  'image' | 'video' | 'audio' | 'pdf' | 'text' | 'doc' | 'sheet' | 'slide' | 'archive' | 'ebook' | 'other';
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'pdf'
+  | 'text'
+  | 'doc'
+  | 'sheet'
+  | 'slide'
+  | 'archive'
+  | 'ebook'
+  | 'app'
+  | 'other';
 
 const KIND_BY_EXT: Record<string, FileKind> = {
   jpg: 'image',
@@ -101,6 +112,27 @@ const KIND_BY_EXT: Record<string, FileKind> = {
   epub: 'ebook',
   mobi: 'ebook',
   azw3: 'ebook',
+  // 安装包 / 可执行（2026-10-24）：类型已放开，这族下载前要过一次警示确认
+  apk: 'app',
+  xapk: 'app',
+  apks: 'app',
+  exe: 'app',
+  msi: 'app',
+  msix: 'app',
+  scr: 'app',
+  com: 'app',
+  pif: 'app',
+  bat: 'app',
+  cmd: 'app',
+  ps1: 'app',
+  vbs: 'app',
+  vbe: 'app',
+  dmg: 'app',
+  pkg: 'app',
+  deb: 'app',
+  rpm: 'app',
+  appimage: 'app',
+  jar: 'app',
 };
 
 /** 该文件消息属于哪一类（扩展名优先，MIME 兜底） */
@@ -178,6 +210,8 @@ export function kindLabel(kind: FileKind): string {
       return '压缩包';
     case 'ebook':
       return '电子书';
+    case 'app':
+      return '安装包';
     default:
       return '文件';
   }

@@ -173,7 +173,7 @@ import top.kuangdada.k.core.data.dayDividerText
 import top.kuangdada.k.core.data.model.MAX_MESSAGE_FILES
 import top.kuangdada.k.core.data.model.MessageDto
 import top.kuangdada.k.core.data.model.formatFileBytes
-import top.kuangdada.k.core.data.model.isAllowedMessageFile
+import top.kuangdada.k.core.data.model.isExecutableMessageFile
 import top.kuangdada.k.core.data.model.messageFileExtension
 import top.kuangdada.k.core.data.model.messageFileKind
 import top.kuangdada.k.core.data.model.messageFileKindLabel
@@ -598,11 +598,11 @@ fun ChatScreen(
 
     /**
      * ============================================================
-     * 文件消息（2026-10-23）
+     * 文件消息（2026-10-23；2026-10-24 类型放开）
      * ============================================================
      * 功能排第 4 格「文件」→ SAF 文档选择器（`OpenMultipleDocuments`，可多选、不需要存储权限）
-     * → 本地校验（类型白名单 / 100MB / 最多 9 个）→ 先上屏再上传（带百分比）
-     * → 成功原位换成服务端那条；失败留红感叹号。
+     * → 本地校验（100MB / 最多 9 个；类型不限，apk/exe 也能发）
+     * → 先上屏再上传（带百分比）→ 成功原位换成服务端那条；失败留红感叹号。
      *
      * 与图片的差别只有两处：**不压缩**（原样传，压缩会把 pdf/doc 弄坏），并且
      * 上传走 [MessageRepository.send] 的 `file` 分支（长超时通道，见 KApi.messagesMedia）。
@@ -614,10 +614,6 @@ fun ChatScreen(
             return false
         }
         val (name, size) = meta
-        if (!isAllowedMessageFile(name)) {
-            toast = "不支持该文件类型"
-            return false
-        }
         // 云盘类 provider 常常不给 SIZE（回 0 = 未知）：这时不做本地大小校验，
         // 交给服务端兜底 —— 否则会被 messageFileSizeError 当成"空文件"直接拒掉
         if (size > 0) {
@@ -639,7 +635,7 @@ fun ChatScreen(
             )
         )
         // 拷进 cacheDir 再传：SAF 的 Uri 是临时授权，长上传期间可能失效；
-        // 文件名保持原样（扩展名是服务端白名单的唯一依据）
+        // 文件名保持原样（扩展名是服务端判定 MIME 的依据，丢了会退化成二进制流）
         val cached = withContext(Dispatchers.IO) { copyFileUriToCache(context, uri, name) }
         if (cached == null) {
             markPendingFailed(pendingId)
@@ -701,7 +697,7 @@ fun ChatScreen(
         }
     }
 
-    /** SAF 文档选择器：可多选任意文件（类型白名单在选完后再校验，选择器里过滤不全平台一致） */
+    /** SAF 文档选择器：可多选任意文件（类型不限，选完只校验大小和数量） */
     val pickChatFile = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenMultipleDocuments()
     ) { uris: List<Uri> ->
@@ -711,26 +707,40 @@ fun ChatScreen(
     /** 正在下载/打开的那条（防重复点，也用来把气泡右侧换成「打开中…」） */
     var openingFileId by remember { mutableStateOf<Long?>(null) }
 
+    // ---- 举报 / 拉黑 / 安装包警示（2026-10-24）----
+    /** 等警示确认的安装包/可执行文件（null = 不弹） */
+    var pendingOpenFile by remember { mutableStateOf<MessageRepository.MessageUi?>(null) }
+    /** 等确认的举报对象（null = 不弹） */
+    var reportTarget by remember { mutableStateOf<MessageRepository.MessageUi?>(null) }
+    /** 我是否已拉黑当前会话对方（顶栏「…」菜单文案；进会话时拉一次） */
+    var partnerBlocked by remember { mutableStateOf(false) }
+    /** 拉黑/解除拉黑的二次确认 */
+    var confirmBlock by remember { mutableStateOf(false) }
+
+    LaunchedEffect(partnerId) {
+        when (val r = messages.blockedIds()) {
+            is ApiResult.Success -> partnerBlocked = r.data.contains(partnerId)
+            is ApiResult.Failure -> Unit // 拉不到就当未拉黑，点「拉黑」仍会调接口
+        }
+    }
+
     /**
      * 点文件气泡 → 带鉴权下载到 cacheDir → 交给系统打开。
      *
      * 为什么落盘再打开：附件在 uploads_private 后面，只有 Bearer 能取；
      * 下载完再用 FileProvider 授权给外部应用（cache-path 已在 file_paths.xml 里声明）。
      * 打不开（没有对应应用）时给出明确提示，而不是静默失败。
+     *
+     * 2026-10-24：安装包/可执行文件（apk/exe…）先过一道警示确认 ——
+     * 聊天传安装包是安卓木马最典型的投递方式，多这一次点击能挡掉绝大多数顺手点开。
      */
-    fun openFileMessage(msg: MessageRepository.MessageUi) {
-        // 失败的气泡 id 还是本地负数，点它没有文件可下 —— 给一句能照做的提示，
-        // 别让用户对着一个"点了没反应"的卡片猜（重新选择文件即可再发一次）
-        if (msg.sendState == MessageRepository.SendState.Failed) {
-            toast = "发送失败，请重新选择文件发送"
-            return
-        }
+    /**
+     * 真正的下载 + 打开（[openFileMessage] 的落点：安装包/可执行文件过完警示确认后
+     * 才会走到这里，普通文件直达）。局部函数不能前向引用，所以声明在前。
+     */
+    fun doOpenFileMessage(msg: MessageRepository.MessageUi) {
         val messageId = msg.raw.id
-        if (messageId <= 0) {
-            toast = "发送完成后才能打开"
-            return
-        }
-        if (openingFileId != null) return
+        if (messageId <= 0 || openingFileId != null) return
         val name = msg.raw.fileName?.takeIf { it.isNotBlank() } ?: "文件"
         val mime = messageFileMime(name, msg.raw.fileMime)
         scope.launch {
@@ -757,6 +767,35 @@ fun ChatScreen(
             }
             openingFileId = null
         }
+    }
+
+    /**
+     * 点文件气泡 → 带鉴权下载到 cacheDir → 交给系统打开。
+     *
+     * 为什么落盘再打开：附件在 uploads_private 后面，只有 Bearer 能取；
+     * 下载完再用 FileProvider 授权给外部应用（cache-path 已在 file_paths.xml 里声明）。
+     * 打不开（没有对应应用）时给出明确提示，而不是静默失败。
+     *
+     * 2026-10-24：安装包/可执行文件（apk/exe…）先过一道警示确认 ——
+     * 聊天传安装包是安卓木马最典型的投递方式，多这一次点击能挡掉绝大多数顺手点开。
+     */
+    fun openFileMessage(msg: MessageRepository.MessageUi) {
+        // 失败的气泡 id 还是本地负数，点它没有文件可下 —— 给一句能照做的提示，
+        // 别让用户对着一个"点了没反应"的卡片猜（重新选择文件即可再发一次）
+        if (msg.sendState == MessageRepository.SendState.Failed) {
+            toast = "发送失败，请重新选择文件发送"
+            return
+        }
+        if (msg.raw.id <= 0) {
+            toast = "发送完成后才能打开"
+            return
+        }
+        val name = msg.raw.fileName?.takeIf { it.isNotBlank() } ?: "文件"
+        if (isExecutableMessageFile(name)) {
+            pendingOpenFile = msg
+            return
+        }
+        doOpenFileMessage(msg)
     }
 
     /**
@@ -1653,6 +1692,7 @@ fun ChatScreen(
                                     openingFileId = openingFileId,
                                     // 引用与撤回都在长按菜单里（气泡自身不带常显操作文字）
                                     onQuote = { quoteMessage(entry.msg) },
+                                    onReport = { reportTarget = entry.msg },
                                     onRecall = {
                                         val id = entry.msg.raw.id
                                         scope.launch {
@@ -2080,8 +2120,8 @@ fun ChatScreen(
                                         emojiOpen = false
                                         keyboard?.hide()
                                         focusManager.clearFocus()
-                                        // "*/*"：扩展名白名单在选完后再判（SAF 的类型过滤
-                                        // 各厂商不一致，选完给明确提示比"文件全灰掉"好）
+                                        // "*/*"：类型不限（选完只校验大小/数量；SAF 的
+                                        // 类型过滤各厂商不一致，写死反而会把能发的文件灰掉）
                                         pickChatFile.launch(arrayOf("*/*"))
                                     },
                                 )
@@ -2275,6 +2315,14 @@ fun ChatScreen(
                         menuOpen = false
                         confirmClear = true
                     }
+                    // 拉黑/解除拉黑（2026-10-24）：处置恶意用户的第一道自助手段
+                    ChatMenuItem(
+                        if (partnerBlocked) "解除拉黑" else "拉黑用户",
+                        if (partnerBlocked) c.textSecondary else c.danger,
+                    ) {
+                        menuOpen = false
+                        confirmBlock = true
+                    }
                 }
             }
         }
@@ -2326,6 +2374,72 @@ fun ChatScreen(
                                 items = emptyList()
                                 hasMore = false
                                 toast = "已清空"
+                            }
+                            is ApiResult.Failure -> toast = r.error.displayMessage
+                        }
+                    }
+                },
+            )
+        }
+
+        // 安装包/可执行文件的下载警示（2026-10-24）：确认后才下载并打开
+        pendingOpenFile?.let { target ->
+            val targetName = target.raw.fileName?.takeIf { it.isNotBlank() } ?: "该文件"
+            KAlertDialog(
+                title = "下载安装包",
+                text = "「$targetName」是安装包/可执行文件，可能危害设备。确定要下载并打开吗？",
+                confirmText = "继续",
+                danger = true,
+                onDismissRequest = { pendingOpenFile = null },
+                onConfirm = {
+                    pendingOpenFile = null
+                    doOpenFileMessage(target)
+                },
+            )
+        }
+
+        // 举报确认（2026-10-24）：长按消息 → 举报 → 管理员后台处置
+        reportTarget?.let { target ->
+            KAlertDialog(
+                title = "举报这条消息",
+                text = "举报后管理员会尽快处理（恶意文件会被删除）。确定举报吗？",
+                confirmText = "举报",
+                danger = true,
+                onDismissRequest = { reportTarget = null },
+                onConfirm = {
+                    reportTarget = null
+                    scope.launch {
+                        when (val r = messages.reportMessage(target.raw.id)) {
+                            is ApiResult.Success -> toast = "已举报，管理员会尽快处理"
+                            is ApiResult.Failure -> toast = r.error.displayMessage
+                        }
+                    }
+                },
+            )
+        }
+
+        // 拉黑/解除拉黑确认（顶栏「…」→ 拉黑用户）
+        if (confirmBlock) {
+            val partnerLabel = partnerName?.ifBlank { null } ?: "用户$partnerId"
+            KAlertDialog(
+                title = if (partnerBlocked) "解除拉黑" else "拉黑用户",
+                text = if (partnerBlocked) {
+                    "解除后你们可以继续互发私信。"
+                } else {
+                    "拉黑「$partnerLabel」后，你们双方都无法发送私信（已有消息保留）。"
+                },
+                confirmText = if (partnerBlocked) "解除" else "拉黑",
+                danger = !partnerBlocked,
+                onDismissRequest = { confirmBlock = false },
+                onConfirm = {
+                    confirmBlock = false
+                    val wasBlocked = partnerBlocked
+                    scope.launch {
+                        val r = if (wasBlocked) messages.unblockUser(partnerId) else messages.blockUser(partnerId)
+                        when (r) {
+                            is ApiResult.Success -> {
+                                partnerBlocked = !wasBlocked
+                                toast = if (wasBlocked) "已解除拉黑" else "已拉黑，对方无法再给你发消息"
                             }
                             is ApiResult.Failure -> toast = r.error.displayMessage
                         }
@@ -2957,6 +3071,8 @@ private fun MessageBubble(
     openingFileId: Long? = null,
     onQuote: () -> Unit,
     onRecall: () -> Unit,
+    /** 举报（只出现在**对方发来**的消息上；自己的消息撤回就行，没有举报自己的场景） */
+    onReport: () -> Unit,
     /** 语音消息：聊天页共享的播放控制器（同一条互斥、切条自动换源） */
     voice: VoicePlaybackController,
     /** 语音转文字（返回 ApiResult；结果由服务端缓存） */
@@ -3332,6 +3448,15 @@ private fun MessageBubble(
                                     onQuote()
                                 }
                             )
+                            // 对方的消息才有「举报」（2026-10-24）：处置恶意文件的入口
+                            if (!mine) {
+                                add(
+                                    ChatMenuAction("举报") {
+                                        menu = false
+                                        onReport()
+                                    }
+                                )
+                            }
                             if (mine) {
                                 add(
                                     ChatMenuAction("撤回", danger = true) {
@@ -3479,7 +3604,7 @@ private fun copyUriToCache(context: Context, uri: Uri): File? = runCatching {
 /**
  * 读 SAF 选中文档的**显示名与大小**（文件消息用）。
  *
- * 显示名就是对方看到的文件名（也决定扩展名白名单与下载保存名）。大小可能拿不到
+ * 显示名就是对方看到的文件名（也决定服务端判定的 MIME 与下载保存名）。大小可能拿不到
  * （云盘类 provider 常常返回 null）—— 这时回 0 表示"未知"，本地就不做大小校验，
  * 交给服务端兜底（100MB 上限在服务端是权威的）。
  *
@@ -3513,8 +3638,8 @@ private fun queryFileMeta(context: Context, uri: Uri): Pair<String, Long>? = run
  * 把选中的文档拷进 cacheDir（上传用）。
  *
  * 为什么要拷：SAF 给的 Uri 是**临时授权**，长上传（几十 MB）期间可能失效；
- * 而且 OkHttp 需要能反复读的文件。文件名保留原名（扩展名是服务端白名单的唯一依据），
- * 前面加时间戳+随机数避免同名覆盖。
+ * 而且 OkHttp 需要能反复读的文件。文件名保留原名（扩展名是服务端判定 MIME 的依据，
+ * 丢了会退化成二进制流），前面加时间戳+随机数避免同名覆盖。
  */
 private fun copyFileUriToCache(context: Context, uri: Uri, name: String): File? = runCatching {
     val dir = File(context.cacheDir, "chatfiles").apply { mkdirs() }

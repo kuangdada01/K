@@ -27,6 +27,16 @@
   color: var(--text-primary);
 }
 
+/* 已拉黑横幅：说明状态 + 指向解除入口（右上角禁止图标） */
+.blockBanner {
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--danger);
+  background: var(--bg-danger-light);
+  text-align: center;
+  border-bottom: 1px solid var(--border-color, transparent);
+}
+
 .clearBtn {
   margin-left: auto;
   background: none;
@@ -47,6 +57,14 @@
     color: var(--danger);
     background: var(--bg-danger-light);
   }
+}
+
+/* 拉黑按钮已激活（当前处于拉黑态）：红底提示。
+   必须放在 .clearBtn 之后 —— 同级选择器后者胜出，放在前面会被 clearBtn 的
+   color/background 覆盖，横幅永远显示未激活的样子。 */
+.blockActive {
+  color: var(--danger);
+  background: var(--bg-danger-light);
 }
 
 .backBtn {

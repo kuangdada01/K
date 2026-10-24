@@ -49,6 +49,7 @@ import migration036 from './036-media-jobs-file-path-index';
 import migration037 from './037-messages-audio-voice';
 import migration038 from './038-messages-recalled';
 import migration039 from './039-messages-file';
+import migration040 from './040-report-block';
 import type { Migration } from './helpers';
 
 export type { Migration };
@@ -95,6 +96,7 @@ export const migrations: Migration[] = [
   migration037,
   migration038,
   migration039,
+  migration040,
 ];
 
 /** 迁移记录表 */

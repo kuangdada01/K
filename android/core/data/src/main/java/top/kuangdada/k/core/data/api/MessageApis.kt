@@ -84,7 +84,37 @@ interface MessageApi {
     /** 清空与某用户的全部消息 */
     @DELETE("api/messages/{userId}")
     suspend fun clear(@Path("userId") userId: Long): SimpleSuccess
+
+    /**
+     * 举报一条消息（2026-10-24；只有收件人可以，重复举报幂等）。
+     * body 里 reason 传预设文案（"恶意文件或诈骗"等），服务端限长 200。
+     */
+    @POST("api/messages/{id}/report")
+    suspend fun report(
+        @Path("id") messageId: Long,
+        @Body body: ReportRequest,
+    ): SimpleSuccess
+
+    /** 拉黑用户（拉黑后双向都不能发私信） */
+    @POST("api/messages/{userId}/block")
+    suspend fun block(@Path("userId") userId: Long): SimpleSuccess
+
+    /** 解除拉黑 */
+    @DELETE("api/messages/{userId}/block")
+    suspend fun unblock(@Path("userId") userId: Long): SimpleSuccess
+
+    /** 我拉黑的用户 id 列表（进会话时取一次，决定顶栏菜单文案） */
+    @GET("api/messages/blocks")
+    suspend fun blocks(): BlockedIdsResponse
 }
+
+/** 举报理由（可选；不传时服务端记空串） */
+@Serializable
+data class ReportRequest(val reason: String? = null)
+
+/** GET /api/messages/blocks 的响应 */
+@Serializable
+data class BlockedIdsResponse(val blocked_ids: List<Long> = emptyList())
 
 /**
  * 发帖接口（multipart）。

@@ -178,6 +178,42 @@
   color: var(--text-tag-admin);
 }
 
+/* ---- 举报 Tab：状态筛选（待处理/已处理/全部）与行内 id 提示 ---- */
+
+.filterGroup {
+  display: flex;
+  gap: 8px;
+}
+
+.filterBtn {
+  padding: 6px 14px;
+  border: none;
+  border-radius: 6px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.filterBtn:hover {
+  color: var(--text-primary);
+}
+
+.filterActive {
+  background: var(--accent, #d4a24e);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* 用户名后的 "#123"：小号灰字，定位用户时用 */
+.idHint {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .postThumb {
   width: 48px;
   height: 48px;

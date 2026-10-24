@@ -16,6 +16,7 @@ import okio.BufferedSink
 import okio.Buffer
 import okio.source
 import top.kuangdada.k.core.data.api.DeleteTempVideoRequest
+import top.kuangdada.k.core.data.api.ReportRequest
 import top.kuangdada.k.core.data.api.TempVideoStatus
 import top.kuangdada.k.core.data.model.ConversationDto
 import top.kuangdada.k.core.data.model.MessageDto
@@ -322,6 +323,22 @@ class MessageRepository(private val session: SessionRepository) {
 
     suspend fun clearConversation(partnerId: Long): ApiResult<Unit> =
         call { session.api.messages.clear(partnerId) }
+
+    /** 举报一条消息（2026-10-24；服务端对文件消息会现算 sha256 落库，重复举报幂等） */
+    suspend fun reportMessage(messageId: Long, reason: String? = null): ApiResult<Unit> =
+        call { session.api.messages.report(messageId, ReportRequest(reason)) }
+
+    /** 拉黑用户（拉黑后双向都不能发私信） */
+    suspend fun blockUser(userId: Long): ApiResult<Unit> =
+        call { session.api.messages.block(userId) }
+
+    /** 解除拉黑 */
+    suspend fun unblockUser(userId: Long): ApiResult<Unit> =
+        call { session.api.messages.unblock(userId) }
+
+    /** 我拉黑的用户 id 列表（进会话时取一次） */
+    suspend fun blockedIds(): ApiResult<List<Long>> =
+        call { session.api.messages.blocks().blocked_ids }
 
     suspend fun markAllRead(): ApiResult<Unit> =
         call { session.api.messages.markAllRead() }

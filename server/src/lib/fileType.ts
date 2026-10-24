@@ -17,7 +17,7 @@
 
 import { fileExtensionOf } from '@k/shared';
 
-/** 扩展名 → MIME（只列私信白名单里会出现的；缺省 octet-stream） */
+/** 扩展名 → MIME（值得给正式 MIME 的常见类型；类型已不限，缺省一律 octet-stream 下载） */
 const MIME_BY_EXT: Record<string, string> = {
   // 文档
   pdf: 'application/pdf',
@@ -73,6 +73,10 @@ const MIME_BY_EXT: Record<string, string> = {
   '3gp': 'video/3gpp',
   flv: 'video/x-flv',
   wmv: 'video/x-ms-wmv',
+  // 安装包（2026-10-24 类型放开后补：apk 给正式 MIME，
+  // Chrome 下载完才会出现「打开」按钮拉起系统安装器；不在内联白名单，只下载）
+  apk: 'application/vnd.android.package-archive',
+  xapk: 'application/vnd.android.package-archive',
   // 压缩包
   zip: 'application/zip',
   rar: 'application/vnd.rar',

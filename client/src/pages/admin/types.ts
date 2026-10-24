@@ -41,3 +41,23 @@ export interface AdminAnnouncement {
   target_username: string | null;
   created_at: string;
 }
+
+/** /admin/reports 行（举报一条私信消息；字段见 server report.repo 的 AdminReportRow） */
+export interface AdminReport {
+  id: number;
+  message_id: number;
+  reporter_id: number;
+  sender_id: number;
+  reason: string;
+  file_sha256: string | null;
+  status: 'open' | 'resolved';
+  created_at: string;
+  resolved_at: string | null;
+  resolved_by: number | null;
+  /** JOIN 出的上下文（消息可能已被撤回，此时 content/file_name 为空） */
+  reporter_name: string;
+  sender_name: string;
+  message_content: string | null;
+  message_file_name: string | null;
+  message_recalled_at: string | null;
+}

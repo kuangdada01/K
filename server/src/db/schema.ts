@@ -326,6 +326,32 @@ export function createSchema(db: InstanceType<typeof Database>): void {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    /* ========== 举报与拉黑（2026-10-24）==========
+     * 私信文件类型放开后的配套处置通道：
+     * - message_reports：举报消息（(message_id, reporter_id) 唯一防刷；结构见 040 迁移注释）
+     * - user_blocks：拉黑（单向；拉黑后双向都不能发私信）
+     */
+    CREATE TABLE IF NOT EXISTS message_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id INTEGER NOT NULL,             -- 被举报的消息
+      reporter_id INTEGER NOT NULL,            -- 举报人
+      sender_id INTEGER NOT NULL,              -- 被举报人（冗余，删消息后仍可定位）
+      reason TEXT NOT NULL DEFAULT '',         -- 举报理由（客户端预设选项）
+      file_sha256 TEXT,                        -- 文件消息的内容哈希（服务端举报时现算）
+      status TEXT NOT NULL DEFAULT 'open',     -- open / resolved
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      resolved_at TEXT,
+      resolved_by INTEGER,
+      UNIQUE(message_id, reporter_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS user_blocks (
+      blocker_id INTEGER NOT NULL,             -- 拉黑发起者
+      blocked_id INTEGER NOT NULL,             -- 被拉黑者
+      created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      PRIMARY KEY (blocker_id, blocked_id)
+    );
+
     /* ========== 性能优化索引 ==========
      * 为常用查询字段创建索引，加速数据检索
      */

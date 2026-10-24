@@ -4,7 +4,7 @@
  * ============================================================
  * 覆盖服务端对外契约：
  *  1. multipart `file` → 201，返回鉴权媒体地址、原始名、大小与 MIME，content 为空；
- *  2. 不支持的类型 / 空文件 / 图片超限 → 400，且已落盘文件被清理；
+ *  2. 空文件 / 图片超限 → 400，且已落盘文件被清理；
  *  3. 下发：可内联的类型 `inline`，`?download=1` 与 html/svg 一律 `attachment`
  *     （带 nosniff，绝不在站点源上执行）；
  *  4. 只有收发双方能取（否则 403 / 未登录 401）；
@@ -137,21 +137,47 @@ describe('私信文件消息', () => {
     expect(json.file_mime).toBe('application/pdf');
   });
 
-  it('不支持的类型 → 400，且不留下孤儿文件', async () => {
-    const before = fs.existsSync(PATHS.uploadsPrivate)
-      ? fs.readdirSync(PATHS.uploadsPrivate).filter((n) => n.startsWith('msg_')).length
-      : 0;
-    const res = await sendFile({
+  it('类型不限：exe/apk/无扩展名也能发，下发一律 attachment', async () => {
+    // exe：不在 MIME 表里 → 二进制流，强制下载
+    const exe = (await (
+      await sendFile({
+        token: tokenA,
+        receiverId: userB,
+        filename: `tool-${uniq}.exe`,
+        bytes: Buffer.from('MZ fake'),
+        mime: 'application/octet-stream',
+      })
+    ).json()) as { file_url: string; file_mime: string | null };
+    expect(exe.file_mime).toBe('application/octet-stream');
+    const exeRes = await fetch(`${base}${exe.file_url}`, {
+      headers: { Authorization: `Bearer ${tokenB}` },
+    });
+    expect(exeRes.status).toBe(200);
+    expect(exeRes.headers.get('content-type')).toBe('application/octet-stream');
+    expect(exeRes.headers.get('content-disposition')).toContain('attachment');
+    expect(exeRes.headers.get('x-content-type-options')).toBe('nosniff');
+
+    // apk：有正式 MIME（安卓下载完出现「打开」拉起安装器），同样只下载不内联
+    const apk = (await (
+      await sendFile({
+        token: tokenA,
+        receiverId: userB,
+        filename: `app-${uniq}.apk`,
+        bytes: Buffer.from('PK fake apk'),
+        mime: 'application/vnd.android.package-archive',
+      })
+    ).json()) as { file_mime: string | null };
+    expect(apk.file_mime).toBe('application/vnd.android.package-archive');
+
+    // 无扩展名（云盘 provider 常见）：照发，按二进制流下载
+    const noExt = await sendFile({
       token: tokenA,
       receiverId: userB,
-      filename: `evil-${uniq}.exe`,
-      bytes: Buffer.from('MZ fake'),
+      filename: `Makefile-${uniq}`,
+      bytes: Buffer.from('all:'),
       mime: 'application/octet-stream',
     });
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toContain('不支持该文件类型');
-    const after = fs.readdirSync(PATHS.uploadsPrivate).filter((n) => n.startsWith('msg_')).length;
-    expect(after).toBeLessThanOrEqual(before);
+    expect(noExt.status).toBe(201);
   });
 
   it('空文件 → 400', async () => {
@@ -337,6 +363,7 @@ describe('文件类型工具（纯函数）', () => {
   it('MIME 按扩展名判定，未知类型退化成二进制流', () => {
     expect(mimeForFileName('a.PDF')).toBe('application/pdf');
     expect(mimeForFileName('a.docx')).toContain('wordprocessingml');
+    expect(mimeForFileName('app.apk')).toBe('application/vnd.android.package-archive');
     expect(mimeForFileName('a.unknown')).toBe('application/octet-stream');
     expect(mimeForFileName('无扩展名')).toBe('application/octet-stream');
   });
