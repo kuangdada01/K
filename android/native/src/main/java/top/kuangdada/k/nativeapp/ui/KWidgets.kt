@@ -655,8 +655,13 @@ fun KSegmentedTabs(
         val itemWidth = (maxWidth - gap * (options.size - 1)) / options.size
 
         // 刻意不写 `by`：State 留到 graphicsLayer 里读，滑动期间只重绘、不重组
+        //
+        // ★ 位移要把**段间隔**算进去：Row 里各项 spacedBy(gap) 排布，第 i 段的左边
+        //   不是 i·itemWidth 而是 i·(itemWidth+gap)。此前漏了 +gap，药丸逐段往左偏
+        //   （第 i 段偏 i·gap），两段时差 4dp 看不出，管理后台加到四段后「公告」
+        //   「举报」偏 8/12dp —— 文字没跑，是白药丸没对准段，看着像字没居中。
         val indicatorX = animateDpAsState(
-            targetValue = itemWidth * selected,
+            targetValue = (itemWidth + gap) * selected,
             animationSpec = KMotion.spatial(),
             label = "segmentIndicator",
         )
