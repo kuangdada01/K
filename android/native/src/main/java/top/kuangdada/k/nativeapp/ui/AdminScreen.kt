@@ -46,6 +46,7 @@ import top.kuangdada.k.core.data.ApiResult
 import top.kuangdada.k.core.data.displayMessage
 import top.kuangdada.k.core.data.model.AdminAnnouncementRow
 import top.kuangdada.k.core.data.model.AdminPostRow
+import top.kuangdada.k.core.data.model.AdminReportRow
 import top.kuangdada.k.core.data.model.AdminUserRow
 import top.kuangdada.k.core.data.relativeTime
 import top.kuangdada.k.core.designsystem.component.KButton
@@ -60,21 +61,24 @@ import top.kuangdada.k.core.designsystem.theme.KType
 
 /**
  * ============================================================
- * 管理后台（设计稿「管理后台」三屏：用户 / 帖子 / 公告）
+ * 管理后台（设计稿「管理后台」三屏 + 举报段：用户 / 帖子 / 公告 / 举报）
  * ============================================================
  * 形态完全照设计稿重排（上一版是"表头 + 表格行"的三层表格，与设计稿不符）：
  *  · 顶栏：圆形返回钮 + 「管理后台」，**公告段右上角多一个实心 + 圆钮**（进新建公告）；
- *  · 分段控件「用户 | 帖子 | 公告」（全圆药丸轨道 + 白色选中段）；
+ *  · 分段控件「用户 | 帖子 | 公告 | 举报」（全圆药丸轨道 + 白色选中段）；
  *  · **搜索框**（药丸，带放大镜，无「搜索」按钮 —— 服务端搜索由输入防抖触发）；
+ *    举报段没有关键词搜索（服务端不支持 q），换成「待处理 / 已处理 / 全部」状态药丸；
  *  · 列表：**一张张白卡片**，每张左边一个图标/缩略图（56dp 圆角），中间主副两行，右边一个操作药丸；
  *  · 列表下方一行灰色统计：「共 128 位用户 · 已封禁 2」/「共 256 篇帖子 · 今日新增 8」/
  *    「共 12 条公告 · 全部用户可见」。
  *
- * 三种行的高亮内容（设计稿逐项对齐）：
+ * 各行的高亮内容（设计稿逐项对齐）：
  *  · 用户：昵称 17 + 「管理员 · @kuangdada · 已封禁」13；操作 = 解禁（accentSoft 底）或 封禁（dangerSoft 底）
  *  · 帖子：标题 17 + 「作者 · 时间 · N 条评论」13；操作 = 删除（dangerSoft 底）；
  *    左侧是**首图缩略图**，没有图（纯文字帖）时退化成浅绿占位块
  *  · 公告：标题 17 + 「作者 · 时间 · 全部用户/指定用户」13；操作 = 删除；左侧是浅绿喇叭图标块
+ *  · 举报（2026-10-24）：消息摘要 + 「举报人 举报 被举报人 · 理由 · 时间 · 哈希前8位」；
+ *    操作 = 删消息 / 忽略（已处理的只显示状态）；左侧盾牌图标块，待处理用 dangerSoft 底
  *
  * 服务端的权限与业务校验（客户端不能假装）：不能删除/封禁/重置管理员账号、不能删自己、
  * 封禁天数只允许 1/7/30/365 —— 这些都在服务端兜底，客户端把错误文案原样展示。
@@ -103,8 +107,15 @@ fun AdminScreen(
     var users by remember { mutableStateOf<List<AdminUserRow>>(emptyList()) }
     var posts by remember { mutableStateOf<List<AdminPostRow>>(emptyList()) }
     var announcements by remember { mutableStateOf<List<AdminAnnouncementRow>>(emptyList()) }
+    var reports by remember { mutableStateOf<List<AdminReportRow>>(emptyList()) }
     var totalPages by remember { mutableIntStateOf(1) }
     var total by remember { mutableIntStateOf(0) }
+    /**
+     * 举报段的状态筛选下标（0=待处理 1=已处理 2=全部）。
+     * 举报列表服务端**没有关键词搜索**，筛选维度是状态 —— 所以举报段把搜索框
+     * 换成了这三枚状态药丸（见 [REPORT_STATUS]）。
+     */
+    var reportStatusIdx by rememberSaveable { mutableIntStateOf(0) }
     /**
      * 待确认的破坏性操作（null = 没有弹窗）。
      *
@@ -141,9 +152,17 @@ fun AdminScreen(
                 }
                 is ApiResult.Failure -> error = r.error.displayMessage
             }
-            else -> when (val r = repo.announcements(page, q)) {
+            2 -> when (val r = repo.announcements(page, q)) {
                 is ApiResult.Success -> {
                     announcements = r.data.items
+                    totalPages = r.data.totalPages
+                    total = r.data.total
+                }
+                is ApiResult.Failure -> error = r.error.displayMessage
+            }
+            else -> when (val r = repo.reports(page, REPORT_STATUS[reportStatusIdx].second)) {
+                is ApiResult.Success -> {
+                    reports = r.data.items
                     totalPages = r.data.totalPages
                     total = r.data.total
                 }
@@ -153,8 +172,9 @@ fun AdminScreen(
         loading = false
     }
 
-    // refreshKey 变化 = 刚从新建公告页回来，要重拉（否则新公告不出现在列表里）
-    LaunchedEffect(tab, page, refreshKey) { load() }
+    // refreshKey 变化 = 刚从新建公告页回来，要重拉（否则新公告不出现在列表里）；
+    // reportStatusIdx 在举报段里做筛选维度，变化时同样要重拉
+    LaunchedEffect(tab, page, refreshKey, reportStatusIdx) { load() }
 
     /**
      * 搜索防抖：输入停下 400ms 才发请求。
@@ -212,20 +232,45 @@ fun AdminScreen(
                     }
 
                     KSegmentedTabs(
-                        options = listOf("用户", "帖子", "公告"),
+                        options = listOf("用户", "帖子", "公告", "举报"),
                         selectedIndex = tab,
                         onSelect = { tab = it; page = 1 },
                     )
 
-                    AdminSearchField(
-                        value = query,
-                        onValueChange = { query = it },
-                        placeholder = when (tab) {
-                            0 -> "搜索昵称 / @用户名"
-                            1 -> "搜索帖子标题 / 作者"
-                            else -> "搜索公告标题"
-                        },
-                    )
+                    if (tab == 3) {
+                        // 举报段：服务端没有关键词搜索，筛选维度是**状态**。
+                        // 待处理排第一 —— 管理员打开后台第一眼就是要干活的事。
+                        Row(horizontalArrangement = Arrangement.spacedBy(KSpacing.xs)) {
+                            REPORT_STATUS.forEachIndexed { i, (label, _) ->
+                                val selected = reportStatusIdx == i
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(KRadius.pill))
+                                        .background(
+                                            if (selected) c.accentSoft else c.surfaceSubtle
+                                        )
+                                        .clickable { reportStatusIdx = i; page = 1 }
+                                        .padding(horizontal = KSpacing.sm, vertical = KSpacing.xxs),
+                                ) {
+                                    Text(
+                                        text = label,
+                                        style = KType.footnote,
+                                        color = if (selected) c.accentText else c.textMuted,
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        AdminSearchField(
+                            value = query,
+                            onValueChange = { query = it },
+                            placeholder = when (tab) {
+                                0 -> "搜索昵称 / @用户名"
+                                1 -> "搜索帖子标题 / 作者"
+                                else -> "搜索公告标题"
+                            },
+                        )
+                    }
                 }
             }
 
@@ -297,7 +342,7 @@ fun AdminScreen(
                     }
 
                     // ---------------- 公告 ----------------
-                    else -> if (announcements.isEmpty()) {
+                    2 -> if (announcements.isEmpty()) {
                         item { KPlaceholder(kind = KPlaceholderKind.Empty, title = "没有公告", description = null) }
                     } else {
                         items(announcements, key = { it.id }) { a ->
@@ -310,6 +355,43 @@ fun AdminScreen(
                             )
                         }
                         item { ListFooter("共 $total 条公告 · 全部用户可见") }
+                    }
+
+                    // ---------------- 举报 ----------------
+                    else -> if (reports.isEmpty()) {
+                        item {
+                            KPlaceholder(
+                                kind = KPlaceholderKind.Empty,
+                                title = if (reportStatusIdx == 0) "没有待处理的举报" else "暂无记录",
+                                description = null,
+                            )
+                        }
+                    } else {
+                        items(reports, key = { it.id }) { r ->
+                            ReportCardRow(
+                                row = r,
+                                onDeleteMessage = {
+                                    pending = AdminConfirm.ResolveReport(
+                                        id = r.id,
+                                        summary = r.summary,
+                                        reason = r.reason,
+                                        deleteMessage = true,
+                                    )
+                                },
+                                onDismiss = {
+                                    pending = AdminConfirm.ResolveReport(
+                                        id = r.id,
+                                        summary = r.summary,
+                                        reason = r.reason,
+                                        deleteMessage = false,
+                                    )
+                                },
+                                modifier = Modifier.animateItem(),
+                            )
+                        }
+                        item {
+                            ListFooter("共 $total 条举报 · ${REPORT_STATUS[reportStatusIdx].first}")
+                        }
                     }
                 }
             }
@@ -358,7 +440,7 @@ fun AdminScreen(
                 title = p.title,
                 text = p.message,
                 confirmText = p.confirmText,
-                danger = true,
+                danger = p.danger,
                 onDismissRequest = { pending = null },
                 onConfirm = {
                     pending = null
@@ -373,6 +455,13 @@ fun AdminScreen(
         }
     }
 }
+
+/** 举报段的状态筛选（下标 → 标签 + 传给服务端的 status 值） */
+private val REPORT_STATUS = listOf(
+    "待处理" to "open",
+    "已处理" to "resolved",
+    "全部" to "all",
+)
 
 /**
  * 管理后台里需要二次确认的操作。
@@ -392,6 +481,9 @@ private sealed interface AdminConfirm {
 
     /** 成功后的提示 */
     val doneText: String
+
+    /** 危险操作用红色确认钮；可逆/无副作用的不吓人（如"忽略举报"） */
+    val danger: Boolean get() = true
 
     suspend fun run(repo: AdminRepository): ApiResult<*>
 
@@ -428,6 +520,30 @@ private sealed interface AdminConfirm {
         override val confirmText = "删除"
         override val doneText = "已删除"
         override suspend fun run(repo: AdminRepository) = repo.deleteAnnouncement(id)
+    }
+
+    /**
+     * 处置举报（2026-10-24）：
+     * [deleteMessage] = true → 删消息（复用撤回语义，附件一并回收，双方可见）；
+     * false → 忽略误报（消息不动，只标状态）—— 不是危险操作，确认钮不用红色。
+     */
+    data class ResolveReport(
+        val id: Long,
+        val summary: String,
+        val reason: String,
+        val deleteMessage: Boolean,
+    ) : AdminConfirm {
+        override val title = if (deleteMessage) "删除被举报的消息" else "忽略举报"
+        override val message = if (deleteMessage) {
+            "「${summary.take(20)}」（理由：${reason.ifBlank { "无" }}）会被删除，附件一并回收，" +
+                "双方会看到「撤回了一条消息」。"
+        } else {
+            "「${summary.take(20)}」（理由：${reason.ifBlank { "无" }}）将保留不动，本条举报标记为已处理。"
+        }
+        override val confirmText = if (deleteMessage) "删除消息" else "忽略"
+        override val doneText = if (deleteMessage) "消息已删除" else "已忽略"
+        override val danger = deleteMessage
+        override suspend fun run(repo: AdminRepository) = repo.resolveReport(id, deleteMessage)
     }
 }
 
@@ -681,6 +797,72 @@ private fun PostCardRow(
             )
         }
         ActionPill(text = "删除", danger = true, onClick = onDelete)
+    }
+}
+
+/**
+ * 举报卡片（2026-10-24）：盾牌图标块 + 消息摘要/「举报人 → 被举报人 · 理由 · 时间」+ 处置药丸。
+ *
+ * 主行是**被举报的消息**（文件名或正文片段；已撤回的标出来 —— 管理员要知道证据
+ * 是否已被撤回销掉）；有文件哈希时副行带前 8 位 —— 同一个恶意包改名重发哈希相同，
+ * 一眼看出惯犯。已处理的举报没有操作，只显示状态。
+ */
+@Composable
+private fun ReportCardRow(
+    row: AdminReportRow,
+    onDeleteMessage: () -> Unit,
+    onDismiss: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val c = KTheme.colors
+    AdminRowCard(modifier = modifier) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(RoundedCornerShape(KRadius.control))
+                .background(if (row.isOpen) c.dangerSoft else c.surfaceSubtle),
+            contentAlignment = Alignment.Center,
+        ) {
+            Glyph(
+                tint = if (row.isOpen) c.danger else c.accentText,
+                kind = GlyphKind.Shield,
+                size = 22.dp,
+            )
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = row.summary,
+                style = KType.subtitle,
+                color = c.textPrimary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                text = buildString {
+                    append("${row.reporterName} 举报 ${row.senderName}")
+                    append(" · ")
+                    append(row.reason.ifBlank { "无理由" })
+                    append(" · ")
+                    append(relativeTime(row.createdAt))
+                    row.fileSha256?.let { append(" · ${it.take(8)}") }
+                },
+                style = KType.caption,
+                color = c.textMuted,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (row.isOpen) {
+            Column(verticalArrangement = Arrangement.spacedBy(KSpacing.xxs)) {
+                ActionPill(text = "删消息", danger = true, onClick = onDeleteMessage)
+                ActionPill(text = "忽略", danger = false, onClick = onDismiss)
+            }
+        } else {
+            Text("已处理", style = KType.footnote, color = c.textMuted)
+        }
     }
 }
 

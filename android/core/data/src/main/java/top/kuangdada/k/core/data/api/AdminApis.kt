@@ -10,6 +10,7 @@ import retrofit2.http.Query
 import top.kuangdada.k.core.data.model.AdminAnnouncementPage
 import top.kuangdada.k.core.data.model.AdminAnnouncementRow
 import top.kuangdada.k.core.data.model.AdminPostPage
+import top.kuangdada.k.core.data.model.AdminReportPage
 import top.kuangdada.k.core.data.model.AdminUserPage
 import top.kuangdada.k.core.data.model.AdminUsersResponse
 import top.kuangdada.k.core.data.model.AnnouncementsResponse
@@ -18,6 +19,7 @@ import top.kuangdada.k.core.data.model.BanResult
 import top.kuangdada.k.core.data.model.CreateAnnouncementRequest
 import top.kuangdada.k.core.data.model.NotificationsResponse
 import top.kuangdada.k.core.data.model.ResetPasswordRequest2
+import top.kuangdada.k.core.data.model.ResolveReportRequest
 import top.kuangdada.k.core.data.model.SimpleSuccess
 
 /**
@@ -86,6 +88,23 @@ interface AdminApi {
 
     @DELETE("api/admin/announcements/{id}")
     suspend fun deleteAnnouncement(@Path("id") id: Long): SimpleSuccess
+
+    // ---- 举报（2026-10-24） ----
+
+    /** 举报列表：status = open（默认，只看待处理）/ resolved / all */
+    @GET("api/admin/reports")
+    suspend fun reports(
+        @Query("page") page: Int = 1,
+        @Query("limit") limit: Int = 20,
+        @Query("status") status: String = "open",
+    ): AdminReportPage
+
+    /** 处置举报：delete = 删除被举报消息（复用撤回语义），dismiss = 忽略误报 */
+    @POST("api/admin/reports/{id}/resolve")
+    suspend fun resolveReport(
+        @Path("id") id: Long,
+        @Body body: ResolveReportRequest,
+    ): SimpleSuccess
 }
 
 /**

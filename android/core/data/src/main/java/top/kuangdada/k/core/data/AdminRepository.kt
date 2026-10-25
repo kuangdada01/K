@@ -4,11 +4,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import top.kuangdada.k.core.data.model.AdminAnnouncementRow
 import top.kuangdada.k.core.data.model.AdminPostRow
+import top.kuangdada.k.core.data.model.AdminReportRow
 import top.kuangdada.k.core.data.model.AdminUserRow
 import top.kuangdada.k.core.data.model.AnnouncementDto
 import top.kuangdada.k.core.data.model.BanRequest
 import top.kuangdada.k.core.data.model.CreateAnnouncementRequest
 import top.kuangdada.k.core.data.model.ResetPasswordRequest2
+import top.kuangdada.k.core.data.model.ResolveReportRequest
 
 /**
  * ============================================================
@@ -85,6 +87,21 @@ class AdminRepository(private val session: SessionRepository) {
 
     suspend fun deleteAnnouncement(id: Long): ApiResult<Unit> =
         call { session.api.admin.deleteAnnouncement(id) }
+
+    // ---- 举报（2026-10-24） ----
+
+    /**
+     * 举报列表（状态过滤：open 只看待处理）。服务端**不支持** q 搜索，
+     * 与用户/帖子/公告三个列表不同 —— 管理页举报段的筛选是状态而非关键词。
+     */
+    suspend fun reports(page: Int = 1, status: String = "open"): ApiResult<Paged<AdminReportRow>> = call {
+        val r = session.api.admin.reports(page = page, status = status)
+        Paged(r.reports, r.page, if (r.totalPages <= 0) 1 else r.totalPages, r.total)
+    }
+
+    /** 处置举报：[deleteMessage] = true 删消息，false 忽略误报 */
+    suspend fun resolveReport(id: Long, deleteMessage: Boolean): ApiResult<Unit> =
+        call { session.api.admin.resolveReport(id, ResolveReportRequest(if (deleteMessage) "delete" else "dismiss")) }
 
     // ---- 公告（用户侧） ----
 

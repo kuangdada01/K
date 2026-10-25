@@ -160,6 +160,59 @@ data class CreateAnnouncementRequest(
 )
 
 // ---------------------------------------------------------------
+// 举报（2026-10-24，server routes/admin/reports.routes.ts）
+// ---------------------------------------------------------------
+
+/**
+ * 管理端举报列表行（镜像 server report.repo 的 AdminReportRow）。
+ *
+ * JOIN 出的用户名与消息上下文都在行内：被举报消息即便已被发送者撤回
+ * （content/file_name 清空），sender_id 冗余也保得住定位。
+ */
+@Serializable
+data class AdminReportRow(
+    val id: Long,
+    @SerialName("message_id") val messageId: Long = 0,
+    @SerialName("reporter_id") val reporterId: Long = 0,
+    @SerialName("sender_id") val senderId: Long = 0,
+    val reason: String = "",
+    /** 文件消息的内容哈希（服务端举报时现算；同一恶意包改名重发哈希相同） */
+    @SerialName("file_sha256") val fileSha256: String? = null,
+    val status: String = "open",
+    @SerialName("created_at") val createdAt: String = "",
+    @SerialName("reporter_name") val reporterName: String = "",
+    @SerialName("sender_name") val senderName: String = "",
+    @SerialName("message_content") val messageContent: String? = null,
+    @SerialName("message_file_name") val messageFileName: String? = null,
+    @SerialName("message_recalled_at") val messageRecalledAt: String? = null,
+) {
+    val isOpen: Boolean get() = status == "open"
+
+    /** 消息摘要：文件名优先；已撤回的标出来（管理员要知道证据是否已被撤回销掉） */
+    val summary: String
+        get() = when {
+            messageRecalledAt != null -> "[已撤回]"
+            !messageFileName.isNullOrBlank() -> messageFileName
+            !messageContent.isNullOrBlank() -> messageContent.take(24)
+            else -> "[无内容]"
+        }
+}
+
+@Serializable
+data class AdminReportPage(
+    val reports: List<AdminReportRow> = emptyList(),
+    val total: Int = 0,
+    val page: Int = 1,
+    val limit: Int = 20,
+    @SerialName("totalPages") val totalPages: Int = 0,
+    @SerialName("has_more") val hasMore: Boolean = false,
+)
+
+/** 处置举报的请求体：action = "delete"（删消息）/ "dismiss"（忽略误报） */
+@Serializable
+data class ResolveReportRequest(val action: String)
+
+// ---------------------------------------------------------------
 // 公告（面向普通用户的 /api/announcements）
 // ---------------------------------------------------------------
 
