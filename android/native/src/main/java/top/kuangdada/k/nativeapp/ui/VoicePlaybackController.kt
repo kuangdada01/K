@@ -19,6 +19,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import kotlin.math.roundToLong
@@ -52,6 +53,8 @@ import kotlin.math.roundToLong
  *  · 播放中插/拔耳机 → `AudioDeviceCallback` 立刻重新决策；
  *  · 没有耳机 → 还是原来的听筒/扬声器切换。
  */
+// DefaultHttpDataSource/DefaultMediaSourceFactory 系 media3 未稳定 API（鉴权头注入必须用它）
+@androidx.annotation.OptIn(UnstableApi::class)
 class VoicePlaybackController(
     private val context: Context,
     private val authHeaders: Map<String, String>,
