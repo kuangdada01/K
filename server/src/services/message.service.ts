@@ -164,7 +164,6 @@ export async function sendMessage(input: {
     throw new AppError(400, '不能给自己发消息');
   }
 
-  // 验证接收者存在
   const receiver = friendRepo.userExists(receiverId);
   if (!receiver) {
     cleanupUploads(imageFile);

@@ -176,7 +176,6 @@ export default function AdminUsersTab({
         )}
       </div>
 
-      {/* Password change modal */}
       {pwTarget && (
         <div className={styles.modalOverlay} onClick={() => setPwTarget(null)}>
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -206,7 +205,6 @@ export default function AdminUsersTab({
         </div>
       )}
 
-      {/* Ban duration modal */}
       {banTarget && (
         <div className={styles.modalOverlay} onClick={() => onSetBanTarget(null)}>
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>

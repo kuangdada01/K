@@ -51,7 +51,6 @@ const ExploreGridItem = memo(function ExploreGridItem({
     <div className={styles.gridItem} onClick={() => onOpen(post.id)}>
       <img src={thumbnail} alt={post.title || post.description || ''} loading="lazy" />
 
-      {/* 视频标识 */}
       {post.video_url && (
         <span className={styles.videoBadge}>
           <Play size={12} fill="white" />
@@ -59,7 +58,6 @@ const ExploreGridItem = memo(function ExploreGridItem({
         </span>
       )}
 
-      {/* 多图标识 */}
       {!post.video_url && multiCount > 1 && (
         <span className={styles.multiBadge}>
           <Layers size={20} />
@@ -260,10 +258,8 @@ export default function ExplorePage() {
         </div>
       </div>
 
-      {/* 搜索结果信息 */}
       {searched && <div className={styles.resultInfo}>找到 {totalResults} 个相关帖子</div>}
 
-      {/* 帖子网格 */}
       {posts.length > 0 ? (
         <>
           <div className={styles.grid}>

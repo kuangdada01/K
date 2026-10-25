@@ -153,7 +153,6 @@ export default function VoiceRoomList({
         </div>
       )}
 
-      {/* 创建房间弹层 */}
       {creating && (
         <div className={styles.modalMask} onClick={() => setCreating(false)}>
           <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -187,7 +186,6 @@ export default function VoiceRoomList({
         </div>
       )}
 
-      {/* 删除房间确认 */}
       {deletingRoom && (
         <ConfirmDialog
           message={`确定删除房间「${deletingRoom.name}」吗？房内成员会被请出。`}

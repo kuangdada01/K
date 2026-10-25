@@ -32,7 +32,6 @@ export function useEmailVerification(mode: Mode, setError: (message: string) => 
   const [countdown, setCountdown] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 倒计时清理
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -64,7 +63,6 @@ export function useEmailVerification(mode: Mode, setError: (message: string) => 
         } else {
           await api.post('/auth/send-code', { email });
         }
-        // 启动60秒倒计时
         setCountdown(60);
         timerRef.current = setInterval(() => {
           setCountdown((prev) => {

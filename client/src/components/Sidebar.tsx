@@ -143,7 +143,6 @@ export default function Sidebar() {
 
   return (
     <nav className={styles.sidebar}>
-      {/* 品牌区 */}
       <div className={styles.brand}>
         <span className={styles.brandMark}>
           <BrandK />

@@ -34,9 +34,6 @@ fs.mkdirSync(e2eTmpDir, { recursive: true });
  * 也试过「每轮一个随机文件名」，但本文件被多进程求值，随 runId 变化的路径会让
  * 服务端与规格连到不同的库（实测出现两个 k-e2e-*.db），因此改为稳定文件名 + 重置。
  */
-// 目录仍需提前创建（better-sqlite3 不会自动建父目录；reset-tmp.mjs 也会建）
-fs.mkdirSync(e2eTmpDir, { recursive: true });
-
 export default defineConfig({
   testDir: './e2e',
   timeout: 60_000,

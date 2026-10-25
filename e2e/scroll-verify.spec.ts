@@ -214,7 +214,6 @@ test('移动端窄视口：发布模态框三步内容均可滚动到底部', as
   await expect(page.getByTestId('media-grid-item')).toHaveCount(8);
 
   let m = await scrollCheck(page, 'media-grid', 'media-grid-add');
-  console.log('[step1 media-grid]', JSON.stringify(m));
   expect(m.ok, 'media-grid-add 元素应存在').toBe(true);
   expect(m.overflow, '步骤1：短视口下网格应超出容器').toBe(true);
   expect(m.scrolled, '步骤1：media-grid 应可滚动').toBe(true);
@@ -238,7 +237,6 @@ test('移动端窄视口：发布模态框三步内容均可滚动到底部', as
   });
   await expect(page.getByTestId('cover-preview')).toBeVisible();
   m = await scrollCheck(page, 'cover-right', 'cover-slider-row');
-  console.log('[step2 coverRight]', JSON.stringify(m));
   expect(m.ok, 'coverRight 与滑块行应存在').toBe(true);
   expect(m.overflow, '步骤2：封面面板内容应超出容器').toBe(true);
   expect(m.scrolled, '步骤2：coverRight 应可滚动').toBe(true);
@@ -248,7 +246,6 @@ test('移动端窄视口：发布模态框三步内容均可滚动到底部', as
   await page.getByRole('button', { name: '下一步' }).click();
   await expect(page.getByText('编辑', { exact: true })).toBeVisible({ timeout: 10_000 });
   m = await scrollCheck(page, 'edit-right', 'advanced-toggle');
-  console.log('[step3 editRight]', JSON.stringify(m));
   expect(m.ok, 'editRight 与高级设置按钮应存在').toBe(true);
   expect(m.overflow, '步骤3：编辑栏内容应超出容器').toBe(true);
   expect(m.reachable, '步骤3：高级设置按钮应可通过滚动到达').toBe(true);

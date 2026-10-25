@@ -568,7 +568,6 @@ export default function AdminPage() {
         </Suspense>
       )}
 
-      {/* Confirm dialog */}
       {confirmAction && (
         <ConfirmDialog
           message={confirmMsg}

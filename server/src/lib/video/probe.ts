@@ -63,12 +63,3 @@ export async function probeVideoStream(filePath: string): Promise<VideoStreamInf
     return null;
   }
 }
-
-/**
- * 探测视频编码格式，返回视频流 codec_name（如 h264/hevc），
- * 探测失败（ffprobe 未安装或文件异常）返回 null
- */
-export async function probeVideoCodec(filePath: string): Promise<string | null> {
-  const info = await probeVideoStream(filePath);
-  return info?.codec ?? null;
-}

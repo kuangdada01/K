@@ -201,7 +201,6 @@ export default function AvatarMenu({
             style={getMenuStyle()}
             role="menu"
           >
-            {/* 用户信息头 */}
             <div className={styles.menuHeader}>
               {user ? (
                 <>
@@ -251,7 +250,6 @@ export default function AvatarMenu({
               </Link>
             )}
 
-            {/* 主题切换 */}
             <div className={styles.sectionLabel}>主题</div>
             {themeOptions.map((opt) => (
               <button
@@ -269,7 +267,6 @@ export default function AvatarMenu({
 
             <div className={styles.divider} />
 
-            {/* 退出登录 / 登录 */}
             {user ? (
               <button
                 className={`${styles.item} ${styles.itemDanger}`}

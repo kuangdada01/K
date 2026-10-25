@@ -31,8 +31,8 @@ export interface User {
 /** 公告信息接口（对应后端 announcements 表，扩展已读状态和关联用户信息） */
 export interface Announcement {
   id: number;
-  title: string; // 公告标题
-  content: string; // 公告内容
+  title: string;
+  content: string;
   target_user_id: number | null; // 目标用户ID（null=全体公告）
   from_user_id: number; // 发布者ID
   created_at: string;
@@ -223,8 +223,8 @@ export interface BookDetail extends BookSummary {
 /** 语音房间（对应后端 voice_rooms 表，participantCount 来自 WS 内存态实时统计） */
 export interface VoiceRoom {
   id: number;
-  name: string; // 房间名
-  description: string; // 房间简介
+  name: string;
+  description: string;
   cover_url?: string | null; // 房间封面（创建时上传；老房间为 null，列表端回落占位横幅）
   creator_id: number; // 创建者用户ID（未登录访客创建为 0 占位，不做相等判断，归属以 isCreator 为准）
   created_at: string;

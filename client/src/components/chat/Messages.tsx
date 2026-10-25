@@ -452,7 +452,6 @@ export default function Messages() {
         />
       )}
 
-      {/* 拉黑/解除拉黑确认 */}
       {blockConfirm && (
         <ConfirmDialog
           message={

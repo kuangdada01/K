@@ -247,7 +247,6 @@ export default function HomePage() {
         ) : (
           <>
             <div className={styles.feed}>
-              {/* 页头 */}
               <div className={styles.feedHead}>
                 <h1>首页</h1>
                 <Link to="/explore" className={styles.searchBtn} aria-label="搜索">

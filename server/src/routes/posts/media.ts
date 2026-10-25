@@ -614,7 +614,6 @@ function storeDirectVideo(
   // 二次验证视频文件类型（防御性检查，fileFilter 已拦截大部分非法文件）
   const videoExt = path.extname(uploadedVideo.originalname).toLowerCase();
   if (!uploadedVideo.mimetype.startsWith('video/') && !VIDEO_EXTS.includes(videoExt)) {
-    // 删除已上传的文件
     safeDeleteFile(`/uploads/${uploadedVideo.filename}`, 'uploads');
     // 封面也一并清理（与下方"过小文件"分支同口径；拆分前这里漏删——
     // coverFile 尚未登记进 staged，catch 回删覆盖不到，文件会滞留到永不被清扫）

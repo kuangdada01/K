@@ -114,7 +114,6 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
     if (activeTab === 'reposts' && isOwnProfile) setLoadingReposts(true);
   }
 
-  // 加载收藏帖子
   useEffect(() => {
     if (activeTab !== 'bookmarks' || !isOwnProfile) return;
     api
@@ -130,7 +129,6 @@ export default function Profile({ embeddedUserId, onBack }: ProfileProps = {}) {
       });
   }, [activeTab, isOwnProfile]);
 
-  // 加载转发帖子
   useEffect(() => {
     if (activeTab !== 'reposts' || !isOwnProfile) return;
     api

@@ -181,16 +181,4 @@ export function pseudoMovesFrom(board: ChessBoard, sq: ChessSquare): ChessMove[]
   return out;
 }
 
-/** 某方全部伪合法着法（将帅照面不算"吃将"——照面约束在 isInCheck 统一处理） */
-export function pseudoMovesForSide(board: ChessBoard, side: ChessSide): ChessMove[] {
-  const out: ChessMove[] = [];
-  for (let r = 0; r <= 9; r++) {
-    for (let f = 0; f <= 8; f++) {
-      const p = at(board, f, r);
-      if (p && pieceSide(p) === side) out.push(...pseudoMovesFrom(board, { f, r }));
-    }
-  }
-  return out;
-}
-
 export { sameSquare };

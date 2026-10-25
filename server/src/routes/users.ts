@@ -80,7 +80,6 @@ router.put(
     const { username, bio } = req.body;
     const userId = req.user!.id;
 
-    // 验证用户名唯一性
     if (username !== undefined && userRepo.usernameTaken(username, userId)) {
       throw new AppError(400, '用户名已被占用');
     }

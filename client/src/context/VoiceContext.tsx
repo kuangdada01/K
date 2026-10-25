@@ -34,9 +34,6 @@ export type { VoiceShareState } from '../hooks/useVoiceSessionController';
 export interface VoiceContextValue {
   status: VoiceStatus;
   participants: VoiceParticipant[];
-  /** 高频字段已移到 VoiceRealtimeContext，通过 useVoiceRealtime() 获取；此处保留类型标注保证 useVoice() 兼容字段读取（已废弃，请迁移） */
-  speaking?: Set<number>;
-  peerQuality?: Record<number, VoiceQualityLevel>;
   inRoom: boolean;
   activeRoomId: number | null;
   activeRoomName: string | null;

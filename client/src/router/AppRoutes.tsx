@@ -107,7 +107,6 @@ export function AppRoutes() {
 
   return (
     <>
-      {/* 路由表 */}
       <Routes>
         {/* MainLayout: 侧边栏始终可见 */}
         <Route element={<MainLayout />}>
@@ -120,7 +119,6 @@ export function AppRoutes() {
           <Route path="/books/:id/read" element={<BookReaderPage />} />
           <Route path="/voice" element={<VoicePage />} />
 
-          {/* 受保护路由（需登录） */}
           <Route element={<ProtectedRoute />}>
             <Route path="/messages" element={<MessagesPage />} />
             <Route path="/messages/:userId" element={<MessagesPage />} />

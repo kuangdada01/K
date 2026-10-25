@@ -117,11 +117,6 @@ export function getVoiceGame(
   ).get(roomId, gameId) as VoiceGameDetailRow | undefined;
 }
 
-/** 删除某房间的全部对局留档（房间删除时级联清理） */
-export function deleteRoomGames(roomId: number, db: Database = getDb()): void {
-  stmt('DELETE FROM voice_room_games WHERE room_id = ?', db).run(roomId);
-}
-
 /** 用户维度战绩（跨房间聚合；result 以红黑计，换算成请求方视角） */
 export interface ChessUserStats {
   wins: number;

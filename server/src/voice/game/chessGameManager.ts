@@ -8,7 +8,7 @@
  *
  * 生命周期钩子：成员移除（离房/顶替/断线）与房间关闭经 hub 的监听注入
  * （onMemberRemoved/onRoomClosed），消息入口经 messageHandlers 的
- * ctx.chess 分发（默认实例 chessGames，测试可另建实例注入假 hub）。
+ * ctx.chess 分发（默认实例 chessGames）。
  *
  * 断线宽限：棋手连接断开（含顶号）不立即判负——启动
  * GAME_DISCONNECT_GRACE_MS 宽限，同 userId 重新 join 即恢复；
@@ -914,7 +914,7 @@ export function createChessGameManager(deps: ChessGameManagerDeps) {
 
 export type ChessGameManager = ReturnType<typeof createChessGameManager>;
 
-/** 生产单例：挂接 hub 生命周期钩子（测试经 createChessGameManager 自建实例注入假 hub） */
+/** 生产单例：挂接 hub 生命周期钩子 */
 export const chessGames = createChessGameManager({
   broadcast: hubModule.broadcast,
   sendToUser: hubModule.sendToUser,

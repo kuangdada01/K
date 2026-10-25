@@ -126,13 +126,11 @@ router.post(
   asyncHandler(async (req: Request, res: Response) => {
     const { username, email, password, code } = req.body;
 
-    // 校验验证码
     const record = authRepo.findValidCode(email, code);
     if (!record) {
       throw new AppError(400, '验证码错误或已过期');
     }
 
-    // 检查用户名和邮箱是否已被注册
     const existing = authRepo.findUserByUsernameOrEmail(username, email);
     if (existing) {
       throw new AppError(400, '用户名或邮箱已被注册');
@@ -158,7 +156,6 @@ router.post(
     // 删除已使用的验证码
     authRepo.deleteVerificationCodes(email);
 
-    // 生成 token
     const token = generateToken({
       id: user.id,
       username: user.username,
