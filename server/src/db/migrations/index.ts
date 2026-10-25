@@ -50,6 +50,7 @@ import migration037 from './037-messages-audio-voice';
 import migration038 from './038-messages-recalled';
 import migration039 from './039-messages-file';
 import migration040 from './040-report-block';
+import migration041 from './041-verification-code-failed-attempts';
 import type { Migration } from './helpers';
 
 export type { Migration };
@@ -97,6 +98,7 @@ export const migrations: Migration[] = [
   migration038,
   migration039,
   migration040,
+  migration041,
 ];
 
 /** 迁移记录表 */

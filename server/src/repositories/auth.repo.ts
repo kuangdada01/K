@@ -34,6 +34,22 @@ export function findValidCode(
   ).get(email, code) as { id: number; email: string; code: string; expires: string } | undefined;
 }
 
+/** 单码失败次数上限：达到即作废该邮箱全部未过期验证码（防绕过 IP 限流的分布式撞码） */
+export const MAX_CODE_FAILED_ATTEMPTS = 5;
+
+/** 记一次校验失败（配合 [MAX_CODE_FAILED_ATTEMPTS]；无未过期验证码时是 no-op） */
+export function registerCodeFailure(email: string): void {
+  const info = stmt(
+    "UPDATE verification_codes SET failed_attempts = failed_attempts + 1 WHERE email = ? AND datetime(expires) > datetime('now')"
+  ).run(email);
+  if (info.changes > 0) {
+    stmt('DELETE FROM verification_codes WHERE email = ? AND failed_attempts >= ?').run(
+      email,
+      MAX_CODE_FAILED_ATTEMPTS
+    );
+  }
+}
+
 /** 60 秒内是否已发送过验证码 */
 export function hasRecentCode(email: string): boolean {
   return !!stmt(

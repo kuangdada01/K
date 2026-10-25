@@ -128,6 +128,7 @@ router.post(
 
     const record = authRepo.findValidCode(email, code);
     if (!record) {
+      authRepo.registerCodeFailure(email);
       throw new AppError(400, '验证码错误或已过期');
     }
 
@@ -310,6 +311,10 @@ router.post(
     // 用户存在性，否则猜中 6 位码仍可走重置逻辑。
     const record = authRepo.findValidCode(email, code);
     const user = authRepo.findUserByEmail(email);
+    if (!record) {
+      // 只按「码不对」计失败：邮箱不存在（record 也为空）时 registerCodeFailure 是 no-op
+      authRepo.registerCodeFailure(email);
+    }
     if (!record || !user) {
       throw new AppError(400, '验证码错误或已过期');
     }

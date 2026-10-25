@@ -35,11 +35,16 @@ dotenv.config({
   override: process.env.NODE_ENV !== 'test',
 });
 
-/** 环境变量 schema（宽松默认值；JWT_SECRET 无默认值——未配置一律拒绝启动，防止生产用公开的 dev 密钥） */
+/** 环境变量 schema（宽松默认值；JWT_SECRET 无默认值且长度 ≥16——未配置/过短一律拒绝启动，防止生产用公开或可暴破的 dev 密钥） */
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
-  JWT_SECRET: z.string().min(1, 'JWT_SECRET 未配置：请在 .env 或环境变量中设置强密钥，服务拒绝启动'),
+  JWT_SECRET: z
+    .string()
+    .min(
+      16,
+      'JWT_SECRET 未配置或长度不足 16 位：请在 .env 设置强随机密钥（如 openssl rand -base64 48），服务拒绝启动'
+    ),
   ALLOWED_ORIGINS: z.string().optional(),
   ADMIN_EMAIL: z.string().optional(),
   // 服务端前有反向代理（nginx）时置为非空：语音 WS 访客 IP 改从 x-forwarded-for 读取，
@@ -100,11 +105,6 @@ const envSchema = z.object({
 
 /** 校验并导出环境变量（启动时执行一次） */
 export const env = envSchema.parse(process.env);
-
-// §4.4：生产环境 JWT_SECRET 过短时告警（不阻断启动；fail-fast 已由 envSchema 保证必填）
-if (env.NODE_ENV === 'production' && env.JWT_SECRET.length < 16) {
-  console.warn('[config] 警告：JWT_SECRET 长度不足 16 位，建议使用强随机密钥（如 openssl rand -base64 48）');
-}
 
 // ============================================================
 // 路径常量
